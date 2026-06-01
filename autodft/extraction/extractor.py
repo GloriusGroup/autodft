@@ -504,8 +504,10 @@ class PipelineExtractor:
             if mol_dir.is_dir():
                 shutil.rmtree(mol_dir)
 
-        # 4) Delete the project from the database.
-        self._delete_project_rows()
+        # 4) Mark the project as archived. We deliberately KEEP every DB
+        #    row so the Molecules subpage can still show the project's
+        #    history; only the on-disk comp_data tree is gone.
+        self._mark_project_archived()
 
         logger.info(
             "Archived project %r: %d molecules, %d files kept, %d dropped",
@@ -530,67 +532,21 @@ class PipelineExtractor:
             ext = "." + ext
         return ext
 
-    def _delete_project_rows(self) -> None:
-        """Delete every DB row that belongs to this project.
+    def _mark_project_archived(self) -> None:
+        """Set ``Molecule.archived = True`` on every row in this project.
 
-        Order: ComputationJob → ComputationTask → MoleculeGeometry →
-        MoleculeState → Molecule → CalculationEntrypoint (matched on
-        request_metadata JSON containing project_name).
+        Replaces the prior ``_delete_project_rows`` behaviour. Keeping
+        the rows means archived projects still appear in selectors and
+        the Molecules subpage; their on-disk data lives in the export
+        directory and the DB acts as the searchable index.
         """
-        import json as _json
-        from autodft.models.entrypoint import CalculationEntrypoint
-
         with get_session() as session:
             mols = session.exec(
                 select(Molecule).where(Molecule.project_name == self.project_name)
             ).all()
-            mol_ids = [m.id for m in mols if m.id is not None]
-            if mol_ids:
-                state_ids = [
-                    s.id
-                    for s in session.exec(
-                        select(MoleculeState).where(col(MoleculeState.molecule_id).in_(mol_ids))
-                    ).all()
-                    if s.id is not None
-                ]
-                if state_ids:
-                    task_ids = [
-                        t.id
-                        for t in session.exec(
-                            select(ComputationTask).where(col(ComputationTask.state_id).in_(state_ids))
-                        ).all()
-                        if t.id is not None
-                    ]
-                    if task_ids:
-                        for j in session.exec(
-                            select(ComputationJob).where(col(ComputationJob.task_id).in_(task_ids))
-                        ).all():
-                            session.delete(j)
-                        for t in session.exec(
-                            select(ComputationTask).where(col(ComputationTask.id).in_(task_ids))
-                        ).all():
-                            session.delete(t)
-                    for g in session.exec(
-                        select(MoleculeGeometry).where(col(MoleculeGeometry.state_id).in_(state_ids))
-                    ).all():
-                        session.delete(g)
-                    for s in session.exec(
-                        select(MoleculeState).where(col(MoleculeState.id).in_(state_ids))
-                    ).all():
-                        session.delete(s)
-                for m in mols:
-                    session.delete(m)
-
-            # Entrypoints reference the project by name embedded in
-            # request_metadata JSON — match decoded, not by string contains.
-            for entry in session.exec(select(CalculationEntrypoint)).all():
-                try:
-                    meta = _json.loads(entry.request_metadata) if entry.request_metadata else {}
-                except Exception:
-                    continue
-                if meta.get("project_name") == self.project_name:
-                    session.delete(entry)
-
+            for m in mols:
+                m.archived = True
+                session.add(m)
             session.commit()
 
     # ------------------------------------------------------------------

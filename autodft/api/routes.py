@@ -434,12 +434,19 @@ def api_projects():
                 .join(Molecule, MoleculeState.molecule_id == Molecule.id)
                 .where(Molecule.project_name == name, ComputationTask.status == TaskStatus.successful)
             ).one()
+            n_arch = session.exec(
+                select(func.count())
+                .select_from(Molecule)
+                .where(Molecule.project_name == name, Molecule.archived == True)  # noqa: E712
+            ).one()
             out.append({
                 "name": name,
                 "molecules": n_mol,
                 "tasks_total": n_tasks,
                 "tasks_failed": n_failed,
                 "tasks_successful": n_succ,
+                "archived": n_arch == n_mol and n_mol > 0,
+                "protected": name in PROTECTED_PROJECT_NAMES,
             })
         return out
 
@@ -521,9 +528,13 @@ def api_project_detail(name: str):
     else:
         status = "running"
 
+    # Project-wide archive / protection flags.
+    archived_project = total_mols > 0 and all(bool(getattr(m, "archived", False)) for m in mols)
     return {
         "name": name,
         "status": status,
+        "archived": archived_project,
+        "protected": name in PROTECTED_PROJECT_NAMES,
         "in_flight_molecules": in_flight_molecules,
         "in_flight_tasks": in_flight_tasks_total,
         "completed_molecules": total_mols - in_flight_molecules,
@@ -661,6 +672,20 @@ class ArchiveRequest(BaseModel):
     all_conformers: bool = False
 
 
+PROTECTED_PROJECT_NAMES = {"default"}
+
+
+def _project_is_archived(session, name: str) -> Optional[bool]:
+    """Return True/False if every molecule in the project is archived,
+    or None if the project doesn't exist."""
+    rows = session.exec(
+        select(Molecule.archived).where(Molecule.project_name == name)
+    ).all()
+    if not rows:
+        return None
+    return all(bool(r) for r in rows)
+
+
 @router.post("/api/projects/{name}/archive")
 def api_project_archive(name: str, body: ArchiveRequest):
     """Destructive archive of one project.
@@ -668,36 +693,51 @@ def api_project_archive(name: str, body: ArchiveRequest):
     Writes the CSV summary + the user-selected files into
     ``<export_data>/<name>/`` (CSV at the root, raw files under
     ``raw/``), then deletes every ``<comp_data>/mol_<id>/`` belonging
-    to the project and removes the project's rows from the database.
+    to the project and flips ``Molecule.archived = True`` on every row.
 
-    The endpoint is intentionally one-shot and non-resumable: the
-    dashboard must show a confirmation dialog before calling it.
+    Refuses with 4xx when:
+    * the project is ``"default"`` (protected — never archivable)
+    * the project doesn't exist
+    * the project is already archived
+
+    Wraps any unexpected exception so the response is always JSON.
     """
     from autodft.extraction.extractor import PipelineExtractor
 
-    settings = get_active_settings()
-    settings.ensure_directories()
+    if name in PROTECTED_PROJECT_NAMES:
+        return JSONResponse(
+            status_code=409,
+            content={"detail": f"Project {name!r} is protected and cannot be archived."},
+        )
 
-    # Verify the project actually exists before we delete anything.
-    with get_session() as session:
-        exists = session.exec(
-            select(Molecule.id).where(Molecule.project_name == name).limit(1)
-        ).first()
-        if not exists:
-            return JSONResponse(status_code=404, content={"detail": f"Project {name!r} has no molecules"})
-
-    extractor = PipelineExtractor(name)
     try:
+        settings = get_active_settings()
+        settings.ensure_directories()
+
+        with get_session() as session:
+            state = _project_is_archived(session, name)
+        if state is None:
+            return JSONResponse(status_code=404, content={"detail": f"Project {name!r} has no molecules"})
+        if state is True:
+            return JSONResponse(status_code=409, content={"detail": f"Project {name!r} is already archived."})
+
+        extractor = PipelineExtractor(name)
         summary = extractor.archive_project(
             export_root=settings.export_data_path,
             comp_root=settings.comp_data_path,
             extensions=body.extensions,
             all_conformers=body.all_conformers,
         )
+        return {"project": name, "archived": True, **summary}
     except ValueError as exc:
         return JSONResponse(status_code=400, content={"detail": str(exc)})
-
-    return {"project": name, "archived": True, **summary}
+    except Exception as exc:
+        logger = __import__("logging").getLogger(__name__)
+        logger.exception("Archive failed for project %r", name)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Archive failed: {type(exc).__name__}: {exc}"},
+        )
 
 
 @router.post("/api/projects/{name}/export")
@@ -711,31 +751,53 @@ def api_project_export(
     Writes into ``<export_data>/<name>/`` and returns the path. Format:
     ``csv`` -> ``<name>.csv``; ``json`` -> ``<name>.json``;
     ``files`` -> copies raw ORCA files into ``<name>/files/``.
+
+    Archived projects cannot be re-exported (their source files are
+    gone) — returns 409. Wraps any unexpected exception so the response
+    body is always JSON.
     """
     from autodft.extraction.extractor import PipelineExtractor
 
     if format not in {"csv", "json", "files"}:
         return JSONResponse(status_code=400, content={"detail": f"Unknown format {format!r}"})
 
-    settings = get_active_settings()
-    settings.ensure_directories()
-    out_root = settings.export_data_path / name
-    out_root.mkdir(parents=True, exist_ok=True)
+    try:
+        settings = get_active_settings()
+        settings.ensure_directories()
 
-    extractor = PipelineExtractor(name)
+        with get_session() as session:
+            state = _project_is_archived(session, name)
+        if state is None:
+            return JSONResponse(status_code=404, content={"detail": f"Project {name!r} has no molecules"})
+        if state is True:
+            return JSONResponse(
+                status_code=409,
+                content={"detail": f"Project {name!r} is archived — source files are no longer on disk."},
+            )
 
-    if format == "csv":
-        target = out_root / f"{name}.csv"
-        extractor.export_summary_csv(target, all_conformers=all_conformers)
-        return {"format": format, "path": str(target)}
-    if format == "json":
-        target = out_root / f"{name}.json"
-        extractor.export_summary_json(target, all_conformers=all_conformers)
-        return {"format": format, "path": str(target)}
-    # files
-    target = out_root / "files"
-    count = extractor.export_calculation_files(target, all_conformers=all_conformers)
-    return {"format": format, "path": str(target), "files_copied": count}
+        out_root = settings.export_data_path / name
+        out_root.mkdir(parents=True, exist_ok=True)
+
+        extractor = PipelineExtractor(name)
+        if format == "csv":
+            target = out_root / f"{name}.csv"
+            extractor.export_summary_csv(target, all_conformers=all_conformers)
+            return {"format": format, "path": str(target)}
+        if format == "json":
+            target = out_root / f"{name}.json"
+            extractor.export_summary_json(target, all_conformers=all_conformers)
+            return {"format": format, "path": str(target)}
+        # files
+        target = out_root / "files"
+        count = extractor.export_calculation_files(target, all_conformers=all_conformers)
+        return {"format": format, "path": str(target), "files_copied": count}
+    except Exception as exc:
+        logger = __import__("logging").getLogger(__name__)
+        logger.exception("Export failed for project %r (format=%r)", name, format)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Export failed: {type(exc).__name__}: {exc}"},
+        )
 
 
 @router.get("/api/entrypoints/failed")

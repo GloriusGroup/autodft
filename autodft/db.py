@@ -103,6 +103,7 @@ def _migrate_sqlite_schema(engine) -> None:
         ("computation_headers", "kind", "TEXT"),
         ("computation_headers", "deleted", "BOOLEAN NOT NULL DEFAULT 0"),
         ("calculation_entrypoints", "processing_error", "TEXT"),
+        ("molecules",                "archived",        "BOOLEAN NOT NULL DEFAULT 0"),
     ]
     with engine.connect() as conn:
         for table, column, coltype in additions:

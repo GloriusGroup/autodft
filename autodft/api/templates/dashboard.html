@@ -1855,8 +1855,9 @@
                 document.getElementById('projectEmptyState').style.display = 'none';
 
                 var html = projectCache.map(function (p) {
+                    var tag = p.archived ? ' [archived]' : '';
                     return '<option value="' + escHtml(p.name) + '">' +
-                            escHtml(p.name) + '  (' + p.molecules + ' mol, ' +
+                            escHtml(p.name) + tag + '  (' + p.molecules + ' mol, ' +
                             p.tasks_successful + '/' + p.tasks_total + ' tasks)' +
                            '</option>';
                 }).join('');
@@ -1909,6 +1910,31 @@
                     detail.textContent = '';
                 }
 
+                // Gate the export + archive buttons. Archived projects have
+                // no source files to export; the protected project ("default")
+                // cannot be archived. Tooltips explain why a button is off.
+                var isArchived  = !!data.archived;
+                var isProtected = !!data.protected;
+                var csvBtn  = document.getElementById('exportCsvBtn');
+                var jsonBtn = document.getElementById('exportJsonBtn');
+                var allBtn  = document.getElementById('exportAllBtn');
+                csvBtn.disabled  = isArchived;
+                jsonBtn.disabled = isArchived;
+                allBtn.disabled  = isArchived || isProtected;
+                csvBtn.title  = isArchived  ? 'Project is archived — source files are gone.' : '';
+                jsonBtn.title = isArchived  ? 'Project is archived — source files are gone.' : '';
+                allBtn.title  = isArchived  ? 'Project is already archived.'
+                                : isProtected ? 'The default project is protected and cannot be archived.'
+                                              : '';
+                if (isArchived) {
+                    // Override the running/complete banner with a single archived state.
+                    var banner = document.getElementById('projectStatusBanner');
+                    var text   = document.getElementById('psbText');
+                    banner.className = 'project-status-banner complete';
+                    text.innerHTML = '<strong>Archived</strong> — source files have been exported and removed from comp_data.';
+                    document.getElementById('psbDetail').textContent = '';
+                }
+
                 document.getElementById('pcMolecules').textContent = data.molecules.length;
                 var sp = data.submission_progress || { started: 0, total: 0 };
                 document.getElementById('pcSubmitted').textContent = sp.started + '/' + sp.total;
@@ -1940,6 +1966,22 @@
             }
         }
 
+        // Defensive: read the response body as text first, parse JSON
+        // separately, and surface a useful error if the server returned
+        // something else (HTML 5xx page, proxy timeout, empty body, ...).
+        async function safeJson(resp) {
+            var text = '';
+            try { text = await resp.text(); } catch (_) {}
+            if (!text) return { _ok: false, _raw: '', _err: 'empty response body' };
+            try { return JSON.parse(text); }
+            catch (e) {
+                return {
+                    _ok: false, _raw: text,
+                    _err: 'response was not JSON (' + e.message + ')',
+                };
+            }
+        }
+
         async function exportProject(format) {
             if (!currentProject) return;
             var fb = document.getElementById('projectExportFeedback');
@@ -1952,14 +1994,20 @@
                     '/export?format=' + format + '&all_conformers=' + (allConf ? 'true' : 'false'),
                     { method: 'POST' }
                 );
-                var data = await resp.json();
+                var data = await safeJson(resp);
+                if (data._err) {
+                    fb.textContent = 'Server returned non-JSON (HTTP ' + resp.status + '): ' +
+                                     data._err + ' — ' + (data._raw || '').slice(0, 200);
+                    fb.className = 'submit-feedback error';
+                    return;
+                }
                 if (resp.ok) {
                     var detail = data.path;
                     if (data.files_copied != null) detail += '  (' + data.files_copied + ' files)';
                     fb.textContent = 'Exported: ' + detail;
                     fb.className = 'submit-feedback success';
                 } else {
-                    fb.textContent = 'Error: ' + (data.detail || JSON.stringify(data));
+                    fb.textContent = 'Error (HTTP ' + resp.status + '): ' + (data.detail || JSON.stringify(data));
                     fb.className = 'submit-feedback error';
                 }
             } catch (err) {
@@ -2017,7 +2065,14 @@
                         }),
                     }
                 );
-                var data = await resp.json();
+                var data = await safeJson(resp);
+                if (data._err) {
+                    fb.textContent = 'Server returned non-JSON (HTTP ' + resp.status + '): ' +
+                                     data._err + ' — ' + (data._raw || '').slice(0, 200);
+                    fb.className = 'submit-feedback error';
+                    btn.disabled = false;
+                    return;
+                }
                 if (resp.ok) {
                     fb.innerHTML =
                         'Archived <strong>' + escHtml(data.project) + '</strong>: ' +
@@ -2026,18 +2081,14 @@
                         escHtml(data.files_dropped) + ' dropped). ' +
                         'CSV → <code>' + escHtml(data.csv_path) + '</code>.';
                     fb.className = 'submit-feedback success';
-                    // Refresh project list — the project is gone.
+                    // Refresh project list — the project stays visible (marked
+                    // as archived) so the user can still browse its molecules.
                     setTimeout(function () {
                         closeArchiveModal();
-                        currentProject = null;
-                        document.getElementById('projectStatusBanner').style.display = 'none';
-                        document.getElementById('projectCards').style.display = 'none';
-                        document.getElementById('projectExportSection').style.display = 'none';
-                        document.getElementById('projectMoleculesSection').style.display = 'none';
                         fetchProjects();
                     }, 1800);
                 } else {
-                    fb.textContent = 'Error: ' + (data.detail || JSON.stringify(data));
+                    fb.textContent = 'Error (HTTP ' + resp.status + '): ' + (data.detail || JSON.stringify(data));
                     fb.className = 'submit-feedback error';
                 }
             } catch (err) {
