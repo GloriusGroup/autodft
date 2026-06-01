@@ -641,11 +641,15 @@
             text-align: center;
             padding: 6px 10px;
         }
-        .mol-table canvas.struct {
+        .mol-table div.struct {
             background: #ffffff;
             border-radius: 6px;
             display: inline-block;
+            width: 180px;
+            height: 130px;
+            overflow: hidden;
         }
+        .mol-table div.struct svg { display: block; }
         .mol-table .tick      { color: var(--green); font-weight: 700; }
         .mol-table .cross     { color: var(--red);   font-weight: 700; }
         .mol-table .inflight  { color: var(--yellow); }
@@ -1251,8 +1255,11 @@
     </div>  <!-- /container -->
     </div>  <!-- /app -->
 
-    <!-- SmilesDrawer (canvas) — client-side 2-D structures on the Molecules page. -->
-    <script src="https://unpkg.com/smiles-drawer@2.3.0/dist/smiles-drawer.min.js"></script>
+    <!-- RDKit-JS (WASM) — client-side 2-D structures on the Molecules page.
+         Bigger (~5 MB) than SmilesDrawer but accurate on all aromatic
+         systems / charged species / stereo etc. Cached aggressively by
+         the browser after first load. -->
+    <script src="https://unpkg.com/@rdkit/rdkit/dist/RDKit_minimal.js"></script>
 
 
     <script>
@@ -2126,58 +2133,89 @@
 
         // ── Project Overview > Molecules subpage ────────────────────────
 
-        // SmilesDrawer is loaded from a CDN at the bottom of <body>. It
-        // exposes ``window.SmilesDrawer`` once ready. Use the bundled
-        // 'dark' theme (matches our background) — custom themes get
-        // silently merged in older versions and can break rendering.
-        var _smilesDrawer = null;
-        function getSmilesDrawer() {
-            if (_smilesDrawer || !window.SmilesDrawer || !window.SmilesDrawer.Drawer) return _smilesDrawer;
-            _smilesDrawer = new SmilesDrawer.Drawer({
-                width: 180, height: 130,
-                bondThickness: 1.0,
-                shortBondLength: 0.85,
-                explicitHydrogens: false,
-            });
-            return _smilesDrawer;
-        }
+        // RDKit-JS loads as WASM. The <script> tag at the bottom of
+        // <body> defines window.initRDKitModule(); we await it once
+        // and cache the module on _rdkit so subsequent draws are sync.
+        var _rdkit = null;
+        var _rdkitPromise = null;
+        // Cache SVGs per SMILES — the user often switches projects /
+        // pages and we'd otherwise re-render every structure each time.
+        var _svgCache = {};
 
-        function _drawFallback(canvas, msg) {
-            var ctx = canvas.getContext('2d');
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.fillStyle = '#9ca0ab';
-            ctx.font = '11px sans-serif';
-            ctx.fillText(msg, 8, 18);
-        }
-
-        function drawStructureInto(canvas, smiles) {
-            // Defer first call until the script has finished loading.
-            if (!window.SmilesDrawer || !window.SmilesDrawer.Drawer) {
-                _drawFallback(canvas, '(loading…)');
-                setTimeout(function () { drawStructureInto(canvas, smiles); }, 300);
-                return;
-            }
-            var drawer = getSmilesDrawer();
-            if (!drawer) { _drawFallback(canvas, '(no drawer)'); return; }
-            try {
-                SmilesDrawer.parse(smiles,
-                    function (tree) {
-                        try {
-                            drawer.draw(tree, canvas, 'dark', false);
-                        } catch (e) {
-                            console.warn('SmilesDrawer draw failed for', smiles, e);
-                            _drawFallback(canvas, '(draw error)');
-                        }
-                    },
-                    function (err) {
-                        console.warn('SmilesDrawer parse failed for', smiles, err);
-                        _drawFallback(canvas, '(parse error)');
+        function loadRDKit() {
+            if (_rdkit) return Promise.resolve(_rdkit);
+            if (_rdkitPromise) return _rdkitPromise;
+            _rdkitPromise = new Promise(function (resolve, reject) {
+                var tries = 0;
+                var poll = function () {
+                    if (window.initRDKitModule) {
+                        window.initRDKitModule()
+                            .then(function (mod) { _rdkit = mod; resolve(mod); })
+                            .catch(reject);
+                        return;
                     }
-                );
-            } catch (e) {
-                console.warn('SmilesDrawer threw for', smiles, e);
-                _drawFallback(canvas, '(error)');
-            }
+                    if (tries++ > 100) {
+                        reject(new Error('initRDKitModule never appeared'));
+                        return;
+                    }
+                    setTimeout(poll, 100);
+                };
+                poll();
+            });
+            return _rdkitPromise;
+        }
+
+        function _structFallback(container, msg, isError) {
+            container.innerHTML =
+                '<div style="color: ' + (isError ? '#ef4444' : '#6b7080') +
+                '; font-size: 11px; line-height: 130px; text-align: center;">' +
+                msg + '</div>';
+        }
+
+        function drawStructureInto(container, smiles) {
+            if (!smiles) { _structFallback(container, '(no smiles)', true); return; }
+            if (_svgCache[smiles]) { container.innerHTML = _svgCache[smiles]; return; }
+            _structFallback(container, '(loading…)', false);
+            loadRDKit().then(function (RDKit) {
+                var mol = null;
+                try {
+                    mol = RDKit.get_mol(smiles);
+                    if (!mol || !mol.is_valid()) {
+                        _structFallback(container, '(invalid)', true);
+                        return;
+                    }
+                    var svg = mol.get_svg_with_highlights(JSON.stringify({
+                        width: 180,
+                        height: 130,
+                        bondLineWidth: 1.0,
+                        // Keep a white background card so atom colours read
+                        // clearly against the dark dashboard.
+                        backgroundColour: [1.0, 1.0, 1.0, 1.0],
+                    }));
+                    _svgCache[smiles] = svg;
+                    container.innerHTML = svg;
+                } catch (e) {
+                    console.warn('RDKit-JS render failed for', smiles, e);
+                    _structFallback(container, '(error)', true);
+                } finally {
+                    if (mol) {
+                        try { mol.delete(); } catch (_) {}
+                    }
+                }
+            }).catch(function (err) {
+                console.warn('RDKit-JS failed to initialize:', err);
+                _structFallback(container, '(rdkit failed to load)', true);
+            });
+        }
+
+        // Kick off the WASM download as soon as the page is interactive
+        // so the first molecules render fast.
+        if (document.readyState !== 'loading') {
+            loadRDKit().catch(function () { /* surfaced per-cell */ });
+        } else {
+            document.addEventListener('DOMContentLoaded', function () {
+                loadRDKit().catch(function () { /* surfaced per-cell */ });
+            });
         }
 
         function statusCell(value) {
@@ -2226,7 +2264,7 @@
                         var cells = [];
                         if (!molRendered) {
                             cells.push('<td rowspan="' + molRows + '" class="mol-id">#' + escHtml(m.id) + '</td>');
-                            cells.push('<td rowspan="' + molRows + '" class="mol-struct"><canvas class="struct" width="180" height="130" data-smiles="' + escHtml(m.smiles) + '"></canvas></td>');
+                            cells.push('<td rowspan="' + molRows + '" class="mol-struct"><div class="struct" data-smiles="' + escHtml(m.smiles) + '"></div></td>');
                             cells.push('<td rowspan="' + molRows + '" class="mol-smiles" title="' + escHtml(m.smiles) + '">' + escHtml(m.smiles) + '</td>');
                             molRendered = true;
                         }
@@ -2241,7 +2279,7 @@
                         var cells = [];
                         if (!molRendered) {
                             cells.push('<td rowspan="' + molRows + '" class="mol-id">#' + escHtml(m.id) + '</td>');
-                            cells.push('<td rowspan="' + molRows + '" class="mol-struct"><canvas class="struct" width="180" height="130" data-smiles="' + escHtml(m.smiles) + '"></canvas></td>');
+                            cells.push('<td rowspan="' + molRows + '" class="mol-struct"><div class="struct" data-smiles="' + escHtml(m.smiles) + '"></div></td>');
                             cells.push('<td rowspan="' + molRows + '" class="mol-smiles" title="' + escHtml(m.smiles) + '">' + escHtml(m.smiles) + '</td>');
                             molRendered = true;
                         }
@@ -2263,8 +2301,8 @@
             tbody.innerHTML = rows.join('');
 
             // Now render every <canvas data-smiles="…"> with SmilesDrawer.
-            tbody.querySelectorAll('canvas.struct').forEach(function (canvas) {
-                drawStructureInto(canvas, canvas.dataset.smiles);
+            tbody.querySelectorAll('div.struct').forEach(function (div) {
+                drawStructureInto(div, div.dataset.smiles);
             });
         }
 
