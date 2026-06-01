@@ -1,28 +1,20 @@
-"""Extract energies and raw ORCA files for one project.
+"""Extract energies and raw ORCA files for one project — in-process.
 
-Three non-destructive exports + one destructive **archive** workflow:
+Three flows, all built on ``PipelineExtractor``:
 
-    --mode summary    # CSV  + JSON of energies (default)
-    --mode files      # also copies raw files into <export_data>/<project>/files
-    --mode archive    # *destructive*: filters + wipes comp_data + drops the
-                      # project from the database. Same as the dashboard's
-                      # "Export all files" button.
+* ``export_summary`` — CSV + JSON of energies.
+* ``export_files``   — also copies the curated raw ORCA files.
+* ``archive``        — DESTRUCTIVE: filter by extension, wipe comp_data,
+                        drop the project from the database. Same code
+                        path as ``POST /api/projects/{name}/archive`` and
+                        the dashboard's "Export all files" button.
 
-The summary and files modes use ``PipelineExtractor`` directly. The
-archive mode goes through ``PipelineExtractor.archive_project`` (also
-exposed via ``POST /api/projects/{name}/archive``).
-
-Usage
------
-    python examples/04_export_results.py --project alcohols
-    python examples/04_export_results.py --project alcohols --mode files --all-conformers
-    python examples/04_export_results.py --project alcohols --mode archive \
-        --extensions .inp .xyz .out .gbw .cube
+Set the configuration at the top, then import / call any of the
+``run_*`` helpers — or just execute the file to run the demo.
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 from pathlib import Path
 
@@ -31,88 +23,111 @@ from autodft.db import init_db
 from autodft.extraction.extractor import PipelineExtractor
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--project", required=True, help="Project name to export")
-    parser.add_argument(
-        "--mode", choices=("summary", "files", "archive"), default="summary",
-        help="summary = CSV+JSON only; files = also raw curated files; "
-             "archive = DESTRUCTIVE (filters + wipes comp_data + drops project)",
-    )
-    parser.add_argument(
-        "--all-conformers", action="store_true",
-        help="Include every conformer per state, not just the lowest-energy one",
-    )
-    parser.add_argument(
-        "--extensions", nargs="+",
-        default=[".inp", ".xyz", ".out"],
-        help="(archive mode) file extensions to keep when archiving. "
-             "Add e.g. .gbw .cube .spindens .eldens .hess to keep more.",
-    )
-    parser.add_argument(
-        "--config",
-        default=str(Path(__file__).resolve().parents[1] / "config" / "reaction.toml"),
-        help="Path to AutoDFT config TOML",
-    )
-    args = parser.parse_args()
+# ---------------------------------------------------------------------------
+# Configuration — edit these for your environment.
+# ---------------------------------------------------------------------------
 
-    cfg_path = Path(args.config)
-    settings = load_settings(cfg_path if cfg_path.exists() else None)
-    init_db(settings)
+CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "reaction.toml"
+PROJECT = "Test"
 
-    out_root = settings.export_data_path / args.project
+# Whether to include every conformer per state (True) or only the
+# lowest-energy one per state (False).
+ALL_CONFORMERS = False
+
+# For the archive flow: file extensions to KEEP. Everything else under
+# comp_data/mol_* is deleted as part of the archive step.
+ARCHIVE_EXTENSIONS = [".inp", ".xyz", ".out"]
+# Set to True to actually run the destructive archive when this script
+# is executed directly. Leave False during development.
+RUN_ARCHIVE = False
+
+
+# Init engine once — safe to repeat.
+SETTINGS = load_settings(CONFIG_PATH if CONFIG_PATH.exists() else None)
+init_db(SETTINGS)
+
+
+# ---------------------------------------------------------------------------
+# Public helpers
+# ---------------------------------------------------------------------------
+
+
+def project_progress(project: str = PROJECT) -> dict:
+    """Submission progress + success rate, same shape the dashboard shows."""
+    ext = PipelineExtractor(project)
+    return {
+        "submission_progress": ext.get_submission_progress(),
+        "success_rate": ext.get_success_rate(),
+    }
+
+
+def export_summary(
+    project: str = PROJECT,
+    all_conformers: bool = ALL_CONFORMERS,
+) -> dict:
+    """Write CSV + JSON energy summaries under ``<export_data>/<project>/``."""
+    ext = PipelineExtractor(project)
+    out_root = SETTINGS.export_data_path / project
     out_root.mkdir(parents=True, exist_ok=True)
+    csv_path = out_root / f"{project}.csv"
+    json_path = out_root / f"{project}.json"
+    ext.export_summary_csv(csv_path, all_conformers=all_conformers)
+    ext.export_summary_json(json_path, all_conformers=all_conformers)
+    return {"csv": str(csv_path), "json": str(json_path)}
 
-    extractor = PipelineExtractor(args.project)
 
-    # Always show progress so the user knows what they're exporting.
-    prog = extractor.get_submission_progress()
-    succ = extractor.get_success_rate()
-    print(f"project: {args.project}")
-    print(f"  entrypoints started        : {prog['started']}/{prog['total']}")
-    print(f"  molecules fully successful : "
-          f"{succ['successful_molecules']}/{succ['total_molecules']}")
+def export_files(
+    project: str = PROJECT,
+    all_conformers: bool = ALL_CONFORMERS,
+) -> dict:
+    """Summaries + the curated raw ORCA files under ``<export_data>/<project>/files/``."""
+    summary = export_summary(project=project, all_conformers=all_conformers)
+    files_dir = SETTINGS.export_data_path / project / "files"
+    copied = PipelineExtractor(project).export_calculation_files(
+        files_dir, all_conformers=all_conformers
+    )
+    summary.update({"files_dir": str(files_dir), "files_copied": copied})
+    return summary
 
-    # ---- ARCHIVE (destructive) ---------------------------------------------
-    if args.mode == "archive":
-        print(f"  archiving with extensions  : {args.extensions}")
-        confirm = input(
-            f"\n*** Archive '{args.project}'? This DELETES the project's "
-            f"comp_data and DB rows. Type 'yes' to continue: "
-        )
-        if confirm.strip().lower() != "yes":
-            print("aborted.")
-            return
-        result = extractor.archive_project(
-            export_root=settings.export_data_path,
-            comp_root=settings.comp_data_path,
-            extensions=args.extensions,
-            all_conformers=args.all_conformers,
-        )
-        print(json.dumps(result, indent=2))
-        return
 
-    # ---- NON-DESTRUCTIVE EXPORT ------------------------------------------
-    results = extractor.extract_results(all_conformers=args.all_conformers)
-    print(f"  extracted {len(results)} conformer row(s)")
-    if results:
-        print("  first row:")
-        print(json.dumps(results[0].__dict__, indent=4, default=str))
+def archive(
+    project: str = PROJECT,
+    extensions: list[str] = ARCHIVE_EXTENSIONS,
+    all_conformers: bool = ALL_CONFORMERS,
+) -> dict:
+    """**Destructive**: filtered export + comp_data wipe + project DB drop.
 
-    csv_path  = out_root / f"{args.project}.csv"
-    json_path = out_root / f"{args.project}.json"
-    extractor.export_summary_csv(csv_path,  all_conformers=args.all_conformers)
-    extractor.export_summary_json(json_path, all_conformers=args.all_conformers)
-    print(f"  wrote {csv_path}")
-    print(f"  wrote {json_path}")
+    No interactive confirmation — the caller is responsible for guarding
+    this. Returns the summary dict from ``archive_project``.
+    """
+    return PipelineExtractor(project).archive_project(
+        export_root=SETTINGS.export_data_path,
+        comp_root=SETTINGS.comp_data_path,
+        extensions=extensions,
+        all_conformers=all_conformers,
+    )
 
-    if args.mode == "files":
-        files_dir = out_root / "files"
-        copied = extractor.export_calculation_files(
-            files_dir, all_conformers=args.all_conformers
-        )
-        print(f"  copied {copied} raw ORCA file(s) into {files_dir}")
+
+# ---------------------------------------------------------------------------
+# Examples — run when this file is executed directly.
+# ---------------------------------------------------------------------------
 
 
 if __name__ == "__main__":
-    main()
+    print(f"project: {PROJECT}")
+    print(json.dumps(project_progress(), indent=2))
+
+    summary = export_summary()
+    print(f"\nsummaries written:\n  {summary['csv']}\n  {summary['json']}")
+
+    files = export_files()
+    print(f"copied {files['files_copied']} raw file(s) into {files['files_dir']}")
+
+    if RUN_ARCHIVE:
+        print(f"\nRUN_ARCHIVE=True — archiving {PROJECT} now...")
+        print(json.dumps(archive(), indent=2))
+    else:
+        print(
+            "\n(skipping archive — set RUN_ARCHIVE = True at the top of the "
+            "file or call archive() to run the destructive flow)"
+        )

@@ -473,13 +473,19 @@ in the queue history for auditing.
 
 The `examples/` directory contains runnable scripts:
 
+Each file is a normal Python module: configuration lives in named
+constants at the top (server URL, project name, etc.), the work is
+factored into importable helper functions, and an
+`if __name__ == "__main__":` block runs a demo. Use them as starting
+points for your own scripts.
+
 | File                          | What it shows                                                    |
 | ----------------------------- | ---------------------------------------------------------------- |
-| `01_submit_via_python.py`     | direct DB submission covering every `request_metadata` option, pre-flight `validate_smiles`, and looking up stored headers |
-| `02_submit_via_rest_api.py`   | stdlib-only HTTP client: validate, list headers, minimal & full-coverage submit, query queue / overview / failed entrypoints |
-| `03_monitor_progress.py`      | one-shot or `--watch` snapshot via SQLModel or via HTTP, with per-project progress and failed-entrypoint surfacing |
-| `04_export_results.py`        | three modes: `summary` (CSV+JSON), `files` (+ raw curated files), and `archive` (destructive — filtered files + comp_data wipe + DB drop). Uses `PipelineExtractor` directly. |
-| `05_export_via_rest_api.py`   | same three exports + project listing/inspection over HTTP only (stdlib `urllib`). Demonstrates `GET /api/projects`, `GET /api/projects/{name}`, `POST /api/projects/{name}/export?format=…`, and `POST /api/projects/{name}/archive`. |
+| `01_submit_via_python.py`     | `submit()`, `make_metadata()`, `header_by_description()`, `validate_smiles()`. Direct DB submission covering every `request_metadata` option. |
+| `02_submit_via_rest_api.py`   | `submit()`, `validate_smiles()`, `list_headers()`, `overview()`, `queue()`, `failed_entrypoints()`. Stdlib-only HTTP client. |
+| `03_monitor_progress.py`      | `snapshot_via_db()`, `snapshot_via_api()`, `watch()`. SQLModel and HTTP backends with the same return shape. |
+| `04_export_results.py`        | `project_progress()`, `export_summary()`, `export_files()`, `archive()` — built on `PipelineExtractor`. |
+| `05_export_via_rest_api.py`   | `list_projects()`, `inspect_project()`, `export_project()`, `archive_project()` — same operations over the REST API. |
 
 Each script is documented and self-contained.
 

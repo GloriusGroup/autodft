@@ -1,191 +1,168 @@
 """Export and archive AutoDFT projects over the REST API.
 
-Companion to ``04_export_results.py`` (which uses ``PipelineExtractor``
-directly in-process). This example only needs the stdlib + a running
-controller — useful from any machine that can reach the dashboard.
+HTTP counterpart of ``04_export_results.py`` — no autodft import, just
+``urllib`` + the running controller. Configure at the top, then call
+the helpers or run this file directly.
 
 Endpoints exercised:
 
-* ``GET  /api/projects``                 — list projects with counts
-* ``GET  /api/projects/{name}``          — molecules + progress + success rate
-* ``POST /api/projects/{name}/export``   — non-destructive CSV / JSON / files
-* ``POST /api/projects/{name}/archive``  — DESTRUCTIVE: writes filtered
-                                             files, wipes comp_data, drops
-                                             the project from the DB
-
-Usage
------
-    # list and inspect projects (non-destructive)
-    python examples/05_export_via_rest_api.py --list
-    python examples/05_export_via_rest_api.py --project phenols
-
-    # CSV / JSON / files exports
-    python examples/05_export_via_rest_api.py --project phenols --export csv
-    python examples/05_export_via_rest_api.py --project phenols --export json --all-conformers
-    python examples/05_export_via_rest_api.py --project phenols --export files
-
-    # archive — needs --confirm AND a non-default extension list
-    python examples/05_export_via_rest_api.py --project phenols --archive \
-        --extensions .inp .xyz .out .gbw --confirm
+* ``GET  /api/projects``                  — list with summary counts
+* ``GET  /api/projects/{name}``           — molecules + progress + status
+* ``POST /api/projects/{name}/export``    — CSV / JSON / files
+* ``POST /api/projects/{name}/archive``   — DESTRUCTIVE archive
 """
 
 from __future__ import annotations
 
-import argparse
 import json
-import sys
 from urllib import error, parse, request
 
+
+# ---------------------------------------------------------------------------
+# Configuration — edit these for your environment.
+# ---------------------------------------------------------------------------
+
 BASE_URL = "http://localhost:8085"
+PROJECT = "Test"
+ALL_CONFORMERS = False
+
+# For the archive flow: file extensions to KEEP. Everything else under
+# comp_data/mol_* is deleted as part of the archive.
+ARCHIVE_EXTENSIONS = [".inp", ".xyz", ".out"]
+# Hard gate — leave False so re-running this script can't accidentally
+# nuke a project.
+RUN_ARCHIVE = False
+
+HTTP_TIMEOUT = 30
 
 
 # ---------------------------------------------------------------------------
-# Tiny stdlib HTTP helper. Returns (status, parsed-json).
+# Internals
 # ---------------------------------------------------------------------------
 
 
-def _request(method: str, path: str,
-             body: dict | None = None,
-             params: dict | None = None) -> tuple[int, object]:
+class APIError(RuntimeError):
+    def __init__(self, status: int, body: object) -> None:
+        super().__init__(f"HTTP {status}: {body}")
+        self.status = status
+        self.body = body
+
+
+def call(method: str, path: str, body: dict | None = None,
+         params: dict | None = None) -> object:
     url = BASE_URL + path
     if params:
         url += "?" + parse.urlencode({k: v for k, v in params.items() if v is not None})
-    data = None
+    data = json.dumps(body).encode() if body is not None else None
     headers = {"Accept": "application/json"}
     if body is not None:
-        data = json.dumps(body).encode()
         headers["Content-Type"] = "application/json"
     req = request.Request(url, data=data, method=method, headers=headers)
     try:
-        with request.urlopen(req, timeout=30) as resp:
-            return resp.status, json.loads(resp.read().decode())
+        with request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+            return json.loads(resp.read().decode())
     except error.HTTPError as exc:
-        body_text = exc.read().decode(errors="replace")
+        payload = exc.read().decode(errors="replace")
         try:
-            body_text = json.loads(body_text)
-        except Exception:
+            payload = json.loads(payload)
+        except ValueError:
             pass
-        return exc.code, body_text
+        raise APIError(exc.code, payload) from None
     except error.URLError as exc:
-        raise SystemExit(
-            f"Cannot reach {BASE_URL}. Is the controller running?\n  {exc}"
-        ) from None
+        raise RuntimeError(f"Cannot reach {BASE_URL}: {exc}") from None
 
 
 # ---------------------------------------------------------------------------
-# Operations
+# Public helpers
 # ---------------------------------------------------------------------------
 
 
-def cmd_list() -> None:
-    status, data = _request("GET", "/api/projects")
-    if status != 200:
-        raise SystemExit(f"GET /api/projects -> {status}: {data}")
-    if not data:
-        print("(no projects yet)")
-        return
-    print(f"{'name':<24} {'mols':>5} {'tasks':>6} {'ok':>5} {'failed':>7}")
-    for p in data:
-        print(f"{p['name']:<24} {p['molecules']:>5} {p['tasks_total']:>6} "
-              f"{p['tasks_successful']:>5} {p['tasks_failed']:>7}")
+def list_projects() -> list:
+    return call("GET", "/api/projects")
 
 
-def cmd_inspect(project: str) -> None:
-    status, data = _request("GET", f"/api/projects/{parse.quote(project)}")
-    if status != 200:
-        raise SystemExit(f"GET /api/projects/{project} -> {status}: {data}")
-    print(f"project: {data['name']}")
-    print(f"  submission_progress : {data['submission_progress']}")
-    print(f"  success_rate        : {data['success_rate']}")
-    print(f"  molecules           : {len(data['molecules'])}")
-    if data["molecules"]:
-        print(f"\n  {'id':>4}  {'smiles':<36}  {'tasks':>5}  {'ok':>5}  {'failed':>6}")
-        for m in data["molecules"][:20]:
-            print(f"  {m['id']:>4}  {m['smiles'][:36]:<36}  {m['tasks']:>5}  "
-                  f"{m['successful']:>5}  {m['failed']:>6}")
-        if len(data["molecules"]) > 20:
-            print(f"  ... ({len(data['molecules']) - 20} more)")
+def inspect_project(project: str = PROJECT) -> dict:
+    return call("GET", f"/api/projects/{parse.quote(project)}")
 
 
-def cmd_export(project: str, fmt: str, all_conformers: bool) -> None:
-    """Non-destructive export: ?format=csv|json|files."""
-    status, data = _request(
+def export_project(
+    project: str = PROJECT,
+    fmt: str = "csv",
+    all_conformers: bool = ALL_CONFORMERS,
+) -> dict:
+    """Non-destructive ``POST /api/projects/{name}/export?format=…``.
+
+    ``fmt`` is one of ``"csv"``, ``"json"``, ``"files"``.
+    """
+    return call(
         "POST",
         f"/api/projects/{parse.quote(project)}/export",
-        params={"format": fmt, "all_conformers": str(all_conformers).lower()},
+        params={"format": fmt, "all_conformers": str(bool(all_conformers)).lower()},
     )
-    if status != 200:
-        raise SystemExit(f"export {fmt!r} -> HTTP {status}: {data}")
-    print(json.dumps(data, indent=2))
 
 
-def cmd_archive(project: str, extensions: list[str], all_conformers: bool,
-                confirm: bool) -> None:
-    """DESTRUCTIVE archive: filtered files copied, comp_data wiped, project
-    removed from the database. Same behaviour as the dashboard's
-    'Export all files' button after confirmation."""
-    if not confirm:
-        raise SystemExit(
-            "Refusing to archive without --confirm. This is irreversible: it "
-            "writes the CSV summary + only the listed extensions into "
-            "<export_data>/<project>/raw/, deletes every <comp_data>/mol_*/ "
-            "for the project, and removes the project rows from the DB."
-        )
-    status, data = _request(
+def archive_project(
+    project: str = PROJECT,
+    extensions: list[str] = ARCHIVE_EXTENSIONS,
+    all_conformers: bool = ALL_CONFORMERS,
+) -> dict:
+    """**Destructive** ``POST /api/projects/{name}/archive``.
+
+    Raises ``APIError`` with HTTP 409 if any task is still in flight.
+    """
+    return call(
         "POST",
         f"/api/projects/{parse.quote(project)}/archive",
-        body={"extensions": extensions, "all_conformers": all_conformers},
+        body={"extensions": extensions, "all_conformers": bool(all_conformers)},
     )
-    if status == 409:
-        raise SystemExit(
-            f"Archive refused (409): {data}\n"
-            f"Wait for in-flight tasks to finish/fail, then retry."
-        )
-    if status != 200:
-        raise SystemExit(f"archive -> HTTP {status}: {data}")
-    print(json.dumps(data, indent=2))
 
 
 # ---------------------------------------------------------------------------
-# CLI
+# Examples — run when this file is executed directly.
 # ---------------------------------------------------------------------------
-
-
-def main() -> None:
-    p = argparse.ArgumentParser()
-    g = p.add_mutually_exclusive_group(required=True)
-    g.add_argument("--list", action="store_true",
-                   help="List projects (no project name needed).")
-    g.add_argument("--project", help="Project to inspect / export / archive.")
-
-    p.add_argument("--export", choices=("csv", "json", "files"),
-                   help="Trigger /api/projects/{name}/export with this format.")
-    p.add_argument("--archive", action="store_true",
-                   help="Trigger the DESTRUCTIVE /api/projects/{name}/archive.")
-    p.add_argument("--extensions", nargs="+",
-                   default=[".inp", ".xyz", ".out"],
-                   help="(archive) file extensions to keep. Add e.g. .gbw "
-                        ".cube .spindens .eldens .hess for more.")
-    p.add_argument("--all-conformers", action="store_true",
-                   help="Export every conformer per state instead of only the lowest.")
-    p.add_argument("--confirm", action="store_true",
-                   help="Required for --archive (this is irreversible).")
-    args = p.parse_args()
-
-    if args.list:
-        cmd_list()
-        return
-
-    if args.archive:
-        cmd_archive(args.project, args.extensions, args.all_conformers, args.confirm)
-        return
-
-    if args.export:
-        cmd_export(args.project, args.export, args.all_conformers)
-        return
-
-    cmd_inspect(args.project)
 
 
 if __name__ == "__main__":
-    main()
+    # 1) Project listing.
+    projects = list_projects()
+    print(f"{'name':<24} {'mols':>5} {'tasks':>6} {'ok':>5} {'failed':>7}")
+    for p in projects:
+        print(f"{p['name']:<24} {p['molecules']:>5} {p['tasks_total']:>6} "
+              f"{p['tasks_successful']:>5} {p['tasks_failed']:>7}")
+
+    if not any(p["name"] == PROJECT for p in projects):
+        print(f"\nproject {PROJECT!r} not found on the server — nothing else to do.")
+        raise SystemExit(0)
+
+    # 2) Per-project view, including the running/complete status banner
+    #    the dashboard renders.
+    detail = inspect_project(PROJECT)
+    print(f"\nproject: {detail['name']}")
+    print(f"  status:               {detail['status']}")
+    print(f"  total_molecules:      {detail['total_molecules']}")
+    print(f"  completed_molecules:  {detail['completed_molecules']}")
+    print(f"  in_flight_molecules:  {detail['in_flight_molecules']}")
+    print(f"  in_flight_tasks:      {detail['in_flight_tasks']}")
+    print(f"  submission_progress:  {detail['submission_progress']}")
+    print(f"  success_rate:         {detail['success_rate']}")
+
+    # 3) Non-destructive exports.
+    print("\nexport CSV:  ", export_project(PROJECT, fmt="csv"))
+    print("export JSON: ", export_project(PROJECT, fmt="json"))
+    print("export files:", export_project(PROJECT, fmt="files"))
+
+    # 4) Destructive archive, gated behind RUN_ARCHIVE.
+    if RUN_ARCHIVE:
+        print(f"\nRUN_ARCHIVE=True — archiving {PROJECT} now...")
+        try:
+            print(json.dumps(archive_project(PROJECT), indent=2))
+        except APIError as exc:
+            if exc.status == 409:
+                print("archive refused (409 — in-flight tasks still present):", exc.body)
+            else:
+                raise
+    else:
+        print(
+            "\n(skipping archive — set RUN_ARCHIVE = True at the top of the "
+            "file or call archive_project() to run the destructive flow)"
+        )

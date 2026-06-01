@@ -1,22 +1,17 @@
 """Monitor pipeline progress.
 
-Two equivalent ways to inspect what the pipeline is doing:
+Two equivalent ways to look at what the controller is doing:
 
-1. **Direct DB** — SQLModel queries; same code the CLI uses. Use this on
-   the controller host where the DB file is local.
-2. **REST API** — pure HTTP polling. Use this from anywhere else.
+* ``snapshot_via_db`` — direct SQLModel queries. Use this when the script
+  runs on the controller host where the SQLite file is local.
+* ``snapshot_via_api`` — pure HTTP. Use this from anywhere else.
 
-Usage
------
-    python examples/03_monitor_progress.py                    # one snapshot
-    python examples/03_monitor_progress.py --project phenols  # focus a project
-    python examples/03_monitor_progress.py --watch 30         # refresh loop
-    python examples/03_monitor_progress.py --via api          # use HTTP
+Configure ``BASE_URL`` / ``PROJECT`` / ``CONFIG_PATH`` at the top, then
+import the helpers or run the file directly.
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import time
 from pathlib import Path
@@ -34,50 +29,60 @@ from autodft.models.molecule import Molecule
 from autodft.models.task import ComputationTask
 
 
+# ---------------------------------------------------------------------------
+# Configuration — edit these for your environment.
+# ---------------------------------------------------------------------------
+
 BASE_URL = "http://localhost:8085"
+CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "reaction.toml"
+PROJECT = "Test"            # set to None to skip per-project block
+WATCH_INTERVAL = 0           # >0 = refresh every N seconds; 0 = one shot
+HTTP_TIMEOUT = 10
+
+
+# Ensure tables exist if we touch the DB path.
+init_db(load_settings(CONFIG_PATH if CONFIG_PATH.exists() else None))
 
 
 # ---------------------------------------------------------------------------
-# Direct DB snapshot — also reports failed entrypoints (the dashboard's
-# "Failed Entrypoints" widget) so silent SMILES errors can't be missed.
+# Direct DB snapshot — also surfaces failed entrypoints so silent SMILES
+# errors can't be missed.
 # ---------------------------------------------------------------------------
 
 
 def snapshot_via_db(project: str | None = None) -> dict:
     with get_session() as session:
-        n_molecules = session.exec(select(func.count(Molecule.id))).one()
-        n_running = session.exec(
+        molecules = session.exec(select(func.count(Molecule.id))).one()
+        running = session.exec(
             select(func.count(ComputationJob.id)).where(
                 ComputationJob.slurm_status == "RUNNING"
             )
         ).one()
-        n_pending = session.exec(
+        pending = session.exec(
             select(func.count(ComputationJob.id)).where(
                 ComputationJob.slurm_status == "PENDING"
             )
         ).one()
-        n_completed = session.exec(
+        completed = session.exec(
             select(func.count(ComputationJob.id)).where(
                 ComputationJob.success == True  # noqa: E712
             )
         ).one()
-        n_failed_jobs = session.exec(
+        failed_jobs = session.exec(
             select(func.count(ComputationJob.id)).where(
                 ComputationJob.success == False  # noqa: E712
             )
         ).one()
-        n_failed_tasks = session.exec(
+        failed_tasks = session.exec(
             select(func.count(ComputationTask.id)).where(
                 ComputationTask.status == TaskStatus.failed
             )
         ).one()
-        queue_length = session.exec(
+        queue_len = session.exec(
             select(func.count(CalculationEntrypoint.id)).where(
                 col(CalculationEntrypoint.time_started).is_(None)
             )
         ).one()
-        # Failed-pre-task entrypoints (e.g. SMILES that slipped past
-        # validation and then crashed in geometry generation)
         failed_eps = session.exec(
             select(CalculationEntrypoint).where(
                 col(CalculationEntrypoint.processing_error).is_not(None)
@@ -85,13 +90,13 @@ def snapshot_via_db(project: str | None = None) -> dict:
         ).all()
 
     summary = {
-        "molecules": n_molecules,
-        "running_jobs": n_running,
-        "pending_jobs": n_pending,
-        "completed_jobs": n_completed,
-        "failed_jobs":  n_failed_jobs,
-        "failed_tasks": n_failed_tasks,
-        "queue_length": queue_length,
+        "molecules": molecules,
+        "running_jobs": running,
+        "pending_jobs": pending,
+        "completed_jobs": completed,
+        "failed_jobs": failed_jobs,
+        "failed_tasks": failed_tasks,
+        "queue_length": queue_len,
         "failed_entrypoints": [
             {"id": e.id, "smiles": e.smiles, "error": (e.processing_error or "")[:200]}
             for e in failed_eps
@@ -100,7 +105,7 @@ def snapshot_via_db(project: str | None = None) -> dict:
 
     if project:
         ext = PipelineExtractor(project)
-        summary[f"{project}_progress"]     = ext.get_submission_progress()
+        summary[f"{project}_progress"] = ext.get_submission_progress()
         summary[f"{project}_success_rate"] = ext.get_success_rate()
 
     return summary
@@ -108,14 +113,14 @@ def snapshot_via_db(project: str | None = None) -> dict:
 
 # ---------------------------------------------------------------------------
 # REST API snapshot — composes /api/overview with /api/entrypoints/failed
-# and, when --project is given, with /api/projects/{name}.
+# and /api/projects/{name} when a project is configured.
 # ---------------------------------------------------------------------------
 
 
 def _http_get(path: str) -> object:
     req = request.Request(BASE_URL + path, headers={"Accept": "application/json"})
     try:
-        with request.urlopen(req, timeout=10) as resp:
+        with request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
             return json.loads(resp.read().decode())
     except (error.URLError, error.HTTPError) as exc:
         return {"error": str(exc), "path": path}
@@ -132,43 +137,37 @@ def snapshot_via_api(project: str | None = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# CLI
+# Watch loop helper
 # ---------------------------------------------------------------------------
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--project", help="Project name to include per-project progress for")
-    parser.add_argument(
-        "--watch", type=int, metavar="SECONDS",
-        help="Refresh every N seconds instead of printing a single snapshot",
-    )
-    parser.add_argument(
-        "--via", choices=("db", "api"), default="db",
-        help="db = SQLModel queries, api = HTTP. Default: db.",
-    )
-    args = parser.parse_args()
+def watch(via: str = "db", interval: int = WATCH_INTERVAL, project: str | None = PROJECT) -> None:
+    """Print snapshots either once (interval ≤ 0) or in a loop."""
+    snap_fn = snapshot_via_db if via == "db" else snapshot_via_api
+    if interval <= 0:
+        print(json.dumps(snap_fn(project), indent=2, default=str))
+        return
+    try:
+        while True:
+            print(json.dumps(snap_fn(project), indent=2, default=str))
+            print(f"--- refresh in {interval}s (Ctrl-C to stop) ---")
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        pass
 
-    if args.via == "db":
-        cfg = Path(__file__).resolve().parents[1] / "config" / "reaction.toml"
-        init_db(load_settings(cfg if cfg.exists() else None))
 
-    def one_round() -> None:
-        snap = (snapshot_via_db(args.project) if args.via == "db"
-                else snapshot_via_api(args.project))
-        print(json.dumps(snap, indent=2, default=str))
-
-    if args.watch:
-        try:
-            while True:
-                one_round()
-                print(f"--- refresh in {args.watch}s (Ctrl-C to stop) ---")
-                time.sleep(args.watch)
-        except KeyboardInterrupt:
-            pass
-    else:
-        one_round()
+# ---------------------------------------------------------------------------
+# Examples — run when this file is executed directly.
+# ---------------------------------------------------------------------------
 
 
 if __name__ == "__main__":
-    main()
+    # Quick demo: show both backends side-by-side, one snapshot each.
+    print("=== snapshot via DB ===")
+    print(json.dumps(snapshot_via_db(PROJECT), indent=2, default=str))
+
+    print("\n=== snapshot via REST API ===")
+    print(json.dumps(snapshot_via_api(PROJECT), indent=2, default=str))
+
+    # To watch continuously, change WATCH_INTERVAL at the top of the file
+    # (or call watch() directly), e.g.: watch(via="api", interval=30).

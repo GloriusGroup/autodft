@@ -1,14 +1,16 @@
 """Submit SMILES to AutoDFT directly from Python.
 
-Bypasses the CLI and the REST API: writes ``CalculationEntrypoint`` rows
-straight into the SQLite database that the controller polls. The same
-options that the dashboard form and REST endpoint expose are available
-here through the ``request_metadata`` JSON field.
+Writes ``CalculationEntrypoint`` rows straight into the database the
+controller polls — no CLI, no HTTP. The same options that the dashboard
+form and REST endpoint expose are available here as keyword arguments.
 
-Run with the project root on PYTHONPATH and the production config
-visible (or set ``AUTODFT_*`` env vars to override pieces of it):
+Run it as a script::
 
     python examples/01_submit_via_python.py
+
+or import the helpers into your own code::
+
+    from examples.submit_via_python import submit, make_metadata
 """
 
 from __future__ import annotations
@@ -22,190 +24,177 @@ from autodft.engine.entrypoint_processor import validate_smiles
 from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.models.header import ComputationHeader
 from autodft.qm.orca.defaults import (
-    DEFAULT_HEADER_CONFSEARCH,    # GOAT GFN2-xTB
-    DEFAULT_HEADER_OPTIMIZATION,  # wB97X-D3 / def2-TZVP
-    DEFAULT_HEADER_SINGLEPOINT,   # wB97X-D3 / def2-QZVPD
-    GXTB_HEADER_CONFSEARCH,       # GOAT g-xTB variant
+    B3LYP_HEADER_OPTIMIZATION,
+    B3LYP_HEADER_SINGLEPOINT,
+    DEFAULT_HEADER_CONFSEARCH,
+    DEFAULT_HEADER_OPTIMIZATION,
+    DEFAULT_HEADER_SINGLEPOINT,
+    GXTB_HEADER_CONFSEARCH,
 )
 from sqlmodel import select
 
+
 # ---------------------------------------------------------------------------
-# Pick up the production config (you can also rely on AUTODFT_* env vars
-# alone by passing config_path=None here).
+# Configuration — edit these for your environment.
 # ---------------------------------------------------------------------------
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "reaction.toml"
 
-settings = load_settings(CONFIG_PATH if CONFIG_PATH.exists() else None)
-init_db(settings)  # creates data_path / comp_data / export_data / DB tables
+
+# ---------------------------------------------------------------------------
+# Engine init. ``init_db`` is idempotent: safe to call from any importing
+# module; it just makes sure the data path and tables exist.
+# ---------------------------------------------------------------------------
+
+SETTINGS = load_settings(CONFIG_PATH if CONFIG_PATH.exists() else None)
+init_db(SETTINGS)
 
 
 # ---------------------------------------------------------------------------
-# Helper: build the request_metadata JSON the controller understands.
-# Every option in /api/submit is also a key here. The names match exactly.
+# Public helpers
 # ---------------------------------------------------------------------------
 
 
 def make_metadata(
     project: str,
     *,
-    # Which states to build beyond S0
     request_t1: bool = False,
     request_ox: bool = False,
     request_red: bool = False,
-    # Workflow toggles
-    skip_confsearch: bool = False,           # GOAT skipped, RDKit geom -> optimization
-    request_optimization: bool = True,        # turn off to stop after confsearch
-    request_singlepoint: bool = True,         # turn off to stop after optimization
-    request_singlepoint_vertical_excitations: bool = True,  # vert-ox/red/spin-flip SPs
-    request_singlepoint_nbo: bool = False,    # reserved; not exposed via REST yet
-    # Per-state conformer caps (defaults match the dashboard form)
+    skip_confsearch: bool = False,
+    request_optimization: bool = True,
+    request_singlepoint: bool = True,
+    request_singlepoint_vertical_excitations: bool = True,
+    request_singlepoint_nbo: bool = False,
     max_conformers_S0: int = 1,
     max_conformers_T1: int = 1,
     max_conformers_ox: int = 1,
     max_conformers_red: int = 1,
 ) -> str:
+    """Build the ``request_metadata`` JSON blob the controller consumes.
+
+    Every keyword mirrors one body field of ``POST /api/submit``. ``S1``
+    is intentionally absent — it's not supported yet.
+    """
     return json.dumps({
         "project_name": project,
         "project_author": "python_example",
-        # S1 is not yet supported; the controller ignores it but the
-        # field is kept for forward-compatibility with the legacy schema.
-        "request_S1":  False,
-        "request_T1":  request_t1,
-        "request_ox":  request_ox,
+        "request_S1": False,
+        "request_T1": request_t1,
+        "request_ox": request_ox,
         "request_red": request_red,
         "request_confsearch": not skip_confsearch,
         "request_optimization": request_optimization,
         "request_singlepoint": request_singlepoint,
         "request_singlepoint_vertical_excitations": request_singlepoint_vertical_excitations,
         "request_singlepoint_nbo": request_singlepoint_nbo,
-        "max_conformers_S0":  max_conformers_S0,
-        "max_conformers_T1":  max_conformers_T1,
-        "max_conformers_ox":  max_conformers_ox,
+        "max_conformers_S0": max_conformers_S0,
+        "max_conformers_T1": max_conformers_T1,
+        "max_conformers_ox": max_conformers_ox,
         "max_conformers_red": max_conformers_red,
     })
 
 
-# ---------------------------------------------------------------------------
-# 1) Minimal submission — S0 only, default headers, 1 conformer.
-# ---------------------------------------------------------------------------
+def submit(
+    smiles: str,
+    project: str,
+    *,
+    priority: int = 10,
+    header_confsearch: str | None = DEFAULT_HEADER_CONFSEARCH,
+    header_optimization: str | None = DEFAULT_HEADER_OPTIMIZATION,
+    header_singlepoint: str | None = DEFAULT_HEADER_SINGLEPOINT,
+    **metadata_kwargs,
+) -> int:
+    """Validate, then queue one entrypoint. Returns the new row id.
 
-print("--- 1) minimal: ethanol, S0 only, all defaults ---")
-with get_session() as session:
-    entry = CalculationEntrypoint(
-        smiles="CCO",
-        request_metadata=make_metadata("alcohols"),
-        priority=10,
-        header_confsearch=DEFAULT_HEADER_CONFSEARCH,
-        header_optimization=DEFAULT_HEADER_OPTIMIZATION,
-        header_singlepoint=DEFAULT_HEADER_SINGLEPOINT,
-    )
-    session.add(entry)
-    session.commit()
-    session.refresh(entry)
-    print(f"    queued #{entry.id}  {entry.smiles}")
+    Raises ``ValueError`` if the SMILES is invalid — same check the
+    REST endpoint runs before writing the row.
+    """
+    check = validate_smiles(smiles)
+    if not check["valid"]:
+        raise ValueError(f"Invalid SMILES {smiles!r}: {check['error']}")
 
-
-# ---------------------------------------------------------------------------
-# 2) "Everything on": T1 / ox / red + per-state conformer counts +
-#    vertical excitations off + non-default priority + g-xTB conformer
-#    search header.
-# ---------------------------------------------------------------------------
-
-print("--- 2) full coverage: T1/ox/red, per-state conformers, g-xTB confsearch ---")
-with get_session() as session:
-    entry = CalculationEntrypoint(
-        smiles="c1ccc(O)cc1",  # phenol
-        request_metadata=make_metadata(
-            project="phenols",
-            request_t1=True,
-            request_ox=True,
-            request_red=True,
-            request_singlepoint_vertical_excitations=False,
-            max_conformers_S0=5,
-            max_conformers_T1=3,
-            max_conformers_ox=2,
-            max_conformers_red=2,
-        ),
-        priority=20,
-        header_confsearch=GXTB_HEADER_CONFSEARCH,
-        header_optimization=DEFAULT_HEADER_OPTIMIZATION,
-        header_singlepoint=DEFAULT_HEADER_SINGLEPOINT,
-    )
-    session.add(entry)
-    session.commit()
-    session.refresh(entry)
-    print(f"    queued #{entry.id}  {entry.smiles}")
-
-
-# ---------------------------------------------------------------------------
-# 3) Skip-confsearch path — RDKit's initial geometry feeds optimization
-#    directly. Useful for very small molecules where GOAT is overkill.
-# ---------------------------------------------------------------------------
-
-print("--- 3) skip-confsearch path ---")
-with get_session() as session:
-    entry = CalculationEntrypoint(
-        smiles="CC",  # ethane
-        request_metadata=make_metadata("quick", skip_confsearch=True),
-        priority=5,
-        # No confsearch header needed when skip_confsearch=True
-        header_confsearch=None,
-        header_optimization=DEFAULT_HEADER_OPTIMIZATION,
-        header_singlepoint=DEFAULT_HEADER_SINGLEPOINT,
-    )
-    session.add(entry)
-    session.commit()
-    session.refresh(entry)
-    print(f"    queued #{entry.id}  {entry.smiles}  (skip_confsearch)")
-
-
-# ---------------------------------------------------------------------------
-# 4) Use a stored DB header by reading it back from the seeded rows
-#    rather than hardcoding the text. This is what the dashboard does.
-# ---------------------------------------------------------------------------
-
-print("--- 4) submit using stored headers (by description lookup) ---")
-with get_session() as session:
-    b3lyp_opt = session.exec(
-        select(ComputationHeader).where(
-            ComputationHeader.kind == "optimization",
-            ComputationHeader.description.contains("B3LYP")  # type: ignore[union-attr]
-        )
-    ).first()
-    b3lyp_sp = session.exec(
-        select(ComputationHeader).where(
-            ComputationHeader.kind == "singlepoint",
-            ComputationHeader.description.contains("B3LYP")  # type: ignore[union-attr]
-        )
-    ).first()
-    if b3lyp_opt and b3lyp_sp:
+    with get_session() as session:
         entry = CalculationEntrypoint(
-            smiles="CCN",  # ethylamine
-            request_metadata=make_metadata("amines", request_t1=True),
-            priority=10,
-            header_confsearch=DEFAULT_HEADER_CONFSEARCH,
-            header_optimization=b3lyp_opt.header_text,
-            header_singlepoint=b3lyp_sp.header_text,
+            smiles=smiles,
+            request_metadata=make_metadata(project, **metadata_kwargs),
+            priority=priority,
+            header_confsearch=header_confsearch,
+            header_optimization=header_optimization,
+            header_singlepoint=header_singlepoint,
         )
         session.add(entry)
         session.commit()
         session.refresh(entry)
-        print(f"    queued #{entry.id}  {entry.smiles}  "
-              f"(opt header #{b3lyp_opt.id}, sp header #{b3lyp_sp.id})")
-    else:
-        print("    (no B3LYP headers found — run autodft admin init-db first)")
+        return entry.id
+
+
+def header_by_description(kind: str, contains: str) -> ComputationHeader | None:
+    """Find a stored header by case-insensitive description substring."""
+    with get_session() as session:
+        return session.exec(
+            select(ComputationHeader).where(
+                ComputationHeader.kind == kind,
+                ComputationHeader.description.contains(contains),  # type: ignore[union-attr]
+            )
+        ).first()
 
 
 # ---------------------------------------------------------------------------
-# 5) Always validate before queuing. The controller will refuse to expand
-#    bad SMILES, but failing here is faster and clearer.
+# Examples — run when this file is executed directly.
 # ---------------------------------------------------------------------------
 
-print("--- 5) pre-flight validation ---")
-for smi in ["c1ccccc1", "[Fe+2]", "not a smiles"]:
-    v = validate_smiles(smi)
-    if v["valid"]:
-        print(f"    OK    {smi!r:<25}  {v['heavy_atoms']} heavy atoms, canonical={v['canonical']!r}")
-    else:
-        print(f"    SKIP  {smi!r:<25}  -> {v['error']}")
+
+if __name__ == "__main__":
+    # 1) Minimal: S0 only, defaults everywhere.
+    eid = submit("CCO", project="alcohols")
+    print(f"#{eid}  CCO  (defaults)")
+
+    # 2) Full coverage: T1 / ox / red, per-state conformer caps,
+    #    vertical excitations off, non-default priority, g-xTB
+    #    conformer-search header.
+    eid = submit(
+        "c1ccc(O)cc1",
+        project="phenols",
+        priority=20,
+        request_t1=True,
+        request_ox=True,
+        request_red=True,
+        request_singlepoint_vertical_excitations=False,
+        max_conformers_S0=5,
+        max_conformers_T1=3,
+        max_conformers_ox=2,
+        max_conformers_red=2,
+        header_confsearch=GXTB_HEADER_CONFSEARCH,
+    )
+    print(f"#{eid}  c1ccc(O)cc1  (T1/ox/red, per-state confs, g-xTB)")
+
+    # 3) Skip-confsearch path — RDKit's geometry feeds optimization directly.
+    eid = submit(
+        "CC",
+        project="quick",
+        priority=5,
+        skip_confsearch=True,
+        header_confsearch=None,
+    )
+    print(f"#{eid}  CC   (skip_confsearch)")
+
+    # 4) Pick stored headers from the seeded rows by description.
+    b3lyp_opt = header_by_description("optimization", "B3LYP")
+    b3lyp_sp = header_by_description("singlepoint", "B3LYP")
+    if b3lyp_opt and b3lyp_sp:
+        eid = submit(
+            "CCN",
+            project="amines",
+            request_t1=True,
+            header_optimization=b3lyp_opt.header_text,
+            header_singlepoint=b3lyp_sp.header_text,
+        )
+        print(f"#{eid}  CCN  (B3LYP opt #{b3lyp_opt.id} + sp #{b3lyp_sp.id})")
+
+    # 5) Pre-flight validation — same check the REST endpoint runs.
+    for smi in ["c1ccccc1", "[Fe+2]", "not a smiles"]:
+        v = validate_smiles(smi)
+        verdict = "OK  " if v["valid"] else "BAD "
+        info = v["canonical"] if v["valid"] else v["error"]
+        print(f"{verdict} {smi!r:<25}  {info}")
