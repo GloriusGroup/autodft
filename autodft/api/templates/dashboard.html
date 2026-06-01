@@ -1251,8 +1251,8 @@
     </div>  <!-- /container -->
     </div>  <!-- /app -->
 
-    <!-- SmilesDrawer for client-side 2-D structures on the Molecules page. -->
-    <script src="https://unpkg.com/smiles-drawer@2.1.7/dist/smiles-drawer.min.js"></script>
+    <!-- SmilesDrawer (canvas) — client-side 2-D structures on the Molecules page. -->
+    <script src="https://unpkg.com/smiles-drawer@2.3.0/dist/smiles-drawer.min.js"></script>
 
 
     <script>
@@ -2127,42 +2127,57 @@
         // ── Project Overview > Molecules subpage ────────────────────────
 
         // SmilesDrawer is loaded from a CDN at the bottom of <body>. It
-        // exposes ``window.SmilesDrawer`` once ready.
+        // exposes ``window.SmilesDrawer`` once ready. Use the bundled
+        // 'dark' theme (matches our background) — custom themes get
+        // silently merged in older versions and can break rendering.
         var _smilesDrawer = null;
         function getSmilesDrawer() {
-            if (_smilesDrawer || !window.SmilesDrawer) return _smilesDrawer;
+            if (_smilesDrawer || !window.SmilesDrawer || !window.SmilesDrawer.Drawer) return _smilesDrawer;
             _smilesDrawer = new SmilesDrawer.Drawer({
                 width: 180, height: 130,
                 bondThickness: 1.0,
                 shortBondLength: 0.85,
-                themes: { 'autodft': {
-                    C: '#e4e6eb', N: '#5d8bf4', O: '#ef4444', F: '#a3e635',
-                    Cl: '#22c55e', Br: '#f97316', I: '#a78bfa', P: '#fbbf24',
-                    S: '#eab308', B: '#fbcfe8', H: '#9ca0ab',
-                    BACKGROUND: 'transparent',
-                } },
+                explicitHydrogens: false,
             });
             return _smilesDrawer;
         }
 
+        function _drawFallback(canvas, msg) {
+            var ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#9ca0ab';
+            ctx.font = '11px sans-serif';
+            ctx.fillText(msg, 8, 18);
+        }
+
         function drawStructureInto(canvas, smiles) {
-            var drawer = getSmilesDrawer();
-            if (!drawer) {
-                // SmilesDrawer hasn't loaded yet — write a tiny placeholder.
-                var ctx = canvas.getContext('2d');
-                ctx.fillStyle = '#6b7080';
-                ctx.font = '11px sans-serif';
-                ctx.fillText('(loading…)', 8, 18);
+            // Defer first call until the script has finished loading.
+            if (!window.SmilesDrawer || !window.SmilesDrawer.Drawer) {
+                _drawFallback(canvas, '(loading…)');
+                setTimeout(function () { drawStructureInto(canvas, smiles); }, 300);
                 return;
             }
-            SmilesDrawer.parse(smiles, function (tree) {
-                drawer.draw(tree, canvas, 'autodft', false);
-            }, function () {
-                var ctx = canvas.getContext('2d');
-                ctx.fillStyle = '#9ca0ab';
-                ctx.font = '11px sans-serif';
-                ctx.fillText('(can\'t draw)', 8, 18);
-            });
+            var drawer = getSmilesDrawer();
+            if (!drawer) { _drawFallback(canvas, '(no drawer)'); return; }
+            try {
+                SmilesDrawer.parse(smiles,
+                    function (tree) {
+                        try {
+                            drawer.draw(tree, canvas, 'dark', false);
+                        } catch (e) {
+                            console.warn('SmilesDrawer draw failed for', smiles, e);
+                            _drawFallback(canvas, '(draw error)');
+                        }
+                    },
+                    function (err) {
+                        console.warn('SmilesDrawer parse failed for', smiles, err);
+                        _drawFallback(canvas, '(parse error)');
+                    }
+                );
+            } catch (e) {
+                console.warn('SmilesDrawer threw for', smiles, e);
+                _drawFallback(canvas, '(error)');
+            }
         }
 
         function statusCell(value) {
