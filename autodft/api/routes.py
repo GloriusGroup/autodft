@@ -7,11 +7,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import APIRouter, Form, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from sqlmodel import col, func, select
+
+from autodft.api.auth import COOKIE_NAME, issue_token
 
 from autodft.db import get_session
 from autodft.models import (
@@ -27,8 +29,65 @@ from autodft.models import (
 
 router = APIRouter()
 
+# Public router — accessible without authentication. Hosts the login
+# form and the logout helper. Every other route lives on ``router`` and
+# is gated by the auth middleware in ``autodft.api.app``.
+public_router = APIRouter()
+
 _TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
 templates = Jinja2Templates(directory=str(_TEMPLATE_DIR))
+
+
+# ---------------------------------------------------------------------------
+# Login / logout
+# ---------------------------------------------------------------------------
+
+
+@public_router.get("/login", response_class=HTMLResponse)
+def login_page(request: Request, next: Optional[str] = Query("/"), error: Optional[str] = None):
+    """Render the login form."""
+    return templates.TemplateResponse(
+        request=request, name="login.html",
+        context={"next": next or "/", "error": error},
+    )
+
+
+@public_router.post("/login")
+def login_submit(request: Request,
+                 password: str = Form(...),
+                 next: str = Form("/")):
+    """Validate the submitted password and set the session cookie."""
+    settings = get_active_settings()
+    if password != settings.security.dashboard_password:
+        # Re-render the form with an error message. Status stays 200 so
+        # the browser keeps the URL stable.
+        return templates.TemplateResponse(
+            request=request, name="login.html",
+            context={"next": next, "error": "Incorrect password."},
+            status_code=200,
+        )
+
+    token = issue_token(password, settings.security.session_lifetime_seconds)
+    # Sanitise the redirect target — only allow same-origin paths so a
+    # malicious ?next= can't bounce users off-site.
+    target = next if next.startswith("/") and not next.startswith("//") else "/"
+    resp = RedirectResponse(url=target, status_code=303)
+    resp.set_cookie(
+        COOKIE_NAME, token,
+        max_age=settings.security.session_lifetime_seconds,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )
+    return resp
+
+
+@public_router.get("/logout")
+def logout(request: Request):
+    """Clear the session cookie and redirect to the login page."""
+    resp = RedirectResponse(url="/login", status_code=303)
+    resp.delete_cookie(COOKIE_NAME, path="/")
+    return resp
 
 
 # ---------------------------------------------------------------------------

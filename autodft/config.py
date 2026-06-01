@@ -90,6 +90,17 @@ class ApiConfig:
 
 
 @dataclass
+class SecurityConfig:
+    # Password required to access the dashboard and the /api/* endpoints.
+    # Sent either as a cookie (browser flow via /login) or via the
+    # X-AutoDFT-Password header (scripts). The default is intentionally
+    # weak — change it in your deployment config.
+    dashboard_password: str = "password"
+    # How long the session cookie stays valid, in seconds. Default: 7 days.
+    session_lifetime_seconds: int = 7 * 24 * 3600
+
+
+@dataclass
 class OrcaConfig:
     # Absolute path to the ORCA executable. Use "orca" if a module system
     # puts it on PATH; on bare-metal clusters set the full path.
@@ -112,6 +123,7 @@ class Settings:
     slurm: SlurmConfig = field(default_factory=SlurmConfig)
     api: ApiConfig = field(default_factory=ApiConfig)
     orca: OrcaConfig = field(default_factory=OrcaConfig)
+    security: SecurityConfig = field(default_factory=SecurityConfig)
 
     # ------------------------------------------------------------------
     # Derived path helpers (used everywhere instead of touching the
@@ -205,6 +217,7 @@ def _apply_env_overrides(data: dict[str, Any]) -> None:
         ("AUTODFT_ORCA_EXTRA",     ["orca", "extra_args"]),
         ("AUTODFT_NBO_EXE",        ["orca", "nbo_exe"]),
         ("AUTODFT_TMP_DIR",        ["orca", "tmp_dir"]),
+        ("AUTODFT_PASSWORD",       ["security", "dashboard_password"]),
     ]
 
     for env_key, path in env_map:

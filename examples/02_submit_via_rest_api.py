@@ -16,6 +16,10 @@ from urllib import error, request
 # ---------------------------------------------------------------------------
 
 BASE_URL = "http://localhost:8085"
+# Password from [security].dashboard_password in the controller's TOML
+# config. Sent via the X-AutoDFT-Password header on every request — no
+# need to walk through /login from a script.
+PASSWORD = "password"
 DEFAULT_PROJECT = "alcohols"
 TIMEOUT_SECONDS = 30
 
@@ -36,7 +40,7 @@ class APIError(RuntimeError):
 def call(method: str, path: str, body: dict | None = None) -> object:
     """One JSON HTTP round-trip. Raises ``APIError`` on non-2xx."""
     data = json.dumps(body).encode() if body is not None else None
-    headers = {"Accept": "application/json"}
+    headers = {"Accept": "application/json", "X-AutoDFT-Password": PASSWORD}
     if body is not None:
         headers["Content-Type"] = "application/json"
     req = request.Request(BASE_URL + path, data=data, method=method, headers=headers)

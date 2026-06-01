@@ -23,6 +23,8 @@ from urllib import error, parse, request
 # ---------------------------------------------------------------------------
 
 BASE_URL = "http://localhost:8085"
+# Password from [security].dashboard_password — sent on every request.
+PASSWORD = "password"
 PROJECT = "Test"
 ALL_CONFORMERS = False
 
@@ -54,7 +56,7 @@ def call(method: str, path: str, body: dict | None = None,
     if params:
         url += "?" + parse.urlencode({k: v for k, v in params.items() if v is not None})
     data = json.dumps(body).encode() if body is not None else None
-    headers = {"Accept": "application/json"}
+    headers = {"Accept": "application/json", "X-AutoDFT-Password": PASSWORD}
     if body is not None:
         headers["Content-Type"] = "application/json"
     req = request.Request(url, data=data, method=method, headers=headers)

@@ -9,6 +9,8 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "jinja2>=3.1",
+    # Required by FastAPI's Form() — used by the /login handler.
+    "python-multipart>=0.0.9",
     "numpy>=1.24",
     "rich>=13.0",
     # Required on the controller to convert SMILES -> initial 3D geometry.

@@ -34,6 +34,8 @@ from autodft.models.task import ComputationTask
 # ---------------------------------------------------------------------------
 
 BASE_URL = "http://localhost:8085"
+# Sent on every HTTP request via the X-AutoDFT-Password header.
+PASSWORD = "password"
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "reaction.toml"
 PROJECT = "Test"            # set to None to skip per-project block
 WATCH_INTERVAL = 0           # >0 = refresh every N seconds; 0 = one shot
@@ -118,7 +120,10 @@ def snapshot_via_db(project: str | None = None) -> dict:
 
 
 def _http_get(path: str) -> object:
-    req = request.Request(BASE_URL + path, headers={"Accept": "application/json"})
+    req = request.Request(BASE_URL + path, headers={
+        "Accept": "application/json",
+        "X-AutoDFT-Password": PASSWORD,
+    })
     try:
         with request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
             return json.loads(resp.read().decode())

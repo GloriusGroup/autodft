@@ -10,6 +10,42 @@ schema at `GET /docs` and `GET /openapi.json`.
 
 ---
 
+## 0. Authentication
+
+Every endpoint — including the HTML dashboard and `/docs` — requires
+the password set via `[security].dashboard_password` in the controller's
+TOML config (default `"password"`).
+
+* **Browser** — visiting any protected URL redirects to `/login`
+  (HTML form). On success the server sets an HMAC-signed `autodft_auth`
+  cookie. `GET /logout` clears it.
+* **Scripts** — send the password via the `X-AutoDFT-Password` header
+  on every request. No cookie needed.
+
+```bash
+# Header path
+curl -s http://localhost:8085/api/overview \
+     -H "X-AutoDFT-Password: password"
+
+# Browser path
+curl -i -c cookies.txt -X POST http://localhost:8085/login \
+     -d 'password=password&next=/'                          # 303 + Set-Cookie
+curl -s -b cookies.txt http://localhost:8085/api/overview
+```
+
+Unauthenticated requests to `/api/*` return:
+
+```json
+HTTP 401
+{ "detail": "Authentication required. Send the password via the "
+            "X-AutoDFT-Password header or sign in at /login first." }
+```
+
+Unauthenticated browser requests get an HTTP 303 redirect to
+`/login?next=<original-path>`.
+
+---
+
 ## 1. Submission
 
 ### `POST /api/validate-smiles`

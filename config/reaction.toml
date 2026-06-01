@@ -71,3 +71,10 @@ tmp_dir    = "/tmp"
 enabled = true
 host = "0.0.0.0"
 port = 8085
+
+[security]
+# Password required to access the dashboard and the /api/* endpoints.
+# Sent either via the login form (cookie-based session) or as the
+# X-AutoDFT-Password header (scripts). CHANGE THIS in production.
+dashboard_password       = "password"
+session_lifetime_seconds = 604800   # 7 days

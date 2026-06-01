@@ -91,8 +91,8 @@ The loader merges three layers, highest-priority last:
 2. the file you pass via `--config`
 3. environment variables (`AUTODFT_*`)
 
-For production, the entire config is anchored on `data_path` plus the
-ORCA section:
+For production, the entire config is anchored on `data_path`, the ORCA
+section, and a dashboard password:
 
 ```toml
 # config/reaction.toml
@@ -127,6 +127,13 @@ tmp_dir    = "/tmp"
 enabled = true
 host    = "0.0.0.0"
 port    = 8085
+
+[security]
+# Required to access the dashboard and /api/* endpoints. Change this
+# in production. Browsers sign in at /login (sets a cookie); scripts
+# send the same value via the X-AutoDFT-Password header.
+dashboard_password       = "password"
+session_lifetime_seconds = 604800   # 7 days
 ```
 
 Override individual values without editing the file:
@@ -144,6 +151,7 @@ Override individual values without editing the file:
 | `AUTODFT_ORCA_EXTRA`    | `orca.extra_args`                         |
 | `AUTODFT_NBO_EXE`       | `orca.nbo_exe`                            |
 | `AUTODFT_TMP_DIR`       | `orca.tmp_dir`                            |
+| `AUTODFT_PASSWORD`      | `security.dashboard_password`             |
 
 ---
 
@@ -186,6 +194,34 @@ For local testing without SLURM:
 ```bash
 autodft run --scheduler local --once   # single tick, then exit
 ```
+
+---
+
+## Authentication
+
+The dashboard and the `/api/*` endpoints are gated by a single shared
+password — `[security].dashboard_password` in your config TOML (default
+`"password"`, **change it in production**). Two ways to authenticate:
+
+* **Browser** — first request to any non-public path redirects to
+  `/login`. The form accepts the password and sets an HMAC-signed
+  session cookie (7-day default lifetime). `/logout` clears it.
+* **Scripts** — send the password on every request via the
+  `X-AutoDFT-Password` header. No cookie required.
+
+```bash
+# Browser flow — visit http://localhost:8085/ and you'll be redirected.
+
+# Script flow — header on every request:
+curl -s http://localhost:8085/api/overview \
+     -H "X-AutoDFT-Password: password" | jq .
+```
+
+All example scripts under `examples/` carry a `PASSWORD = "password"`
+constant at the top — update it to match your deployment. The auth check
+also kicks in on the live SMILES validator, the headers manager, and
+every project / export endpoint, so leaking the dashboard URL alone is
+not enough to access the API.
 
 ---
 
