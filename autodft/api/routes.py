@@ -534,6 +534,128 @@ def api_project_detail(name: str):
     }
 
 
+@router.get("/api/projects/{name}/molecules-detail")
+def api_project_molecules_detail(name: str):
+    """Per-molecule conformer-level breakdown for one project.
+
+    Returns each molecule with an embedded 2-D SVG depiction, the list
+    of states (S0 / T1 / ox / red), and per-conformer status for every
+    task type spawned from that conformer's optimization. Used by the
+    dashboard's "Project Overview → Molecules" subpage.
+
+    Status values per task slot:
+        "successful" | "failed" | "pending" | "created" | null (not requested).
+    Each conformer = one ``optimization`` task; its dependent singlepoint
+    family is looked up via ``ComputationTask.depends_on_task_id``.
+    """
+    from autodft.models.geometry import MoleculeGeometry
+
+    # Build the molecule list and gather all the related rows in a few
+    # bulk queries — avoid the N+1 trap when a project has many mols.
+    with get_session() as session:
+        mols = session.exec(
+            select(Molecule)
+            .where(Molecule.project_name == name)
+            .order_by(col(Molecule.id).asc())
+        ).all()
+        if not mols:
+            return {"name": name, "molecules": []}
+
+        mol_ids = [m.id for m in mols if m.id is not None]
+        states = session.exec(
+            select(MoleculeState).where(col(MoleculeState.molecule_id).in_(mol_ids))
+        ).all()
+        state_ids = [s.id for s in states if s.id is not None]
+
+        tasks = (
+            session.exec(
+                select(ComputationTask).where(col(ComputationTask.state_id).in_(state_ids))
+            ).all()
+            if state_ids else []
+        )
+
+        # Look up the conformer index for every input geometry the
+        # optimisation tasks reference, so we can render them in a
+        # stable order.
+        geom_ids = [t.input_geometry_id for t in tasks
+                    if t.task_type == TaskType.optimization and t.input_geometry_id is not None]
+        geoms = (
+            session.exec(
+                select(MoleculeGeometry).where(col(MoleculeGeometry.id).in_(geom_ids))
+            ).all()
+            if geom_ids else []
+        )
+
+    # Group helpers
+    states_by_mol: dict[int, list[MoleculeState]] = {}
+    for s in states:
+        states_by_mol.setdefault(s.molecule_id, []).append(s)
+    tasks_by_state: dict[int, list[ComputationTask]] = {}
+    for t in tasks:
+        tasks_by_state.setdefault(t.state_id, []).append(t)
+    geom_by_id = {g.id: g for g in geoms}
+
+    # task -> dependent tasks (singlepoint family hangs off the opt task)
+    deps_by_parent: dict[int, list[ComputationTask]] = {}
+    for t in tasks:
+        if t.depends_on_task_id is not None:
+            deps_by_parent.setdefault(t.depends_on_task_id, []).append(t)
+
+    # Render the molecule list
+    out_mols = []
+    for m in mols:
+        out_states = []
+        for st in sorted(states_by_mol.get(m.id, []), key=_state_sort_key):
+            opt_tasks = sorted(
+                (t for t in tasks_by_state.get(st.id, []) if t.task_type == TaskType.optimization),
+                key=lambda t: t.id,
+            )
+            conformers = []
+            for idx, opt in enumerate(opt_tasks, start=1):
+                deps = {d.task_type: d for d in deps_by_parent.get(opt.id, [])}
+                conformers.append({
+                    "index": idx,
+                    "optimization":                  opt.status.value,
+                    "singlepoint":                   _status_of(deps.get(TaskType.singlepoint)),
+                    "singlepoint_vert_ox":           _status_of(deps.get(TaskType.singlepoint_vert_ox)),
+                    "singlepoint_vert_red":          _status_of(deps.get(TaskType.singlepoint_vert_red)),
+                    "singlepoint_vert_spin_change":  _status_of(deps.get(TaskType.singlepoint_vert_spin_change)),
+                })
+            # Confsearch status for the state — useful when no opt tasks exist yet.
+            cs = next((t for t in tasks_by_state.get(st.id, [])
+                       if t.task_type == TaskType.confsearch), None)
+            out_states.append({
+                "id": st.id,
+                "description": st.description,
+                "charge": st.charge,
+                "multiplicity": st.multiplicity,
+                "confsearch": _status_of(cs),
+                "conformers": conformers,
+            })
+        out_mols.append({
+            "id": m.id,
+            "smiles": m.smiles,
+            # Structure is rendered client-side via SmilesDrawer to keep
+            # the backend free of the X11 / Cairo deps RDKit's Draw
+            # module needs on a headless cluster.
+            "created_at": m.created_at.isoformat() if m.created_at else None,
+            "states": out_states,
+        })
+
+    return {"name": name, "molecules": out_mols}
+
+
+def _status_of(task: Optional[ComputationTask]) -> Optional[str]:
+    return task.status.value if task is not None else None
+
+
+_STATE_ORDER = {"S0": 0, "S1": 1, "T1": 2, "ox": 3, "red": 4}
+
+
+def _state_sort_key(s: MoleculeState) -> tuple[int, str]:
+    return (_STATE_ORDER.get(s.description, 99), s.description)
+
+
 class ArchiveRequest(BaseModel):
     extensions: list[str] = [".inp", ".xyz", ".out"]
     all_conformers: bool = False

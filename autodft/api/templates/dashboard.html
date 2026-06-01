@@ -92,6 +92,19 @@
         }
         .nav-item.active .nav-icon { color: var(--accent); }
 
+        /* Indented sub-nav items under a parent route. */
+        .nav-item.nav-sub {
+            padding-left: 38px;
+            font-size: 0.82rem;
+            color: var(--text-muted);
+        }
+        .nav-item.nav-sub:hover { color: var(--text-primary); }
+        .nav-item.nav-sub.active {
+            background: var(--bg-card);
+            color: var(--text-primary);
+            box-shadow: inset 3px 0 0 var(--accent);
+        }
+
         .sidebar-footer {
             margin-top: auto;
             padding-top: 12px;
@@ -616,6 +629,29 @@
         .btn.btn-danger { background: var(--red); }
         .btn.btn-danger:hover { background: #f87171; }
 
+        /* Molecules table: merged rowspans + tick marks */
+        .mol-table { table-layout: auto; }
+        .mol-table td { vertical-align: middle; }
+        .mol-table td.mol-id     { color: var(--text-muted); font-family: 'SF Mono','Fira Code','Consolas',monospace; }
+        .mol-table td.mol-smiles { font-family: 'SF Mono','Fira Code','Consolas',monospace; font-size: 0.78rem; word-break: break-all; max-width: 260px; }
+        .mol-table td.mol-state  { color: var(--text-secondary); font-weight: 600; font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }
+        .mol-table td.mol-conf   { color: var(--text-muted); }
+        .mol-table td.mol-state, .mol-table td.mol-conf { white-space: nowrap; }
+        .mol-table td.mol-struct {
+            text-align: center;
+            padding: 6px 10px;
+        }
+        .mol-table canvas.struct {
+            background: #ffffff;
+            border-radius: 6px;
+            display: inline-block;
+        }
+        .mol-table .tick      { color: var(--green); font-weight: 700; }
+        .mol-table .cross     { color: var(--red);   font-weight: 700; }
+        .mol-table .inflight  { color: var(--yellow); }
+        .mol-table .skipped   { color: var(--text-muted); }
+        .mol-table tr.mol-first td { border-top: 2px solid var(--border); }
+
         /* Project status banner */
         .project-status-banner {
             display: flex;
@@ -718,6 +754,8 @@
             <a class="nav-item" data-route="submit"   href="#/submit">  <span class="nav-icon">+</span> Job Submission</a>
             <a class="nav-item" data-route="status"   href="#/status">  <span class="nav-icon">&#9678;</span> Current Status</a>
             <a class="nav-item" data-route="projects" href="#/projects"><span class="nav-icon">&#9776;</span> Project Overview</a>
+            <a class="nav-item nav-sub" data-route="projects.summary"   href="#/projects/summary">  Summary</a>
+            <a class="nav-item nav-sub" data-route="projects.molecules" href="#/projects/molecules">Molecules</a>
             <a class="nav-item" data-route="headers"  href="#/headers"> <span class="nav-icon">&#9881;</span> Headers</a>
             <div class="sidebar-footer">
                 <div class="status-indicator">
@@ -1040,12 +1078,12 @@
 
 
         <!-- ============================================================ -->
-        <!-- PAGE: Project Overview                                        -->
+        <!-- PAGE: Project Overview > Summary                              -->
         <!-- ============================================================ -->
-        <section class="page" data-page="projects">
+        <section class="page" data-page="projects.summary">
         <div class="page-header">
             <div>
-                <h1>Project Overview</h1>
+                <h1>Project Overview · Summary</h1>
                 <div class="subtitle">Per-project progress, success rate, and exports.</div>
             </div>
             <div class="form-group" style="min-width: 240px;">
@@ -1156,10 +1194,65 @@
             No projects yet — submit a molecule from Job Submission to populate this view.
         </div>
         </section>
-        <!-- /PAGE: Project Overview -->
+        <!-- /PAGE: Project Overview > Summary -->
+
+
+        <!-- ============================================================ -->
+        <!-- PAGE: Project Overview > Molecules                            -->
+        <!-- ============================================================ -->
+        <section class="page" data-page="projects.molecules">
+        <div class="page-header">
+            <div>
+                <h1>Project Overview · Molecules</h1>
+                <div class="subtitle">Per-conformer task status with 2-D structures (rendered client-side from SMILES).</div>
+            </div>
+            <div class="form-group" style="min-width: 240px;">
+                <label for="projectSelectMols">Project</label>
+                <select id="projectSelectMols"><option value="">Loading...</option></select>
+            </div>
+        </div>
+
+        <div id="moleculesEmptyState" class="empty-state" style="padding: 60px 16px;">
+            Select a project to see its molecules.
+        </div>
+
+        <div class="table-section" id="moleculesTableWrapper" style="display: none;">
+            <div class="table-header">
+                Molecules &amp; conformers
+                <span style="font-weight:400; color:var(--text-muted); font-size:0.8rem; margin-left:8px;">
+                    Ticks = task succeeded · ✗ = failed · ◷ = running/pending · — = not requested
+                </span>
+            </div>
+            <div class="table-scroll" style="max-height: none;">
+                <table class="mol-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 56px;">ID</th>
+                            <th style="width: 200px;">Structure</th>
+                            <th>SMILES</th>
+                            <th>State</th>
+                            <th>Conf</th>
+                            <th>Opt</th>
+                            <th>SP</th>
+                            <th>Vert-Ox</th>
+                            <th>Vert-Red</th>
+                            <th>Vert-Spin</th>
+                        </tr>
+                    </thead>
+                    <tbody id="moleculesTableBody">
+                        <tr><td colspan="10" class="empty-state">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        </section>
+        <!-- /PAGE: Project Overview > Molecules -->
 
     </div>  <!-- /container -->
     </div>  <!-- /app -->
+
+    <!-- SmilesDrawer for client-side 2-D structures on the Molecules page. -->
+    <script src="https://unpkg.com/smiles-drawer@2.1.7/dist/smiles-drawer.min.js"></script>
 
 
     <script>
@@ -1201,26 +1294,50 @@
         }
 
         // ── Sidebar hash routing ────────────────────────────────────────
-        // Routes: #/submit  #/status  #/projects  #/headers
-        // Default to #/submit. Each route maps to a <section data-page="...">.
+        // Routes:
+        //   #/submit
+        //   #/status
+        //   #/projects          (alias for #/projects/summary)
+        //   #/projects/summary
+        //   #/projects/molecules
+        //   #/headers
+        // Each route maps to a <section data-page="..."> and (optionally)
+        // a nav-item with matching data-route.
 
-        var ROUTES = ['submit', 'status', 'projects', 'headers'];
+        var ROUTES = [
+            'submit', 'status',
+            'projects.summary', 'projects.molecules',
+            'headers',
+        ];
+
+        function normaliseRoute(raw) {
+            // "" -> submit, "projects" -> projects.summary, "projects/molecules" -> projects.molecules
+            raw = (raw || '').replace(/^\/+/, '').replace(/\/+$/, '');
+            if (!raw) return 'submit';
+            if (raw === 'projects') return 'projects.summary';
+            var dotted = raw.replace(/\//g, '.');
+            return ROUTES.indexOf(dotted) !== -1 ? dotted : 'submit';
+        }
+
+        function currentRoute() {
+            var h = (location.hash || '').replace(/^#/, '');
+            return normaliseRoute(h);
+        }
 
         function activateRoute(route) {
             if (ROUTES.indexOf(route) === -1) route = 'submit';
             document.querySelectorAll('.page').forEach(function (el) {
                 el.classList.toggle('active', el.dataset.page === route);
             });
+            // Highlight the matching nav item; the parent "projects" item is also active when on a subpage.
             document.querySelectorAll('.nav-item').forEach(function (el) {
-                el.classList.toggle('active', el.dataset.route === route);
+                var r = el.dataset.route;
+                var match = (r === route) || (r === 'projects' && route.indexOf('projects.') === 0);
+                el.classList.toggle('active', match);
             });
-            if (route === 'projects') fetchProjects();
-            if (route === 'status')   fetchFailed();
-        }
-
-        function currentRoute() {
-            var h = (location.hash || '').replace(/^#\//, '');
-            return h || 'submit';
+            if (route === 'projects.summary')   fetchProjects();
+            if (route === 'projects.molecules') fetchProjects().then(loadMoleculesPage);
+            if (route === 'status')             fetchFailed();
         }
 
         window.addEventListener('hashchange', function () { activateRoute(currentRoute()); });
@@ -1717,28 +1834,38 @@
             try {
                 var resp = await fetch('/api/projects');
                 projectCache = await resp.json();
-                var sel   = document.getElementById('projectSelect');
-                var prev  = sel.value;
+                var sel       = document.getElementById('projectSelect');
+                var selMols   = document.getElementById('projectSelectMols');
+                var prev      = sel.value || (selMols && selMols.value) || '';
 
                 if (!projectCache || projectCache.length === 0) {
-                    sel.innerHTML = '<option value="">(no projects yet)</option>';
+                    var empty = '<option value="">(no projects yet)</option>';
+                    sel.innerHTML = empty;
+                    if (selMols) selMols.innerHTML = empty;
                     document.getElementById('projectCards').style.display = 'none';
                     document.getElementById('projectExportSection').style.display = 'none';
                     document.getElementById('projectMoleculesSection').style.display = 'none';
                     document.getElementById('projectEmptyState').style.display = 'block';
+                    if (document.getElementById('moleculesEmptyState')) {
+                        document.getElementById('moleculesEmptyState').style.display = 'block';
+                        document.getElementById('moleculesTableWrapper').style.display = 'none';
+                    }
                     return;
                 }
                 document.getElementById('projectEmptyState').style.display = 'none';
 
-                sel.innerHTML = projectCache.map(function (p) {
+                var html = projectCache.map(function (p) {
                     return '<option value="' + escHtml(p.name) + '">' +
                             escHtml(p.name) + '  (' + p.molecules + ' mol, ' +
                             p.tasks_successful + '/' + p.tasks_total + ' tasks)' +
                            '</option>';
                 }).join('');
+                sel.innerHTML = html;
+                if (selMols) selMols.innerHTML = html;
 
                 if (prev && projectCache.some(function (p) { return p.name === prev; })) {
                     sel.value = prev;
+                    if (selMols) selMols.value = prev;
                 }
                 loadProjectDetail(sel.value);
             } catch (err) {
@@ -1924,7 +2051,17 @@
         (function () {
             document.getElementById('projectSelect').addEventListener('change', function () {
                 loadProjectDetail(this.value);
+                var alt = document.getElementById('projectSelectMols');
+                if (alt) alt.value = this.value;
             });
+            var alt = document.getElementById('projectSelectMols');
+            if (alt) {
+                alt.addEventListener('change', function () {
+                    document.getElementById('projectSelect').value = this.value;
+                    currentProject = this.value;
+                    loadMoleculesPage();
+                });
+            }
             document.getElementById('exportCsvBtn').addEventListener('click', function () { exportProject('csv'); });
             document.getElementById('exportJsonBtn').addEventListener('click', function () { exportProject('json'); });
             document.getElementById('exportAllBtn').addEventListener('click', openArchiveModal);
@@ -1935,6 +2072,135 @@
                 if (e.target === this) closeArchiveModal();
             });
         })();
+
+        // ── Project Overview > Molecules subpage ────────────────────────
+
+        // SmilesDrawer is loaded from a CDN at the bottom of <body>. It
+        // exposes ``window.SmilesDrawer`` once ready.
+        var _smilesDrawer = null;
+        function getSmilesDrawer() {
+            if (_smilesDrawer || !window.SmilesDrawer) return _smilesDrawer;
+            _smilesDrawer = new SmilesDrawer.Drawer({
+                width: 180, height: 130,
+                bondThickness: 1.0,
+                shortBondLength: 0.85,
+                themes: { 'autodft': {
+                    C: '#e4e6eb', N: '#5d8bf4', O: '#ef4444', F: '#a3e635',
+                    Cl: '#22c55e', Br: '#f97316', I: '#a78bfa', P: '#fbbf24',
+                    S: '#eab308', B: '#fbcfe8', H: '#9ca0ab',
+                    BACKGROUND: 'transparent',
+                } },
+            });
+            return _smilesDrawer;
+        }
+
+        function drawStructureInto(canvas, smiles) {
+            var drawer = getSmilesDrawer();
+            if (!drawer) {
+                // SmilesDrawer hasn't loaded yet — write a tiny placeholder.
+                var ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#6b7080';
+                ctx.font = '11px sans-serif';
+                ctx.fillText('(loading…)', 8, 18);
+                return;
+            }
+            SmilesDrawer.parse(smiles, function (tree) {
+                drawer.draw(tree, canvas, 'autodft', false);
+            }, function () {
+                var ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#9ca0ab';
+                ctx.font = '11px sans-serif';
+                ctx.fillText('(can\'t draw)', 8, 18);
+            });
+        }
+
+        function statusCell(value) {
+            // value: "successful" | "failed" | "pending" | "created" | null
+            if (value === null || value === undefined) return '<span class="skipped" title="not requested">—</span>';
+            if (value === 'successful') return '<span class="tick"     title="successful">✓</span>';
+            if (value === 'failed')     return '<span class="cross"    title="failed">✗</span>';
+            if (value === 'pending' || value === 'created')
+                return '<span class="inflight" title="' + value + '">◷</span>';
+            return '<span class="skipped" title="' + escHtml(value) + '">' + escHtml(value) + '</span>';
+        }
+
+        async function loadMoleculesPage() {
+            var sel = document.getElementById('projectSelectMols');
+            var name = sel ? sel.value : currentProject;
+            var empty = document.getElementById('moleculesEmptyState');
+            var wrap  = document.getElementById('moleculesTableWrapper');
+            var tbody = document.getElementById('moleculesTableBody');
+            if (!name) {
+                empty.style.display = 'block';
+                wrap.style.display = 'none';
+                return;
+            }
+            empty.style.display = 'none';
+            wrap.style.display = 'block';
+            tbody.innerHTML = '<tr><td colspan="10" class="empty-state">Loading...</td></tr>';
+
+            var resp = await fetch('/api/projects/' + encodeURIComponent(name) + '/molecules-detail');
+            var data = await resp.json();
+            if (!data.molecules || data.molecules.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="10" class="empty-state">No molecules yet for this project.</td></tr>';
+                return;
+            }
+
+            // Build the rowspan-merged HTML in one pass.
+            var rows = [];
+            data.molecules.forEach(function (m) {
+                // total conformer rows for this molecule (sum across states, at least 1 per state for a placeholder)
+                var molRows = 0;
+                m.states.forEach(function (s) { molRows += Math.max(1, s.conformers.length); });
+                var molRendered = false;
+                m.states.forEach(function (st) {
+                    var rowsForState = Math.max(1, st.conformers.length);
+                    if (st.conformers.length === 0) {
+                        // No optimisation tasks yet — render a single "no conformers" row with the confsearch status.
+                        var cells = [];
+                        if (!molRendered) {
+                            cells.push('<td rowspan="' + molRows + '" class="mol-id">#' + escHtml(m.id) + '</td>');
+                            cells.push('<td rowspan="' + molRows + '" class="mol-struct"><canvas class="struct" width="180" height="130" data-smiles="' + escHtml(m.smiles) + '"></canvas></td>');
+                            cells.push('<td rowspan="' + molRows + '" class="mol-smiles" title="' + escHtml(m.smiles) + '">' + escHtml(m.smiles) + '</td>');
+                            molRendered = true;
+                        }
+                        cells.push('<td rowspan="1" class="mol-state">' + escHtml(st.description) + '</td>');
+                        cells.push('<td class="mol-conf"><em style="color:var(--text-muted);">—</em></td>');
+                        // Show the confsearch status in the Opt column so the user sees something even before any opt task exists.
+                        cells.push('<td colspan="5" style="color:var(--text-muted); font-style:italic;">confsearch ' + (st.confsearch || 'not yet') + '</td>');
+                        rows.push('<tr class="' + (rows.length === 0 || cells.length > 5 ? 'mol-first' : '') + '">' + cells.join('') + '</tr>');
+                        return;
+                    }
+                    st.conformers.forEach(function (c, ci) {
+                        var cells = [];
+                        if (!molRendered) {
+                            cells.push('<td rowspan="' + molRows + '" class="mol-id">#' + escHtml(m.id) + '</td>');
+                            cells.push('<td rowspan="' + molRows + '" class="mol-struct"><canvas class="struct" width="180" height="130" data-smiles="' + escHtml(m.smiles) + '"></canvas></td>');
+                            cells.push('<td rowspan="' + molRows + '" class="mol-smiles" title="' + escHtml(m.smiles) + '">' + escHtml(m.smiles) + '</td>');
+                            molRendered = true;
+                        }
+                        if (ci === 0) {
+                            cells.push('<td rowspan="' + rowsForState + '" class="mol-state" title="charge ' + st.charge + ' / mult ' + st.multiplicity + '">' + escHtml(st.description) + '</td>');
+                        }
+                        cells.push('<td class="mol-conf">' + escHtml(c.index) + '</td>');
+                        cells.push('<td>' + statusCell(c.optimization) + '</td>');
+                        cells.push('<td>' + statusCell(c.singlepoint) + '</td>');
+                        cells.push('<td>' + statusCell(c.singlepoint_vert_ox) + '</td>');
+                        cells.push('<td>' + statusCell(c.singlepoint_vert_red) + '</td>');
+                        cells.push('<td>' + statusCell(c.singlepoint_vert_spin_change) + '</td>');
+                        var firstRowClass = (!molRendered ? '' : '') + (cells.some(function (c) { return c.indexOf('rowspan') !== -1 && c.indexOf('mol-id') !== -1; }) ? ' mol-first' : '');
+                        rows.push('<tr class="' + (firstRowClass.trim()) + '">' + cells.join('') + '</tr>');
+                    });
+                });
+            });
+            // Mark the row that opens each molecule with a thicker border. Simplest: every row that has a td.mol-id descendant.
+            tbody.innerHTML = rows.join('');
+
+            // Now render every <canvas data-smiles="…"> with SmilesDrawer.
+            tbody.querySelectorAll('canvas.struct').forEach(function (canvas) {
+                drawStructureInto(canvas, canvas.dataset.smiles);
+            });
+        }
 
         // ── Refresh orchestration ────────────────────────────────────────
 
