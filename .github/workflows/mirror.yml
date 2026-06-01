@@ -20,4 +20,4 @@ jobs:
       - name: Push to Mirror
         run: |
           git config --unset-all http.https://github.com/.extraheader
-          git push --mirror https://oauth2:${{ secrets.AUTODFT_MIRROR_GROUP_REPO_TOKEN }}@github.com/GloriusGroup/autodft.git
+          git push --mirror https://oauth2:${{ secrets.AUTODFT_MIRROR_TOKEN }}@github.com/GloriusGroup/autodft.git
