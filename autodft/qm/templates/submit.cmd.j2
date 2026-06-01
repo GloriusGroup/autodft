@@ -1,0 +1,48 @@
+#!/bin/bash
+#SBATCH --job-name={{ job_name }}
+#SBATCH --output={{ job_path }}/slurm-%j.out
+#SBATCH --error={{ job_path }}/slurm-%j.err
+#SBATCH --ntasks-per-node={{ nprocs }}
+#SBATCH --mem={{ total_mem }}
+#SBATCH --time={{ time_limit }}
+#SBATCH --partition={{ partition }}
+{% if nice and nice != 0 %}#SBATCH --nice={{ nice }}
+{% endif %}
+
+# Enable nullglob so unmatched globs in the cp lines below don't expand to themselves
+shopt -s nullglob
+
+WORK_DIR="{{ job_path }}"
+{% if tmp_dir %}TMP_DIR="{{ tmp_dir }}/{{ job_name }}.${SLURM_JOB_ID:-$$}"
+{% endif %}
+{% if nbo_exe %}export NBOEXE={{ nbo_exe }}
+{% endif %}
+{% if tmp_dir %}
+mkdir -p "$TMP_DIR"
+cp "$WORK_DIR"/input.inp "$TMP_DIR"/
+if [ -f "$WORK_DIR"/input.xyz ]; then
+    cp "$WORK_DIR"/input.xyz "$TMP_DIR"/
+    cp "$WORK_DIR"/input.xyz "$TMP_DIR"/input_original.xyz
+fi
+
+cd "$TMP_DIR"
+{% else %}
+cd "$WORK_DIR"
+{% endif %}
+
+# Run ORCA — full path or 'orca' from the [orca].path config field.
+{{ orca_path }} input.inp{% if orca_extra_args %} "{{ orca_extra_args }}"{% endif %} > output.out
+ORCA_EXIT=$?
+
+{% if tmp_dir %}
+# Copy results back to the shared job directory
+cp *.out *.txt *.xyz "$WORK_DIR"/ 2>/dev/null || true
+cp *.gbw                                "$WORK_DIR"/ 2>/dev/null || true
+cp *.densities *.densitiesinfo *.cube   "$WORK_DIR"/ 2>/dev/null || true
+cp input.finalensemble.xyz              "$WORK_DIR"/ 2>/dev/null || true
+
+cd /
+rm -rf "$TMP_DIR"
+{% endif %}
+
+exit $ORCA_EXIT

@@ -1,0 +1,1955 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AutoDFT Dashboard</title>
+    <style>
+        :root {
+            --bg-primary: #0f1117;
+            --bg-secondary: #1a1d27;
+            --bg-card: #21242f;
+            --bg-input: #2a2d3a;
+            --border: #2e3140;
+            --text-primary: #e4e6eb;
+            --text-secondary: #9ca0ab;
+            --text-muted: #6b7080;
+            --accent: #6366f1;
+            --accent-hover: #818cf8;
+            --green: #22c55e;
+            --green-bg: rgba(34, 197, 94, 0.12);
+            --yellow: #eab308;
+            --yellow-bg: rgba(234, 179, 8, 0.12);
+            --red: #ef4444;
+            --red-bg: rgba(239, 68, 68, 0.12);
+            --blue: #3b82f6;
+            --blue-bg: rgba(59, 130, 246, 0.12);
+            --gray-bg: rgba(107, 112, 128, 0.15);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+        }
+
+        /* Sidebar layout: nav on the left, content on the right. */
+        .app {
+            display: flex;
+            min-height: 100vh;
+        }
+
+        .sidebar {
+            width: 220px;
+            flex-shrink: 0;
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            padding: 22px 14px 18px;
+            position: sticky;
+            top: 0;
+            height: 100vh;
+        }
+
+        .sidebar-brand {
+            font-size: 1.3rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            padding: 0 10px 18px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 14px;
+        }
+        .sidebar-brand span { color: var(--accent); }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            border-radius: 8px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 0.9rem;
+            user-select: none;
+            margin: 2px 0;
+            text-decoration: none;
+        }
+        .nav-item:hover { background: var(--bg-card); color: var(--text-primary); }
+        .nav-item.active {
+            background: var(--bg-card);
+            color: var(--text-primary);
+            box-shadow: inset 3px 0 0 var(--accent);
+        }
+        .nav-icon {
+            display: inline-block;
+            width: 18px;
+            text-align: center;
+            color: var(--text-muted);
+        }
+        .nav-item.active .nav-icon { color: var(--accent); }
+
+        .sidebar-footer {
+            margin-top: auto;
+            padding-top: 12px;
+            border-top: 1px solid var(--border);
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        .container {
+            flex: 1;
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 28px 32px;
+            width: 100%;
+        }
+
+        .page { display: none; }
+        .page.active { display: block; }
+
+        @media (max-width: 900px) {
+            .app { flex-direction: column; }
+            .sidebar { width: 100%; height: auto; position: relative; padding: 14px; }
+            .sidebar-brand { padding: 0 8px 10px; }
+            .container { padding: 20px 14px; }
+        }
+
+        /* Page header (shared between pages) */
+        .page-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 4px 0 24px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 24px;
+        }
+        .page-header h1 {
+            font-size: 1.4rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+        .page-header .subtitle {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        /* Legacy <header> block (kept for any leftover instances) */
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 20px 0 28px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 28px;
+        }
+
+        header h1 {
+            font-size: 1.6rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        header h1 span { color: var(--accent); }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--green);
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        .status-dot.disconnected {
+            background: var(--red);
+            animation: none;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        /* Collapsible section */
+        .collapsible-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .collapsible-header h2 {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .collapse-icon {
+            font-size: 1.2rem;
+            color: var(--text-muted);
+            transition: transform 0.2s;
+        }
+
+        .collapse-icon.collapsed { transform: rotate(-90deg); }
+
+        .collapsible-body {
+            overflow: hidden;
+            transition: max-height 0.3s ease, opacity 0.3s ease;
+            max-height: 600px;
+            opacity: 1;
+        }
+
+        .collapsible-body.collapsed {
+            max-height: 0;
+            opacity: 0;
+        }
+
+        /* Submit form */
+        .submit-section {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px 24px;
+            margin-bottom: 24px;
+        }
+
+        .form-row {
+            display: flex;
+            gap: 12px;
+            align-items: flex-end;
+            flex-wrap: wrap;
+            margin-top: 14px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .form-group label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+
+        .form-group input,
+        .form-group select {
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 14px;
+            color: var(--text-primary);
+            font-size: 0.9rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus {
+            border-color: var(--accent);
+        }
+
+        .form-group input::placeholder {
+            color: var(--text-muted);
+        }
+
+        .form-group input:disabled,
+        .form-group select:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .form-group select {
+            appearance: none;
+            -webkit-appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236b7080' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 12px center;
+            padding-right: 32px;
+            cursor: pointer;
+        }
+
+        .form-group select option {
+            background: var(--bg-input);
+            color: var(--text-primary);
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 0;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+
+        .checkbox-group label {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            cursor: pointer;
+        }
+
+        .btn {
+            background: var(--accent);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 10px 24px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+            white-space: nowrap;
+        }
+
+        .btn:hover { background: var(--accent-hover); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .submit-feedback {
+            font-size: 0.85rem;
+            margin-top: 10px;
+            min-height: 1.4em;
+        }
+
+        .submit-feedback.success { color: var(--green); }
+        .submit-feedback.error { color: var(--red); }
+
+        /* Inline SMILES validation hint under the SMILES input */
+        .smiles-hint {
+            font-size: 0.75rem;
+            margin-top: 4px;
+            font-family: 'SF Mono','Fira Code','Consolas',monospace;
+        }
+        .smiles-hint.valid    { color: var(--green); }
+        .smiles-hint.invalid  { color: var(--red); }
+        .smiles-hint.checking { color: var(--text-muted); }
+        input.invalid {
+            border-color: var(--red) !important;
+        }
+        input.valid {
+            border-color: var(--green) !important;
+        }
+
+        /* Stats cards */
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 16px;
+            margin-bottom: 28px;
+        }
+
+        @media (max-width: 900px) {
+            .cards { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+        }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 20px 22px;
+        }
+
+        .card-label {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 6px;
+        }
+
+        .card-value {
+            font-size: 2rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        .card-value.green { color: var(--green); }
+        .card-value.yellow { color: var(--yellow); }
+        .card-value.red { color: var(--red); }
+        .card-value.blue { color: var(--blue); }
+
+        /* Tables section */
+        .tables-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 20px;
+        }
+
+        @media (max-width: 1100px) {
+            .tables-grid { grid-template-columns: 1fr; }
+        }
+
+        .table-section {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .table-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.95rem;
+            font-weight: 600;
+            flex-shrink: 0;
+        }
+
+        .table-scroll {
+            max-height: 420px;
+            overflow-y: auto;
+        }
+
+        .table-scroll::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .table-scroll::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .table-scroll::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 3px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            text-align: left;
+            padding: 10px 16px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            background: var(--bg-card);
+            z-index: 1;
+        }
+
+        td {
+            padding: 10px 16px;
+            font-size: 0.85rem;
+            border-bottom: 1px solid var(--border);
+            color: var(--text-secondary);
+        }
+
+        tr:last-child td { border-bottom: none; }
+
+        .smiles-cell {
+            max-width: 160px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            font-size: 0.8rem;
+        }
+
+        /* Status badges */
+        .badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            white-space: nowrap;
+        }
+
+        .badge-successful, .badge-COMPLETED {
+            background: var(--green-bg);
+            color: var(--green);
+        }
+
+        .badge-pending, .badge-PENDING {
+            background: var(--yellow-bg);
+            color: var(--yellow);
+        }
+
+        .badge-failed, .badge-FAILED, .badge-TIMEOUT, .badge-CANCELLED {
+            background: var(--red-bg);
+            color: var(--red);
+        }
+
+        .badge-created {
+            background: var(--gray-bg);
+            color: var(--text-muted);
+        }
+
+        .badge-RUNNING {
+            background: var(--blue-bg);
+            color: var(--blue);
+        }
+
+        .empty-state {
+            padding: 32px 16px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        .footer {
+            text-align: right;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 20px;
+            padding-top: 16px;
+            border-top: 1px solid var(--border);
+        }
+
+        /* Utility */
+        .mono {
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+        }
+
+        /* Headers manager */
+        .headers-section { margin-bottom: 24px; }
+
+        .headers-section textarea {
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 14px;
+            color: var(--text-primary);
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            font-size: 0.85rem;
+            outline: none;
+            transition: border-color 0.2s;
+            resize: vertical;
+            min-height: 160px;
+            width: 100%;
+        }
+        .headers-section textarea:focus { border-color: var(--accent); }
+
+        .headers-list {
+            border-top: 1px solid var(--border);
+            margin-top: 14px;
+        }
+        .header-row {
+            display: grid;
+            grid-template-columns: 56px 130px 1fr 90px auto;
+            gap: 10px;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.85rem;
+        }
+        .header-row .id    { color: var(--text-muted); font-family: 'SF Mono','Fira Code','Consolas',monospace; font-size: 0.8rem; }
+        .header-row .kind  { color: var(--text-secondary); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; }
+        .header-row .desc  { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .header-row .actions { display: flex; gap: 6px; justify-content: flex-end; }
+
+        .btn-mini {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 4px 10px;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .btn-mini:hover  { color: var(--text-primary); border-color: var(--accent); }
+        .btn-mini.danger { color: var(--red); border-color: rgba(239,68,68,0.3); }
+        .btn-mini.danger:hover { background: var(--red-bg); }
+
+        .header-editor {
+            margin-top: 16px;
+            padding: 16px;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            display: none;
+        }
+        .header-editor.open { display: block; }
+        .header-editor .form-row { margin-top: 10px; }
+
+        .header-editor h3 {
+            font-size: 0.95rem;
+            font-weight: 600;
+            margin-bottom: 4px;
+            color: var(--text-primary);
+        }
+
+        .header-text-hint {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+            line-height: 1.5;
+        }
+        .header-text-hint code {
+            background: var(--bg-card);
+            padding: 1px 5px;
+            border-radius: 4px;
+            font-family: 'SF Mono','Fira Code','Consolas',monospace;
+            font-size: 0.72rem;
+        }
+
+        /* Destructive button variant for archive confirmation */
+        .btn.btn-danger { background: var(--red); }
+        .btn.btn-danger:hover { background: #f87171; }
+
+        /* Project status banner */
+        .project-status-banner {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 14px 18px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            background: var(--bg-card);
+            margin-bottom: 20px;
+            font-size: 0.92rem;
+        }
+        .project-status-banner .status-pulse {
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .project-status-banner .project-status-detail {
+            margin-left: auto;
+            color: var(--text-muted);
+            font-size: 0.82rem;
+        }
+        .project-status-banner.running {
+            border-color: rgba(234, 179, 8, 0.4);
+            background: var(--yellow-bg);
+        }
+        .project-status-banner.running   .status-pulse {
+            background: var(--yellow);
+            animation: pulse 2s ease-in-out infinite;
+        }
+        .project-status-banner.complete {
+            border-color: rgba(34, 197, 94, 0.4);
+            background: var(--green-bg);
+        }
+        .project-status-banner.complete .status-pulse { background: var(--green); }
+        .project-status-banner.complete_with_failures {
+            border-color: rgba(239, 68, 68, 0.3);
+            background: var(--red-bg);
+        }
+        .project-status-banner.complete_with_failures .status-pulse { background: var(--red); }
+        .project-status-banner.empty {
+            border-color: var(--border);
+            background: var(--bg-card);
+            color: var(--text-muted);
+        }
+        .project-status-banner.empty .status-pulse { background: var(--text-muted); }
+
+        /* Modal */
+        .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+        }
+        .modal {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 22px 26px;
+            max-width: 600px;
+            width: calc(100% - 32px);
+            box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+        }
+        .modal h2 {
+            font-size: 1.05rem;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+        .modal-warn {
+            color: var(--text-secondary);
+            font-size: 0.88rem;
+            margin: 8px 0;
+        }
+        .modal-warn strong { color: var(--red); }
+        .modal-list {
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            padding-left: 20px;
+            margin: 8px 0 12px;
+        }
+        .modal-list li { margin: 4px 0; }
+        .modal code {
+            background: var(--bg-input);
+            padding: 1px 5px;
+            border-radius: 4px;
+            font-family: 'SF Mono','Fira Code','Consolas',monospace;
+            font-size: 0.78rem;
+            color: var(--text-primary);
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-brand">Auto<span>DFT</span></div>
+            <a class="nav-item" data-route="submit"   href="#/submit">  <span class="nav-icon">+</span> Job Submission</a>
+            <a class="nav-item" data-route="status"   href="#/status">  <span class="nav-icon">&#9678;</span> Current Status</a>
+            <a class="nav-item" data-route="projects" href="#/projects"><span class="nav-icon">&#9776;</span> Project Overview</a>
+            <a class="nav-item" data-route="headers"  href="#/headers"> <span class="nav-icon">&#9881;</span> Headers</a>
+            <div class="sidebar-footer">
+                <div class="status-indicator">
+                    <div class="status-dot" id="statusDot"></div>
+                    <span id="statusText">Connected</span>
+                </div>
+                <div style="margin-top: 4px;">Last refresh: <span id="lastUpdated">--</span></div>
+            </div>
+        </aside>
+
+    <div class="container">
+
+        <!-- ============================================================ -->
+        <!-- PAGE: Job Submission                                          -->
+        <!-- ============================================================ -->
+        <section class="page" data-page="submit">
+        <div class="page-header">
+            <div>
+                <h1>Job Submission</h1>
+                <div class="subtitle">Queue a new SMILES into the pipeline.</div>
+            </div>
+        </div>
+
+        <div class="submit-section">
+            <div class="collapsible-header" id="submitToggle" style="display:none;">
+                <h2>Submit Molecule</h2>
+                <span class="collapse-icon" id="collapseIcon">&#9660;</span>
+            </div>
+            <div class="collapsible-body" id="submitBody">
+                <form id="submitForm">
+                    <!-- Row 1: SMILES, Project, Priority -->
+                    <div class="form-row">
+                        <div class="form-group" style="flex: 3; min-width: 220px;">
+                            <label for="smiles">SMILES</label>
+                            <input type="text" id="smiles" name="smiles" placeholder="e.g. c1ccccc1" required class="mono" autocomplete="off">
+                            <div id="smilesHint" class="smiles-hint" style="display:none;"></div>
+                        </div>
+                        <div class="form-group" style="flex: 1; min-width: 140px;">
+                            <label for="project">Project</label>
+                            <input type="text" id="project" name="project" placeholder="default" value="default">
+                        </div>
+                        <div class="form-group" style="flex: 0; min-width: 90px;">
+                            <label for="priority">Priority</label>
+                            <input type="number" id="priority" name="priority" value="10" min="1" max="100" style="width: 90px;">
+                        </div>
+                    </div>
+
+                    <!-- Row 2: Requested states + workflow toggles -->
+                    <div class="form-row" style="gap: 24px;">
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="skipConfsearch" name="skip_confsearch">
+                            <label for="skipConfsearch">Skip Conformer Search</label>
+                        </div>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="requestT1" name="request_t1">
+                            <label for="requestT1">Request T1</label>
+                        </div>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="requestOx" name="request_ox">
+                            <label for="requestOx">Request Ox</label>
+                        </div>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="requestRed" name="request_red">
+                            <label for="requestRed">Request Red</label>
+                        </div>
+                        <div class="checkbox-group" title="Singlepoint vertical excitations: ox/red and spin-flip energies at the optimised geometry.">
+                            <input type="checkbox" id="requestVertEx" name="request_vert_ex" checked>
+                            <label for="requestVertEx">Vertical excitations</label>
+                        </div>
+                    </div>
+
+                    <!-- Row 2b: Per-state conformer count (only requested states show) -->
+                    <div class="form-row" id="conformersRow" style="gap: 12px;">
+                        <div class="form-group conf-input" data-state="S0" style="min-width: 110px;">
+                            <label for="maxConfS0">Conformers — S0</label>
+                            <input type="number" id="maxConfS0" min="1" max="50" value="1" style="width: 100px;">
+                        </div>
+                        <div class="form-group conf-input" data-state="T1" data-requires="requestT1" style="min-width: 110px; display:none;">
+                            <label for="maxConfT1">Conformers — T1</label>
+                            <input type="number" id="maxConfT1" min="1" max="50" value="1" style="width: 100px;">
+                        </div>
+                        <div class="form-group conf-input" data-state="ox" data-requires="requestOx" style="min-width: 110px; display:none;">
+                            <label for="maxConfOx">Conformers — Ox</label>
+                            <input type="number" id="maxConfOx" min="1" max="50" value="1" style="width: 100px;">
+                        </div>
+                        <div class="form-group conf-input" data-state="red" data-requires="requestRed" style="min-width: 110px; display:none;">
+                            <label for="maxConfRed">Conformers — Red</label>
+                            <input type="number" id="maxConfRed" min="1" max="50" value="1" style="width: 100px;">
+                        </div>
+                    </div>
+
+                    <!-- Row 3: Header dropdowns -->
+                    <div class="form-row">
+                        <div class="form-group" style="flex: 1; min-width: 200px;">
+                            <label for="headerConfsearch">Conformer Search Header</label>
+                            <select id="headerConfsearch" name="header_confsearch">
+                                <option value="">Loading...</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="flex: 1; min-width: 200px;">
+                            <label for="headerOptimization">Optimization Header</label>
+                            <select id="headerOptimization" name="header_optimization">
+                                <option value="">Loading...</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="flex: 1; min-width: 200px;">
+                            <label for="headerSinglepoint">Singlepoint Header</label>
+                            <select id="headerSinglepoint" name="header_singlepoint">
+                                <option value="">Loading...</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Submit button -->
+                    <div class="form-row">
+                        <button type="submit" class="btn" id="submitBtn">Submit</button>
+                    </div>
+                </form>
+                <div class="submit-feedback" id="submitFeedback"></div>
+            </div>
+        </div>
+
+        </section>
+        <!-- /PAGE: Job Submission -->
+
+
+        <!-- ============================================================ -->
+        <!-- PAGE: Headers                                                 -->
+        <!-- ============================================================ -->
+        <section class="page" data-page="headers">
+        <div class="page-header">
+            <div>
+                <h1>Computation Headers</h1>
+                <div class="subtitle">Manage the ORCA header templates that populate the submission dropdowns.</div>
+            </div>
+        </div>
+
+        <div class="submit-section headers-section">
+            <div class="collapsible-header" id="headersToggle" style="display:none;">
+                <h2>Computation Headers</h2>
+                <span class="collapse-icon" id="headersCollapseIcon">&#9660;</span>
+            </div>
+            <div class="collapsible-body" id="headersBody">
+                <div class="form-row" style="margin-top: 14px;">
+                    <button type="button" class="btn" id="newHeaderBtn">+ New Header</button>
+                </div>
+
+                <div id="headerEditor" class="header-editor">
+                    <h3 id="headerEditorTitle">New Header</h3>
+                    <div class="form-row">
+                        <div class="form-group" style="flex: 1; min-width: 180px;">
+                            <label for="headerKind">Kind</label>
+                            <select id="headerKind">
+                                <option value="">(any)</option>
+                                <option value="confsearch">Conformer search</option>
+                                <option value="optimization">Optimization</option>
+                                <option value="singlepoint">Singlepoint</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="flex: 3; min-width: 280px;">
+                            <label for="headerDescription">Description (shown in dropdown)</label>
+                            <input type="text" id="headerDescription" placeholder="e.g. wB97X-D3/def2-TZVP single-point with COSMO water">
+                        </div>
+                    </div>
+                    <div class="form-row" style="flex-direction: column; align-items: stretch;">
+                        <label for="headerText" style="font-size: 0.8rem; color: var(--text-muted);">
+                            Header text (raw ORCA block, gets prepended above the geometry section)
+                        </label>
+                        <textarea id="headerText" spellcheck="false" placeholder="! B3LYP def2-SVP OPT FREQ&#10;%maxcore 4000&#10;%pal nprocs 16 end"></textarea>
+                        <div class="header-text-hint">
+                            Multiline ORCA blocks are supported verbatim. Examples:
+                            <code>%pal nprocs 16 end</code>,
+                            <code>%maxcore 4000</code>,
+                            <code>%cpcm SMD true SMDsolvent "water" end</code>,
+                            or for g-xTB:
+                            <code>%xtb XTBINPUTSTRING "--alpb water" end</code>.
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <button type="button" class="btn" id="saveHeaderBtn">Save</button>
+                        <button type="button" class="btn-mini" id="cancelHeaderBtn">Cancel</button>
+                        <span class="submit-feedback" id="headerFeedback" style="margin-left: 12px;"></span>
+                    </div>
+                </div>
+
+                <div class="headers-list" id="headersList">
+                    <div class="empty-state">Loading...</div>
+                </div>
+            </div>
+        </div>
+
+        </section>
+        <!-- /PAGE: Headers -->
+
+
+        <!-- ============================================================ -->
+        <!-- PAGE: Current Status                                          -->
+        <!-- ============================================================ -->
+        <section class="page" data-page="status">
+        <div class="page-header">
+            <div>
+                <h1>Current Status</h1>
+                <div class="subtitle">Live view of the queue, in-flight jobs, and recently updated tasks.</div>
+            </div>
+        </div>
+
+        <div class="cards">
+            <div class="card">
+                <div class="card-label">Queued</div>
+                <div class="card-value" id="cardQueue">--</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Pending Jobs</div>
+                <div class="card-value yellow" id="cardPending">--</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Running Jobs</div>
+                <div class="card-value blue" id="cardRunning">--</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Failed Tasks</div>
+                <div class="card-value red" id="cardFailed">--</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Molecules</div>
+                <div class="card-value" id="cardMolecules">--</div>
+            </div>
+        </div>
+
+        <!-- Three live tables: Queued / Pending (SLURM) / Running (active) -->
+        <div class="tables-grid">
+            <!-- Table A: Queued entrypoints (waiting for the controller) -->
+            <div class="table-section">
+                <div class="table-header">Queued (entrypoints waiting for controller)</div>
+                <div class="table-scroll">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>SMILES</th>
+                                <th>Priority</th>
+                                <th>Submitted</th>
+                            </tr>
+                        </thead>
+                        <tbody id="queueBody">
+                            <tr><td colspan="4" class="empty-state">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Table B: Pending jobs (waiting on SLURM) -->
+            <div class="table-section">
+                <div class="table-header">Pending Jobs (SLURM PENDING)</div>
+                <div class="table-scroll">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Job ID</th>
+                                <th>SLURM ID</th>
+                                <th>Task ID</th>
+                                <th>Attempt</th>
+                                <th>Submitted</th>
+                            </tr>
+                        </thead>
+                        <tbody id="pendingJobsBody">
+                            <tr><td colspan="5" class="empty-state">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Table C: Running jobs (actively executing) -->
+            <div class="table-section">
+                <div class="table-header">Running Jobs (active on cluster)</div>
+                <div class="table-scroll">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Job ID</th>
+                                <th>SLURM ID</th>
+                                <th>Task ID</th>
+                                <th>Attempt</th>
+                                <th>Started</th>
+                            </tr>
+                        </thead>
+                        <tbody id="runningJobsBody">
+                            <tr><td colspan="5" class="empty-state">Loading...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Failed-entrypoints widget -->
+        <div class="table-section" style="margin-top: 24px;">
+            <div class="table-header">Failed Entrypoints
+                <span style="font-weight:400; color:var(--text-muted); font-size:0.8rem; margin-left:8px;">
+                    (SMILES the controller couldn't expand into tasks — fix and resubmit)
+                </span>
+            </div>
+            <div class="table-scroll">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>SMILES</th>
+                            <th>Error</th>
+                            <th>Failed at</th>
+                        </tr>
+                    </thead>
+                    <tbody id="failedBody">
+                        <tr><td colspan="4" class="empty-state">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        </section>
+        <!-- /PAGE: Current Status -->
+
+
+        <!-- ============================================================ -->
+        <!-- PAGE: Project Overview                                        -->
+        <!-- ============================================================ -->
+        <section class="page" data-page="projects">
+        <div class="page-header">
+            <div>
+                <h1>Project Overview</h1>
+                <div class="subtitle">Per-project progress, success rate, and exports.</div>
+            </div>
+            <div class="form-group" style="min-width: 240px;">
+                <label for="projectSelect">Project</label>
+                <select id="projectSelect"><option value="">Loading...</option></select>
+            </div>
+        </div>
+
+        <div id="projectStatusBanner" class="project-status-banner" style="display: none;">
+            <span class="status-pulse" id="psbDot"></span>
+            <span id="psbText">Loading status…</span>
+            <span class="project-status-detail" id="psbDetail"></span>
+        </div>
+
+        <div class="cards" id="projectCards" style="display: none;">
+            <div class="card">
+                <div class="card-label">Molecules</div>
+                <div class="card-value" id="pcMolecules">--</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Submitted / Total</div>
+                <div class="card-value blue" id="pcSubmitted">--</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Fully successful</div>
+                <div class="card-value green" id="pcSuccess">--</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Tasks Successful</div>
+                <div class="card-value green" id="pcTaskSucc">--</div>
+            </div>
+            <div class="card">
+                <div class="card-label">Tasks Failed</div>
+                <div class="card-value red" id="pcTaskFail">--</div>
+            </div>
+        </div>
+
+        <div class="submit-section" id="projectExportSection" style="display: none;">
+            <h2 style="font-size:0.95rem; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em;">Export</h2>
+            <div class="form-row" style="gap: 10px; margin-top: 12px;">
+                <button type="button" class="btn" id="exportCsvBtn">Export CSV</button>
+                <button type="button" class="btn" id="exportJsonBtn">Export JSON</button>
+                <button type="button" class="btn" id="exportAllBtn">Export all files</button>
+                <label class="checkbox-group" style="margin-left: 8px;">
+                    <input type="checkbox" id="exportAllConformers">
+                    <span style="font-size:0.85rem; color:var(--text-secondary);">Include all conformers</span>
+                </label>
+            </div>
+            <div class="submit-feedback" id="projectExportFeedback"></div>
+        </div>
+
+        <!-- Archive confirmation modal (hidden by default) -->
+        <div class="modal-backdrop" id="archiveModal" style="display:none;">
+            <div class="modal">
+                <h2>Archive project <span id="archiveProjectName" class="mono"></span>?</h2>
+                <p class="modal-warn">
+                    This is a <strong>destructive</strong> operation. It will:
+                </p>
+                <ol class="modal-list">
+                    <li>Write the energy summary to <code id="archiveCsvPath" class="mono"></code>.</li>
+                    <li>Copy only files with the extensions below into <code id="archiveFilesPath" class="mono"></code>.</li>
+                    <li><strong>Delete every other file</strong> from <code id="archiveCompPath" class="mono"></code>.</li>
+                    <li>Remove the project from the database — it will no longer appear in Project Overview.</li>
+                </ol>
+                <p class="modal-warn">
+                    All raw files will be deleted; only files matching the extensions you list here will survive.
+                </p>
+                <div class="form-group" style="margin-top: 12px;">
+                    <label for="archiveExts">File extensions to keep (space- or comma-separated)</label>
+                    <input type="text" id="archiveExts" class="mono" value=".inp .xyz .out">
+                    <div class="header-text-hint">
+                        Defaults preserve the canonical ORCA inputs/geometries/outputs.
+                        Add e.g. <code>.cube</code>, <code>.spindens</code>, <code>.eldens</code>,
+                        <code>.gbw</code>, <code>.densities</code>, <code>.hess</code> to keep more.
+                    </div>
+                </div>
+                <div class="form-row" style="justify-content: flex-end; margin-top: 16px;">
+                    <button type="button" class="btn-mini"      id="archiveCancelBtn">Cancel</button>
+                    <button type="button" class="btn btn-danger" id="archiveConfirmBtn">Archive and delete</button>
+                </div>
+                <div class="submit-feedback" id="archiveFeedback"></div>
+            </div>
+        </div>
+
+        <div class="table-section" id="projectMoleculesSection" style="margin-top: 20px; display: none;">
+            <div class="table-header">Molecules in this project</div>
+            <div class="table-scroll" style="max-height: 540px;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>SMILES</th>
+                            <th>States</th>
+                            <th>Tasks</th>
+                            <th>Successful</th>
+                            <th>Failed</th>
+                            <th>Created</th>
+                        </tr>
+                    </thead>
+                    <tbody id="projectMoleculesBody">
+                        <tr><td colspan="7" class="empty-state">Select a project to view its molecules.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div id="projectEmptyState" class="empty-state" style="padding: 60px 16px;">
+            No projects yet — submit a molecule from Job Submission to populate this view.
+        </div>
+        </section>
+        <!-- /PAGE: Project Overview -->
+
+    </div>  <!-- /container -->
+    </div>  <!-- /app -->
+
+
+    <script>
+        const POLL_INTERVAL = 5000;
+
+        // ── Helpers ──────────────────────────────────────────────────────
+
+        function badge(value) {
+            if (!value) return '<span class="badge badge-created">unknown</span>';
+            return '<span class="badge badge-' + escHtml(value) + '">' + escHtml(value) + '</span>';
+        }
+
+        function escHtml(str) {
+            if (str == null) return '';
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        function fmtTime(iso) {
+            if (!iso) return '-';
+            try {
+                var d = new Date(iso);
+                return d.toLocaleString(undefined, {
+                    month: 'short', day: 'numeric',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit'
+                });
+            } catch (_) { return iso; }
+        }
+
+        function setConnected(connected) {
+            var dot = document.getElementById('statusDot');
+            var text = document.getElementById('statusText');
+            if (connected) {
+                dot.className = 'status-dot';
+                text.textContent = 'Connected';
+            } else {
+                dot.className = 'status-dot disconnected';
+                text.textContent = 'Disconnected';
+            }
+        }
+
+        // ── Sidebar hash routing ────────────────────────────────────────
+        // Routes: #/submit  #/status  #/projects  #/headers
+        // Default to #/submit. Each route maps to a <section data-page="...">.
+
+        var ROUTES = ['submit', 'status', 'projects', 'headers'];
+
+        function activateRoute(route) {
+            if (ROUTES.indexOf(route) === -1) route = 'submit';
+            document.querySelectorAll('.page').forEach(function (el) {
+                el.classList.toggle('active', el.dataset.page === route);
+            });
+            document.querySelectorAll('.nav-item').forEach(function (el) {
+                el.classList.toggle('active', el.dataset.route === route);
+            });
+            if (route === 'projects') fetchProjects();
+            if (route === 'status')   fetchFailed();
+        }
+
+        function currentRoute() {
+            var h = (location.hash || '').replace(/^#\//, '');
+            return h || 'submit';
+        }
+
+        window.addEventListener('hashchange', function () { activateRoute(currentRoute()); });
+
+        // ── Skip Conformer Search toggle ─────────────────────────────────
+
+        document.getElementById('skipConfsearch').addEventListener('change', function () {
+            document.getElementById('headerConfsearch').disabled = this.checked;
+        });
+
+        // ── Show/hide per-state conformer inputs ────────────────────────
+        // A conformer-count input is visible iff its corresponding state is
+        // requested via the matching checkbox. S0 has no toggle — always on.
+
+        (function () {
+            var inputs = document.querySelectorAll('.conf-input[data-requires]');
+            function refresh() {
+                inputs.forEach(function (el) {
+                    var cb = document.getElementById(el.dataset.requires);
+                    el.style.display = (cb && cb.checked) ? '' : 'none';
+                });
+            }
+            ['requestT1', 'requestOx', 'requestRed'].forEach(function (id) {
+                document.getElementById(id).addEventListener('change', refresh);
+            });
+            refresh();
+        })();
+
+        // ── Live SMILES validation ──────────────────────────────────────
+        // Debounces input by 300 ms, calls /api/validate-smiles, shows
+        // canonical SMILES + atom count when valid or the RDKit error
+        // when not. Submit is gated on the last result.
+
+        (function () {
+            var input    = document.getElementById('smiles');
+            var hint     = document.getElementById('smilesHint');
+            var submitBtn = document.getElementById('submitBtn');
+            var debounceTimer = null;
+            var lastChecked = null;
+            window.lastSmilesValid = false;  // consumed by the submit handler
+
+            function setState(state, text) {
+                hint.style.display = text ? 'block' : 'none';
+                hint.textContent = text || '';
+                hint.className = 'smiles-hint ' + (state || '');
+                input.classList.toggle('invalid', state === 'invalid');
+                input.classList.toggle('valid',   state === 'valid');
+                window.lastSmilesValid = (state === 'valid');
+                if (submitBtn) submitBtn.disabled = (state === 'invalid');
+            }
+
+            async function check(smi) {
+                lastChecked = smi;
+                setState('checking', 'Checking...');
+                try {
+                    var resp = await fetch('/api/validate-smiles', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ smiles: smi }),
+                    });
+                    var data = await resp.json();
+                    if (lastChecked !== smi) return;  // a newer keystroke superseded this
+                    if (data.valid) {
+                        var note = 'OK — ' + data.atoms + ' atoms (' + data.heavy_atoms + ' heavy), '
+                                 + 'charge ' + data.charge + ', mult ' + data.multiplicity;
+                        if (data.canonical && data.canonical !== smi) {
+                            note += ', canonical: ' + data.canonical;
+                        }
+                        setState('valid', note);
+                    } else {
+                        setState('invalid', data.error || 'Invalid SMILES.');
+                    }
+                } catch (err) {
+                    if (lastChecked !== smi) return;
+                    setState('invalid', 'Validation network error: ' + err.message);
+                }
+            }
+
+            input.addEventListener('input', function () {
+                var v = input.value.trim();
+                if (debounceTimer) clearTimeout(debounceTimer);
+                if (!v) { setState(null, ''); return; }
+                debounceTimer = setTimeout(function () { check(v); }, 300);
+            });
+            input.addEventListener('blur', function () {
+                var v = input.value.trim();
+                if (v && (!hint.textContent || hint.classList.contains('checking'))) check(v);
+            });
+        })();
+
+        // ── Headers: fetch, manage, and populate dropdowns ──────────────
+
+        // Selected option value encodes the source:
+        //   ""            -> let the backend use the package fallback default
+        //                    (only ever needed when no custom header for this
+        //                    kind exists; the seeded rows otherwise cover it)
+        //   "id:<n>"      -> custom DB header (the standard path)
+        //
+        // Untagged custom headers do NOT appear in slot dropdowns — assign
+        // a kind in the Headers manager to surface them here.
+
+        function populateHeaderSelect(selectEl, kind, defaults, custom) {
+            var current = selectEl.value;
+            selectEl.innerHTML = '';
+
+            // Headers tagged with EXACTLY this kind.
+            var relevant = custom.filter(function (c) { return c.kind === kind; });
+
+            if (relevant.length === 0) {
+                // Fallback: nothing seeded for this slot, let backend use defaults.py.
+                var fb = document.createElement('option');
+                fb.value = '';
+                fb.textContent = 'Package default';
+                selectEl.appendChild(fb);
+                return;
+            }
+
+            relevant.forEach(function (c) {
+                var o = document.createElement('option');
+                o.value = 'id:' + c.id;
+                o.textContent = c.description || ('Header #' + c.id);
+                o.title = c.description || '';
+                selectEl.appendChild(o);
+            });
+
+            // Preserve selection across reloads where possible
+            if (current && [].some.call(selectEl.options, function (o) { return o.value === current; })) {
+                selectEl.value = current;
+            }
+        }
+
+        // Cache so the manager and the submit form share one fetch
+        var headerCache = { defaults: [], custom: [] };
+
+        async function fetchHeaders() {
+            try {
+                var resp = await fetch('/api/headers');
+                var data = await resp.json();
+                headerCache.defaults = data.defaults || [];
+                headerCache.custom = data.custom || [];
+
+                populateHeaderSelect(document.getElementById('headerConfsearch'),    'confsearch',    headerCache.defaults, headerCache.custom);
+                populateHeaderSelect(document.getElementById('headerOptimization'),  'optimization',  headerCache.defaults, headerCache.custom);
+                populateHeaderSelect(document.getElementById('headerSinglepoint'),   'singlepoint',   headerCache.defaults, headerCache.custom);
+                renderHeadersList();
+            } catch (err) {
+                console.warn('Failed to load headers:', err);
+                ['headerConfsearch', 'headerOptimization', 'headerSinglepoint'].forEach(function (id) {
+                    var sel = document.getElementById(id);
+                    sel.innerHTML = '<option value="">Default</option>';
+                });
+            }
+        }
+
+        // ── Headers manager (CRUD) ──────────────────────────────────────
+
+        var editingHeaderId = null;
+
+        function renderHeadersList() {
+            var list = document.getElementById('headersList');
+            var rows = [];
+
+            headerCache.custom.forEach(function (c) {
+                rows.push(
+                    '<div class="header-row">' +
+                        '<div class="id">#' + escHtml(c.id) + '</div>' +
+                        '<div class="kind">' + escHtml(c.kind || 'any') + '</div>' +
+                        '<div class="desc" title="' + escHtml(c.description || '') + '">' + escHtml(c.description || ('Header #' + c.id)) + '</div>' +
+                        '<div>' + (c.validated ? '<span class="badge badge-successful">validated</span>' : '') + '</div>' +
+                        '<div class="actions">' +
+                            '<button type="button" class="btn-mini" data-action="edit"   data-id="' + escHtml(c.id) + '">Edit</button>' +
+                            '<button type="button" class="btn-mini danger" data-action="delete" data-id="' + escHtml(c.id) + '">Delete</button>' +
+                        '</div>' +
+                    '</div>'
+                );
+            });
+
+            if (rows.length === 0) {
+                list.innerHTML = '<div class="empty-state">No headers yet — click "+ New Header" to create one.</div>';
+            } else {
+                list.innerHTML = rows.join('');
+            }
+
+            // Wire row buttons
+            list.querySelectorAll('button[data-action]').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    var action = btn.dataset.action;
+                    var id = btn.dataset.id;
+                    if (action === 'edit')        { openHeaderEditor(parseInt(id, 10)); }
+                    else if (action === 'delete') { deleteHeader(parseInt(id, 10)); }
+                });
+            });
+        }
+
+        function openHeaderEditor(id) {
+            editingHeaderId = id;
+            var editor = document.getElementById('headerEditor');
+            var title  = document.getElementById('headerEditorTitle');
+            var kindEl = document.getElementById('headerKind');
+            var descEl = document.getElementById('headerDescription');
+            var textEl = document.getElementById('headerText');
+            var fb     = document.getElementById('headerFeedback');
+            fb.textContent = '';
+            fb.className = 'submit-feedback';
+
+            if (id == null) {
+                title.textContent = 'New Header';
+                kindEl.value = '';
+                descEl.value = '';
+                textEl.value = '';
+            } else {
+                var h = headerCache.custom.find(function (c) { return c.id === id; });
+                if (!h) return;
+                title.textContent = 'Edit Header #' + id;
+                kindEl.value = h.kind || '';
+                descEl.value = h.description || '';
+                textEl.value = h.text || '';
+            }
+            editor.classList.add('open');
+        }
+
+        function closeHeaderEditor() {
+            document.getElementById('headerEditor').classList.remove('open');
+            editingHeaderId = null;
+        }
+
+        async function saveHeader() {
+            var fb = document.getElementById('headerFeedback');
+            fb.textContent = '';
+            fb.className = 'submit-feedback';
+
+            var body = {
+                header_text: document.getElementById('headerText').value,
+                description: document.getElementById('headerDescription').value || null,
+                kind:        document.getElementById('headerKind').value || null,
+            };
+            if (!body.header_text.trim()) {
+                fb.textContent = 'Header text is required.';
+                fb.className = 'submit-feedback error';
+                return;
+            }
+
+            try {
+                var url    = editingHeaderId == null ? '/api/headers' : ('/api/headers/' + editingHeaderId);
+                var method = editingHeaderId == null ? 'POST'         : 'PUT';
+                var resp = await fetch(url, {
+                    method: method,
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                var data = await resp.json();
+                if (resp.ok) {
+                    fb.textContent = (editingHeaderId == null ? 'Created' : 'Updated') + ' header #' + data.id;
+                    fb.className = 'submit-feedback success';
+                    await fetchHeaders();
+                    setTimeout(closeHeaderEditor, 600);
+                } else {
+                    fb.textContent = 'Error: ' + (data.detail || JSON.stringify(data));
+                    fb.className = 'submit-feedback error';
+                }
+            } catch (err) {
+                fb.textContent = 'Network error: ' + err.message;
+                fb.className = 'submit-feedback error';
+            }
+        }
+
+        async function deleteHeader(id) {
+            if (!confirm('Delete header #' + id + '? This cannot be undone.')) return;
+            try {
+                var resp = await fetch('/api/headers/' + id, { method: 'DELETE' });
+                if (resp.ok) {
+                    await fetchHeaders();
+                } else {
+                    var data = await resp.json();
+                    alert('Cannot delete: ' + (data.detail || 'unknown error'));
+                }
+            } catch (err) {
+                alert('Network error: ' + err.message);
+            }
+        }
+
+        // Headers manager buttons
+        (function () {
+            document.getElementById('newHeaderBtn').addEventListener('click', function () { openHeaderEditor(null); });
+            document.getElementById('saveHeaderBtn').addEventListener('click', saveHeader);
+            document.getElementById('cancelHeaderBtn').addEventListener('click', closeHeaderEditor);
+        })();
+
+        // ── Submit form ──────────────────────────────────────────────────
+
+        document.getElementById('submitForm').addEventListener('submit', async function (e) {
+            e.preventDefault();
+            var btn = document.getElementById('submitBtn');
+            var feedback = document.getElementById('submitFeedback');
+            btn.disabled = true;
+            feedback.textContent = '';
+            feedback.className = 'submit-feedback';
+
+            var smiles = document.getElementById('smiles').value.trim();
+            var requestVertEx = document.getElementById('requestVertEx').checked;
+            // Per-state conformer counts. Use the input value when the
+            // state is requested; default to 1 (irrelevant when off).
+            function intOrDefault(id, def) {
+                var v = parseInt(document.getElementById(id).value, 10);
+                return Number.isFinite(v) && v > 0 ? v : def;
+            }
+            var nS0  = intOrDefault('maxConfS0',  1);
+            var nT1  = intOrDefault('maxConfT1',  1);
+            var nOx  = intOrDefault('maxConfOx',  1);
+            var nRed = intOrDefault('maxConfRed', 1);
+
+            // Last-line check: refuse submission if the SMILES didn't pass
+            // validation (the server enforces this too, but checking here
+            // saves a roundtrip and keeps the form state coherent).
+            if (!window.lastSmilesValid) {
+                feedback.textContent = 'Fix the SMILES first — it failed validation.';
+                feedback.className = 'submit-feedback error';
+                btn.disabled = false;
+                return;
+            }
+            var project = document.getElementById('project').value.trim() || 'default';
+            var priority = parseInt(document.getElementById('priority').value, 10) || 10;
+            var skipConfsearch = document.getElementById('skipConfsearch').checked;
+            var requestT1 = document.getElementById('requestT1').checked;
+            var requestOx = document.getElementById('requestOx').checked;
+            var requestRed = document.getElementById('requestRed').checked;
+
+            // Translate the dropdown's encoded value into the right API field.
+            //   ""       -> server falls back to its package default (defaults.py)
+            //   "id:<n>" -> server resolves header by DB id
+            function pickHeader(slot) {
+                var v = document.getElementById(slot).value;
+                if (!v) return { id: null, text: null };
+                if (v.indexOf('id:') === 0) {
+                    return { id: parseInt(v.slice(3), 10), text: null };
+                }
+                return { id: null, text: v };
+            }
+
+            var hCs  = pickHeader('headerConfsearch');
+            var hOpt = pickHeader('headerOptimization');
+            var hSp  = pickHeader('headerSinglepoint');
+
+            var body = {
+                smiles: smiles,
+                project: project,
+                priority: priority,
+                skip_confsearch: skipConfsearch,
+                request_t1: requestT1,
+                request_ox: requestOx,
+                request_red: requestRed,
+                request_singlepoint_vertical_excitations: requestVertEx,
+                max_conformers_S0:  nS0,
+                max_conformers_T1:  nT1,
+                max_conformers_ox:  nOx,
+                max_conformers_red: nRed,
+                header_confsearch:        hCs.text,
+                header_optimization:      hOpt.text,
+                header_singlepoint:       hSp.text,
+                header_confsearch_id:     hCs.id,
+                header_optimization_id:   hOpt.id,
+                header_singlepoint_id:    hSp.id
+            };
+
+            try {
+                var resp = await fetch('/api/submit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                var data = await resp.json();
+                if (resp.ok) {
+                    feedback.textContent = 'Submitted: ' + (data.smiles || smiles) + (data.id ? ' (ID ' + data.id + ')' : '');
+                    feedback.className = 'submit-feedback success';
+                    document.getElementById('smiles').value = '';
+                    refreshAll();
+                } else {
+                    feedback.textContent = 'Error: ' + (data.detail || JSON.stringify(data));
+                    feedback.className = 'submit-feedback error';
+                }
+            } catch (err) {
+                feedback.textContent = 'Network error: ' + err.message;
+                feedback.className = 'submit-feedback error';
+            } finally {
+                btn.disabled = false;
+            }
+        });
+
+        // ── Data fetching ────────────────────────────────────────────────
+
+        async function fetchOverview() {
+            try {
+                var resp = await fetch('/api/overview');
+                var data = await resp.json();
+                document.getElementById('cardMolecules').textContent = data.molecules != null ? data.molecules : '--';
+                document.getElementById('cardRunning').textContent = (data.jobs && data.jobs['RUNNING']) || 0;
+                document.getElementById('cardPending').textContent = (data.jobs && data.jobs['PENDING']) || 0;
+                document.getElementById('cardFailed').textContent = (data.tasks && data.tasks['failed']) || 0;
+                document.getElementById('cardQueue').textContent = data.queue_length != null ? data.queue_length : '--';
+                setConnected(true);
+            } catch (_) {
+                setConnected(false);
+            }
+        }
+
+        async function fetchQueue() {
+            try {
+                var resp = await fetch('/api/queue');
+                var items = await resp.json();
+                var tbody = document.getElementById('queueBody');
+                if (!items || items.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" class="empty-state">Queue empty</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = items.map(function (q) {
+                    return '<tr>' +
+                        '<td>' + escHtml(q.id) + '</td>' +
+                        '<td class="smiles-cell" title="' + escHtml(q.smiles) + '">' + escHtml(q.smiles || '-') + '</td>' +
+                        '<td>' + escHtml(q.priority) + '</td>' +
+                        '<td>' + fmtTime(q.time_created) + '</td>' +
+                        '</tr>';
+                }).join('');
+            } catch (_) { /* handled by overview connectivity */ }
+        }
+
+        async function fetchJobs() {
+            try {
+                var resp = await fetch('/api/jobs?limit=100');
+                var jobs = await resp.json();
+
+                var pending = jobs.filter(function (j) { return j.slurm_status === 'PENDING'; });
+                var running = jobs.filter(function (j) { return j.slurm_status === 'RUNNING'; });
+
+                var pBody = document.getElementById('pendingJobsBody');
+                if (pending.length === 0) {
+                    pBody.innerHTML = '<tr><td colspan="5" class="empty-state">No pending jobs</td></tr>';
+                } else {
+                    pBody.innerHTML = pending.map(function (j) {
+                        return '<tr>' +
+                            '<td>' + escHtml(j.id) + '</td>' +
+                            '<td>' + escHtml(j.slurm_jobid || '-') + '</td>' +
+                            '<td>' + escHtml(j.task_id) + '</td>' +
+                            '<td>' + escHtml(j.attempt) + '</td>' +
+                            '<td>' + fmtTime(j.time_start) + '</td>' +
+                            '</tr>';
+                    }).join('');
+                }
+
+                var rBody = document.getElementById('runningJobsBody');
+                if (running.length === 0) {
+                    rBody.innerHTML = '<tr><td colspan="5" class="empty-state">No running jobs</td></tr>';
+                } else {
+                    rBody.innerHTML = running.map(function (j) {
+                        return '<tr>' +
+                            '<td>' + escHtml(j.id) + '</td>' +
+                            '<td>' + escHtml(j.slurm_jobid || '-') + '</td>' +
+                            '<td>' + escHtml(j.task_id) + '</td>' +
+                            '<td>' + escHtml(j.attempt) + '</td>' +
+                            '<td>' + fmtTime(j.time_start) + '</td>' +
+                            '</tr>';
+                    }).join('');
+                }
+            } catch (_) { /* handled by overview connectivity */ }
+        }
+
+        // ── Failed entrypoints (surfaced on the Current Status page) ───
+
+        async function fetchFailed() {
+            try {
+                var resp = await fetch('/api/entrypoints/failed');
+                var rows = await resp.json();
+                var tbody = document.getElementById('failedBody');
+                if (!rows || rows.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No failed entrypoints. The pipeline is healthy.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = rows.map(function (e) {
+                    return '<tr>' +
+                        '<td>' + escHtml(e.id) + '</td>' +
+                        '<td class="smiles-cell" title="' + escHtml(e.smiles) + '">' + escHtml(e.smiles) + '</td>' +
+                        '<td><span class="badge badge-failed" title="' + escHtml(e.processing_error || '') + '">' + escHtml((e.processing_error || '').slice(0, 80)) + '</span></td>' +
+                        '<td>' + fmtTime(e.time_started) + '</td>' +
+                        '</tr>';
+                }).join('');
+            } catch (_) { /* connectivity flagged by overview */ }
+        }
+
+        // ── Project Overview ────────────────────────────────────────────
+
+        var projectCache = [];
+        var currentProject = null;
+
+        async function fetchProjects() {
+            try {
+                var resp = await fetch('/api/projects');
+                projectCache = await resp.json();
+                var sel   = document.getElementById('projectSelect');
+                var prev  = sel.value;
+
+                if (!projectCache || projectCache.length === 0) {
+                    sel.innerHTML = '<option value="">(no projects yet)</option>';
+                    document.getElementById('projectCards').style.display = 'none';
+                    document.getElementById('projectExportSection').style.display = 'none';
+                    document.getElementById('projectMoleculesSection').style.display = 'none';
+                    document.getElementById('projectEmptyState').style.display = 'block';
+                    return;
+                }
+                document.getElementById('projectEmptyState').style.display = 'none';
+
+                sel.innerHTML = projectCache.map(function (p) {
+                    return '<option value="' + escHtml(p.name) + '">' +
+                            escHtml(p.name) + '  (' + p.molecules + ' mol, ' +
+                            p.tasks_successful + '/' + p.tasks_total + ' tasks)' +
+                           '</option>';
+                }).join('');
+
+                if (prev && projectCache.some(function (p) { return p.name === prev; })) {
+                    sel.value = prev;
+                }
+                loadProjectDetail(sel.value);
+            } catch (err) {
+                console.warn('Failed to fetch projects:', err);
+            }
+        }
+
+        async function loadProjectDetail(name) {
+            if (!name) return;
+            currentProject = name;
+            try {
+                var resp = await fetch('/api/projects/' + encodeURIComponent(name));
+                var data = await resp.json();
+
+                document.getElementById('projectCards').style.display = 'grid';
+                document.getElementById('projectExportSection').style.display = 'block';
+                document.getElementById('projectMoleculesSection').style.display = 'block';
+
+                // ── Status banner: running / complete / complete_with_failures ──
+                var banner  = document.getElementById('projectStatusBanner');
+                var dot     = document.getElementById('psbDot');     // styled via parent class
+                var text    = document.getElementById('psbText');
+                var detail  = document.getElementById('psbDetail');
+                banner.style.display = 'flex';
+                banner.className = 'project-status-banner ' + (data.status || 'empty');
+                var totalMols = data.total_molecules || 0;
+                var doneMols  = data.completed_molecules || 0;
+                if (data.status === 'running') {
+                    text.innerHTML =
+                        '<strong>' + escHtml(data.in_flight_molecules) + '</strong> molecule(s) still running' +
+                        ' (' + escHtml(data.in_flight_tasks) + ' active task' + (data.in_flight_tasks === 1 ? '' : 's') + ')';
+                    detail.textContent = doneMols + ' of ' + totalMols + ' complete';
+                } else if (data.status === 'complete') {
+                    text.innerHTML = '<strong>All ' + escHtml(totalMols) + ' molecule(s) complete</strong> — every task ended successfully';
+                    detail.textContent = '';
+                } else if (data.status === 'complete_with_failures') {
+                    text.innerHTML = '<strong>All ' + escHtml(totalMols) + ' molecule(s) complete</strong> — some tasks failed (see table below)';
+                    detail.textContent = '';
+                } else {
+                    text.textContent = 'No molecules yet for this project';
+                    detail.textContent = '';
+                }
+
+                document.getElementById('pcMolecules').textContent = data.molecules.length;
+                var sp = data.submission_progress || { started: 0, total: 0 };
+                document.getElementById('pcSubmitted').textContent = sp.started + '/' + sp.total;
+                var sr = data.success_rate || { successful_molecules: 0, total_molecules: 0 };
+                document.getElementById('pcSuccess').textContent = sr.successful_molecules + '/' + sr.total_molecules;
+
+                var meta = projectCache.find(function (p) { return p.name === name; }) || {};
+                document.getElementById('pcTaskSucc').textContent = meta.tasks_successful != null ? meta.tasks_successful : '--';
+                document.getElementById('pcTaskFail').textContent = meta.tasks_failed != null ? meta.tasks_failed : '--';
+
+                var tbody = document.getElementById('projectMoleculesBody');
+                if (!data.molecules || data.molecules.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No molecules yet for this project.</td></tr>';
+                } else {
+                    tbody.innerHTML = data.molecules.map(function (m) {
+                        return '<tr>' +
+                            '<td>' + escHtml(m.id) + '</td>' +
+                            '<td class="smiles-cell" title="' + escHtml(m.smiles) + '">' + escHtml(m.smiles) + '</td>' +
+                            '<td>' + escHtml(m.states) + '</td>' +
+                            '<td>' + escHtml(m.tasks) + '</td>' +
+                            '<td><span class="badge badge-successful">' + escHtml(m.successful) + '</span></td>' +
+                            '<td>' + (m.failed > 0 ? '<span class="badge badge-failed">' + escHtml(m.failed) + '</span>' : '<span style="color:var(--text-muted);">' + escHtml(m.failed) + '</span>') + '</td>' +
+                            '<td>' + fmtTime(m.created_at) + '</td>' +
+                            '</tr>';
+                    }).join('');
+                }
+            } catch (err) {
+                console.warn('Failed to load project detail:', err);
+            }
+        }
+
+        async function exportProject(format) {
+            if (!currentProject) return;
+            var fb = document.getElementById('projectExportFeedback');
+            var allConf = document.getElementById('exportAllConformers').checked;
+            fb.textContent = 'Exporting...';
+            fb.className = 'submit-feedback';
+            try {
+                var resp = await fetch(
+                    '/api/projects/' + encodeURIComponent(currentProject) +
+                    '/export?format=' + format + '&all_conformers=' + (allConf ? 'true' : 'false'),
+                    { method: 'POST' }
+                );
+                var data = await resp.json();
+                if (resp.ok) {
+                    var detail = data.path;
+                    if (data.files_copied != null) detail += '  (' + data.files_copied + ' files)';
+                    fb.textContent = 'Exported: ' + detail;
+                    fb.className = 'submit-feedback success';
+                } else {
+                    fb.textContent = 'Error: ' + (data.detail || JSON.stringify(data));
+                    fb.className = 'submit-feedback error';
+                }
+            } catch (err) {
+                fb.textContent = 'Network error: ' + err.message;
+                fb.className = 'submit-feedback error';
+            }
+        }
+
+        // ── Project archive confirmation modal ──────────────────────────
+
+        function openArchiveModal() {
+            if (!currentProject) return;
+            // Show the modal and pre-fill the path hints so the user sees
+            // exactly where data is going / disappearing from.
+            document.getElementById('archiveProjectName').textContent = currentProject;
+            // We don't actually know the export path until the server responds,
+            // but we can render the relative shape so the warning is concrete.
+            document.getElementById('archiveCsvPath').textContent   = '<export_data>/' + currentProject + '/' + currentProject + '.csv';
+            document.getElementById('archiveFilesPath').textContent = '<export_data>/' + currentProject + '/raw/';
+            document.getElementById('archiveCompPath').textContent  = '<comp_data>/mol_*/';
+            var fb = document.getElementById('archiveFeedback');
+            fb.textContent = '';
+            fb.className = 'submit-feedback';
+            document.getElementById('archiveModal').style.display = 'flex';
+        }
+
+        function closeArchiveModal() {
+            document.getElementById('archiveModal').style.display = 'none';
+        }
+
+        async function runArchive() {
+            if (!currentProject) return;
+            var fb = document.getElementById('archiveFeedback');
+            var raw = document.getElementById('archiveExts').value || '';
+            var exts = raw.split(/[\s,]+/).filter(function (e) { return e.length; });
+            if (exts.length === 0) {
+                fb.textContent = 'At least one extension is required.';
+                fb.className = 'submit-feedback error';
+                return;
+            }
+            fb.textContent = 'Archiving... (CSV → copy → delete → drop project)';
+            fb.className = 'submit-feedback';
+
+            var btn = document.getElementById('archiveConfirmBtn');
+            btn.disabled = true;
+            try {
+                var resp = await fetch(
+                    '/api/projects/' + encodeURIComponent(currentProject) + '/archive',
+                    {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            extensions: exts,
+                            all_conformers: document.getElementById('exportAllConformers').checked,
+                        }),
+                    }
+                );
+                var data = await resp.json();
+                if (resp.ok) {
+                    fb.innerHTML =
+                        'Archived <strong>' + escHtml(data.project) + '</strong>: ' +
+                        escHtml(data.molecules) + ' molecules, ' +
+                        escHtml(data.files_copied) + ' files kept (' +
+                        escHtml(data.files_dropped) + ' dropped). ' +
+                        'CSV → <code>' + escHtml(data.csv_path) + '</code>.';
+                    fb.className = 'submit-feedback success';
+                    // Refresh project list — the project is gone.
+                    setTimeout(function () {
+                        closeArchiveModal();
+                        currentProject = null;
+                        document.getElementById('projectStatusBanner').style.display = 'none';
+                        document.getElementById('projectCards').style.display = 'none';
+                        document.getElementById('projectExportSection').style.display = 'none';
+                        document.getElementById('projectMoleculesSection').style.display = 'none';
+                        fetchProjects();
+                    }, 1800);
+                } else {
+                    fb.textContent = 'Error: ' + (data.detail || JSON.stringify(data));
+                    fb.className = 'submit-feedback error';
+                }
+            } catch (err) {
+                fb.textContent = 'Network error: ' + err.message;
+                fb.className = 'submit-feedback error';
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        (function () {
+            document.getElementById('projectSelect').addEventListener('change', function () {
+                loadProjectDetail(this.value);
+            });
+            document.getElementById('exportCsvBtn').addEventListener('click', function () { exportProject('csv'); });
+            document.getElementById('exportJsonBtn').addEventListener('click', function () { exportProject('json'); });
+            document.getElementById('exportAllBtn').addEventListener('click', openArchiveModal);
+            document.getElementById('archiveCancelBtn').addEventListener('click', closeArchiveModal);
+            document.getElementById('archiveConfirmBtn').addEventListener('click', runArchive);
+            // Click outside the modal to cancel.
+            document.getElementById('archiveModal').addEventListener('click', function (e) {
+                if (e.target === this) closeArchiveModal();
+            });
+        })();
+
+        // ── Refresh orchestration ────────────────────────────────────────
+
+        async function refreshAll() {
+            await Promise.all([fetchOverview(), fetchQueue(), fetchJobs(), fetchFailed()]);
+            document.getElementById('lastUpdated').textContent = new Date().toLocaleTimeString();
+        }
+
+        // Initial load
+        fetchHeaders();
+        refreshAll();
+        activateRoute(currentRoute());
+
+        // Poll every 5 seconds
+        setInterval(refreshAll, POLL_INTERVAL);
+    </script>
+</body>
+</html>

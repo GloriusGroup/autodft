@@ -1,0 +1,73 @@
+# ==========================================================================
+# AutoDFT production configuration for the cluster.
+#
+# Start the controller with:
+#   autodft admin init-db --config config/reaction.toml
+#   autodft run          --config config/reaction.toml
+#
+# Submit work with:
+#   autodft submit       --config config/reaction.toml ...
+#
+# Any setting can also be overridden via environment variables, e.g.
+#   AUTODFT_DATA_PATH=/mnt/share/dft_calculations/autodft_data
+#   AUTODFT_PARTITION=CPU
+#   AUTODFT_API_PORT=8085
+# ==========================================================================
+
+[storage]
+# Single root that holds everything. The loader derives:
+#   <data_path>/autodft.db      (unless [database].url is set explicitly)
+#   <data_path>/comp_data/      (per-molecule SLURM working directories)
+#   <data_path>/export_data/    (CSV / JSON / file exports)
+# This path MUST be on a shared filesystem that controller and compute
+# nodes can both reach (NFS, Lustre, BeeGFS, ...).
+data_path = "/mnt/share/dft_calculations/autodft_data"
+
+[pipeline]
+max_simultaneous_entrypoints = 50
+max_queue_length = 50
+loop_interval_seconds = 60
+max_attempts = 3
+
+[pipeline.confsearch]
+time_limit = "2-00:00:00"
+default_nprocs = 36
+default_mem_per_core = 1000
+
+[pipeline.optimization]
+time_limit = "2-12:00:00"
+default_nprocs = 16
+default_mem_per_core = 1500
+max_iter = 1000
+displacement = 0.1
+
+[pipeline.singlepoint]
+time_limit = "1-00:00:00"
+default_nprocs = 8
+default_mem_per_core = 2000
+
+[pipeline.retry]
+increased_time_limit = "4-00:00:00"
+increased_nprocs = 32
+increased_mem_per_core = 4000
+
+[slurm]
+partition = "CPU"
+nice = 1000
+
+[orca]
+# Absolute path to the ORCA binary on the compute nodes. Use "orca" only
+# if a module system has already placed it on PATH (no module system here).
+path       = "/mnt/share/public/software/orca-6.1.1-gxtb/orca"
+# Second arg to ORCA — controls MPI binding. Empty string disables it.
+extra_args = "--bind-to none"
+# Optional NBO 7 executable (exported as NBOEXE when set).
+nbo_exe    = "/mnt/share/public/software/nbo7/bin/nbo7.i8.exe"
+# Per-job scratch directory parent. Empty string runs ORCA inside the
+# shared job dir without staging through /tmp.
+tmp_dir    = "/tmp"
+
+[api]
+enabled = true
+host = "0.0.0.0"
+port = 8085

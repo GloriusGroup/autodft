@@ -1,0 +1,244 @@
+"""TOML-based configuration with sensible defaults.
+
+The storage layout is anchored on a single ``data_path``::
+
+    <data_path>/
+        autodft.db          # SQLite database (unless ``database.url`` is set)
+        comp_data/          # per-molecule SLURM working directories
+        export_data/        # CSV / JSON / file exports
+
+``database.url`` and the individual sub-paths (``comp_data_path``,
+``export_data_path``) can still be overridden explicitly in the TOML or
+via environment variables.
+"""
+
+from __future__ import annotations
+
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Optional
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        import tomli as tomllib  # type: ignore[no-redef]
+
+_DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "config" / "default.toml"
+
+# ---------------------------------------------------------------------------
+# Nested config dataclasses
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DatabaseConfig:
+    # If left as None, the URL is derived from ``storage.data_path``.
+    url: Optional[str] = None
+
+
+@dataclass
+class StorageConfig:
+    # Single root directory holding DB, comp_data/, export_data/.
+    data_path: str = "/data/autodft"
+    # Explicit overrides; computed from ``data_path`` when None.
+    comp_data_path: Optional[str] = None
+    export_data_path: Optional[str] = None
+
+
+@dataclass
+class StageConfig:
+    time_limit: str = "1-00:00:00"
+    default_nprocs: int = 16
+    default_mem_per_core: int = 4000
+    max_iter: int = 1000
+    displacement: float = 0.1
+
+
+@dataclass
+class RetryConfig:
+    increased_time_limit: str = "4-00:00:00"
+    increased_nprocs: int = 32
+    increased_mem_per_core: int = 4000
+
+
+@dataclass
+class PipelineConfig:
+    max_simultaneous_entrypoints: int = 40
+    max_queue_length: int = 20
+    loop_interval_seconds: int = 30
+    max_attempts: int = 3
+    confsearch: StageConfig = field(default_factory=StageConfig)
+    optimization: StageConfig = field(default_factory=StageConfig)
+    singlepoint: StageConfig = field(default_factory=StageConfig)
+    retry: RetryConfig = field(default_factory=RetryConfig)
+
+
+@dataclass
+class SlurmConfig:
+    partition: str = "CPU"
+    nice: int = 1000
+
+
+@dataclass
+class ApiConfig:
+    enabled: bool = True
+    host: str = "0.0.0.0"
+    port: int = 8080
+
+
+@dataclass
+class OrcaConfig:
+    # Absolute path to the ORCA executable. Use "orca" if a module system
+    # puts it on PATH; on bare-metal clusters set the full path.
+    path: str = "orca"
+    # Extra string passed as ORCA's second argument (e.g. MPI binding).
+    # The old pipeline used "--bind-to none".
+    extra_args: str = ""
+    # Optional NBO executable; exported as NBOEXE when set.
+    nbo_exe: Optional[str] = None
+    # Per-job temp directory parent. "" disables the TMP_DIR copy-out
+    # pattern and runs ORCA directly inside the job_path.
+    tmp_dir: str = "/tmp"
+
+
+@dataclass
+class Settings:
+    database: DatabaseConfig = field(default_factory=DatabaseConfig)
+    storage: StorageConfig = field(default_factory=StorageConfig)
+    pipeline: PipelineConfig = field(default_factory=PipelineConfig)
+    slurm: SlurmConfig = field(default_factory=SlurmConfig)
+    api: ApiConfig = field(default_factory=ApiConfig)
+    orca: OrcaConfig = field(default_factory=OrcaConfig)
+
+    # ------------------------------------------------------------------
+    # Derived path helpers (used everywhere instead of touching the
+    # raw config fields, so the data_path default applies uniformly).
+    # ------------------------------------------------------------------
+
+    @property
+    def data_path(self) -> Path:
+        return Path(self.storage.data_path).expanduser().resolve()
+
+    @property
+    def comp_data_path(self) -> Path:
+        if self.storage.comp_data_path:
+            return Path(self.storage.comp_data_path).expanduser().resolve()
+        return self.data_path / "comp_data"
+
+    @property
+    def export_data_path(self) -> Path:
+        if self.storage.export_data_path:
+            return Path(self.storage.export_data_path).expanduser().resolve()
+        return self.data_path / "export_data"
+
+    @property
+    def database_url(self) -> str:
+        if self.database.url:
+            return self.database.url
+        return f"sqlite:///{self.data_path / 'autodft.db'}"
+
+    def ensure_directories(self) -> None:
+        """Create ``data_path``, ``comp_data``, and ``export_data`` if missing."""
+        self.data_path.mkdir(parents=True, exist_ok=True)
+        self.comp_data_path.mkdir(parents=True, exist_ok=True)
+        self.export_data_path.mkdir(parents=True, exist_ok=True)
+
+
+# ---------------------------------------------------------------------------
+# Loader
+# ---------------------------------------------------------------------------
+
+def _merge(target: dict, source: dict) -> dict:
+    """Deep-merge *source* into *target* (mutates target)."""
+    for key, value in source.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            _merge(target[key], value)
+        else:
+            target[key] = value
+    return target
+
+
+def _dict_to_dataclass(cls: type, data: dict[str, Any]) -> Any:
+    """Recursively convert a dict to a dataclass instance."""
+    field_types = {f.name: f.type for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
+    kwargs: dict[str, Any] = {}
+    for key, value in data.items():
+        if key not in field_types:
+            continue
+        ft = field_types[key]
+        # Resolve string annotations
+        if isinstance(ft, str):
+            ft = eval(ft)  # noqa: S307 - only our own type names
+        if isinstance(value, dict) and hasattr(ft, "__dataclass_fields__"):
+            kwargs[key] = _dict_to_dataclass(ft, value)
+        else:
+            kwargs[key] = value
+    return cls(**kwargs)
+
+
+def _apply_env_overrides(data: dict[str, Any]) -> None:
+    """Override config values from environment variables.
+
+    Supported env vars:
+        AUTODFT_DB_URL        -> database.url
+        AUTODFT_DATA_PATH     -> storage.data_path
+        AUTODFT_COMP_DATA     -> storage.comp_data_path
+        AUTODFT_EXPORT_DATA   -> storage.export_data_path
+        AUTODFT_PARTITION     -> slurm.partition
+        AUTODFT_API_PORT      -> api.port
+        AUTODFT_LOOP_INTERVAL -> pipeline.loop_interval_seconds
+    """
+    import os
+
+    env_map = [
+        ("AUTODFT_DB_URL",         ["database", "url"]),
+        ("AUTODFT_DATA_PATH",      ["storage", "data_path"]),
+        ("AUTODFT_COMP_DATA",      ["storage", "comp_data_path"]),
+        ("AUTODFT_EXPORT_DATA",    ["storage", "export_data_path"]),
+        ("AUTODFT_PARTITION",      ["slurm", "partition"]),
+        ("AUTODFT_API_PORT",       ["api", "port"]),
+        ("AUTODFT_LOOP_INTERVAL",  ["pipeline", "loop_interval_seconds"]),
+        ("AUTODFT_ORCA_PATH",      ["orca", "path"]),
+        ("AUTODFT_ORCA_EXTRA",     ["orca", "extra_args"]),
+        ("AUTODFT_NBO_EXE",        ["orca", "nbo_exe"]),
+        ("AUTODFT_TMP_DIR",        ["orca", "tmp_dir"]),
+    ]
+
+    for env_key, path in env_map:
+        value = os.environ.get(env_key)
+        if value is None:
+            continue
+        target = data
+        for part in path[:-1]:
+            target = target.setdefault(part, {})
+        # Attempt int conversion for numeric fields
+        try:
+            value = int(value)  # type: ignore[assignment]
+        except (ValueError, TypeError):
+            pass
+        target[path[-1]] = value
+
+
+def load_settings(config_path: str | Path | None = None) -> Settings:
+    """Load settings from *config_path*, falling back to defaults.
+
+    Priority (highest wins): env vars > user config > default.toml
+    """
+    # Start with defaults
+    with open(_DEFAULT_CONFIG, "rb") as f:
+        data = tomllib.load(f)
+
+    # Overlay user-supplied config
+    if config_path is not None:
+        user_path = Path(config_path)
+        if user_path.exists():
+            with open(user_path, "rb") as f:
+                _merge(data, tomllib.load(f))
+
+    # Environment variable overrides (highest priority)
+    _apply_env_overrides(data)
+
+    return _dict_to_dataclass(Settings, data)
