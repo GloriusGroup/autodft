@@ -1,0 +1,23 @@
+name: Mirror to AK Glorius Group Repo
+
+on:
+  push:
+    branches: ["main", "master", "gh-pages"]
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    # Guard so forks don't try to mirror to the group repo.
+    if: github.repository == 'niklashoelter/autodft'
+    name: mirror
+    steps:
+      # 1. Full history is required for --mirror.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 2. Push to the group repository.
+      - name: Push to Mirror
+        run: |
+          git config --unset-all http.https://github.com/.extraheader
+          git push --mirror https://oauth2:${{ secrets.AUTODFT_MIRROR_GROUP_REPO_TOKEN }}@github.com/GloriusGroup/autodft.git
