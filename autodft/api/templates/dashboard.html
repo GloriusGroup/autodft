@@ -121,6 +121,43 @@
             width: 100%;
         }
 
+        /* Floating refresh button — fixed to the top-right of the viewport,
+           visible on every page. Refreshes the global polling data AND
+           re-runs the current route's loader so page-specific data
+           (project detail, molecule grid) updates too. */
+        .refresh-fab {
+            position: fixed;
+            top: 18px;
+            right: 22px;
+            z-index: 100;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 1.1rem;
+            transition: background 0.15s, color 0.15s, transform 0.5s;
+            user-select: none;
+        }
+        .refresh-fab:hover {
+            background: var(--bg-input);
+            color: var(--text-primary);
+        }
+        .refresh-fab:active { transform: scale(0.92); }
+        .refresh-fab.spinning {
+            animation: refresh-spin 0.8s linear infinite;
+            color: var(--accent);
+        }
+        @keyframes refresh-spin {
+            from { transform: rotate(0deg); }
+            to   { transform: rotate(360deg); }
+        }
+
         .page { display: none; }
         .page.active { display: block; }
 
@@ -261,7 +298,8 @@
         }
 
         .form-group input,
-        .form-group select {
+        .form-group select,
+        .form-group textarea {
             background: var(--bg-input);
             border: 1px solid var(--border);
             border-radius: 8px;
@@ -273,19 +311,32 @@
         }
 
         .form-group input:focus,
-        .form-group select:focus {
+        .form-group select:focus,
+        .form-group textarea:focus {
             border-color: var(--accent);
         }
 
-        .form-group input::placeholder {
+        .form-group input::placeholder,
+        .form-group textarea::placeholder {
             color: var(--text-muted);
         }
 
         .form-group input:disabled,
-        .form-group select:disabled {
+        .form-group select:disabled,
+        .form-group textarea:disabled {
             opacity: 0.4;
             cursor: not-allowed;
         }
+
+        /* Multi-line SMILES input: monospace, vertical resize only, sane min-height. */
+        #smiles {
+            min-height: 72px;
+            resize: vertical;
+            font-family: 'SF Mono','Fira Code','Consolas',monospace;
+            line-height: 1.4;
+        }
+        textarea.invalid { border-color: var(--red) !important; }
+        textarea.valid   { border-color: var(--green) !important; }
 
         .form-group select {
             appearance: none;
@@ -751,6 +802,7 @@
     </style>
 </head>
 <body>
+    <button type="button" class="refresh-fab" id="refreshFab" title="Refresh now" aria-label="Refresh now">&#x21bb;</button>
     <div class="app">
         <!-- Sidebar -->
         <aside class="sidebar">
@@ -793,8 +845,8 @@
                     <!-- Row 1: SMILES, Project, Priority -->
                     <div class="form-row">
                         <div class="form-group" style="flex: 3; min-width: 220px;">
-                            <label for="smiles">SMILES</label>
-                            <input type="text" id="smiles" name="smiles" placeholder="e.g. c1ccccc1" required class="mono" autocomplete="off">
+                            <label for="smiles">SMILES <span style="color: var(--text-muted); font-weight: normal;">(one per line for batch submission)</span></label>
+                            <textarea id="smiles" name="smiles" placeholder="e.g. c1ccccc1&#10;c1ccncc1&#10;CC(=O)O" required class="mono" autocomplete="off" spellcheck="false" rows="3"></textarea>
                             <div id="smilesHint" class="smiles-hint" style="display:none;"></div>
                         </div>
                         <div class="form-group" style="flex: 1; min-width: 140px;">
@@ -1373,18 +1425,26 @@
             refresh();
         })();
 
-        // ── Live SMILES validation ──────────────────────────────────────
-        // Debounces input by 300 ms, calls /api/validate-smiles, shows
-        // canonical SMILES + atom count when valid or the RDKit error
-        // when not. Submit is gated on the last result.
+        // ── Live SMILES validation (multi-line) ─────────────────────────
+        // Debounces input by 300 ms, splits the textarea by newlines,
+        // validates each unique non-empty line via /api/validate-smiles
+        // (cached per SMILES), and reports per-line state. The submit
+        // handler reads window.lastSmilesResults to gate sending.
 
         (function () {
-            var input    = document.getElementById('smiles');
-            var hint     = document.getElementById('smilesHint');
+            var input     = document.getElementById('smiles');
+            var hint      = document.getElementById('smilesHint');
             var submitBtn = document.getElementById('submitBtn');
             var debounceTimer = null;
-            var lastChecked = null;
-            window.lastSmilesValid = false;  // consumed by the submit handler
+            var lastToken = null;          // join of the lines we're currently checking
+            var cache = Object.create(null);  // smiles -> {valid, error, ...}
+            window.lastSmilesResults = null;  // [{smiles, result}, ...] when all lines validated
+
+            function getLines() {
+                return input.value.split(/\r?\n/)
+                    .map(function (s) { return s.trim(); })
+                    .filter(function (s) { return s.length > 0; });
+            }
 
             function setState(state, text) {
                 hint.style.display = text ? 'block' : 'none';
@@ -1392,13 +1452,11 @@
                 hint.className = 'smiles-hint ' + (state || '');
                 input.classList.toggle('invalid', state === 'invalid');
                 input.classList.toggle('valid',   state === 'valid');
-                window.lastSmilesValid = (state === 'valid');
                 if (submitBtn) submitBtn.disabled = (state === 'invalid');
             }
 
-            async function check(smi) {
-                lastChecked = smi;
-                setState('checking', 'Checking...');
+            async function validateOne(smi) {
+                if (cache[smi]) return cache[smi];
                 try {
                     var resp = await fetch('/api/validate-smiles', {
                         method: 'POST',
@@ -1406,32 +1464,70 @@
                         body: JSON.stringify({ smiles: smi }),
                     });
                     var data = await resp.json();
-                    if (lastChecked !== smi) return;  // a newer keystroke superseded this
-                    if (data.valid) {
-                        var note = 'OK — ' + data.atoms + ' atoms (' + data.heavy_atoms + ' heavy), '
-                                 + 'charge ' + data.charge + ', mult ' + data.multiplicity;
-                        if (data.canonical && data.canonical !== smi) {
-                            note += ', canonical: ' + data.canonical;
-                        }
+                    cache[smi] = data;
+                    return data;
+                } catch (err) {
+                    return { valid: false, error: 'network error: ' + err.message };
+                }
+            }
+
+            async function checkAll(lines) {
+                var token = lines.join('\n');
+                lastToken = token;
+                setState('checking', lines.length === 1
+                    ? 'Checking...'
+                    : 'Checking ' + lines.length + ' SMILES...');
+
+                var results = [];
+                for (var i = 0; i < lines.length; i++) {
+                    var r = await validateOne(lines[i]);
+                    if (lastToken !== token) return;  // superseded by a newer keystroke
+                    results.push({ smiles: lines[i], result: r });
+                }
+                window.lastSmilesResults = results;
+
+                if (lines.length === 1) {
+                    // Single line: rich detail (atoms, charge, mult, canonical)
+                    var r = results[0].result;
+                    if (r.valid) {
+                        var note = 'OK — ' + r.atoms + ' atoms (' + r.heavy_atoms + ' heavy), '
+                                 + 'charge ' + r.charge + ', mult ' + r.multiplicity;
+                        if (r.canonical && r.canonical !== lines[0]) note += ', canonical: ' + r.canonical;
                         setState('valid', note);
                     } else {
-                        setState('invalid', data.error || 'Invalid SMILES.');
+                        setState('invalid', r.error || 'Invalid SMILES.');
                     }
-                } catch (err) {
-                    if (lastChecked !== smi) return;
-                    setState('invalid', 'Validation network error: ' + err.message);
+                    return;
+                }
+
+                // Multi-line: summary + per-invalid detail
+                var invalid = results.filter(function (x) { return !x.result.valid; });
+                if (invalid.length === 0) {
+                    setState('valid', lines.length + ' SMILES — all valid');
+                } else {
+                    var details = invalid.slice(0, 3).map(function (x) {
+                        return '"' + x.smiles + '" — ' + (x.result.error || 'invalid');
+                    }).join('; ');
+                    if (invalid.length > 3) details += '; …(' + (invalid.length - 3) + ' more)';
+                    setState('invalid', invalid.length + '/' + lines.length + ' invalid: ' + details);
                 }
             }
 
             input.addEventListener('input', function () {
-                var v = input.value.trim();
                 if (debounceTimer) clearTimeout(debounceTimer);
-                if (!v) { setState(null, ''); return; }
-                debounceTimer = setTimeout(function () { check(v); }, 300);
+                var lines = getLines();
+                if (!lines.length) {
+                    window.lastSmilesResults = null;
+                    setState(null, '');
+                    return;
+                }
+                debounceTimer = setTimeout(function () { checkAll(lines); }, 300);
             });
             input.addEventListener('blur', function () {
-                var v = input.value.trim();
-                if (v && (!hint.textContent || hint.classList.contains('checking'))) check(v);
+                var lines = getLines();
+                if (lines.length && (!hint.textContent || hint.classList.contains('checking'))) {
+                    checkAll(lines);
+                }
             });
         })();
 
@@ -1639,98 +1735,120 @@
             e.preventDefault();
             var btn = document.getElementById('submitBtn');
             var feedback = document.getElementById('submitFeedback');
+            var smilesArea = document.getElementById('smiles');
             btn.disabled = true;
             feedback.textContent = '';
             feedback.className = 'submit-feedback';
 
-            var smiles = document.getElementById('smiles').value.trim();
-            var requestVertEx = document.getElementById('requestVertEx').checked;
-            // Per-state conformer counts. Use the input value when the
-            // state is requested; default to 1 (irrelevant when off).
-            function intOrDefault(id, def) {
-                var v = parseInt(document.getElementById(id).value, 10);
-                return Number.isFinite(v) && v > 0 ? v : def;
-            }
-            var nS0  = intOrDefault('maxConfS0',  1);
-            var nT1  = intOrDefault('maxConfT1',  1);
-            var nOx  = intOrDefault('maxConfOx',  1);
-            var nRed = intOrDefault('maxConfRed', 1);
-
-            // Last-line check: refuse submission if the SMILES didn't pass
-            // validation (the server enforces this too, but checking here
-            // saves a roundtrip and keeps the form state coherent).
-            if (!window.lastSmilesValid) {
-                feedback.textContent = 'Fix the SMILES first — it failed validation.';
+            // ── Parse SMILES lines (one per line, blanks ignored). ─────
+            var lines = smilesArea.value.split(/\r?\n/)
+                .map(function (s) { return s.trim(); })
+                .filter(function (s) { return s.length > 0; });
+            if (lines.length === 0) {
+                feedback.textContent = 'Enter at least one SMILES.';
                 feedback.className = 'submit-feedback error';
                 btn.disabled = false;
                 return;
             }
-            var project = document.getElementById('project').value.trim() || 'default';
-            var priority = parseInt(document.getElementById('priority').value, 10) || 10;
-            var skipConfsearch = document.getElementById('skipConfsearch').checked;
-            var requestT1 = document.getElementById('requestT1').checked;
-            var requestOx = document.getElementById('requestOx').checked;
-            var requestRed = document.getElementById('requestRed').checked;
 
-            // Translate the dropdown's encoded value into the right API field.
-            //   ""       -> server falls back to its package default (defaults.py)
-            //   "id:<n>" -> server resolves header by DB id
+            // Every line must have a recorded valid result from the live
+            // validator. The server re-validates too, but this avoids
+            // a partial-submit race when the user edits during checking.
+            var results = window.lastSmilesResults;
+            if (!results || results.length !== lines.length
+                || results.some(function (x) { return !x.result.valid; })) {
+                feedback.textContent = 'Fix the SMILES first — at least one line failed validation.';
+                feedback.className = 'submit-feedback error';
+                btn.disabled = false;
+                return;
+            }
+
+            // ── Collect form fields shared across all submissions. ────
+            function intOrDefault(id, def) {
+                var v = parseInt(document.getElementById(id).value, 10);
+                return Number.isFinite(v) && v > 0 ? v : def;
+            }
             function pickHeader(slot) {
                 var v = document.getElementById(slot).value;
                 if (!v) return { id: null, text: null };
-                if (v.indexOf('id:') === 0) {
-                    return { id: parseInt(v.slice(3), 10), text: null };
-                }
+                if (v.indexOf('id:') === 0) return { id: parseInt(v.slice(3), 10), text: null };
                 return { id: null, text: v };
             }
-
             var hCs  = pickHeader('headerConfsearch');
             var hOpt = pickHeader('headerOptimization');
             var hSp  = pickHeader('headerSinglepoint');
-
-            var body = {
-                smiles: smiles,
-                project: project,
-                priority: priority,
-                skip_confsearch: skipConfsearch,
-                request_t1: requestT1,
-                request_ox: requestOx,
-                request_red: requestRed,
-                request_singlepoint_vertical_excitations: requestVertEx,
-                max_conformers_S0:  nS0,
-                max_conformers_T1:  nT1,
-                max_conformers_ox:  nOx,
-                max_conformers_red: nRed,
-                header_confsearch:        hCs.text,
-                header_optimization:      hOpt.text,
-                header_singlepoint:       hSp.text,
-                header_confsearch_id:     hCs.id,
-                header_optimization_id:   hOpt.id,
-                header_singlepoint_id:    hSp.id
+            var commonBody = {
+                project: document.getElementById('project').value.trim() || 'default',
+                priority: parseInt(document.getElementById('priority').value, 10) || 10,
+                skip_confsearch: document.getElementById('skipConfsearch').checked,
+                request_t1:  document.getElementById('requestT1').checked,
+                request_ox:  document.getElementById('requestOx').checked,
+                request_red: document.getElementById('requestRed').checked,
+                request_singlepoint_vertical_excitations: document.getElementById('requestVertEx').checked,
+                max_conformers_S0:  intOrDefault('maxConfS0',  1),
+                max_conformers_T1:  intOrDefault('maxConfT1',  1),
+                max_conformers_ox:  intOrDefault('maxConfOx',  1),
+                max_conformers_red: intOrDefault('maxConfRed', 1),
+                header_confsearch:      hCs.text,
+                header_optimization:    hOpt.text,
+                header_singlepoint:     hSp.text,
+                header_confsearch_id:   hCs.id,
+                header_optimization_id: hOpt.id,
+                header_singlepoint_id:  hSp.id,
             };
 
-            try {
-                var resp = await fetch('/api/submit', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body)
-                });
-                var data = await resp.json();
-                if (resp.ok) {
-                    feedback.textContent = 'Submitted: ' + (data.smiles || smiles) + (data.id ? ' (ID ' + data.id + ')' : '');
-                    feedback.className = 'submit-feedback success';
-                    document.getElementById('smiles').value = '';
-                    refreshAll();
-                } else {
-                    feedback.textContent = 'Error: ' + (data.detail || JSON.stringify(data));
-                    feedback.className = 'submit-feedback error';
+            // ── Submit sequentially; keep track of successes/failures. ─
+            var submitted = [];
+            var failed    = [];
+            for (var i = 0; i < lines.length; i++) {
+                var smi = lines[i];
+                feedback.textContent = 'Submitting ' + (i + 1) + '/' + lines.length + ': ' + smi + ' …';
+                feedback.className = 'submit-feedback';
+                var body = Object.assign({}, commonBody, { smiles: smi });
+                try {
+                    var resp = await fetch('/api/submit', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(body)
+                    });
+                    // Defensive parse — server may emit non-JSON on a 500.
+                    var text = await resp.text();
+                    var data; try { data = JSON.parse(text); } catch (_) { data = { detail: text.slice(0, 200) }; }
+                    if (resp.ok) {
+                        submitted.push({ smiles: smi, id: data.id });
+                    } else {
+                        failed.push({ smiles: smi, error: data.detail || ('HTTP ' + resp.status) });
+                    }
+                } catch (err) {
+                    failed.push({ smiles: smi, error: err.message });
                 }
-            } catch (err) {
-                feedback.textContent = 'Network error: ' + err.message;
-                feedback.className = 'submit-feedback error';
-            } finally {
-                btn.disabled = false;
             }
+
+            // ── Final feedback line. ──────────────────────────────────
+            var parts = ['Submitted ' + submitted.length + '/' + lines.length];
+            var ids = submitted.map(function (s) { return s.id; }).filter(Boolean);
+            if (ids.length) parts.push('IDs: ' + ids.join(', '));
+            if (failed.length) {
+                parts.push('Failed: ' + failed.map(function (f) {
+                    return f.smiles + ' (' + f.error + ')';
+                }).join('; '));
+            }
+            feedback.textContent = parts.join(' — ');
+            feedback.className = 'submit-feedback ' + (failed.length === 0 ? 'success' : 'error');
+
+            if (failed.length === 0) {
+                smilesArea.value = '';
+                window.lastSmilesResults = null;
+                document.getElementById('smilesHint').style.display = 'none';
+                smilesArea.classList.remove('valid', 'invalid');
+            } else {
+                // Keep the failed lines in the textarea so the user can fix and retry.
+                smilesArea.value = failed.map(function (f) { return f.smiles; }).join('\n');
+                window.lastSmilesResults = null;
+                smilesArea.dispatchEvent(new Event('input'));  // re-trigger validation
+            }
+            refreshAll();
+            btn.disabled = false;
         });
 
         // ── Data fetching ────────────────────────────────────────────────
@@ -2312,6 +2430,25 @@
             await Promise.all([fetchOverview(), fetchQueue(), fetchJobs(), fetchFailed()]);
             document.getElementById('lastUpdated').textContent = new Date().toLocaleTimeString();
         }
+
+        // Manual refresh: covers global polling data AND whatever the
+        // currently active route renders (project detail, molecules grid,
+        // headers). Spinner stays on for the duration of the fetches.
+        async function refreshNow() {
+            var fab = document.getElementById('refreshFab');
+            if (fab.classList.contains('spinning')) return;  // already in flight
+            fab.classList.add('spinning');
+            try {
+                await Promise.all([
+                    refreshAll(),
+                    fetchHeaders(),
+                    Promise.resolve(activateRoute(currentRoute())),
+                ]);
+            } finally {
+                fab.classList.remove('spinning');
+            }
+        }
+        document.getElementById('refreshFab').addEventListener('click', refreshNow);
 
         // Initial load
         fetchHeaders();
