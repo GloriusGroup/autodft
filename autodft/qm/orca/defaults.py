@@ -8,7 +8,7 @@ production on this cluster.
 
 DEFAULT_HEADER_CONFSEARCH = (
     "!GOAT XTB2\n"
-    "%maxcore 1000\n"
+    "%maxcore 500\n"
     "%pal nprocs 32 end\n"
     "%GOAT\n"
     "MAXEN 10.0\n"
@@ -39,13 +39,13 @@ DEFAULT_HEADER_SINGLEPOINT = (
 # and singlepoint stages.
 B3LYP_HEADER_OPTIMIZATION = (
     "!B3LYP def2-SVP def2/J RIJCOSX DEFGRID3 Opt TightSCF Freq\n"
-    "%maxcore 1000\n"
+    "%maxcore 500\n"
     "%pal nprocs 8 end\n"
 )
 
 B3LYP_HEADER_SINGLEPOINT = (
     "!B3LYP def2-TZVP def2/J RIJCOSX DEFGRID3 TightSCF\n"
-    "%maxcore 1500\n"
+    "%maxcore 500\n"
     "%pal nprocs 2 end\n"
 )
 
@@ -58,7 +58,7 @@ GXTB_HEADER_CONFSEARCH = (
     "%xtb\n"
     '  XTBInputString "--gxtb"\n'
     "end\n"
-    "%maxcore 1000\n"
+    "%maxcore 500\n"
     "%pal nprocs 32 end\n"
     "%GOAT\n"
     "MAXEN 10.0\n"
