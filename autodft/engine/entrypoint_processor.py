@@ -499,14 +499,58 @@ def _create_state_directories(
     logger.debug("Created directories for state %d at %s", state_id, state_dir)
 
 
+# Two atoms placed closer than this (in Å) are taken as a sign that the
+# embedder failed — real bonds are ≥0.74 Å (H–H in H₂). RDKit's ETKDG
+# can't place substituents around hypervalent centres like SF5 and stacks
+# them on top of each other; that's what this threshold catches.
+_MIN_VALID_ATOM_DISTANCE = 0.5
+
+
+def _min_pairwise_distance(xyz: str) -> float:
+    """Return the smallest pairwise distance (Å) in an XYZ string.
+
+    Returns ``float('inf')`` for 0- or 1-atom inputs so single-atom
+    geometries don't trip the degeneracy check (they fail earlier in
+    ``validate_smiles`` anyway).
+    """
+    import math
+
+    lines = xyz.splitlines()
+    coords: list[tuple[float, float, float]] = []
+    for line in lines[2:]:
+        parts = line.split()
+        if len(parts) >= 4:
+            coords.append((float(parts[1]), float(parts[2]), float(parts[3])))
+
+    if len(coords) < 2:
+        return float("inf")
+
+    best = float("inf")
+    for i in range(len(coords)):
+        for j in range(i + 1, len(coords)):
+            d = math.dist(coords[i], coords[j])
+            if d < best:
+                best = d
+    return best
+
+
 def _generate_initial_xyz(smiles: str) -> str:
     """Generate a 3D XYZ string from SMILES.
 
-    Tries RDKit (with ETKDG + UFF) first, then OpenBabel. If both are
-    unavailable or fail, raises ``RuntimeError`` — the pipeline must
-    NEVER silently submit a placeholder geometry, because ORCA will
-    happily run nonsense on a 1-atom stub and look "successful enough"
-    to confuse the operator.
+    Tries RDKit (with ETKDG + UFF) first, then OpenBabel. Each embedder's
+    output is validated by ``_min_pairwise_distance`` — if any pair of
+    atoms is closer than ``_MIN_VALID_ATOM_DISTANCE`` Å, the result is
+    discarded and the next embedder is tried. RDKit's ETKDG, in
+    particular, silently stacks substituents on hypervalent centres
+    (e.g. all 5 fluorines of an SF5 group on top of each other), so a
+    no-raise return from RDKit is not by itself proof of a usable
+    geometry.
+
+    OpenBabel is tried via the ``pybel`` Python bindings first, then via
+    the ``obabel`` CLI if the bindings aren't importable. If both
+    embedders are unavailable or both produce nonsense, raises
+    ``RuntimeError`` — the pipeline must NEVER silently submit a
+    placeholder geometry.
     """
     rdkit_err: Optional[Exception] = None
     obabel_err: Optional[Exception] = None
@@ -530,33 +574,34 @@ def _generate_initial_xyz(smiles: str) -> str:
         for atom in mol.GetAtoms():
             pos = conf.GetAtomPosition(atom.GetIdx())
             lines.append(f"{atom.GetSymbol()} {pos.x:.6f} {pos.y:.6f} {pos.z:.6f}")
+        xyz = "\n".join(lines)
+
+        min_d = _min_pairwise_distance(xyz)
+        if min_d < _MIN_VALID_ATOM_DISTANCE:
+            raise RuntimeError(
+                f"RDKit produced overlapping atoms (min pairwise distance "
+                f"{min_d:.4f} Å < {_MIN_VALID_ATOM_DISTANCE} Å); likely a "
+                f"hypervalent group RDKit can't embed"
+            )
 
         logger.info("RDKit generated initial geometry for '%s'", smiles)
-        return "\n".join(lines)
+        return xyz
 
     except Exception as exc:
         rdkit_err = exc
         logger.warning("RDKit failed (%s); trying OpenBabel", exc)
 
-    # Try OpenBabel
+    # Try OpenBabel — Python bindings first, then CLI
     try:
-        from openbabel import pybel
-
-        obmol = pybel.readstring("smi", smiles)
-        obmol.addh()
-        obmol.make3D()
-
-        atoms = list(obmol.atoms)
-        if not atoms:
-            raise RuntimeError("OpenBabel produced an empty molecule")
-        lines = [str(len(atoms)), "Initial geometry from OpenBabel"]
-        for atom in atoms:
-            coords = atom.coords
-            symbol = pybel.ob.OBElementTable().GetSymbol(atom.atomicnum)
-            lines.append(f"{symbol} {coords[0]:.6f} {coords[1]:.6f} {coords[2]:.6f}")
-
+        xyz = _generate_xyz_via_openbabel(smiles)
+        min_d = _min_pairwise_distance(xyz)
+        if min_d < _MIN_VALID_ATOM_DISTANCE:
+            raise RuntimeError(
+                f"OpenBabel produced overlapping atoms (min pairwise "
+                f"distance {min_d:.4f} Å < {_MIN_VALID_ATOM_DISTANCE} Å)"
+            )
         logger.info("OpenBabel generated initial geometry for '%s'", smiles)
-        return "\n".join(lines)
+        return xyz
 
     except Exception as exc:
         obabel_err = exc
@@ -567,3 +612,63 @@ def _generate_initial_xyz(smiles: str) -> str:
         f"({rdkit_err!r}), OpenBabel error ({obabel_err!r}). Install "
         f"either package on the controller before resubmitting."
     )
+
+
+def _generate_xyz_via_openbabel(smiles: str) -> str:
+    """Generate an XYZ string via OpenBabel.
+
+    Tries the ``pybel`` Python bindings first; if the bindings aren't
+    importable OR fail at runtime (common when the wheel's format
+    plugins can't find their X11 shared libs), falls back to invoking
+    the ``obabel`` CLI from PATH. Raises ``RuntimeError`` if neither
+    path produces a geometry.
+    """
+    pybel_err: Optional[Exception] = None
+    try:
+        from openbabel import pybel
+
+        obmol = pybel.readstring("smi", smiles)
+        obmol.addh()
+        obmol.make3D()
+        atoms = list(obmol.atoms)
+        if not atoms:
+            raise RuntimeError("OpenBabel produced an empty molecule")
+        lines = [str(len(atoms)), "Initial geometry from OpenBabel"]
+        for atom in atoms:
+            symbol = pybel.ob.OBElementTable().GetSymbol(atom.atomicnum)
+            x, y, z = atom.coords
+            lines.append(f"{symbol} {x:.6f} {y:.6f} {z:.6f}")
+        return "\n".join(lines)
+    except Exception as exc:
+        pybel_err = exc
+        logger.info("OpenBabel pybel path failed (%s); trying CLI", exc)
+
+    import shutil
+    import subprocess
+
+    obabel = shutil.which("obabel")
+    if obabel is None:
+        raise RuntimeError(
+            f"OpenBabel pybel failed ({pybel_err!r}) and 'obabel' CLI "
+            f"is not on PATH"
+        )
+
+    proc = subprocess.run(
+        [obabel, f"-:{smiles}", "-oxyz", "--gen3d"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if proc.returncode != 0 or not proc.stdout.strip():
+        raise RuntimeError(
+            f"obabel CLI failed (rc={proc.returncode}): {proc.stderr.strip()[:200]}"
+        )
+
+    # The CLI emits "<n>\n<title>\n<atoms>...". Title is empty by default
+    # — normalise to a recognisable header.
+    out_lines = proc.stdout.splitlines()
+    if len(out_lines) < 3:
+        raise RuntimeError("obabel CLI returned a malformed XYZ block")
+    n_atoms = out_lines[0].strip()
+    atom_lines = out_lines[2:]
+    return "\n".join([n_atoms, "Initial geometry from OpenBabel CLI", *atom_lines])
