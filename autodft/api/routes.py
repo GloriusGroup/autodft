@@ -656,6 +656,25 @@ def api_project_molecules_detail(name: str):
     return {"name": name, "molecules": out_mols}
 
 
+@router.get("/api/projects/{name}/state-analysis")
+def api_project_state_analysis(name: str):
+    """Per-molecule state analysis for one project.
+
+    Returns triplet energies, redox free energies / E vs SCE in MeCN,
+    and 4-point Marcus reorganisation energies for both
+    ``lowest_energy`` and ``rmsd_matched`` conformer-selection modes.
+    Solvation (MeCN) is detected from the optimisation / singlepoint
+    header text — when not present, redox values are reported in
+    ΔG only.
+
+    Computation is delegated to ``autodft.analysis.state_analysis`` so
+    the CSV/JSON exporters and this endpoint share the same energy
+    extraction.
+    """
+    from autodft.analysis.state_analysis import analyze_project
+    return analyze_project(name)
+
+
 def _status_of(task: Optional[ComputationTask]) -> Optional[str]:
     return task.status.value if task is not None else None
 

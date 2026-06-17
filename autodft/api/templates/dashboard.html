@@ -92,11 +92,23 @@
         }
         .nav-item.active .nav-icon { color: var(--accent); }
 
-        /* Indented sub-nav items under a parent route. */
+        /* Indented sub-nav items under a parent route. The ▸ marker
+           and the deeper left padding make the hierarchy obvious. */
         .nav-item.nav-sub {
-            padding-left: 38px;
+            padding-left: 52px;
             font-size: 0.82rem;
             color: var(--text-muted);
+            position: relative;
+        }
+        .nav-item.nav-sub::before {
+            content: '▸';
+            position: absolute;
+            left: 32px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            opacity: 0.7;
         }
         .nav-item.nav-sub:hover { color: var(--text-primary); }
         .nav-item.nav-sub.active {
@@ -104,6 +116,7 @@
             color: var(--text-primary);
             box-shadow: inset 3px 0 0 var(--accent);
         }
+        .nav-item.nav-sub.active::before { color: var(--accent); opacity: 1; }
 
         .sidebar-footer {
             margin-top: auto;
@@ -707,6 +720,123 @@
         .mol-table .skipped   { color: var(--text-muted); }
         .mol-table tr.mol-first td { border-top: 2px solid var(--border); }
 
+        /* ── State Analysis subpage ────────────────────────────────── */
+        .sa-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 18px;
+        }
+        .sa-toggle {
+            display: inline-flex;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+            background: var(--bg-card);
+        }
+        .sa-toggle-btn {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 0;
+            padding: 9px 14px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+        .sa-toggle-btn + .sa-toggle-btn { border-left: 1px solid var(--border); }
+        .sa-toggle-btn:hover { background: var(--bg-input); color: var(--text-primary); }
+        .sa-toggle-btn.active {
+            background: var(--accent);
+            color: #0c0e10;
+            font-weight: 600;
+        }
+        .sa-meta {
+            font-size: 0.78rem;
+            color: var(--text-muted);
+        }
+        .sa-meta .yes { color: var(--green); font-weight: 600; }
+        .sa-meta .no  { color: var(--text-muted); }
+
+        .sa-cards {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 16px;
+        }
+        .sa-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px 18px;
+        }
+        .sa-card-head {
+            display: flex;
+            align-items: baseline;
+            gap: 14px;
+            margin-bottom: 12px;
+            flex-wrap: wrap;
+        }
+        .sa-card-head .sa-mol-id {
+            color: var(--text-muted);
+            font-family: 'SF Mono','Fira Code','Consolas',monospace;
+            font-size: 0.85rem;
+        }
+        .sa-card-head .sa-smiles {
+            font-family: 'SF Mono','Fira Code','Consolas',monospace;
+            font-size: 0.9rem;
+            color: var(--text-primary);
+            word-break: break-all;
+        }
+        .sa-card-note {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            padding: 6px 0;
+        }
+        .sa-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+            gap: 10px 18px;
+            margin-top: 6px;
+        }
+        .sa-metric {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            padding: 8px 10px;
+            background: var(--bg-input);
+            border-radius: 6px;
+            border: 1px solid var(--border);
+        }
+        .sa-metric-label {
+            font-size: 0.72rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .sa-metric-value {
+            font-family: 'SF Mono','Fira Code','Consolas',monospace;
+            font-size: 0.95rem;
+            color: var(--text-primary);
+        }
+        .sa-metric-value.dim { color: var(--text-muted); }
+        .sa-metric-sub {
+            font-family: 'SF Mono','Fira Code','Consolas',monospace;
+            font-size: 0.72rem;
+            color: var(--text-muted);
+        }
+        .sa-picks {
+            margin-top: 12px;
+            font-family: 'SF Mono','Fira Code','Consolas',monospace;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            line-height: 1.6;
+        }
+        .sa-picks code {
+            background: var(--bg-input);
+            padding: 1px 6px;
+            border-radius: 4px;
+            color: var(--text-secondary);
+        }
+
         /* Project status banner */
         .project-status-banner {
             display: flex;
@@ -810,8 +940,9 @@
             <a class="nav-item" data-route="submit"   href="#/submit">  <span class="nav-icon">+</span> Job Submission</a>
             <a class="nav-item" data-route="status"   href="#/status">  <span class="nav-icon">&#9678;</span> Current Status</a>
             <a class="nav-item" data-route="projects" href="#/projects"><span class="nav-icon">&#9776;</span> Project Overview</a>
-            <a class="nav-item nav-sub" data-route="projects.summary"   href="#/projects/summary">  Summary</a>
-            <a class="nav-item nav-sub" data-route="projects.molecules" href="#/projects/molecules">Molecules</a>
+            <a class="nav-item nav-sub" data-route="projects.summary"        href="#/projects/summary">Summary</a>
+            <a class="nav-item nav-sub" data-route="projects.molecules"      href="#/projects/molecules">Molecules</a>
+            <a class="nav-item nav-sub" data-route="projects.state-analysis" href="#/projects/state-analysis">State Analysis</a>
             <a class="nav-item" data-route="headers"  href="#/headers"> <span class="nav-icon">&#9881;</span> Headers</a>
             <div class="sidebar-footer">
                 <div class="status-indicator">
@@ -1304,6 +1435,43 @@
         </section>
         <!-- /PAGE: Project Overview > Molecules -->
 
+
+        <!-- ============================================================ -->
+        <!-- PAGE: Project Overview > State Analysis                       -->
+        <!-- ============================================================ -->
+        <section class="page" data-page="projects.state-analysis">
+        <div class="page-header">
+            <div>
+                <h1>Project Overview · State Analysis</h1>
+                <div class="subtitle">Triplet energies, redox free energies, and 4-point Marcus reorganisation barriers — per molecule.</div>
+            </div>
+            <div class="form-group" style="min-width: 240px;">
+                <label for="projectSelectSA">Project</label>
+                <select id="projectSelectSA"><option value="">Loading...</option></select>
+            </div>
+        </div>
+
+        <div class="sa-toolbar">
+            <div class="sa-toggle" role="tablist" aria-label="Conformer selection">
+                <button type="button" class="sa-toggle-btn active" data-mode="lowest_energy"
+                        title="Per state, the conformer with the smallest free-energy-corrected E(electronic) + (G − E_el).">
+                    Lowest-energy conformer
+                </button>
+                <button type="button" class="sa-toggle-btn" data-mode="rmsd_matched"
+                        title="S0 keeps its lowest-energy conformer; every other state picks the conformer with the smallest Kabsch RMSD to the S0 reference geometry.">
+                    RMSD-matched to S0
+                </button>
+            </div>
+            <div class="sa-meta" id="saMeta"></div>
+        </div>
+
+        <div id="saEmptyState" class="empty-state" style="padding: 60px 16px;">
+            Select a project to see its state analysis.
+        </div>
+        <div id="saCards" class="sa-cards" style="display: none;"></div>
+        </section>
+        <!-- /PAGE: Project Overview > State Analysis -->
+
     </div>  <!-- /container -->
     </div>  <!-- /app -->
 
@@ -1356,16 +1524,17 @@
         // Routes:
         //   #/submit
         //   #/status
-        //   #/projects          (alias for #/projects/summary)
+        //   #/projects                  (alias for #/projects/summary)
         //   #/projects/summary
         //   #/projects/molecules
+        //   #/projects/state-analysis
         //   #/headers
         // Each route maps to a <section data-page="..."> and (optionally)
         // a nav-item with matching data-route.
 
         var ROUTES = [
             'submit', 'status',
-            'projects.summary', 'projects.molecules',
+            'projects.summary', 'projects.molecules', 'projects.state-analysis',
             'headers',
         ];
 
@@ -1394,9 +1563,10 @@
                 var match = (r === route) || (r === 'projects' && route.indexOf('projects.') === 0);
                 el.classList.toggle('active', match);
             });
-            if (route === 'projects.summary')   fetchProjects();
-            if (route === 'projects.molecules') fetchProjects().then(loadMoleculesPage);
-            if (route === 'status')             fetchFailed();
+            if (route === 'projects.summary')        fetchProjects();
+            if (route === 'projects.molecules')      fetchProjects().then(loadMoleculesPage);
+            if (route === 'projects.state-analysis') fetchProjects().then(loadStateAnalysisPage);
+            if (route === 'status')                  fetchFailed();
         }
 
         window.addEventListener('hashchange', function () { activateRoute(currentRoute()); });
@@ -1961,12 +2131,15 @@
                 projectCache = await resp.json();
                 var sel       = document.getElementById('projectSelect');
                 var selMols   = document.getElementById('projectSelectMols');
-                var prev      = sel.value || (selMols && selMols.value) || '';
+                var selSA     = document.getElementById('projectSelectSA');
+                var prev      = sel.value || (selMols && selMols.value)
+                                || (selSA && selSA.value) || '';
 
                 if (!projectCache || projectCache.length === 0) {
                     var empty = '<option value="">(no projects yet)</option>';
                     sel.innerHTML = empty;
                     if (selMols) selMols.innerHTML = empty;
+                    if (selSA)   selSA.innerHTML   = empty;
                     document.getElementById('projectCards').style.display = 'none';
                     document.getElementById('projectExportSection').style.display = 'none';
                     document.getElementById('projectMoleculesSection').style.display = 'none';
@@ -1974,6 +2147,10 @@
                     if (document.getElementById('moleculesEmptyState')) {
                         document.getElementById('moleculesEmptyState').style.display = 'block';
                         document.getElementById('moleculesTableWrapper').style.display = 'none';
+                    }
+                    if (document.getElementById('saEmptyState')) {
+                        document.getElementById('saEmptyState').style.display = 'block';
+                        document.getElementById('saCards').style.display = 'none';
                     }
                     return;
                 }
@@ -1988,10 +2165,12 @@
                 }).join('');
                 sel.innerHTML = html;
                 if (selMols) selMols.innerHTML = html;
+                if (selSA)   selSA.innerHTML   = html;
 
                 if (prev && projectCache.some(function (p) { return p.name === prev; })) {
                     sel.value = prev;
                     if (selMols) selMols.value = prev;
+                    if (selSA)   selSA.value   = prev;
                 }
                 loadProjectDetail(sel.value);
             } catch (err) {
@@ -2225,17 +2404,30 @@
         }
 
         (function () {
+            function syncSelects(value) {
+                ['projectSelect', 'projectSelectMols', 'projectSelectSA'].forEach(function (id) {
+                    var el = document.getElementById(id);
+                    if (el && el.value !== value) el.value = value;
+                });
+            }
             document.getElementById('projectSelect').addEventListener('change', function () {
                 loadProjectDetail(this.value);
-                var alt = document.getElementById('projectSelectMols');
-                if (alt) alt.value = this.value;
+                syncSelects(this.value);
             });
             var alt = document.getElementById('projectSelectMols');
             if (alt) {
                 alt.addEventListener('change', function () {
-                    document.getElementById('projectSelect').value = this.value;
                     currentProject = this.value;
+                    syncSelects(this.value);
                     loadMoleculesPage();
+                });
+            }
+            var altSA = document.getElementById('projectSelectSA');
+            if (altSA) {
+                altSA.addEventListener('change', function () {
+                    currentProject = this.value;
+                    syncSelects(this.value);
+                    loadStateAnalysisPage();
                 });
             }
             document.getElementById('exportCsvBtn').addEventListener('click', function () { exportProject('csv'); });
@@ -2423,6 +2615,160 @@
                 drawStructureInto(div, div.dataset.smiles);
             });
         }
+
+        // ── Project Overview > State Analysis subpage ───────────────────
+
+        // Cache the last analysis payload so flipping the toggle doesn't
+        // re-fetch. Cleared whenever the project changes.
+        var saState = { project: null, payload: null, mode: 'lowest_energy' };
+
+        function fmtFixed(value, digits) {
+            if (value === null || value === undefined || Number.isNaN(value)) return '—';
+            return Number(value).toFixed(digits);
+        }
+        function fmtEvKcal(ev) {
+            if (ev === null || ev === undefined) return '—';
+            var kcal = ev * 23.060547830619;  // 1 eV → kcal/mol
+            return fmtFixed(ev, 3) + ' eV  <span class="sa-metric-sub">(' + fmtFixed(kcal, 1) + ' kcal/mol)</span>';
+        }
+        function fmtVolts(v) {
+            if (v === null || v === undefined) return '—';
+            return fmtFixed(v, 3) + ' V';
+        }
+        function fmtRmsd(a) {
+            if (a === null || a === undefined) return '—';
+            return fmtFixed(a, 3) + ' Å';
+        }
+
+        function renderSaMetaLine(payload) {
+            if (!payload) { document.getElementById('saMeta').innerHTML = ''; return; }
+            var mecn = payload.solvation_mecn;
+            var html = 'MeCN solvation: ' +
+                       (mecn ? '<span class="yes">detected</span>'
+                             : '<span class="no">not detected — V vs SCE hidden</span>') +
+                       ' · SCE reference: ' + fmtFixed(payload.sce_ref, 2) + ' V (Pavlishchuk-Addison 2000)';
+            document.getElementById('saMeta').innerHTML = html;
+        }
+
+        function renderSaCards(payload, mode) {
+            var host = document.getElementById('saCards');
+            if (!payload || !payload.molecules || payload.molecules.length === 0) {
+                host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">No molecules analysed yet.</div>';
+                return;
+            }
+            host.innerHTML = payload.molecules.map(function (m) {
+                if (!m.modes) {
+                    return '<div class="sa-card">' +
+                           '<div class="sa-card-head">' +
+                           '<span class="sa-mol-id">#' + escHtml(m.id) + '</span>' +
+                           '<span class="sa-smiles">' + escHtml(m.smiles) + '</span>' +
+                           '</div>' +
+                           '<div class="sa-card-note">' + escHtml(m.note || 'No analysis available.') + '</div>' +
+                           '</div>';
+                }
+                var ana = m.modes[mode] || m.modes.lowest_energy;
+                var picks = ana.picks || {};
+                var metrics = [];
+                metrics.push({ label: 'Triplet energy ΔE(T1)', value: fmtEvKcal(ana.triplet_energy_ev),
+                               note: (picks.T1 ? '' : 'T1 state not calculated') });
+                metrics.push({ label: 'T1 reorganisation λ',   value: fmtEvKcal(ana.lambda_t1_ev),
+                               note: (ana.lambda_t1_ev === null
+                                      ? 'Needs vert_spin_change on both S0 and T1'
+                                      : '') });
+                metrics.push({ label: 'ΔG (oxidation)',        value: fmtEvKcal(ana.dG_ox_ev),
+                               note: '' });
+                metrics.push({ label: 'E°(Ox) vs SCE/MeCN',    value: fmtVolts(ana.E_ox_vs_sce),
+                               note: (payload.solvation_mecn ? '' : 'requires MeCN solvation') });
+                metrics.push({ label: 'Ox reorganisation λ',   value: fmtEvKcal(ana.lambda_ox_ev),
+                               note: (ana.lambda_ox_ev === null
+                                      ? 'Needs vert_ox at S0 + vert_red at ox geometry'
+                                      : '') });
+                metrics.push({ label: 'ΔG (reduction)',        value: fmtEvKcal(ana.dG_red_ev),
+                               note: '' });
+                metrics.push({ label: 'E°(Red) vs SCE/MeCN',   value: fmtVolts(ana.E_red_vs_sce),
+                               note: (payload.solvation_mecn ? '' : 'requires MeCN solvation') });
+                metrics.push({ label: 'Red reorganisation λ',  value: fmtEvKcal(ana.lambda_red_ev),
+                               note: (ana.lambda_red_ev === null
+                                      ? 'Needs vert_red at S0 + vert_ox at red geometry'
+                                      : '') });
+
+                var grid = metrics.map(function (mt) {
+                    return '<div class="sa-metric">' +
+                           '<div class="sa-metric-label">' + escHtml(mt.label) + '</div>' +
+                           '<div class="sa-metric-value">' + mt.value + '</div>' +
+                           (mt.note ? '<div class="sa-metric-sub">' + escHtml(mt.note) + '</div>' : '') +
+                           '</div>';
+                }).join('');
+
+                var pickRows = Object.keys(picks).map(function (st) {
+                    var p = picks[st];
+                    var rmsd = (st === 'S0' || p.rmsd_to_s0 === null)
+                               ? '' : ' (RMSD ' + fmtRmsd(p.rmsd_to_s0) + ' vs S0)';
+                    return '<div><code>' + escHtml(st) + '</code> — conformer ' +
+                           escHtml(p.conformer_index) + rmsd + '</div>';
+                }).join('');
+
+                return '<div class="sa-card">' +
+                       '<div class="sa-card-head">' +
+                       '<span class="sa-mol-id">#' + escHtml(m.id) + '</span>' +
+                       '<span class="sa-smiles">' + escHtml(m.smiles) + '</span>' +
+                       '</div>' +
+                       '<div class="sa-grid">' + grid + '</div>' +
+                       '<div class="sa-picks">Conformers used:' + pickRows + '</div>' +
+                       '</div>';
+            }).join('');
+        }
+
+        async function loadStateAnalysisPage() {
+            var sel  = document.getElementById('projectSelectSA');
+            var name = sel ? sel.value : currentProject;
+            var empty = document.getElementById('saEmptyState');
+            var host  = document.getElementById('saCards');
+            if (!name) {
+                empty.style.display = 'block';
+                host.style.display = 'none';
+                renderSaMetaLine(null);
+                return;
+            }
+            empty.style.display = 'none';
+            host.style.display = 'block';
+            host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Computing analysis…</div>';
+
+            try {
+                var resp = await fetch('/api/projects/' + encodeURIComponent(name) + '/state-analysis');
+                var text = await resp.text();
+                var payload;
+                try { payload = JSON.parse(text); }
+                catch (_) { throw new Error('Server returned non-JSON: ' + text.slice(0, 200)); }
+                if (!resp.ok) {
+                    host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">' +
+                                     'Error: ' + escHtml(payload.detail || ('HTTP ' + resp.status)) +
+                                     '</div>';
+                    renderSaMetaLine(null);
+                    return;
+                }
+                saState.project = name;
+                saState.payload = payload;
+                renderSaMetaLine(payload);
+                renderSaCards(payload, saState.mode);
+            } catch (err) {
+                host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">' +
+                                 'Network error: ' + escHtml(err.message) + '</div>';
+                renderSaMetaLine(null);
+            }
+        }
+
+        (function () {
+            var buttons = document.querySelectorAll('.sa-toggle-btn');
+            buttons.forEach(function (b) {
+                b.addEventListener('click', function () {
+                    buttons.forEach(function (x) { x.classList.remove('active'); });
+                    b.classList.add('active');
+                    saState.mode = b.dataset.mode;
+                    if (saState.payload) renderSaCards(saState.payload, saState.mode);
+                });
+            });
+        })();
 
         // ── Refresh orchestration ────────────────────────────────────────
 
