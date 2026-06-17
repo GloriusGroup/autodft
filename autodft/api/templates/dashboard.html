@@ -5,26 +5,53 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AutoDFT Dashboard</title>
     <style>
-        :root {
-            --bg-primary: #0f1117;
-            --bg-secondary: #1a1d27;
-            --bg-card: #21242f;
-            --bg-input: #2a2d3a;
-            --border: #2e3140;
-            --text-primary: #e4e6eb;
-            --text-secondary: #9ca0ab;
-            --text-muted: #6b7080;
-            --accent: #6366f1;
-            --accent-hover: #818cf8;
-            --green: #22c55e;
-            --green-bg: rgba(34, 197, 94, 0.12);
-            --yellow: #eab308;
-            --yellow-bg: rgba(234, 179, 8, 0.12);
-            --red: #ef4444;
-            --red-bg: rgba(239, 68, 68, 0.12);
-            --blue: #3b82f6;
-            --blue-bg: rgba(59, 130, 246, 0.12);
-            --gray-bg: rgba(107, 112, 128, 0.15);
+        :root,
+        [data-theme="dark"] {
+            --bg-primary:   #0f1117;
+            --bg-secondary: #181b25;
+            --bg-card:      #262a36;
+            --bg-input:     #2f3340;
+            --border:       #3a3e4d;
+            --text-primary:   #f3f5f8;
+            --text-secondary: #c4c8d4;
+            --text-muted:     #8a90a0;
+            --accent:       #818cf8;
+            --accent-hover: #a5b0ff;
+            --accent-on:    #0c0e10;  /* text colour drawn on top of --accent */
+            --green:    #34d399;
+            --green-bg: rgba(52, 211, 153, 0.16);
+            --yellow:    #fbbf24;
+            --yellow-bg: rgba(251, 191, 36, 0.16);
+            --red:    #f87171;
+            --red-bg: rgba(248, 113, 113, 0.16);
+            --blue:    #60a5fa;
+            --blue-bg: rgba(96, 165, 250, 0.16);
+            --gray-bg: rgba(138, 144, 160, 0.18);
+            --shadow-fab: 0 4px 12px rgba(0, 0, 0, 0.35);
+        }
+
+        [data-theme="light"] {
+            --bg-primary:   #f5f7fb;
+            --bg-secondary: #ffffff;
+            --bg-card:      #ffffff;
+            --bg-input:     #f1f3f8;
+            --border:       #d6dae3;
+            --text-primary:   #1a1f2c;
+            --text-secondary: #4a5266;
+            --text-muted:     #6b7280;
+            --accent:       #4f46e5;
+            --accent-hover: #6366f1;
+            --accent-on:    #ffffff;
+            --green:    #15803d;
+            --green-bg: rgba(21, 128, 61, 0.10);
+            --yellow:    #b45309;
+            --yellow-bg: rgba(180, 83, 9, 0.10);
+            --red:    #b91c1c;
+            --red-bg: rgba(185, 28, 28, 0.10);
+            --blue:    #1d4ed8;
+            --blue-bg: rgba(29, 78, 216, 0.10);
+            --gray-bg: rgba(75, 82, 102, 0.10);
+            --shadow-fab: 0 4px 12px rgba(0, 0, 0, 0.12);
         }
 
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -134,15 +161,18 @@
             width: 100%;
         }
 
-        /* Floating refresh button — fixed to the top-right of the viewport,
-           visible on every page. Refreshes the global polling data AND
-           re-runs the current route's loader so page-specific data
-           (project detail, molecule grid) updates too. */
-        .refresh-fab {
+        /* Floating refresh + theme buttons — fixed to the top-right of
+           the viewport, visible on every page. .top-fabs is the
+           horizontal row container that holds them.  */
+        .top-fabs {
             position: fixed;
             top: 18px;
             right: 22px;
             z-index: 100;
+            display: flex;
+            gap: 8px;
+        }
+        .top-fabs .fab-btn {
             background: var(--bg-card);
             border: 1px solid var(--border);
             color: var(--text-secondary);
@@ -154,15 +184,16 @@
             justify-content: center;
             cursor: pointer;
             font-size: 1.1rem;
+            box-shadow: var(--shadow-fab);
             transition: background 0.15s, color 0.15s, transform 0.5s;
             user-select: none;
         }
-        .refresh-fab:hover {
+        .top-fabs .fab-btn:hover {
             background: var(--bg-input);
             color: var(--text-primary);
         }
-        .refresh-fab:active { transform: scale(0.92); }
-        .refresh-fab.spinning {
+        .top-fabs .fab-btn:active { transform: scale(0.92); }
+        .top-fabs .fab-btn.spinning {
             animation: refresh-spin 0.8s linear infinite;
             color: var(--accent);
         }
@@ -388,7 +419,7 @@
 
         .btn {
             background: var(--accent);
-            color: white;
+            color: var(--accent-on);
             border: none;
             border-radius: 8px;
             padding: 10px 24px;
@@ -747,7 +778,7 @@
         .sa-toggle-btn:hover { background: var(--bg-input); color: var(--text-primary); }
         .sa-toggle-btn.active {
             background: var(--accent);
-            color: #0c0e10;
+            color: var(--accent-on);
             font-weight: 600;
         }
         .sa-meta {
@@ -791,18 +822,42 @@
             font-size: 0.85rem;
             padding: 6px 0;
         }
+        /* Three-column layout: Triplet | Oxidation | Reduction.
+           Stacks on narrow viewports. */
         .sa-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-            gap: 10px 18px;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 18px;
             margin-top: 6px;
+        }
+        @media (max-width: 980px) {
+            .sa-grid { grid-template-columns: 1fr; }
+        }
+        .sa-col {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 12px;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+        .sa-col-title {
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            font-weight: 700;
+            padding-bottom: 4px;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 2px;
         }
         .sa-metric {
             display: flex;
             flex-direction: column;
             gap: 2px;
             padding: 8px 10px;
-            background: var(--bg-input);
+            background: var(--bg-card);
             border-radius: 6px;
             border: 1px solid var(--border);
         }
@@ -932,7 +987,21 @@
     </style>
 </head>
 <body>
-    <button type="button" class="refresh-fab" id="refreshFab" title="Refresh now" aria-label="Refresh now">&#x21bb;</button>
+    <script>
+        // Apply the persisted theme BEFORE first paint so the page never
+        // flashes the wrong colours. Default is dark. Falls back silently
+        // if localStorage is unavailable (e.g. private browsing in some
+        // contexts).
+        (function () {
+            var saved = null;
+            try { saved = localStorage.getItem('autodft_theme'); } catch (_) {}
+            document.documentElement.setAttribute('data-theme', saved || 'dark');
+        })();
+    </script>
+    <div class="top-fabs">
+        <button type="button" class="fab-btn" id="themeFab" title="Toggle light/dark theme" aria-label="Toggle theme">&#x263D;</button>
+        <button type="button" class="fab-btn" id="refreshFab" title="Refresh now" aria-label="Refresh now">&#x21bb;</button>
+    </div>
     <div class="app">
         <!-- Sidebar -->
         <aside class="sidebar">
@@ -1462,6 +1531,19 @@
                     RMSD-matched to S0
                 </button>
             </div>
+            <label for="saUnit" style="font-size: 0.82rem; color: var(--text-secondary); display: flex; align-items: center; gap: 8px;">
+                Energy unit
+                <select id="saUnit" style="background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 0.85rem;">
+                    <option value="kcal" selected>kcal/mol</option>
+                    <option value="eV">eV</option>
+                    <option value="kJ">kJ/mol</option>
+                    <option value="Eh">Eh (Hartree)</option>
+                </select>
+            </label>
+            <button type="button" class="btn" id="saExportBtn" style="padding: 8px 16px; font-size: 0.85rem;"
+                    title="Download a multi-sheet xlsx with both modes and every conformer's energies.">
+                Export Excel
+            </button>
             <div class="sa-meta" id="saMeta"></div>
         </div>
 
@@ -2618,22 +2700,33 @@
 
         // ── Project Overview > State Analysis subpage ───────────────────
 
-        // Cache the last analysis payload so flipping the toggle doesn't
-        // re-fetch. Cleared whenever the project changes.
-        var saState = { project: null, payload: null, mode: 'lowest_energy' };
+        // Cache the last analysis payload so flipping the toggle and
+        // changing the unit don't re-fetch. Cleared whenever the project
+        // changes. Backend ships every energy in Hartree; the frontend
+        // converts via fmtEnergy() below.
+        var saState = { project: null, payload: null, mode: 'lowest_energy', unit: 'kcal' };
+
+        // Conversions from Hartree to each supported unit + per-unit
+        // precision for the displayed value.
+        var SA_UNITS = {
+            'kcal': { label: 'kcal/mol',  scale: 627.5094740631,  digits: 2 },
+            'eV':   { label: 'eV',        scale: 27.211386245988, digits: 3 },
+            'kJ':   { label: 'kJ/mol',    scale: 2625.4996394799, digits: 1 },
+            'Eh':   { label: 'Eh',        scale: 1.0,             digits: 5 },
+        };
 
         function fmtFixed(value, digits) {
             if (value === null || value === undefined || Number.isNaN(value)) return '—';
             return Number(value).toFixed(digits);
         }
-        function fmtEvKcal(ev) {
-            if (ev === null || ev === undefined) return '—';
-            var kcal = ev * 23.060547830619;  // 1 eV → kcal/mol
-            return fmtFixed(ev, 3) + ' eV  <span class="sa-metric-sub">(' + fmtFixed(kcal, 1) + ' kcal/mol)</span>';
+        function fmtEnergy(hartree, unitKey) {
+            if (hartree === null || hartree === undefined) return '—';
+            var u = SA_UNITS[unitKey] || SA_UNITS.kcal;
+            return fmtFixed(hartree * u.scale, u.digits) + ' <span class="sa-metric-sub">' + u.label + '</span>';
         }
         function fmtVolts(v) {
             if (v === null || v === undefined) return '—';
-            return fmtFixed(v, 3) + ' V';
+            return fmtFixed(v, 3) + ' <span class="sa-metric-sub">V</span>';
         }
         function fmtRmsd(a) {
             if (a === null || a === undefined) return '—';
@@ -2643,14 +2736,33 @@
         function renderSaMetaLine(payload) {
             if (!payload) { document.getElementById('saMeta').innerHTML = ''; return; }
             var mecn = payload.solvation_mecn;
-            var html = 'MeCN solvation: ' +
-                       (mecn ? '<span class="yes">detected</span>'
-                             : '<span class="no">not detected — V vs SCE hidden</span>') +
-                       ' · SCE reference: ' + fmtFixed(payload.sce_ref, 2) + ' V (Pavlishchuk-Addison 2000)';
-            document.getElementById('saMeta').innerHTML = html;
+            var bits = [];
+            bits.push('MeCN solvation: ' +
+                      (mecn ? '<span class="yes">detected</span>'
+                            : '<span class="no">not detected — V vs SCE hidden</span>'));
+            bits.push('SCE reference: ' + fmtFixed(payload.sce_ref, 2) + ' V (Pavlishchuk-Addison 2000)');
+            if (payload.archived) {
+                bits.push('<span class="yes">archived project</span> — energies from frozen CSV');
+            }
+            document.getElementById('saMeta').innerHTML = bits.join(' · ');
         }
 
-        function renderSaCards(payload, mode) {
+        // Build one column of metrics. Each item: {label, valueHtml, note}.
+        function renderSaColumn(title, items) {
+            var rows = items.map(function (it) {
+                return '<div class="sa-metric">' +
+                       '<div class="sa-metric-label">' + escHtml(it.label) + '</div>' +
+                       '<div class="sa-metric-value">' + it.valueHtml + '</div>' +
+                       (it.note ? '<div class="sa-metric-sub">' + escHtml(it.note) + '</div>' : '') +
+                       '</div>';
+            }).join('');
+            return '<div class="sa-col">' +
+                   '<div class="sa-col-title">' + escHtml(title) + '</div>' +
+                   rows +
+                   '</div>';
+        }
+
+        function renderSaCards(payload, mode, unitKey) {
             var host = document.getElementById('saCards');
             if (!payload || !payload.molecules || payload.molecules.length === 0) {
                 host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">No molecules analysed yet.</div>';
@@ -2668,37 +2780,59 @@
                 }
                 var ana = m.modes[mode] || m.modes.lowest_energy;
                 var picks = ana.picks || {};
-                var metrics = [];
-                metrics.push({ label: 'Triplet energy ΔE(T1)', value: fmtEvKcal(ana.triplet_energy_ev),
-                               note: (picks.T1 ? '' : 'T1 state not calculated') });
-                metrics.push({ label: 'T1 reorganisation λ',   value: fmtEvKcal(ana.lambda_t1_ev),
-                               note: (ana.lambda_t1_ev === null
-                                      ? 'Needs vert_spin_change on both S0 and T1'
-                                      : '') });
-                metrics.push({ label: 'ΔG (oxidation)',        value: fmtEvKcal(ana.dG_ox_ev),
-                               note: '' });
-                metrics.push({ label: 'E°(Ox) vs SCE/MeCN',    value: fmtVolts(ana.E_ox_vs_sce),
-                               note: (payload.solvation_mecn ? '' : 'requires MeCN solvation') });
-                metrics.push({ label: 'Ox reorganisation λ',   value: fmtEvKcal(ana.lambda_ox_ev),
-                               note: (ana.lambda_ox_ev === null
-                                      ? 'Needs vert_ox at S0 + vert_red at ox geometry'
-                                      : '') });
-                metrics.push({ label: 'ΔG (reduction)',        value: fmtEvKcal(ana.dG_red_ev),
-                               note: '' });
-                metrics.push({ label: 'E°(Red) vs SCE/MeCN',   value: fmtVolts(ana.E_red_vs_sce),
-                               note: (payload.solvation_mecn ? '' : 'requires MeCN solvation') });
-                metrics.push({ label: 'Red reorganisation λ',  value: fmtEvKcal(ana.lambda_red_ev),
-                               note: (ana.lambda_red_ev === null
-                                      ? 'Needs vert_red at S0 + vert_ox at red geometry'
-                                      : '') });
+                var t   = ana.triplet || {};
+                var ox  = ana.ox      || {};
+                var red = ana.red     || {};
 
-                var grid = metrics.map(function (mt) {
-                    return '<div class="sa-metric">' +
-                           '<div class="sa-metric-label">' + escHtml(mt.label) + '</div>' +
-                           '<div class="sa-metric-value">' + mt.value + '</div>' +
-                           (mt.note ? '<div class="sa-metric-sub">' + escHtml(mt.note) + '</div>' : '') +
-                           '</div>';
-                }).join('');
+                // Triplet column — 3 rows: adiabatic, fwd reorg, bwd reorg.
+                var tripletItems = [
+                    { label: 'Adiabatic ΔE(T1)',
+                      valueHtml: fmtEnergy(t.dE_adiabatic_h, unitKey),
+                      note: (picks.T1 ? '' : 'T1 state not calculated') },
+                    { label: 'Forward λ (S0 → T1)',
+                      valueHtml: fmtEnergy(t.lambda_fwd_h, unitKey),
+                      note: (t.lambda_fwd_h === null ? 'Needs vert_spin_change at S0 + SP at T1' : '') },
+                    { label: 'Backward λ (T1 → S0)',
+                      valueHtml: fmtEnergy(t.lambda_bwd_h, unitKey),
+                      note: (t.lambda_bwd_h === null ? 'Needs vert_spin_change at T1 + SP at S0' : '') },
+                ];
+
+                // Oxidation column — 4 rows.
+                var oxItems = [
+                    { label: 'ΔG (oxidation)',
+                      valueHtml: fmtEnergy(ox.dG_h, unitKey),
+                      note: (picks.ox ? '' : 'ox state not calculated') },
+                    { label: 'E°(Ox) vs SCE',
+                      valueHtml: fmtVolts(ox.E_vs_sce_v),
+                      note: (payload.solvation_mecn ? '' : 'requires MeCN solvation') },
+                    { label: 'Forward λ (S0 → ox)',
+                      valueHtml: fmtEnergy(ox.lambda_fwd_h, unitKey),
+                      note: (ox.lambda_fwd_h === null ? 'Needs vert_ox at S0 + SP at ox' : '') },
+                    { label: 'Backward λ (ox → S0)',
+                      valueHtml: fmtEnergy(ox.lambda_bwd_h, unitKey),
+                      note: (ox.lambda_bwd_h === null ? 'Needs vert_red at ox + SP at S0' : '') },
+                ];
+
+                // Reduction column — 4 rows.
+                var redItems = [
+                    { label: 'ΔG (reduction)',
+                      valueHtml: fmtEnergy(red.dG_h, unitKey),
+                      note: (picks.red ? '' : 'red state not calculated') },
+                    { label: 'E°(Red) vs SCE',
+                      valueHtml: fmtVolts(red.E_vs_sce_v),
+                      note: (payload.solvation_mecn ? '' : 'requires MeCN solvation') },
+                    { label: 'Forward λ (S0 → red)',
+                      valueHtml: fmtEnergy(red.lambda_fwd_h, unitKey),
+                      note: (red.lambda_fwd_h === null ? 'Needs vert_red at S0 + SP at red' : '') },
+                    { label: 'Backward λ (red → S0)',
+                      valueHtml: fmtEnergy(red.lambda_bwd_h, unitKey),
+                      note: (red.lambda_bwd_h === null ? 'Needs vert_ox at red + SP at S0' : '') },
+                ];
+
+                var grid =
+                    renderSaColumn('Triplet',   tripletItems) +
+                    renderSaColumn('Oxidation', oxItems) +
+                    renderSaColumn('Reduction', redItems);
 
                 var pickRows = Object.keys(picks).map(function (st) {
                     var p = picks[st];
@@ -2750,7 +2884,7 @@
                 saState.project = name;
                 saState.payload = payload;
                 renderSaMetaLine(payload);
-                renderSaCards(payload, saState.mode);
+                renderSaCards(payload, saState.mode, saState.unit);
             } catch (err) {
                 host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">' +
                                  'Network error: ' + escHtml(err.message) + '</div>';
@@ -2765,9 +2899,47 @@
                     buttons.forEach(function (x) { x.classList.remove('active'); });
                     b.classList.add('active');
                     saState.mode = b.dataset.mode;
-                    if (saState.payload) renderSaCards(saState.payload, saState.mode);
+                    if (saState.payload) renderSaCards(saState.payload, saState.mode, saState.unit);
                 });
             });
+            var unitSel = document.getElementById('saUnit');
+            if (unitSel) {
+                unitSel.addEventListener('change', function () {
+                    saState.unit = this.value;
+                    if (saState.payload) renderSaCards(saState.payload, saState.mode, saState.unit);
+                });
+            }
+            var exportBtn = document.getElementById('saExportBtn');
+            if (exportBtn) {
+                exportBtn.addEventListener('click', async function () {
+                    var name = saState.project || (document.getElementById('projectSelectSA') || {}).value;
+                    if (!name) return;
+                    exportBtn.disabled = true;
+                    var origLabel = exportBtn.textContent;
+                    exportBtn.textContent = 'Preparing…';
+                    try {
+                        var resp = await fetch('/api/projects/' + encodeURIComponent(name) + '/state-analysis/export');
+                        if (!resp.ok) {
+                            var text = await resp.text();
+                            throw new Error('HTTP ' + resp.status + ' — ' + text.slice(0, 200));
+                        }
+                        var blob = await resp.blob();
+                        var url = URL.createObjectURL(blob);
+                        var a = document.createElement('a');
+                        a.href = url;
+                        a.download = name + '_state_analysis.xlsx';
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        setTimeout(function () { URL.revokeObjectURL(url); }, 0);
+                    } catch (err) {
+                        alert('Export failed: ' + err.message);
+                    } finally {
+                        exportBtn.disabled = false;
+                        exportBtn.textContent = origLabel;
+                    }
+                });
+            }
         })();
 
         // ── Refresh orchestration ────────────────────────────────────────
@@ -2795,6 +2967,26 @@
             }
         }
         document.getElementById('refreshFab').addEventListener('click', refreshNow);
+
+        // Theme toggle — flips data-theme on <html> and persists the choice.
+        // The inline script in <body> applies the saved theme before paint;
+        // this block keeps the button icon + tooltip in sync.
+        (function () {
+            var btn = document.getElementById('themeFab');
+            if (!btn) return;
+            function syncIcon(theme) {
+                btn.innerHTML = theme === 'light' ? '&#x263C;' : '&#x263D;';  // sun in light mode, moon in dark
+                btn.title = 'Switch to ' + (theme === 'light' ? 'dark' : 'light') + ' theme';
+            }
+            btn.addEventListener('click', function () {
+                var cur = document.documentElement.getAttribute('data-theme') || 'dark';
+                var next = cur === 'light' ? 'dark' : 'light';
+                document.documentElement.setAttribute('data-theme', next);
+                try { localStorage.setItem('autodft_theme', next); } catch (_) {}
+                syncIcon(next);
+            });
+            syncIcon(document.documentElement.getAttribute('data-theme') || 'dark');
+        })();
 
         // Initial load
         fetchHeaders();

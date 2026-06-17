@@ -30,12 +30,14 @@ Reference values:
 
 from __future__ import annotations
 
+import csv
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from sqlmodel import col, select
+from sqlmodel import col, func, select
 
 from autodft.db import get_session
 from autodft.extraction.extractor import ConformerResult, PipelineExtractor
@@ -142,67 +144,82 @@ class StatePick:
 
 @dataclass
 class ModeAnalysis:
+    """Energies are reported in Hartree; the frontend converts to the
+    user's chosen unit. Redox potentials stay in V (since the user fixed
+    that on the UI side)."""
     mode: str
     picks: dict[str, StatePick]
-    triplet_energy_ev: Optional[float] = None
-    lambda_t1_ev: Optional[float] = None
-    dG_ox_ev: Optional[float] = None
-    dG_red_ev: Optional[float] = None
-    E_ox_vs_sce: Optional[float] = None
-    E_red_vs_sce: Optional[float] = None
-    lambda_ox_ev: Optional[float] = None
-    lambda_red_ev: Optional[float] = None
+    # Triplet: adiabatic gap + forward / backward inner reorganisation.
+    triplet_dE_adiabatic_h: Optional[float] = None
+    triplet_lambda_fwd_h: Optional[float] = None
+    triplet_lambda_bwd_h: Optional[float] = None
+    # Oxidation: adiabatic free energy, E vs SCE, forward / backward λ.
+    ox_dG_h: Optional[float] = None
+    ox_E_vs_sce_v: Optional[float] = None
+    ox_lambda_fwd_h: Optional[float] = None
+    ox_lambda_bwd_h: Optional[float] = None
+    # Reduction: same layout as ox.
+    red_dG_h: Optional[float] = None
+    red_E_vs_sce_v: Optional[float] = None
+    red_lambda_fwd_h: Optional[float] = None
+    red_lambda_bwd_h: Optional[float] = None
 
 
 def _compute_derived(picks: dict[str, StatePick], mecn: bool) -> ModeAnalysis:
+    """Compute every derived quantity in Hartree (energies) and V
+    (redox potentials).
+
+    Reorganisation convention — for an electron transfer R → P:
+        λ_fwd = E_P(R_geom) − E_P(P_geom)       (cost on the PRODUCT surface)
+        λ_bwd = E_R(P_geom) − E_R(R_geom)       (cost on the REACTANT surface)
+    The total Marcus reorg is (λ_fwd + λ_bwd) / 2 in the harmonic limit;
+    here we surface both halves separately so asymmetries are visible.
+    """
     ana = ModeAnalysis(mode="", picks=picks)
     s0 = picks.get("S0")
     t1 = picks.get("T1")
     ox = picks.get("ox")
     red = picks.get("red")
 
+    # ── Triplet ───────────────────────────────────────────────────────
     if s0 and t1 and s0.e_combined is not None and t1.e_combined is not None:
-        ana.triplet_energy_ev = (t1.e_combined - s0.e_combined) * HARTREE_TO_EV
+        ana.triplet_dE_adiabatic_h = t1.e_combined - s0.e_combined
 
-    # Full 4-point Marcus on S0 ↔ T1:
-    #   λ = ½ · [(E_vert_T1@S0 − E_sp(T1)) + (E_vert_S0@T1 − E_sp(S0))]
-    if (
-        s0 and t1
-        and s0.e_vert_spin_change is not None and t1.e_sp is not None
-        and t1.e_vert_spin_change is not None and s0.e_sp is not None
-    ):
-        l_a = s0.e_vert_spin_change - t1.e_sp
-        l_b = t1.e_vert_spin_change - s0.e_sp
-        ana.lambda_t1_ev = 0.5 * (l_a + l_b) * HARTREE_TO_EV
+    # λ_T1_fwd: on T1 surface = E_vert_spin_change(S0) − E_sp(T1)
+    if s0 and t1 and s0.e_vert_spin_change is not None and t1.e_sp is not None:
+        ana.triplet_lambda_fwd_h = s0.e_vert_spin_change - t1.e_sp
+    # λ_T1_bwd: on S0 surface = E_vert_spin_change(T1) − E_sp(S0)
+    if s0 and t1 and t1.e_vert_spin_change is not None and s0.e_sp is not None:
+        ana.triplet_lambda_bwd_h = t1.e_vert_spin_change - s0.e_sp
 
+    # ── Oxidation ─────────────────────────────────────────────────────
     if s0 and ox and s0.e_combined is not None and ox.e_combined is not None:
-        ana.dG_ox_ev = (ox.e_combined - s0.e_combined) * HARTREE_TO_EV
+        ana.ox_dG_h = ox.e_combined - s0.e_combined
         if mecn:
-            ana.E_ox_vs_sce = ana.dG_ox_ev - SCE_ABS_MECN
-    if s0 and red and s0.e_combined is not None and red.e_combined is not None:
-        ana.dG_red_ev = (s0.e_combined - red.e_combined) * HARTREE_TO_EV
-        if mecn:
-            ana.E_red_vs_sce = ana.dG_red_ev - SCE_ABS_MECN
+            ana.ox_E_vs_sce_v = ana.ox_dG_h * HARTREE_TO_EV - SCE_ABS_MECN
 
-    # Redox reorganisation — strict 4-point Marcus. Requires the
-    # cross-vertical SP at both endpoints (vert_ox at S0, vert_red at ox;
-    # and the reverse for the reduction branch).
-    if (
-        s0 and ox
-        and s0.e_vert_ox is not None and s0.e_sp is not None
-        and ox.e_vert_red is not None and ox.e_sp is not None
-    ):
-        l_s0 = ox.e_vert_red - s0.e_sp
-        l_ox = s0.e_vert_ox - ox.e_sp
-        ana.lambda_ox_ev = 0.5 * (l_s0 + l_ox) * HARTREE_TO_EV
-    if (
-        s0 and red
-        and s0.e_vert_red is not None and s0.e_sp is not None
-        and red.e_vert_ox is not None and red.e_sp is not None
-    ):
-        l_s0 = red.e_vert_ox - s0.e_sp
-        l_red = s0.e_vert_red - red.e_sp
-        ana.lambda_red_ev = 0.5 * (l_s0 + l_red) * HARTREE_TO_EV
+    # λ_ox_fwd: on ox surface = E_vert_ox(S0) − E_sp(ox)
+    if s0 and ox and s0.e_vert_ox is not None and ox.e_sp is not None:
+        ana.ox_lambda_fwd_h = s0.e_vert_ox - ox.e_sp
+    # λ_ox_bwd: on S0 surface = E_vert_red(ox) − E_sp(S0)
+    if s0 and ox and ox.e_vert_red is not None and s0.e_sp is not None:
+        ana.ox_lambda_bwd_h = ox.e_vert_red - s0.e_sp
+
+    # ── Reduction ─────────────────────────────────────────────────────
+    # ΔG_red = G(S0) − G(red): positive when reduction is unfavourable,
+    # matches the sign convention used by the SCE formula below
+    # (E°_red,SCE = ΔG/F − E_ref).
+    if s0 and red and s0.e_combined is not None and red.e_combined is not None:
+        ana.red_dG_h = s0.e_combined - red.e_combined
+        if mecn:
+            ana.red_E_vs_sce_v = ana.red_dG_h * HARTREE_TO_EV - SCE_ABS_MECN
+
+    # λ_red_fwd: on red surface = E_vert_red(S0) − E_sp(red)
+    if s0 and red and s0.e_vert_red is not None and red.e_sp is not None:
+        ana.red_lambda_fwd_h = s0.e_vert_red - red.e_sp
+    # λ_red_bwd: on S0 surface = E_vert_ox(red) − E_sp(S0)
+    if s0 and red and red.e_vert_ox is not None and s0.e_sp is not None:
+        ana.red_lambda_bwd_h = red.e_vert_ox - s0.e_sp
 
     return ana
 
@@ -212,15 +229,94 @@ def _compute_derived(picks: dict[str, StatePick], mecn: bool) -> ModeAnalysis:
 # ----------------------------------------------------------------------
 
 
+def _parse_float(s: Optional[str]) -> Optional[float]:
+    if s is None or s == "" or s == "None":
+        return None
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return None
+
+
+def _load_results_from_archive_csv(csv_path: Path) -> list[ConformerResult]:
+    """Reconstruct ConformerResult rows from a frozen archive CSV.
+
+    The archive step writes <export>/<project>/<project>.csv with every
+    column we need for state analysis (all energies in Hartree, plus
+    opt_task_id so we can still resolve geometries from the DB for
+    Kabsch RMSD). Used when output.out files have been wiped from
+    comp_data/.
+    """
+    results: list[ConformerResult] = []
+    with open(csv_path, "r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            try:
+                mol_id = int(row["molecule_id"])
+                conf_idx = int(row["conformer_index"])
+                opt_task_id = int(row["opt_task_id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            results.append(ConformerResult(
+                molecule_id=mol_id,
+                smiles=row.get("smiles", ""),
+                state=row.get("state", ""),
+                conformer_index=conf_idx,
+                opt_task_id=opt_task_id,
+                e_singlepoint=_parse_float(row.get("e_singlepoint")),
+                e_correction=_parse_float(row.get("e_correction")),
+                e_combined=_parse_float(row.get("e_combined")),
+                e_vert_spin_change=_parse_float(row.get("e_vert_spin_change")),
+                e_vert_ox=_parse_float(row.get("e_vert_ox")),
+                e_vert_red=_parse_float(row.get("e_vert_red")),
+            ))
+    return results
+
+
 def analyze_project(project_name: str) -> dict:
     """Run state analysis for every molecule in a project.
 
-    Heavy lifting (ORCA output parsing) is delegated to
-    :class:`PipelineExtractor` so this stays consistent with the CSV/JSON
-    exports.
+    For live projects, energies are read from the on-disk ORCA outputs
+    via :class:`PipelineExtractor`. For archived projects (where
+    comp_data/ has been wiped) we reconstruct the same data from the
+    archive CSV written by :meth:`PipelineExtractor.archive_project`.
+    The DB still holds every geometry row, so Kabsch RMSD works in both
+    cases.
     """
-    extractor = PipelineExtractor(project_name)
-    all_results: list[ConformerResult] = extractor.extract_results(all_conformers=True)
+    # Detect archived status first so we know which extraction path to use.
+    with get_session() as _s:
+        archived_count = _s.exec(
+            select(func.count())
+            .select_from(Molecule)
+            .where(
+                Molecule.project_name == project_name,
+                Molecule.archived == True,  # noqa: E712
+            )
+        ).one()
+        total_count = _s.exec(
+            select(func.count())
+            .select_from(Molecule)
+            .where(Molecule.project_name == project_name)
+        ).one()
+    is_archived = total_count > 0 and archived_count == total_count
+
+    all_results: list[ConformerResult] = []
+    archive_source: Optional[str] = None
+    if is_archived:
+        # Resolve the archive CSV via the active Settings so it works
+        # whether the dashboard or a CLI tool is the caller.
+        try:
+            from autodft.api.routes import get_active_settings
+            settings = get_active_settings()
+            csv_path = settings.export_data_path / project_name / f"{project_name}.csv"
+        except Exception:
+            csv_path = None
+        if csv_path and csv_path.is_file():
+            all_results = _load_results_from_archive_csv(csv_path)
+            archive_source = str(csv_path)
+    if not all_results:
+        extractor = PipelineExtractor(project_name)
+        all_results = extractor.extract_results(all_conformers=True)
 
     # (mol_id, state_desc) -> [ConformerResult, ...], ordered by opt_task_id
     groups: dict[tuple[int, str], list[ConformerResult]] = {}
@@ -241,6 +337,8 @@ def analyze_project(project_name: str) -> dict:
                 "project": project_name,
                 "solvation_mecn": False,
                 "sce_ref": SCE_ABS_MECN,
+                "archived": is_archived,
+                "archive_source": archive_source,
                 "molecules": [],
             }
 
@@ -396,6 +494,8 @@ def analyze_project(project_name: str) -> dict:
         "project": project_name,
         "solvation_mecn": solvation_mecn,
         "sce_ref": SCE_ABS_MECN,
+        "archived": is_archived,
+        "archive_source": archive_source,
         "molecules": out_mols,
     }
 
@@ -418,12 +518,190 @@ def _ana_to_dict(a: ModeAnalysis) -> dict:
             }
             for st, p in a.picks.items()
         },
-        "triplet_energy_ev": a.triplet_energy_ev,
-        "lambda_t1_ev": a.lambda_t1_ev,
-        "dG_ox_ev": a.dG_ox_ev,
-        "dG_red_ev": a.dG_red_ev,
-        "E_ox_vs_sce": a.E_ox_vs_sce,
-        "E_red_vs_sce": a.E_red_vs_sce,
-        "lambda_ox_ev": a.lambda_ox_ev,
-        "lambda_red_ev": a.lambda_red_ev,
+        "triplet": {
+            "dE_adiabatic_h": a.triplet_dE_adiabatic_h,
+            "lambda_fwd_h":   a.triplet_lambda_fwd_h,
+            "lambda_bwd_h":   a.triplet_lambda_bwd_h,
+        },
+        "ox": {
+            "dG_h":          a.ox_dG_h,
+            "E_vs_sce_v":    a.ox_E_vs_sce_v,
+            "lambda_fwd_h":  a.ox_lambda_fwd_h,
+            "lambda_bwd_h":  a.ox_lambda_bwd_h,
+        },
+        "red": {
+            "dG_h":          a.red_dG_h,
+            "E_vs_sce_v":    a.red_E_vs_sce_v,
+            "lambda_fwd_h":  a.red_lambda_fwd_h,
+            "lambda_bwd_h":  a.red_lambda_bwd_h,
+        },
     }
+
+
+# ----------------------------------------------------------------------
+# XLSX export
+# ----------------------------------------------------------------------
+
+
+def _xlsx_mode_columns() -> list[tuple[str, str]]:
+    """Per-mode sheet column definitions: (header, key path)."""
+    return [
+        ("mol_id",               "id"),
+        ("smiles",               "smiles"),
+        # Conformer picks per state (index + RMSD vs S0 in Å)
+        ("S0_conf",              "picks.S0.conformer_index"),
+        ("T1_conf",              "picks.T1.conformer_index"),
+        ("T1_rmsd_to_S0_A",      "picks.T1.rmsd_to_s0"),
+        ("ox_conf",              "picks.ox.conformer_index"),
+        ("ox_rmsd_to_S0_A",      "picks.ox.rmsd_to_s0"),
+        ("red_conf",             "picks.red.conformer_index"),
+        ("red_rmsd_to_S0_A",     "picks.red.rmsd_to_s0"),
+        # Triplet (Hartree)
+        ("triplet_dE_adiab_Eh",  "triplet.dE_adiabatic_h"),
+        ("triplet_lambda_fwd_Eh", "triplet.lambda_fwd_h"),
+        ("triplet_lambda_bwd_Eh", "triplet.lambda_bwd_h"),
+        # Oxidation
+        ("ox_dG_Eh",             "ox.dG_h"),
+        ("ox_E_vs_SCE_V",        "ox.E_vs_sce_v"),
+        ("ox_lambda_fwd_Eh",     "ox.lambda_fwd_h"),
+        ("ox_lambda_bwd_Eh",     "ox.lambda_bwd_h"),
+        # Reduction
+        ("red_dG_Eh",            "red.dG_h"),
+        ("red_E_vs_SCE_V",       "red.E_vs_sce_v"),
+        ("red_lambda_fwd_Eh",    "red.lambda_fwd_h"),
+        ("red_lambda_bwd_Eh",    "red.lambda_bwd_h"),
+    ]
+
+
+def _lookup(obj: object, path: str):
+    cur = obj
+    for part in path.split("."):
+        if cur is None:
+            return None
+        if isinstance(cur, dict):
+            cur = cur.get(part)
+        else:
+            cur = getattr(cur, part, None)
+    return cur
+
+
+def build_xlsx_bytes(payload: dict) -> bytes:
+    """Render the state-analysis ``payload`` (the dict returned by
+    :func:`analyze_project`) into an XLSX file and return the raw bytes.
+
+    Layout:
+        - "Summary"        — project name + MeCN flag + SCE ref + archived flag
+        - "Lowest Energy"  — one row per molecule, every metric (Hartree / V)
+        - "RMSD Matched"   — same columns, different conformer picks
+        - "Conformers"     — every conformer's energies for both modes
+                             (S0/T1/ox/red with the SP / correction /
+                             combined / vert_* fields in Hartree)
+    """
+    from io import BytesIO
+
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    wb = Workbook()
+    summary = wb.active
+    summary.title = "Summary"
+
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="2F3340")
+
+    # ── Summary sheet ────────────────────────────────────────────────
+    summary["A1"] = "Project"
+    summary["B1"] = payload.get("project")
+    summary["A2"] = "Archived"
+    summary["B2"] = "yes" if payload.get("archived") else "no"
+    summary["A3"] = "MeCN solvation"
+    summary["B3"] = "detected" if payload.get("solvation_mecn") else "not detected"
+    summary["A4"] = "SCE reference (V)"
+    summary["B4"] = payload.get("sce_ref")
+    summary["A5"] = "SCE convention"
+    summary["B5"] = "Pavlishchuk & Addison, Inorg. Chim. Acta 2000"
+    summary["A6"] = "Source"
+    summary["B6"] = payload.get("archive_source") or "live ORCA outputs"
+    summary["A7"] = "Molecules"
+    summary["B7"] = len(payload.get("molecules", []))
+    for row in range(1, 8):
+        summary.cell(row=row, column=1).font = Font(bold=True)
+    summary.column_dimensions["A"].width = 26
+    summary.column_dimensions["B"].width = 60
+
+    # ── Per-mode summary sheets ──────────────────────────────────────
+    columns = _xlsx_mode_columns()
+    for mode_key, sheet_title in (
+        ("lowest_energy", "Lowest Energy"),
+        ("rmsd_matched",  "RMSD Matched"),
+    ):
+        ws = wb.create_sheet(sheet_title)
+        for col_idx, (label, _path) in enumerate(columns, start=1):
+            cell = ws.cell(row=1, column=col_idx, value=label)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center")
+
+        for r_idx, m in enumerate(payload.get("molecules", []), start=2):
+            ana = (m.get("modes") or {}).get(mode_key)
+            row_src = {**(ana or {}), "id": m.get("id"), "smiles": m.get("smiles")}
+            for c_idx, (_label, path) in enumerate(columns, start=1):
+                if path in ("id", "smiles"):
+                    val = m.get(path)
+                else:
+                    val = _lookup(row_src, path) if ana else None
+                ws.cell(row=r_idx, column=c_idx, value=val)
+
+        # Sensible default widths.
+        for col_letter, width in (
+            ("A", 8), ("B", 30), ("C", 8), ("D", 8), ("E", 14),
+            ("F", 8), ("G", 14), ("H", 8), ("I", 14),
+        ):
+            ws.column_dimensions[col_letter].width = width
+        for col_idx in range(10, len(columns) + 1):
+            ws.column_dimensions[ws.cell(row=1, column=col_idx).column_letter].width = 22
+
+    # ── Conformers sheet (raw per-conformer energies, both modes) ────
+    ws = wb.create_sheet("Conformers")
+    headers = [
+        "mode", "mol_id", "smiles", "state", "conformer_index", "opt_task_id",
+        "rmsd_to_S0_A", "e_sp_Eh", "e_correction_Eh", "e_combined_Eh",
+        "e_vert_ox_Eh", "e_vert_red_Eh", "e_vert_spin_change_Eh",
+    ]
+    for col_idx, label in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=col_idx, value=label)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+
+    r = 2
+    for m in payload.get("molecules", []):
+        modes = m.get("modes") or {}
+        for mode_key in ("lowest_energy", "rmsd_matched"):
+            ana = modes.get(mode_key)
+            if not ana:
+                continue
+            picks = ana.get("picks") or {}
+            for st, p in picks.items():
+                ws.cell(row=r, column=1, value=mode_key)
+                ws.cell(row=r, column=2, value=m.get("id"))
+                ws.cell(row=r, column=3, value=m.get("smiles"))
+                ws.cell(row=r, column=4, value=st)
+                ws.cell(row=r, column=5, value=p.get("conformer_index"))
+                ws.cell(row=r, column=6, value=p.get("opt_task_id"))
+                ws.cell(row=r, column=7, value=p.get("rmsd_to_s0"))
+                ws.cell(row=r, column=8, value=p.get("e_sp"))
+                ws.cell(row=r, column=9, value=p.get("e_correction"))
+                ws.cell(row=r, column=10, value=p.get("e_combined"))
+                ws.cell(row=r, column=11, value=p.get("e_vert_ox"))
+                ws.cell(row=r, column=12, value=p.get("e_vert_red"))
+                ws.cell(row=r, column=13, value=p.get("e_vert_spin_change"))
+                r += 1
+    for col_idx, width in enumerate(
+        [16, 8, 30, 8, 8, 10, 14, 18, 18, 18, 18, 18, 22], start=1
+    ):
+        ws.column_dimensions[ws.cell(row=1, column=col_idx).column_letter].width = width
+
+    out = BytesIO()
+    wb.save(out)
+    return out.getvalue()

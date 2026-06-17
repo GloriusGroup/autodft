@@ -675,6 +675,28 @@ def api_project_state_analysis(name: str):
     return analyze_project(name)
 
 
+@router.get("/api/projects/{name}/state-analysis/export")
+def api_project_state_analysis_export(name: str):
+    """Stream the state-analysis as a multi-sheet XLSX.
+
+    Sheets: Summary, Lowest Energy, RMSD Matched, Conformers.
+    Energies in Hartree (Eh) so users can convert downstream as needed;
+    redox potentials in V vs SCE.
+    """
+    from fastapi.responses import Response
+
+    from autodft.analysis.state_analysis import analyze_project, build_xlsx_bytes
+
+    payload = analyze_project(name)
+    data = build_xlsx_bytes(payload)
+    filename = f"{name}_state_analysis.xlsx"
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 def _status_of(task: Optional[ComputationTask]) -> Optional[str]:
     return task.status.value if task is not None else None
 
