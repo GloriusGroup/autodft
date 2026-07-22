@@ -421,6 +421,71 @@ class TestSubmitPendingJobs:
 
 
 class TestDeadEndDetection:
+    def test_a_healthy_confsearch_is_not_flagged(self, session, sample_state, sample_header):
+        """Guards the dead-end check against false positives: a confsearch
+        that does spawn optimizations must stay successful."""
+        from autodft.engine.state_machine import start_followup_tasks
+        from autodft.models.geometry import MoleculeGeometry
+
+        sample_state.metadata_json = json.dumps({
+            "request_optimization": True, "max_conformers_S0": 2,
+        })
+        confsearch = ComputationTask(
+            task_type=TaskType.confsearch, state_id=sample_state.id,
+            header_id=sample_header.id, status=TaskStatus.successful,
+            has_followups=True,
+        )
+        session.add_all([sample_state, confsearch])
+        session.commit()
+        session.refresh(confsearch)
+
+        for i, energy in enumerate([-10.0, -9.0, -8.0]):
+            session.add(MoleculeGeometry(
+                state_id=sample_state.id, xyz_data="C 0 0 0\nH 1 0 0\n",
+                energy=energy, origin_task_id=confsearch.id, label=f"conformer_{i}",
+            ))
+        session.commit()
+
+        start_followup_tasks(session, Settings())
+        session.refresh(confsearch)
+
+        optimizations = session.exec(
+            select(ComputationTask).where(
+                ComputationTask.task_type == TaskType.optimization,
+                ComputationTask.depends_on_task_id == confsearch.id,
+            )
+        ).all()
+        assert len(optimizations) == 2                 # capped by max_conformers
+        assert confsearch.status == TaskStatus.successful   # NOT flagged
+        assert confsearch.has_followups is False
+
+        # The cheapest conformers are the ones carried forward.
+        carried = {session.get(MoleculeGeometry, o.input_geometry_id).energy
+                   for o in optimizations}
+        assert carried == {-10.0, -9.0}
+
+    def test_a_confsearch_with_no_conformers_is_flagged(
+        self, session, sample_state, sample_header,
+    ):
+        """The dead end that ended five real states with everything green."""
+        from autodft.engine.state_machine import start_followup_tasks
+
+        sample_state.metadata_json = json.dumps({"request_optimization": True})
+        confsearch = ComputationTask(
+            task_type=TaskType.confsearch, state_id=sample_state.id,
+            header_id=sample_header.id, status=TaskStatus.successful,
+            has_followups=True,
+        )
+        session.add_all([sample_state, confsearch])
+        session.commit()
+        session.refresh(confsearch)
+
+        start_followup_tasks(session, Settings())   # no geometries exist
+        session.refresh(confsearch)
+
+        assert confsearch.status == TaskStatus.failed
+        assert confsearch.has_followups is False
+
     def test_expected_followups_by_stage(self):
         confsearch = ComputationTask(task_type=TaskType.confsearch, state_id=1, header_id=1)
         optimization = ComputationTask(task_type=TaskType.optimization, state_id=1, header_id=1)
