@@ -258,12 +258,17 @@ class PipelineExtractor:
     def _get_successful_job_path(
         self, session: Session, task_id: int,
     ) -> Optional[Path]:
-        """Return the job_path of the first successful job for a task."""
+        """Return the job_path of the latest successful job for a task.
+
+        Ordered explicitly: an unordered .first() is an arbitrary pick when a
+        task has more than one successful attempt, and which one you get can
+        change with the query plan.
+        """
         job = session.exec(
             select(ComputationJob).where(
                 ComputationJob.task_id == task_id,
                 ComputationJob.success == True,  # noqa: E712
-            )
+            ).order_by(ComputationJob.attempt.desc(), ComputationJob.id.desc())  # type: ignore[union-attr]
         ).first()
         if job and job.job_path:
             return Path(job.job_path)

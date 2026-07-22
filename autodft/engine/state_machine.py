@@ -552,14 +552,25 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
     )
     jobs = session.exec(statement).all()
 
+    # A job that can't be submitted must be recorded as a failed attempt, not
+    # skipped. Skipping left `success` NULL forever, so the retry path ignored
+    # it, the task stayed `pending`, and the same warning was logged every
+    # tick in perpetuity. Recording the failure lets max_attempts do its job.
+    def _fail(job: ComputationJob, reason: str) -> None:
+        logger.error("Job %d: %s", job.id, reason)
+        job.success = False
+        job.fail_reason = reason[:500]
+        job.time_end = datetime.now(timezone.utc)
+        session.add(job)
+
     for job in jobs:
         if job.job_path is None:
-            logger.warning("Job %d has no job_path, skipping submission", job.id)
+            _fail(job, "No job_path recorded; input files were never generated")
             continue
 
         submit_script = Path(job.job_path) / "submit.cmd"
         if not submit_script.exists():
-            logger.warning("Submit script not found for job %d: %s", job.id, submit_script)
+            _fail(job, f"Submit script missing: {submit_script}")
             continue
 
         result = scheduler.submit(submit_script, nice=settings.slurm.nice)
@@ -570,7 +581,9 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
             session.add(job)
             logger.info("Job %d submitted (slurm_jobid=%s)", job.id, result.job_id)
         else:
-            logger.error("Failed to submit job %d: %s", job.id, result.error)
+            # Previously left untouched, so the job was re-selected and
+            # resubmitted every tick without ever counting as an attempt.
+            _fail(job, f"sbatch failed: {result.error}")
 
     session.flush()
 

@@ -57,10 +57,12 @@ SCE_ABS_MECN = 4.42  # V, absolute SCE potential in MeCN (Pavlishchuk & Addison 
 
 # Match MeCN solvation written in any of the common ORCA forms:
 #   "! CPCM(Acetonitrile)" / "! SMD(MeCN)" / "%cpcm  smd true  SMDsolvent \"acetonitrile\" end"
+#   "! SMD(CH3CN)" is accepted by ORCA too and was previously missed.
+_MECN_NAMES = r"(?:acetonitrile|mecn|ch3cn|acetonitril)"
 _MECN_RE = re.compile(
-    r"(CPCM|SMD)\s*\(\s*(?:acetonitrile|mecn)\s*\)"
-    r"|smdsolvent\s*[=\s]*[\"']?\s*(?:acetonitrile|mecn)"
-    r"|solvent\s*[=\s]+[\"']?\s*(?:acetonitrile|mecn)",
+    rf"(CPCM|SMD)\s*\(\s*{_MECN_NAMES}\s*\)"
+    rf"|smdsolvent\s*[=\s]*[\"']?\s*{_MECN_NAMES}"
+    rf"|solvent\s*[=\s]+[\"']?\s*{_MECN_NAMES}",
     re.IGNORECASE,
 )
 
@@ -359,6 +361,22 @@ def analyze_project(project_name: str) -> dict:
         )
         solvation_mecn = any(detects_mecn_solvation(h.header_text) for h in headers)
 
+        # ...but decide per molecule when emitting potentials. A project-wide
+        # any() meant one solvated header anywhere switched E vs SCE on for
+        # every molecule in the project, including gas-phase ones, whose
+        # "potential" would then be referenced against a solvated SCE scale.
+        _header_by_id = {h.id: h for h in headers}
+        mecn_by_molecule: dict[int, bool] = {}
+        for st in states:
+            st_mecn = any(
+                detects_mecn_solvation(_header_by_id[hid].header_text)
+                for hid in (st.optimization_header_id, st.singlepoint_header_id)
+                if hid in _header_by_id
+            )
+            mecn_by_molecule[st.molecule_id] = (
+                mecn_by_molecule.get(st.molecule_id, False) or st_mecn
+            )
+
         opt_task_ids = [r.opt_task_id for r in all_results]
         opt_tasks = (
             session.exec(
@@ -452,7 +470,8 @@ def analyze_project(project_name: str) -> dict:
             if cand is None:
                 continue
             picks_low[st] = _pick_from(st, cand, s0_ref_coords)
-        ana_low = _compute_derived(picks_low, solvation_mecn)
+        mol_mecn = mecn_by_molecule.get(mol_id, False)
+        ana_low = _compute_derived(picks_low, mol_mecn)
         ana_low.mode = "lowest_energy"
 
         # Mode 2 — RMSD-matched conformer per state (S0 keeps its lowest)
@@ -478,7 +497,7 @@ def analyze_project(project_name: str) -> dict:
                 # to the lowest-energy pick so derived quantities still
                 # populate. Tagged via rmsd_to_s0 = None.
                 picks_rmsd[st] = picks_low[st]
-        ana_rmsd = _compute_derived(picks_rmsd, solvation_mecn)
+        ana_rmsd = _compute_derived(picks_rmsd, mol_mecn)
         ana_rmsd.mode = "rmsd_matched"
 
         out_mols.append({

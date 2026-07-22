@@ -239,9 +239,14 @@ class TightenConvergence(RetryStrategy):
         submit_content: str,
         failure: FailureInfo,
     ) -> tuple[str, str]:
-        # Only add TightSCF if not already present
-        if "TightSCF" not in input_content:
-            logger.debug("TightenConvergence: adding TightSCF and Convergence tight")
+        logger.debug("TightenConvergence: ensuring TightSCF and Convergence tight")
+
+        # Add TightSCF only when absent -- but the geometry-convergence part
+        # below must run either way. Guarding both on "TightSCF not present"
+        # (the previous behaviour) made this strategy a complete no-op for
+        # every shipped header, since they all already contain TightSCF: the
+        # retry produced a byte-identical input and re-ran the same job.
+        if not re.search(r"\bTightSCF\b", input_content, re.IGNORECASE):
             input_content = re.sub(
                 r"^!(.*)",
                 r"!\1 TightSCF",
@@ -250,32 +255,31 @@ class TightenConvergence(RetryStrategy):
                 flags=re.MULTILINE,
             )
 
-            # Add or update Convergence tight inside the %geom block
-            if "%geom" in input_content:
+        # Add or update Convergence tight inside the %geom block
+        if "%geom" in input_content:
 
-                def _update_convergence(match: re.Match) -> str:
-                    block = match.group(0)
-                    if re.search(r"Convergence\s+\w+", block):
-                        block = re.sub(
-                            r"Convergence\s+\w+", "Convergence tight", block
-                        )
-                    else:
-                        block = block.replace(
-                            "%geom", "%geom\n  Convergence tight"
-                        )
-                    return block
+            def _update_convergence(match: re.Match) -> str:
+                block = match.group(0)
+                if re.search(r"Convergence\s+\w+", block, re.IGNORECASE):
+                    block = re.sub(
+                        r"Convergence\s+\w+", "Convergence tight", block,
+                        flags=re.IGNORECASE,
+                    )
+                else:
+                    block = block.replace("%geom", "%geom\n  Convergence tight")
+                return block
 
-                input_content = re.sub(
-                    r"%geom.*?end",
-                    _update_convergence,
-                    input_content,
-                    flags=re.DOTALL,
-                )
-            else:
-                geom_block = "%geom\n  Convergence tight\nend\n\n"
-                input_content = re.sub(
-                    r"(?=\*xyzfile)", geom_block, input_content, count=1
-                )
+            input_content = re.sub(
+                r"%geom.*?end",
+                _update_convergence,
+                input_content,
+                flags=re.DOTALL | re.IGNORECASE,
+            )
+        else:
+            geom_block = "%geom\n  Convergence tight\nend\n\n"
+            input_content = re.sub(
+                r"(?=\*xyzfile)", geom_block, input_content, count=1
+            )
 
         return input_content, submit_content
 

@@ -19,6 +19,12 @@ __all__ = ["OrcaParser"]
 
 logger = logging.getLogger(__name__)
 
+# Imaginary modes softer than this (cm^-1) are treated as numerical noise
+# rather than a saddle point. Hindered rotors and floppy side chains
+# routinely produce -20 to -50 cm^-1 modes that no amount of re-optimisation
+# removes; failing on them burns the whole retry budget for nothing.
+IMAGINARY_FREQ_THRESHOLD = -50.0
+
 
 class OrcaParser(QMEngine):
     """Concrete :class:`QMEngine` implementation for ORCA.
@@ -59,9 +65,19 @@ class OrcaParser(QMEngine):
             "Optimization Convergence": self._check_for_optimization_convergence(
                 content, task_type
             ),
-            "SCF Convergence": True,  # placeholder for future implementation
+            "SCF Convergence": self._check_scf_convergence(content),
             "Imaginary Frequencies": self._check_for_imaginary_frequencies(content),
+            # ORCA prints its normal-termination banner even after an
+            # internal module has given up, so the banner alone is not
+            # evidence of a usable result.
+            "No Error Banner": self._check_no_error_banner(content),
         }
+        if task_type == "confsearch":
+            # A conformer search that produced no ensemble has nothing for
+            # the rest of the chain to consume. Scoring it successful left
+            # the state with zero optimizations and no error recorded
+            # anywhere -- the calculation simply stopped.
+            checks["Conformer Ensemble"] = bool(self._parse_ensemble_table(content))
 
         success = all(checks.values())
 
@@ -476,5 +492,54 @@ class OrcaParser(QMEngine):
 
     @classmethod
     def _check_for_imaginary_frequencies(cls, content: str) -> bool:
-        """Return ``True`` if there are **no** imaginary frequencies."""
-        return len(cls.extract_imaginary_frequencies(content)) == 0
+        """Return ``True`` if there are no *significant* imaginary frequencies.
+
+        Modes softer than ``IMAGINARY_FREQ_THRESHOLD`` are numerical noise on
+        floppy rotors, not saddle points. Failing on those meant a -42 cm^-1
+        mode burned the full retry budget exactly like a -230 cm^-1 one.
+        """
+        significant = [
+            f for f in cls.extract_imaginary_frequencies(content)
+            if f < IMAGINARY_FREQ_THRESHOLD
+        ]
+        if significant:
+            logger.warning("Significant imaginary frequencies: %s", significant)
+        return len(significant) == 0
+
+    @staticmethod
+    def _check_scf_convergence(content: str) -> bool:
+        """Return ``False`` when ORCA reports the SCF failing to converge.
+
+        Was hardcoded to ``True``, so a non-converged SCF passed every check
+        and its last FINAL SINGLE POINT ENERGY was extracted as if valid.
+        """
+        for marker in (
+            "SCF NOT CONVERGED AFTER",
+            "SCF CONVERGENCE FAILED",
+            "This wavefunction IS NOT FULLY CONVERGED",
+        ):
+            if marker.lower() in content.lower():
+                logger.warning("SCF convergence failure detected: %r", marker)
+                return False
+        return True
+
+    @staticmethod
+    def _check_no_error_banner(content: str) -> bool:
+        """Return ``False`` when ORCA printed a fatal error.
+
+        ORCA can print ``****ORCA TERMINATED NORMALLY****`` after a module
+        has already aborted -- a real GOAT run in this project ended with
+        ``GOAT ERROR: No structure was left after collecting the data!`` and
+        still terminated "normally" in 4.5 s, and was recorded as a success
+        with no downstream calculations.
+        """
+        for marker in (
+            "GOAT ERROR",
+            "ORCA finished by error termination",
+            "Aborting the run",
+            "ORCA TERMINATED ABNORMALLY",
+        ):
+            if marker.lower() in content.lower():
+                logger.warning("ORCA error banner detected: %r", marker)
+                return False
+        return True
