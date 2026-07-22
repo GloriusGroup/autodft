@@ -1,0 +1,274 @@
+"""Tests for the destructive admin operations.
+
+These functions delete data that cannot be recovered, and until now nothing
+executed them. Each test here pins one property that a wipe must have:
+
+* rows and files both go, and only for the requested project
+* rows are committed **before** the filesystem is touched, so a failure
+  during rmtree leaves recoverable orphans rather than an emptied disk with
+  every row still pointing at it
+* two destructive operations never run at once
+* jobs SLURM still has are cancelled before their directories vanish
+"""
+
+from __future__ import annotations
+
+import pytest
+from sqlmodel import Session, select
+
+from autodft.api import admin_ops
+from autodft.models import (
+    ComputationHeader,
+    ComputationJob,
+    ComputationTask,
+    Molecule,
+    MoleculeState,
+    SlurmStatus,
+    TaskStatus,
+    TaskType,
+)
+
+
+class _StubScheduler:
+    """Records what it was asked to cancel."""
+
+    def __init__(self):
+        self.cancelled: list[str] = []
+
+    def cancel(self, job_id):
+        self.cancelled.append(str(job_id))
+        return True
+
+    def cancel_many(self, job_ids):
+        self.cancelled.extend(str(j) for j in job_ids)
+        return len(job_ids)
+
+
+@pytest.fixture()
+def project(session: Session, tmp_path):
+    """A two-molecule project with files on disk, plus a bystander project."""
+    header = ComputationHeader(header_text="!B3LYP\n", description="t", validated=True)
+    session.add(header)
+    session.commit()
+    session.refresh(header)
+
+    comp_root = tmp_path / "comp_data"
+    export_root = tmp_path / "export_data"
+    (export_root / "victim").mkdir(parents=True)
+    (export_root / "victim" / "results.csv").write_text("a,b\n1,2\n")
+
+    made = {}
+    for project_name, smiles in (("victim", "CCO"), ("victim", "CCC"), ("bystander", "CCN")):
+        mol = Molecule(smiles=smiles, project_name=project_name)
+        session.add(mol)
+        session.commit()
+        session.refresh(mol)
+
+        state = MoleculeState(
+            molecule_id=mol.id, description="S0", multiplicity=1, charge=0,
+            optimization_header_id=header.id,
+        )
+        session.add(state)
+        session.commit()
+        session.refresh(state)
+
+        task = ComputationTask(
+            state_id=state.id, task_type=TaskType.optimization,
+            status=TaskStatus.pending, header_id=header.id,
+        )
+        session.add(task)
+        session.commit()
+        session.refresh(task)
+
+        job_dir = comp_root / f"mol_{mol.id}" / "tasks" / f"{task.id}_optimization"
+        job_dir.mkdir(parents=True)
+        (job_dir / "output.out").write_text("x" * 1000)
+
+        session.add(ComputationJob(
+            task_id=task.id, attempt=1, job_path=str(job_dir),
+            slurm_jobid=5000 + mol.id, slurm_status=SlurmStatus.RUNNING,
+        ))
+        session.commit()
+        made.setdefault(project_name, []).append(mol.id)
+
+    return {
+        "comp_root": comp_root, "export_root": export_root,
+        "victim": made["victim"], "bystander": made["bystander"],
+    }
+
+
+class TestRemoveTree:
+    def test_reports_what_it_freed(self, tmp_path):
+        target = tmp_path / "mol_1"
+        (target / "tasks" / "1_opt").mkdir(parents=True)
+        (target / "tasks" / "1_opt" / "output.out").write_text("x" * 500)
+        (target / "geometries").mkdir()
+
+        removed, freed = admin_ops._remove_tree(target)
+
+        assert removed is True
+        assert freed == 500
+        assert not target.exists()
+
+    def test_a_missing_tree_is_not_an_error(self, tmp_path):
+        assert admin_ops._remove_tree(tmp_path / "nope") == (False, 0)
+
+
+class TestExclusive:
+    def test_a_second_operation_is_refused_not_queued(self):
+        """Two concurrent wipes raced through the same directories and piled
+        two long write transactions onto SQLite's single writer."""
+        with admin_ops.exclusive("wipe of project 'a'"):
+            assert admin_ops.current_operation() == "wipe of project 'a'"
+            with pytest.raises(admin_ops.WipeInProgress) as exc:
+                with admin_ops.exclusive("wipe of project 'b'"):
+                    pytest.fail("the second operation should not have started")
+            assert "still running" in str(exc.value)
+
+    def test_the_lock_is_released_after_a_failure(self):
+        with pytest.raises(RuntimeError):
+            with admin_ops.exclusive("failing wipe"):
+                raise RuntimeError("boom")
+        assert admin_ops.current_operation() is None
+        with admin_ops.exclusive("next wipe"):
+            pass
+
+
+class TestWipeProject:
+    def test_removes_rows_and_files_for_that_project_only(self, session, project):
+        result = admin_ops.wipe_project(
+            session, "victim", project["comp_root"], project["export_root"],
+        )
+
+        assert result["rows"]["molecules"] == 2
+        assert result["comp_data_dirs_removed"] == 2
+        assert result["export_removed"] is True
+        assert result["bytes_freed"] > 0
+
+        remaining = session.exec(select(Molecule)).all()
+        assert [m.project_name for m in remaining] == ["bystander"]
+        assert session.exec(select(ComputationJob)).all() != []  # bystander's survives
+
+        for mid in project["victim"]:
+            assert not (project["comp_root"] / f"mol_{mid}").exists()
+        for mid in project["bystander"]:
+            assert (project["comp_root"] / f"mol_{mid}").exists()
+
+    def test_cancels_jobs_slurm_still_has(self, session, project):
+        """Otherwise they keep writing into a directory that no longer exists."""
+        scheduler = _StubScheduler()
+        result = admin_ops.wipe_project(
+            session, "victim", project["comp_root"], project["export_root"],
+            scheduler=scheduler,
+        )
+        assert result["jobs_cancelled"] == 2
+        assert sorted(scheduler.cancelled) == sorted(
+            str(5000 + mid) for mid in project["victim"]
+        )
+
+    def test_rows_are_gone_even_if_the_files_cannot_be_removed(
+        self, session, project, monkeypatch,
+    ):
+        """The old order deleted files first: a failure partway through left
+        an emptied filesystem with every row intact, after which the pipeline
+        marked every job 'Job path missing' en masse."""
+        def _boom(path):
+            raise OSError("network mount went away")
+
+        monkeypatch.setattr(admin_ops, "_remove_tree", _boom)
+        result = admin_ops.wipe_project(
+            session, "victim", project["comp_root"], project["export_root"],
+        )
+
+        assert result["rows"]["molecules"] == 2
+        assert len(result["orphaned_dirs"]) == 3  # two mol dirs + the export dir
+        assert [m.project_name for m in session.exec(select(Molecule)).all()] == ["bystander"]
+
+    def test_protected_projects_are_refused(self, session, project):
+        with pytest.raises(ValueError, match="protected"):
+            admin_ops.wipe_project(
+                session, "default", project["comp_root"], project["export_root"],
+            )
+
+    def test_an_unknown_project_is_refused(self, session, project):
+        with pytest.raises(ValueError, match="no molecules"):
+            admin_ops.wipe_project(
+                session, "nosuch", project["comp_root"], project["export_root"],
+            )
+
+    def test_exports_can_be_kept(self, session, project):
+        admin_ops.wipe_project(
+            session, "victim", project["comp_root"], project["export_root"],
+            delete_exports=False,
+        )
+        assert (project["export_root"] / "victim" / "results.csv").exists()
+
+
+class TestWipeMolecule:
+    def test_leaves_the_rest_of_the_project_alone(self, session, project):
+        target, sibling = project["victim"]
+        result = admin_ops.wipe_molecule(session, target, project["comp_root"])
+
+        assert result["wiped"] is True
+        assert session.get(Molecule, target) is None
+        assert session.get(Molecule, sibling) is not None
+        assert not (project["comp_root"] / f"mol_{target}").exists()
+        assert (project["comp_root"] / f"mol_{sibling}").exists()
+
+    def test_cancels_its_own_job(self, session, project):
+        target = project["victim"][0]
+        scheduler = _StubScheduler()
+        result = admin_ops.wipe_molecule(
+            session, target, project["comp_root"], scheduler=scheduler,
+        )
+        assert result["jobs_cancelled"] == 1
+        assert scheduler.cancelled == [str(5000 + target)]
+
+    def test_an_unknown_molecule_is_refused(self, session, project):
+        with pytest.raises(ValueError, match="does not exist"):
+            admin_ops.wipe_molecule(session, 9999, project["comp_root"])
+
+
+class TestResetDatabase:
+    def test_empties_every_table_but_keeps_headers(self, session, project):
+        result = admin_ops.reset_database(
+            session, project["comp_root"], project["export_root"],
+        )
+
+        assert result["rows"]["molecules"] == 3
+        assert session.exec(select(Molecule)).all() == []
+        assert session.exec(select(MoleculeState)).all() == []
+        assert session.exec(select(ComputationTask)).all() == []
+        assert session.exec(select(ComputationJob)).all() == []
+        assert session.exec(select(ComputationHeader)).all() != []  # kept by default
+        assert list(project["comp_root"].iterdir()) == []
+
+    def test_files_can_be_kept(self, session, project):
+        admin_ops.reset_database(
+            session, project["comp_root"], project["export_root"], delete_files=False,
+        )
+        assert list(project["comp_root"].iterdir()) != []
+
+    def test_cancels_everything_running(self, session, project):
+        scheduler = _StubScheduler()
+        result = admin_ops.reset_database(
+            session, project["comp_root"], project["export_root"], scheduler=scheduler,
+        )
+        assert result["jobs_cancelled"] == 3
+        assert len(scheduler.cancelled) == 3
+
+
+class TestConcurrentWipeOverHttp:
+    def test_the_route_answers_409_instead_of_piling_up(self):
+        """What the user hits: start one wipe, try a second while it runs."""
+        import json
+
+        from autodft.api.routes import WipeRequest, api_project_wipe
+
+        with admin_ops.exclusive("wipe of project 'victim'"):
+            response = api_project_wipe(
+                "other", WipeRequest(confirm="other", delete_exports=True),
+            )
+
+        assert response.status_code == 409
+        assert "still running" in json.loads(response.body)["detail"]

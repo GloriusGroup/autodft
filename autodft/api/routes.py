@@ -1158,6 +1158,25 @@ def _confirmation_error(expected: str, got: str) -> JSONResponse:
     )
 
 
+def _admin_scheduler(settings):
+    """A scheduler for the destructive routes to cancel jobs with.
+
+    Wiping a project used to leave its queued and running jobs alive; they
+    kept writing ORCA output into directories that had just been deleted.
+    Returns None if SLURM isn't reachable -- a wipe must still work on a
+    machine with no scheduler.
+    """
+    try:
+        from autodft.engine.scheduler import SlurmScheduler
+
+        return SlurmScheduler(
+            partition=settings.slurm.partition, nice=settings.slurm.nice,
+        )
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("No scheduler available; not cancelling jobs")
+        return None
+
+
 @router.get("/api/admin/projects/{name}/wipe-preview")
 def api_project_wipe_preview(name: str):
     """What a wipe of this project would delete. Read-only."""
@@ -1189,11 +1208,15 @@ def api_project_wipe(name: str, body: WipeRequest):
 
     settings = get_active_settings()
     try:
-        with get_session() as session:
-            return admin_ops.wipe_project(
-                session, name, settings.comp_data_path, settings.export_data_path,
-                delete_exports=body.delete_exports,
-            )
+        with admin_ops.exclusive(f"wipe of project {name!r}"):
+            with get_session() as session:
+                return admin_ops.wipe_project(
+                    session, name, settings.comp_data_path, settings.export_data_path,
+                    delete_exports=body.delete_exports,
+                    scheduler=_admin_scheduler(settings),
+                )
+    except admin_ops.WipeInProgress as exc:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
     except ValueError as exc:
         return JSONResponse(status_code=409, content={"detail": str(exc)})
     except Exception as exc:
@@ -1229,15 +1252,21 @@ def api_molecule_wipe(molecule_id: int, body: WipeRequest):
 
     settings = get_active_settings()
     try:
-        with get_session() as session:
-            mol = session.get(Molecule, molecule_id)
-            if mol is None:
-                return JSONResponse(
-                    status_code=404, content={"detail": f"Molecule {molecule_id} not found"},
+        with admin_ops.exclusive(f"wipe of molecule {molecule_id}"):
+            with get_session() as session:
+                mol = session.get(Molecule, molecule_id)
+                if mol is None:
+                    return JSONResponse(
+                        status_code=404, content={"detail": f"Molecule {molecule_id} not found"},
+                    )
+                if body.confirm != mol.smiles:
+                    return _confirmation_error(mol.smiles, body.confirm)
+                return admin_ops.wipe_molecule(
+                    session, molecule_id, settings.comp_data_path,
+                    scheduler=_admin_scheduler(settings),
                 )
-            if body.confirm != mol.smiles:
-                return _confirmation_error(mol.smiles, body.confirm)
-            return admin_ops.wipe_molecule(session, molecule_id, settings.comp_data_path)
+    except admin_ops.WipeInProgress as exc:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
     except ValueError as exc:
         return JSONResponse(status_code=409, content={"detail": str(exc)})
     except Exception as exc:
@@ -1311,11 +1340,15 @@ def api_reset_database(body: ResetRequest):
 
     settings = get_active_settings()
     try:
-        with get_session() as session:
-            return admin_ops.reset_database(
-                session, settings.comp_data_path, settings.export_data_path,
-                delete_files=body.delete_files, keep_headers=body.keep_headers,
-            )
+        with admin_ops.exclusive("database reset"):
+            with get_session() as session:
+                return admin_ops.reset_database(
+                    session, settings.comp_data_path, settings.export_data_path,
+                    delete_files=body.delete_files, keep_headers=body.keep_headers,
+                    scheduler=_admin_scheduler(settings),
+                )
+    except admin_ops.WipeInProgress as exc:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
     except Exception as exc:
         logging.getLogger(__name__).exception("Database reset failed")
         return JSONResponse(

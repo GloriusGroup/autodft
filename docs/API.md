@@ -389,3 +389,40 @@ The pipeline is built to fail loudly:
 
 To recover: fix the SMILES / header / config and resubmit. For the
 recovery CLI commands see the README.
+
+---
+
+## 6. Destructive admin operations
+
+Every one of these is irreversible and comes in two halves: a
+`GET …/wipe-preview` (or `/api/admin/reset-preview`) that only counts, and
+a `POST` that acts and requires `confirm` to echo an exact string.
+
+| Endpoint | Confirm with | Deletes |
+|---|---|---|
+| `GET /api/admin/projects/{name}/wipe-preview` | — | nothing |
+| `POST /api/admin/projects/{name}/wipe` | the project name | its rows, `comp_data/mol_*`, and (unless `delete_exports: false`) `export_data/{name}` |
+| `GET /api/admin/molecules/{id}/wipe-preview` | — | nothing |
+| `POST /api/admin/molecules/{id}/wipe` | the molecule's SMILES | that molecule's rows and `comp_data/mol_{id}` |
+| `GET /api/admin/reset-preview` | — | nothing |
+| `POST /api/admin/reset-database` | `RESET THE DATABASE` | every pipeline table; data directories unless `delete_files: false`; headers only if `keep_headers: false` |
+
+`default` is protected and cannot be wiped. Saved headers are shared
+across projects and are never touched by a project or molecule wipe.
+
+Three properties worth knowing:
+
+* **One at a time.** A destructive operation started while another is
+  running is refused with **409**, not queued. Two deleters walking the
+  same tree used to abort each other partway through.
+* **Rows first, files second.** The database rows are deleted and
+  committed before anything is unlinked, so the response comes back only
+  after the (slow) file deletion but a failure mid-rmtree leaves orphaned
+  directories — named in the log and in the response's `orphaned_dirs` —
+  rather than an emptied disk with rows still pointing at it.
+* **SLURM is stopped first.** Jobs the scheduler still has queued or
+  running are `scancel`ed before their directories disappear; the count
+  comes back as `jobs_cancelled`.
+
+A project wipe takes minutes on a network filesystem — roughly 65 ms per
+file on this deployment. That is the file deletion, not the database.

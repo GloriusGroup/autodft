@@ -26,12 +26,16 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
 from sqlmodel import Session, col, delete, select, update
 
+from autodft.models.enums import TRANSIENT_SLURM_STATES
 from autodft.paths import safe_subdirectory
 from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.models.geometry import MoleculeGeometry
@@ -46,6 +50,71 @@ logger = logging.getLogger(__name__)
 PROTECTED_PROJECT_NAMES = {"default"}
 
 RESET_CONFIRMATION = "RESET THE DATABASE"
+
+
+class WipeInProgress(RuntimeError):
+    """Raised when a destructive operation is already running."""
+
+
+# One destructive operation at a time, process-wide. Deleting a project is
+# minutes of rmtree over the network mount, and the API serves each request
+# on its own thread: a second wipe launched while the first was still running
+# walked the same directories and blew up on paths the other had already
+# removed -- which, under the old files-before-rows order, aborted the wipe
+# with the files gone and the rows still there. Refuse the second one
+# instead of letting two deleters race.
+_EXCLUSIVE = threading.Lock()
+_current_operation: Optional[str] = None
+
+
+@contextmanager
+def exclusive(label: str):
+    """Hold the destructive-operation lock, or raise :class:`WipeInProgress`."""
+    global _current_operation
+    if not _EXCLUSIVE.acquire(blocking=False):
+        raise WipeInProgress(
+            f"{_current_operation or 'Another destructive operation'} is still "
+            f"running. Wait for it to finish before starting {label!r}."
+        )
+    _current_operation = label
+    try:
+        yield
+    finally:
+        _current_operation = None
+        _EXCLUSIVE.release()
+
+
+def current_operation() -> Optional[str]:
+    """The destructive operation currently running, if any."""
+    return _current_operation
+
+
+def _cancel_scheduled_jobs(session: Session, job_ids: list[int], scheduler) -> int:
+    """scancel any of these jobs that SLURM still has.
+
+    Without this, wiping a project left its queued and running jobs alive,
+    writing ORCA output into directories that had just been deleted.
+    """
+    if not job_ids or scheduler is None:
+        return 0
+    live = [
+        str(j.slurm_jobid)
+        for j in session.exec(
+            select(ComputationJob).where(
+                col(ComputationJob.id).in_(job_ids),
+                col(ComputationJob.slurm_jobid).is_not(None),
+                col(ComputationJob.slurm_status).in_(sorted(TRANSIENT_SLURM_STATES)),
+            )
+        ).all()
+        if j.slurm_jobid is not None
+    ]
+    if not live:
+        return 0
+    try:
+        return scheduler.cancel_many(live)
+    except Exception:  # noqa: BLE001 - a failed scancel must not abort the wipe
+        logger.exception("Failed to cancel %d job(s) before wiping", len(live))
+        return 0
 
 
 # ----------------------------------------------------------------------
@@ -67,13 +136,44 @@ def _dir_size(path: Path) -> int:
     return total
 
 
-def _remove_tree(path: Path) -> bool:
-    """Delete a directory tree. Returns True if something was removed."""
+def _remove_tree(path: Path) -> tuple[bool, int]:
+    """Delete a directory tree, returning ``(removed, bytes_freed)``.
+
+    The size is accumulated during the walk that deletes. Measuring with
+    ``_dir_size`` first and then calling ``shutil.rmtree`` traversed the tree
+    twice, which on the network mount is most of the wall-clock cost of a
+    wipe -- and a project wipe already walks it once for the preview.
+    """
     if not path.exists():
-        return False
-    shutil.rmtree(path)
-    logger.info("Deleted directory tree %s", path)
-    return True
+        return False, 0
+
+    if not path.is_dir() or path.is_symlink():
+        size = path.stat().st_size if path.is_file() else 0
+        path.unlink()
+        return True, size
+
+    freed = 0
+    for root, dirs, files in os.walk(path, topdown=False):
+        for filename in files:
+            entry = Path(root) / filename
+            try:
+                freed += entry.stat().st_size
+            except OSError:  # broken symlink, or a race with another deleter
+                pass
+            try:
+                entry.unlink()
+            except FileNotFoundError:
+                pass
+        for dirname in dirs:
+            try:
+                (Path(root) / dirname).rmdir()
+            except OSError:
+                # Not empty (a symlinked dir, or something appeared): fall
+                # back to the blunt instrument for this subtree.
+                shutil.rmtree(Path(root) / dirname, ignore_errors=True)
+    path.rmdir()
+    logger.info("Deleted directory tree %s (%s)", path, human_bytes(freed))
+    return True, freed
 
 
 def human_bytes(n: int) -> str:
@@ -243,10 +343,24 @@ def wipe_project(
     export_root: Path,
     *,
     delete_exports: bool = True,
+    scheduler=None,
 ) -> dict:
     """Delete a project's DB rows, raw comp_data, and exported data.
 
     Irreversible. The caller is responsible for having confirmed.
+
+    Rows are deleted and committed *before* the directory trees are removed,
+    the same order ``reset_database`` already used. Removing the files first
+    meant that anything raising partway through the rmtree -- most easily a
+    second wipe racing this one through the same directories -- left an
+    emptied filesystem with every row intact, after which the pipeline marked
+    every job "Job path missing" en masse. Deleting rows first inverts that:
+    a failure leaves orphaned directories, which the log names and the return
+    value reports, and which nothing depends on.
+
+    The file deletion is the slow half -- measured on this network mount,
+    ~65 ms per file, so a real project is minutes -- and it now runs with no
+    transaction open.
 
     Raises:
         ValueError: if the project is protected or has nothing to delete.
@@ -263,20 +377,9 @@ def wipe_project(
     if not molecule_ids and not entrypoint_ids:
         raise ValueError(f"Project {name!r} has no molecules and no queued entrypoints.")
 
-    # Files first: if this fails we haven't yet dropped the rows that say
-    # which directories belong to the project.
-    removed_dirs = 0
-    freed = 0
-    for mid in molecule_ids:
-        target = comp_root / f"mol_{mid}"
-        freed += _dir_size(target)
-        if _remove_tree(target):
-            removed_dirs += 1
-
-    export_removed = False
-    if export_dir is not None:
-        freed += _dir_size(export_dir)
-        export_removed = _remove_tree(export_dir)
+    # Stop the cluster writing into trees that are about to disappear.
+    _, _, _, job_ids = _descendants(session, molecule_ids)
+    cancelled = _cancel_scheduled_jobs(session, job_ids, scheduler)
 
     counts = _delete_molecule_rows(session, molecule_ids)
     if entrypoint_ids:
@@ -284,11 +387,36 @@ def wipe_project(
             delete(CalculationEntrypoint).where(col(CalculationEntrypoint.id).in_(entrypoint_ids))
         )
     counts["queued_entrypoints"] = len(entrypoint_ids)
-
     session.commit()
+
+    # Everything below runs with no transaction open. The project has already
+    # left the database, so a failure here leaves orphaned directories that
+    # the log names -- recoverable -- rather than an inconsistent database.
+    removed_dirs = 0
+    freed = 0
+    failed_dirs: list[str] = []
+    for mid in molecule_ids:
+        target = comp_root / f"mol_{mid}"
+        try:
+            removed, size = _remove_tree(target)
+            freed += size
+            removed_dirs += int(removed)
+        except OSError:
+            logger.exception("Could not remove %s; it is now orphaned", target)
+            failed_dirs.append(str(target))
+
+    export_removed = False
+    if export_dir is not None:
+        try:
+            export_removed, size = _remove_tree(export_dir)
+            freed += size
+        except OSError:
+            logger.exception("Could not remove %s; it is now orphaned", export_dir)
+            failed_dirs.append(str(export_dir))
+
     logger.warning(
-        "WIPED project %r: %s rows, %d comp_data dirs, %s freed",
-        name, counts, removed_dirs, human_bytes(freed),
+        "WIPED project %r: %s rows, %d comp_data dirs, %d job(s) cancelled, %s freed",
+        name, counts, removed_dirs, cancelled, human_bytes(freed),
     )
     return {
         "project": name,
@@ -296,6 +424,8 @@ def wipe_project(
         "rows": counts,
         "comp_data_dirs_removed": removed_dirs,
         "export_removed": export_removed,
+        "jobs_cancelled": cancelled,
+        "orphaned_dirs": failed_dirs,
         "bytes_freed": freed,
         "freed_human": human_bytes(freed),
     }
@@ -336,24 +466,34 @@ def preview_molecule_wipe(session: Session, molecule_id: int, comp_root: Path) -
     }
 
 
-def wipe_molecule(session: Session, molecule_id: int, comp_root: Path) -> dict:
+def wipe_molecule(
+    session: Session, molecule_id: int, comp_root: Path, *, scheduler=None,
+) -> dict:
     """Delete one molecule, its states/tasks/jobs, and its raw files.
 
     The project's exported CSV/JSON is left alone -- it may describe other
     molecules. Re-export after wiping to refresh it.
+
+    Rows go first and are committed before the files are removed, for the
+    reasons given on :func:`wipe_project`.
     """
     mol = session.get(Molecule, molecule_id)
     if mol is None:
         raise ValueError(f"Molecule {molecule_id} does not exist.")
 
     smiles, project = mol.smiles, mol.project_name
-    comp_dir = comp_root / f"mol_{molecule_id}"
-    freed = _dir_size(comp_dir)
-    removed = _remove_tree(comp_dir)
+
+    _, _, _, job_ids = _descendants(session, [molecule_id])
+    cancelled = _cancel_scheduled_jobs(session, job_ids, scheduler)
 
     counts = _delete_molecule_rows(session, [molecule_id])
     session.commit()
-    logger.warning("WIPED molecule %d (%s) from project %r", molecule_id, smiles, project)
+
+    removed, freed = _remove_tree(comp_root / f"mol_{molecule_id}")
+    logger.warning(
+        "WIPED molecule %d (%s) from project %r, %d job(s) cancelled",
+        molecule_id, smiles, project, cancelled,
+    )
     return {
         "molecule_id": molecule_id,
         "smiles": smiles,
@@ -361,6 +501,7 @@ def wipe_molecule(session: Session, molecule_id: int, comp_root: Path) -> dict:
         "wiped": True,
         "rows": counts,
         "comp_data_removed": removed,
+        "jobs_cancelled": cancelled,
         "bytes_freed": freed,
         "freed_human": human_bytes(freed),
     }
@@ -408,6 +549,7 @@ def reset_database(
     *,
     delete_files: bool = True,
     keep_headers: bool = True,
+    scheduler=None,
 ) -> dict:
     """Empty every pipeline table and optionally every data directory.
 
@@ -424,14 +566,12 @@ def reset_database(
         "entrypoints": len(session.exec(select(CalculationEntrypoint.id)).all()),
     }
 
-    freed = 0
-    if delete_files:
-        # Measure now, delete *after* the rows are committed. Deleting first
-        # meant that any failure in between -- a lock timeout while the
-        # controller holds the write lock across network I/O, an FK error --
-        # left an empty filesystem with every row intact, after which the
-        # pipeline marks every job "Job path missing" en masse.
-        freed = sum(_dir_size(root) for root in (comp_root, export_root))
+    # Stop the cluster before the directories it is writing into disappear.
+    cancelled = _cancel_scheduled_jobs(
+        session,
+        [j for j in session.exec(select(ComputationJob.id)).all() if j is not None],
+        scheduler,
+    )
 
     # Same cycle-breaking order as the per-project wipe.
     session.exec(delete(ComputationJob))
@@ -452,7 +592,11 @@ def reset_database(
 
     session.commit()
 
+    freed = 0
     if delete_files:
+        # After the commit, so a failure here leaves orphaned directories
+        # rather than an emptied filesystem with every row intact -- which
+        # made the pipeline mark every job "Job path missing" en masse.
         data_root = comp_root.parent if comp_root.parent == export_root.parent else None
         for root in (comp_root, export_root):
             if not root.exists():
@@ -465,8 +609,13 @@ def reset_database(
                 continue
             for child in root.iterdir():
                 if child.is_dir():
-                    shutil.rmtree(child)
+                    _, size = _remove_tree(child)
+                    freed += size
                 else:
+                    try:
+                        freed += child.stat().st_size
+                    except OSError:
+                        pass
                     child.unlink()
             logger.warning("Emptied data directory %s", root)
 
@@ -474,13 +623,14 @@ def reset_database(
         from autodft.db import _seed_default_headers, get_engine
         _seed_default_headers(get_engine())
 
-    logger.warning("DATABASE RESET: %s, headers_dropped=%d, %s freed",
-                   counts, headers_dropped, human_bytes(freed))
+    logger.warning("DATABASE RESET: %s, headers_dropped=%d, %d job(s) cancelled, %s freed",
+                   counts, headers_dropped, cancelled, human_bytes(freed))
     return {
         "reset": True,
         "rows": counts,
         "headers_dropped": headers_dropped,
         "files_deleted": delete_files,
+        "jobs_cancelled": cancelled,
         "bytes_freed": freed,
         "freed_human": human_bytes(freed),
     }
