@@ -69,8 +69,10 @@ class OrcaParser(QMEngine):
         free_energy_correction = self.extract_free_energy_correction(content)
 
         conformers: Optional[list[str]] = None
+        conformer_energies: Optional[list[float]] = None
         if task_type == "confsearch":
             conformers = self.extract_conformer_ensemble(job_path, content)
+            conformer_energies = self.extract_conformer_ensemble_energies(content)
 
         return QMResult(
             success=success,
@@ -78,6 +80,7 @@ class OrcaParser(QMEngine):
             energy=energy,
             free_energy_correction=free_energy_correction,
             conformers=conformers,
+            conformer_energies=conformer_energies,
         )
 
     def generate_input(
@@ -377,6 +380,48 @@ class OrcaParser(QMEngine):
                 cls._get_conformer_from_ensemble(ensemble_file, conf_index)
             )
         return conformers
+
+    @classmethod
+    def extract_conformer_ensemble_energies(
+        cls,
+        content: str,
+        max_conformers: int = 20,
+    ) -> Optional[list[float]]:
+        """Per-conformer energies matching :meth:`extract_conformer_ensemble`.
+
+        Same table, same sort and same >0.1 % contribution filter, so the
+        returned list is index-aligned with the conformer XYZ blocks.
+        """
+        contributions = cls._parse_ensemble_table(content)
+        if not contributions:
+            return None
+        return [c[2] for c in contributions if c[1] > 0.1][:max_conformers]
+
+    @staticmethod
+    def _parse_ensemble_table(content: str) -> list[list]:
+        """Parse the ``# Final ensemble info #`` table into [index, %total, energy].
+
+        Sorted by energy ascending. Shared by the geometry and energy
+        extractors so the two can never drift out of alignment.
+        """
+        contributions: list[list] = []
+        start_reading = False
+
+        for line in content.splitlines():
+            if "# Final ensemble info #" in line:
+                start_reading = True
+                continue
+            if start_reading:
+                if "Conformer" in line or "----" in line:
+                    continue
+                parts = line.strip().split()
+                if len(parts) == 5 and parts[0].isdigit():
+                    contributions.append(
+                        [int(parts[0]), float(parts[3]), float(parts[1])]
+                    )
+
+        contributions.sort(key=lambda x: x[2])
+        return contributions
 
     @staticmethod
     def _get_conformer_from_ensemble(

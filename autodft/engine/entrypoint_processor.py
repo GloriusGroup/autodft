@@ -101,8 +101,23 @@ def _process_entrypoint_body(
     )
 
     if metadata.get("request_T1", False):
+        # The spin-change chain (S0 <-> T1 and the vert_spin_change
+        # singlepoints hanging off it) is only defined from a closed-shell
+        # reference. Deriving T1 as S0 + 2 keeps the electron-count parity
+        # correct, but for an open-shell reference the result is not a
+        # triplet at all: a doublet would give a quartet, and a reference
+        # that is already a triplet would give a duplicate of S0 whose
+        # "triplet energy" comes out as ~0. Reject instead of computing
+        # something that looks fine and isn't.
+        if multiplicity != 1:
+            raise ValueError(
+                f"T1 was requested for a reference state with multiplicity "
+                f"{multiplicity}. The S0 -> T1 spin change is only defined "
+                f"from a closed-shell singlet; resubmit without request_T1 "
+                f"(ox / red are unaffected and remain available)."
+            )
         _create_state(
-            session, molecule, smiles, "T1", 3, charge,
+            session, molecule, smiles, "T1", multiplicity + 2, charge,
             metadata, header_ids, base_path,
         )
 
@@ -263,6 +278,9 @@ def validate_smiles(smiles: str) -> dict:
         "charge": None,
         "multiplicity": None,
         "error": None,
+        # Non-fatal note about a structure that parses but is probably not
+        # what the user meant (see the multiplicity check below).
+        "warning": None,
     }
 
     if smiles is None or not str(smiles).strip():
@@ -308,6 +326,24 @@ def validate_smiles(smiles: str) -> dict:
     base["heavy_atoms"] = heavy
     base["charge"] = charge
     base["multiplicity"] = multiplicity
+
+    # Supported reference states are closed-shell singlets and radicals
+    # (doublets), neutral or charged. A higher multiplicity is almost always
+    # a drawing artefact rather than an intended high-spin species: ChemDraw
+    # exports a radical carbon as `[C]`, which RDKit reads as *every* missing
+    # valence being an unpaired electron (`[C]` alone -> multiplicity 5).
+    # Warn rather than reject — the SMILES is chemically parseable, and the
+    # caller may genuinely want a high-spin state.
+    if multiplicity > 2:
+        worst = max(a.GetNumRadicalElectrons() for a in mol.GetAtoms())
+        base["warning"] = (
+            f"Multiplicity {multiplicity} — this structure carries "
+            f"{multiplicity - 1} unpaired electrons ({worst} on a single atom). "
+            f"Supported reference states are singlets and doublets. If this came "
+            f"from ChemDraw, a bracketed atom such as [C] means every missing "
+            f"valence is read as a radical electron; write [CH2] / [CH] to pin "
+            f"the hydrogens explicitly."
+        )
     return base
 
 
@@ -384,15 +420,24 @@ def _create_state(
         return
 
     # Build per-state metadata
+    # Defaults must match what the followup code assumes, because storing a
+    # key at all means the consumer's own default never applies. Defaulting
+    # everything to False (the previous behaviour) turned an omitted
+    # `request_optimization` into "no optimizations", and an omitted
+    # `max_conformers_<state>` into `conformer_geoms[:False]` == an empty
+    # list -- a state that finished its conformer search and then silently
+    # stopped. Both submitters populate every key today, so this was latent,
+    # but direct DB inserts and older clients hit it.
+    _defaults = {
+        "request_optimization": True,
+        "request_singlepoint": True,
+        "request_singlepoint_vertical_excitations": True,
+        "request_singlepoint_nbo": False,
+        f"max_conformers_{description}": 1,
+    }
     state_metadata = {
-        k: metadata.get(k, False)
-        for k in [
-            "request_optimization",
-            "request_singlepoint",
-            "request_singlepoint_vertical_excitations",
-            "request_singlepoint_nbo",
-            f"max_conformers_{description}",
-        ]
+        k: metadata.get(k, default)
+        for k, default in _defaults.items()
     }
 
     state = MoleculeState(

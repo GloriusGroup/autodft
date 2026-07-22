@@ -46,6 +46,8 @@ class PipelineWorker:
         self.settings = settings
         self.scheduler = scheduler
         self.qm_engine = qm_engine
+        # Set by _entrypoint_step(); False once the queue is drained.
+        self._last_entrypoint_processed = False
 
     def run_forever(self) -> None:
         """Main loop -- runs until interrupted (e.g. ``KeyboardInterrupt``).
@@ -68,36 +70,55 @@ class PipelineWorker:
 
             time.sleep(self.settings.pipeline.loop_interval_seconds)
 
-    def tick(self) -> None:
-        """Execute one complete pipeline cycle (8 steps).
+    def _run_step(self, session, label: str, fn) -> bool:
+        """Run one pipeline step, commit it, and contain its failures.
 
-        Each cycle runs inside a single database session/transaction.
-        The session is committed at the end if all steps succeed.
+        Each step commits on its own so that progress is durable the moment
+        it is made. Previously the whole tick shared one transaction that was
+        committed only at the very end, which meant a single raising job --
+        a truncated ORCA output, a missing ensemble file -- discarded every
+        other molecule's progress from that tick and then raised again on the
+        next tick, forever. Returns True if the step completed.
+        """
+        logger.debug("Step: %s", label)
+        try:
+            fn()
+            session.commit()
+            return True
+        except Exception:  # noqa: BLE001 - one bad step must not stop the rest
+            logger.exception("Pipeline step %r failed; rolling it back and continuing", label)
+            session.rollback()
+            return False
+
+    def tick(self) -> None:
+        """Execute one complete pipeline cycle.
+
+        Steps are committed individually and are isolated from each other:
+        a failure in one step is logged and rolled back, and the remaining
+        steps still run.
         """
         logger.debug("--- Pipeline tick start ---")
 
         with get_session() as session:
-            # Step 1: Update SLURM job statuses
-            logger.debug("Step 1: Updating status of running jobs")
-            update_running_jobs(session, self.scheduler)
+            self._run_step(session, "1: update running job statuses",
+                           lambda: update_running_jobs(session, self.scheduler))
 
-            # Step 2: Process finished jobs (check QM output)
-            logger.debug("Step 2: Processing finished jobs")
-            process_finished_jobs(session, self.qm_engine)
+            self._run_step(session, "2: process finished jobs",
+                           lambda: process_finished_jobs(session, self.qm_engine))
 
-            # Step 3: Update task statuses based on job results
-            logger.debug("Step 3: Updating task statuses")
-            update_task_statuses(
-                session,
-                max_attempts=self.settings.pipeline.max_attempts,
-            )
+            self._run_step(session, "3: update task statuses",
+                           lambda: update_task_statuses(
+                               session, max_attempts=self.settings.pipeline.max_attempts))
 
-            # Step 4: Start follow-up tasks for successful tasks
-            logger.debug("Step 4: Starting follow-up tasks")
-            start_followup_tasks(session, self.settings)
+            self._run_step(session, "4: start follow-up tasks",
+                           lambda: start_followup_tasks(session, self.settings))
 
-            # Step 5: Process new entrypoints from the queue
-            logger.debug("Step 5: Processing new entrypoints")
+            # Step 5: expand queued entrypoints. Each entrypoint commits
+            # separately -- process_next_entrypoint() rolls the session back
+            # when a SMILES can't be expanded, and without a commit per item
+            # that rollback also discarded every entrypoint expanded before it
+            # in the same tick (including their time_started marks, so they
+            # were re-processed indefinitely).
             for _ in range(self.settings.pipeline.max_simultaneous_entrypoints):
                 queue_len = self.scheduler.get_queue_length()
                 if queue_len > self.settings.pipeline.max_queue_length:
@@ -107,20 +128,23 @@ class PipelineWorker:
                         self.settings.pipeline.max_queue_length,
                     )
                     break
-                if not process_next_entrypoint(session, self.settings):
-                    logger.debug("No more entrypoints to process")
+                processed = self._run_step(
+                    session, "5: process next entrypoint",
+                    lambda: self._entrypoint_step(session),
+                )
+                if not processed or not self._last_entrypoint_processed:
                     break
 
-            # Step 6: Create retry jobs for failed attempts + start new tasks
-            logger.debug("Step 6: Creating retry jobs and starting new tasks")
-            create_retry_jobs(session, self.settings, self.qm_engine)
-            start_new_tasks(session, self.settings, self.qm_engine)
+            self._run_step(session, "6a: create retry jobs",
+                           lambda: create_retry_jobs(session, self.settings, self.qm_engine))
+            self._run_step(session, "6b: start new tasks",
+                           lambda: start_new_tasks(session, self.settings, self.qm_engine))
 
-            # Step 7: Submit pending jobs to scheduler
-            logger.debug("Step 7: Submitting pending jobs to scheduler")
-            submit_pending_jobs(session, self.scheduler, self.settings)
-
-            # Commit the entire cycle
-            session.commit()
+            self._run_step(session, "7: submit pending jobs",
+                           lambda: submit_pending_jobs(session, self.scheduler, self.settings))
 
         logger.debug("--- Pipeline tick complete ---")
+
+    def _entrypoint_step(self, session) -> None:
+        """Process one entrypoint, recording whether there was one to process."""
+        self._last_entrypoint_processed = process_next_entrypoint(session, self.settings)

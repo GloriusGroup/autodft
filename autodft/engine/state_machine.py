@@ -70,11 +70,21 @@ def process_finished_jobs(session: Session, qm_engine: QMEngine) -> None:
     geometries for successful confsearch/optimization jobs.
     """
 
-    terminal_states = [SlurmStatus.COMPLETED, SlurmStatus.FAILED, SlurmStatus.TIMEOUT]
+    # Anything that is not still queued or running is terminal. The previous
+    # whitelist (COMPLETED / FAILED / TIMEOUT) silently swallowed every other
+    # SLURM outcome: CANCELLED, OUT_OF_MEMORY, NODE_FAIL, PREEMPTED,
+    # BOOT_FAIL, DEADLINE. `slurm_status` holds the raw sacct string, so those
+    # values matched neither this query nor the polling filter in
+    # update_running_jobs() — the job kept `success = NULL` forever and its
+    # task sat `pending` with no error anywhere. OUT_OF_MEMORY is exactly the
+    # failure the resource-escalation retry exists to fix, so escalation could
+    # never fire for a real OOM kill.
+    non_terminal = [SlurmStatus.RUNNING, SlurmStatus.PENDING, SlurmStatus.UNKNOWN]
     statement = (
         select(ComputationJob)
         .where(
-            col(ComputationJob.slurm_status).in_(terminal_states),
+            col(ComputationJob.slurm_status).is_not(None),
+            col(ComputationJob.slurm_status).not_in(non_terminal),
             col(ComputationJob.success).is_(None),
         )
     )
@@ -94,7 +104,20 @@ def process_finished_jobs(session: Session, qm_engine: QMEngine) -> None:
             session.add(job)
             continue
 
-        result = qm_engine.check_output(job_path, task.task_type.value)
+        # Output parsing touches files a killed job may have left truncated,
+        # and the parser raises on several of those shapes. Isolate it per
+        # job: an unhandled exception here used to unwind out of the whole
+        # pipeline tick, discarding every other molecule's progress and
+        # re-raising on the same job forever.
+        try:
+            result = qm_engine.check_output(job_path, task.task_type.value)
+        except Exception as exc:  # noqa: BLE001 - deliberately broad
+            logger.exception("Failed to parse output for job %d", job.id)
+            job.success = False
+            job.fail_reason = f"Output parsing failed: {type(exc).__name__}: {exc}"[:500]
+            job.time_end = job.time_end or datetime.now(timezone.utc)
+            session.add(job)
+            continue
 
         job.success = result.success
         if not result.success:
@@ -108,15 +131,22 @@ def process_finished_jobs(session: Session, qm_engine: QMEngine) -> None:
 
         # -- Extract geometries for successful jobs -----------------------
 
-        if task.task_type == TaskType.confsearch and result.conformers:
-            _create_conformer_geometries(
-                session, task, result.conformers, result.energy,
-            )
+        try:
+            if task.task_type == TaskType.confsearch and result.conformers:
+                _create_conformer_geometries(
+                    session, task, result.conformers, result.energy,
+                    result.conformer_energies,
+                )
 
-        elif task.task_type == TaskType.optimization:
-            _create_optimization_geometry(
-                session, task, job_path, result.energy,
-            )
+            elif task.task_type == TaskType.optimization:
+                _create_optimization_geometry(
+                    session, task, job_path, result.energy,
+                )
+        except Exception as exc:  # noqa: BLE001 - deliberately broad
+            logger.exception("Failed to extract geometries for job %d", job.id)
+            job.success = False
+            job.fail_reason = f"Geometry extraction failed: {type(exc).__name__}: {exc}"[:500]
+            session.add(job)
 
     session.flush()
 
@@ -126,13 +156,25 @@ def _create_conformer_geometries(
     task: ComputationTask,
     conformers: list[str],
     energy: Optional[float],
+    conformer_energies: Optional[list[float]] = None,
 ) -> None:
-    """Store each conformer XYZ as a :class:`MoleculeGeometry`."""
+    """Store each conformer XYZ as a :class:`MoleculeGeometry`.
+
+    Each conformer keeps its own energy from the GOAT ensemble table. Storing
+    the run's single scalar energy on all of them (the previous behaviour)
+    made the "keep the N lowest" ORDER BY in _followup_confsearch an
+    all-ties sort, so which conformers survived depended on SQLite's row
+    order rather than on their energies.
+    """
     for i, xyz_data in enumerate(conformers):
+        if conformer_energies is not None and i < len(conformer_energies):
+            geom_energy = conformer_energies[i]
+        else:
+            geom_energy = energy
         geom = MoleculeGeometry(
             state_id=task.state_id,
             xyz_data=xyz_data,
-            energy=energy,
+            energy=geom_energy,
             origin_task_id=task.id,
             label=f"conformer_{i}",
         )
@@ -344,15 +386,29 @@ def _followup_optimization(
 
     desc = state.description
 
+    # The spin-change partner only exists for the singlet/triplet pair. For
+    # an open-shell reference (a radical cation/anion submitted as S0, i.e.
+    # a doublet) there is no T1 state and no meaningful vertical spin flip,
+    # so the task is not created at all rather than run as a duplicate of
+    # the base singlepoint.
+    spin_change_defined = state.multiplicity in (1, 3)
+
     if desc == "S0":
         _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, task.id, TaskType.singlepoint_vert_ox)
         _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, task.id, TaskType.singlepoint_vert_red)
-        _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, task.id, TaskType.singlepoint_vert_spin_change)
+        if spin_change_defined:
+            _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, task.id, TaskType.singlepoint_vert_spin_change)
+        else:
+            logger.info(
+                "State %d (S0, multiplicity %d) is open-shell; skipping the "
+                "vertical spin-change singlepoint", state.id, state.multiplicity,
+            )
     elif desc == "S1":
         _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, task.id, TaskType.singlepoint_vert_ox)
         _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, task.id, TaskType.singlepoint_vert_red)
     elif desc == "T1":
-        _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, task.id, TaskType.singlepoint_vert_spin_change)
+        if spin_change_defined:
+            _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, task.id, TaskType.singlepoint_vert_spin_change)
     elif desc == "ox":
         _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, task.id, TaskType.singlepoint_vert_red)
     elif desc == "red":
@@ -600,7 +656,16 @@ def _generate_job_files(
         return
 
     # --- Gap 2 fix: Adjust charge/multiplicity for vertical excitations ---
-    charge, multiplicity = _get_job_charge_multiplicity(task.task_type, state)
+    # A task whose charge/multiplicity can't be resolved must not silently
+    # stall in `created` forever — fail it so it shows up in the dashboard.
+    try:
+        charge, multiplicity = _get_job_charge_multiplicity(task.task_type, state)
+    except ValueError as exc:
+        logger.error("Cannot resolve charge/multiplicity for task %d: %s", task.id, exc)
+        task.status = TaskStatus.failed
+        session.add(task)
+        session.flush()
+        return
 
     # Fetch input geometry
     geom = session.get(MoleculeGeometry, task.input_geometry_id)
@@ -671,17 +736,22 @@ def _get_job_charge_multiplicity(
         return new_charge, calculate_altered_multiplicity(multiplicity, charge, new_charge)
 
     elif task_type == TaskType.singlepoint_vert_spin_change:
-        # Flip singlet <-> triplet
+        # Flip singlet <-> triplet. Only these two are defined: the task is
+        # the vertical partner of the S0/T1 pair. Returning the state's own
+        # multiplicity for anything else (the previous behaviour) produced a
+        # singlepoint byte-identical to the base one — it succeeded, cost a
+        # full singlepoint per conformer, and made the derived reorganisation
+        # energy a mislabelled adiabatic gap. Task creation is gated on the
+        # same condition, so reaching this branch means the DB holds a task
+        # that should not exist.
         if multiplicity == 1:
             return charge, 3
-        elif multiplicity == 3:
+        if multiplicity == 3:
             return charge, 1
-        else:
-            logger.warning(
-                "Unexpected multiplicity %d for spin change; keeping as-is",
-                multiplicity,
-            )
-            return charge, multiplicity
+        raise ValueError(
+            f"vert_spin_change is only defined for a singlet or triplet state; "
+            f"state {state.id} has multiplicity {multiplicity}"
+        )
 
     return charge, multiplicity
 
@@ -708,6 +778,20 @@ def _parse_resources_from_header(
         nprocs_match = re.search(r"nprocs\s+(\d+)", pal_match.group(1), re.IGNORECASE)
         if nprocs_match:
             nprocs = int(nprocs_match.group(1))
+
+    # ORCA also accepts the route-line shorthand `! ... PAL16`. Without this
+    # the header was read as "no core count given", nprocs fell back to the
+    # per-stage config default, and a `! PAL32` job was allocated 16 cores
+    # while ORCA spawned 32 ranks -- oversubscription plus a matching memory
+    # under-request, with nothing warning about it.
+    if nprocs is None:
+        for line in header_text.splitlines():
+            if not line.lstrip().startswith("!"):
+                continue
+            pal_short = re.search(r"\bPAL(\d+)\b", line, re.IGNORECASE)
+            if pal_short:
+                nprocs = int(pal_short.group(1))
+                break
 
     # Parse %maxcore
     maxcore_match = re.search(r"%maxcore\s+(\d+)", header_text, re.IGNORECASE)

@@ -128,19 +128,36 @@ class IncreaseResources(RetryStrategy):
         logger.debug("IncreaseResources: nprocs=%d, mem_per_core=%d", self.nprocs, self.mem_per_core)
 
         # --- input.inp modifications ---
+        # ORCA keywords are case-insensitive and users write them every way:
+        # %maxcore / %MaxCore / %MAXCORE. Without IGNORECASE these rewrites
+        # silently did nothing while submit.cmd still got the larger
+        # allocation, so ORCA re-ran byte-identical on the original core
+        # count with the extra cores sitting idle.
+        #
+        # Never lower %maxcore either: escalating a header that already asks
+        # for more memory per process than the retry default would halve the
+        # per-rank memory of a job that died *because* a rank needed more.
+        current_maxcore = re.search(r"%maxcore\s+(\d+)", input_content, re.IGNORECASE)
+        target_maxcore = self.mem_per_core
+        if current_maxcore is not None:
+            target_maxcore = max(self.mem_per_core, int(current_maxcore.group(1)))
         input_content = re.sub(
             r"%maxcore\s+\d+",
-            f"%maxcore {self.mem_per_core}",
+            f"%maxcore {target_maxcore}",
             input_content,
+            flags=re.IGNORECASE,
         )
         input_content = re.sub(
             r"%pal\s+nprocs\s+\d+\s+end",
             f"%pal nprocs {self.nprocs} end",
             input_content,
+            flags=re.IGNORECASE,
         )
 
         # --- submit.cmd modifications ---
-        total_mem = self.nprocs * (self.mem_per_core + 50)
+        # Size the SLURM allocation from the %maxcore ORCA actually got, not
+        # from the retry default, so the two can't contradict each other.
+        total_mem = self.nprocs * (target_maxcore + 50)
         submit_content = re.sub(
             r"#SBATCH --ntasks-per-node=\d+",
             f"#SBATCH --ntasks-per-node={self.nprocs}",

@@ -162,9 +162,6 @@ class PipelineExtractor:
             ).order_by(ComputationTask.id.asc())  # type: ignore[union-attr]
         ).all()
 
-        if not all_conformers and opt_tasks:
-            opt_tasks = [opt_tasks[0]]
-
         results: list[ConformerResult] = []
         for conf_idx, opt_task in enumerate(opt_tasks, 1):
             result = self._extract_conformer_energies(
@@ -172,6 +169,22 @@ class PipelineExtractor:
             )
             if result is not None:
                 results.append(result)
+
+        # Keep the genuinely lowest-energy conformer, not the first one.
+        # Selecting opt_tasks[0] (ordered by task id) picked the conformer
+        # that GOAT ranked lowest at xTB level, which is frequently not the
+        # lowest after DFT optimisation -- on real project data this shifted
+        # a reported oxidation potential by ~100 mV. The comparison uses
+        # e_combined (electronic + thermal correction), falling back to the
+        # bare singlepoint when no correction is available.
+        if not all_conformers and results:
+            def _rank(res: ConformerResult) -> float:
+                for value in (res.e_combined, res.e_singlepoint):
+                    if value is not None:
+                        return value
+                return float("inf")
+
+            results = [min(results, key=_rank)]
 
         return results
 

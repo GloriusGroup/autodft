@@ -120,6 +120,10 @@ def get_active_settings():
 class SubmitRequest(BaseModel):
     smiles: str
     project: str = "default"
+    # Provenance label stored in request_metadata as `project_author`.
+    # Nothing in the pipeline branches on it. Defaults to "web" so the
+    # dashboard form keeps labelling its own submissions as before.
+    author: str = "web"
     priority: int = 10
     request_t1: bool = False
     request_ox: bool = False
@@ -1088,6 +1092,24 @@ def api_submit(body: SubmitRequest):
             status_code=400,
             content={"detail": check["error"] or "Invalid SMILES.", "validation": check},
         )
+
+    # The S0 -> T1 spin change is only defined from a closed-shell reference.
+    # Refuse here rather than letting the controller build a state that is
+    # either arithmetically impossible (odd electron count with multiplicity
+    # 3) or a silent duplicate of S0.
+    if body.request_t1 and check["multiplicity"] != 1:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "detail": (
+                    f"T1 requires a closed-shell reference, but {body.smiles!r} has "
+                    f"multiplicity {check['multiplicity']}. Resubmit without "
+                    f"request_t1 — ox and red remain available for open-shell "
+                    f"references."
+                ),
+                "validation": check,
+            },
+        )
     from autodft.qm.orca.defaults import (
         DEFAULT_HEADER_CONFSEARCH,
         DEFAULT_HEADER_OPTIMIZATION,
@@ -1104,7 +1126,7 @@ def api_submit(body: SubmitRequest):
 
     request_metadata = {
         "project_name": body.project,
-        "project_author": "web",
+        "project_author": body.author,
         "request_S1": False,
         "request_T1": body.request_t1,
         "request_ox": body.request_ox,

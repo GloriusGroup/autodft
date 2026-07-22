@@ -22,6 +22,10 @@ class QMResult:
         free_energy_correction: G - E(el) correction in Hartree (if available).
         conformers: List of XYZ-format strings for conformer ensemble
                     results (GOAT-type jobs).
+        conformer_energies: Per-conformer energies in Hartree, index-aligned
+                    with ``conformers``. Without these every conformer
+                    geometry is stored with the same scalar energy, which
+                    makes the "keep the N lowest" ORDER BY an arbitrary tie.
     """
 
     success: bool
@@ -29,6 +33,7 @@ class QMResult:
     energy: Optional[float] = None
     free_energy_correction: Optional[float] = None
     conformers: Optional[list[str]] = None
+    conformer_energies: Optional[list[float]] = None
 
 
 class QMEngine(ABC):

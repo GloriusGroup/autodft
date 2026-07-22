@@ -91,6 +91,7 @@ package defaults in `autodft/qm/orca/defaults.py`.
 | ------------------------------------------- | ------ | ------------- | ------------------------------------------------------------------------------------------- |
 | `smiles`                                    | str    | *required*    | Validated server-side.                                                                      |
 | `project`                                   | str    | `"default"`   | Used to group molecules and to scope exports / archives.                                    |
+| `author`                                    | str    | `"web"`       | Provenance label stored as `project_author` in `request_metadata`. Nothing branches on it.  |
 | `priority`                                  | int    | `10`          | Higher = served first. Ties broken by submission order.                                     |
 | `request_t1`                                | bool   | `false`       | Build a T1 state and run the full chain on it.                                              |
 | `request_ox`                                | bool   | `false`       | Build a +1 (oxidised) state.                                                                |

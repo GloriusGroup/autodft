@@ -9,6 +9,7 @@ from urllib.parse import quote
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
+from autodft import __version__
 from autodft.api.auth import is_authenticated
 from autodft.api.routes import public_router, router, set_active_settings
 from autodft.config import Settings
@@ -37,7 +38,7 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
 
     app = FastAPI(
         title="AutoDFT Dashboard",
-        version="0.1.0",
+        version=__version__,
         description="Monitoring dashboard and REST API for the AutoDFT pipeline.",
     )
 
