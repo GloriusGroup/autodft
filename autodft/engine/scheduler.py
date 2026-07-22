@@ -6,6 +6,7 @@ Provides a ``SlurmScheduler`` for production HPC clusters and a
 
 from __future__ import annotations
 
+import getpass
 import logging
 import os
 import subprocess
@@ -212,11 +213,18 @@ class SlurmScheduler(Scheduler):
     # -- queue length ------------------------------------------------------
 
     def get_queue_length(self) -> int:
-        """Count pending jobs in the configured partition via ``squeue``."""
+        """Count our own pending jobs in the configured partition.
+
+        Scoped to the controller's user: this number is now the sole input to
+        the submission throttle, and counting the whole partition meant any
+        other group queueing work on it would stop the pipeline submitting
+        anything at all.
+        """
         env = os.environ.copy()
+        user = getpass.getuser()
         # `-h` suppresses the header, so no `| wc -l` and no shell needed.
         cmd = self._command([
-            "squeue", "-t", "PD", "-p", self.partition, "-h", "-o", "%i",
+            "squeue", "-t", "PD", "-p", self.partition, "-u", user, "-h", "-o", "%i",
         ])
 
         try:

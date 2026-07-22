@@ -140,11 +140,13 @@ def _settings(tmp_path) -> Settings:
 def _queue(session: Session, smiles: str, **metadata):
     from autodft.models.entrypoint import CalculationEntrypoint
 
+    priority = metadata.pop("priority", 10)
     meta = {"project_name": "t", "request_confsearch": True}
     meta.update(metadata)
     entry = CalculationEntrypoint(
         smiles=smiles,
         request_metadata=json.dumps(meta),
+        priority=priority,
         header_confsearch="!GOAT XTB2\n",
         header_optimization="!B3LYP OPT\n",
         header_singlepoint="!B3LYP\n",
@@ -176,6 +178,35 @@ class TestStateCreation:
         assert states["T1"] == (0, 3)
         assert states["ox"] == (1, 2)
         assert states["red"] == (-1, 2)
+
+    def test_priority_reaches_the_molecule(self, engine, tmp_path, monkeypatch):
+        """The submission throttle scales with priority, and a job can only
+        reach its priority through the molecule row."""
+        from autodft.engine import entrypoint_processor as ep
+
+        settings = _settings(tmp_path)
+        with Session(engine) as session:
+            _queue(session, "CCO", priority=7)
+            monkeypatch.setattr(ep, "_generate_initial_xyz", lambda s: "C 0 0 0\nH 1 0 0\n")
+            ep.process_next_entrypoint(session, settings)
+            session.commit()
+
+            assert session.exec(select(Molecule)).one().priority == 7
+
+    def test_resubmission_raises_but_never_lowers_priority(
+        self, engine, tmp_path, monkeypatch,
+    ):
+        from autodft.engine import entrypoint_processor as ep
+
+        settings = _settings(tmp_path)
+        with Session(engine) as session:
+            monkeypatch.setattr(ep, "_generate_initial_xyz", lambda s: "C 0 0 0\nH 1 0 0\n")
+            for priority in (5, 9, 2):
+                _queue(session, "CCO", priority=priority)
+                ep.process_next_entrypoint(session, settings)
+                session.commit()
+
+            assert session.exec(select(Molecule)).one().priority == 9
 
     def test_t1_is_refused_for_an_open_shell_reference(self, engine, tmp_path, monkeypatch):
         """A doublet reference would otherwise get an impossible mult-3 T1."""
@@ -304,11 +335,12 @@ class _StubEngine:
 
 
 class _StubScheduler:
-    def __init__(self, succeed=True):
+    def __init__(self, succeed=True, queue_length=0):
         self.succeed = succeed
+        self.queue_length = queue_length
 
     def get_queue_length(self):
-        return 0
+        return self.queue_length
 
     def get_status(self, job_id):
         return SlurmStatus.RUNNING
@@ -422,6 +454,69 @@ class TestSubmitPendingJobs:
         assert job.slurm_jobid == 4242
         assert job.slurm_status == SlurmStatus.PENDING
         assert job.success is None
+
+
+class TestPriorityThrottle:
+    """Submission runs until the queue holds priority * slots waiting jobs."""
+
+    @staticmethod
+    def _ready(session, sample_task, tmp_path, priority):
+        """A submittable job whose molecule carries *priority*."""
+        state = session.get(MoleculeState, sample_task.state_id)
+        molecule = session.get(Molecule, state.molecule_id)
+        molecule.priority = priority
+        session.add(molecule)
+        job = ComputationJob(task_id=sample_task.id, attempt=1, job_path=str(tmp_path))
+        (tmp_path / "submit.cmd").write_text("#!/bin/bash\n")
+        session.add(job)
+        session.commit()
+        session.refresh(job)
+        return job
+
+    def test_a_full_queue_stops_submission(self, session, sample_task, tmp_path):
+        job = self._ready(session, sample_task, tmp_path, priority=1)
+        # priority 1 * 10 slots = 10; the queue already holds 10.
+        submit_pending_jobs(session, _StubScheduler(queue_length=10), Settings())
+        session.refresh(job)
+        assert job.slurm_jobid is None
+        assert job.success is None  # not a failure -- just deferred
+
+    def test_room_below_the_cap_submits(self, session, sample_task, tmp_path):
+        job = self._ready(session, sample_task, tmp_path, priority=1)
+        submit_pending_jobs(session, _StubScheduler(queue_length=9), Settings())
+        session.refresh(job)
+        assert job.slurm_jobid == 4242
+
+    def test_priority_scales_the_cap(self, session, sample_task, tmp_path):
+        """The same queue depth that blocks priority 1 leaves room at 5."""
+        job = self._ready(session, sample_task, tmp_path, priority=5)
+        submit_pending_jobs(session, _StubScheduler(queue_length=30), Settings())
+        session.refresh(job)
+        assert job.slurm_jobid == 4242
+
+    def test_archived_molecules_are_not_submitted(self, session, sample_task, tmp_path):
+        """Archiving wipes the comp_data tree; submitting into it would burn
+        the retry budget against directories that no longer exist."""
+        job = self._ready(session, sample_task, tmp_path, priority=1)
+        state = session.get(MoleculeState, sample_task.state_id)
+        molecule = session.get(Molecule, state.molecule_id)
+        molecule.archived = True
+        session.add(molecule)
+        session.commit()
+
+        submit_pending_jobs(session, _StubScheduler(), Settings())
+        session.refresh(job)
+        assert job.slurm_jobid is None
+
+    def test_unknown_queue_length_defers_rather_than_floods(
+        self, session, sample_task, tmp_path,
+    ):
+        """squeue returning -1 must not read as 'the queue is empty'."""
+        job = self._ready(session, sample_task, tmp_path, priority=1)
+        submit_pending_jobs(session, _StubScheduler(queue_length=-1), Settings())
+        session.refresh(job)
+        assert job.slurm_jobid is None
+        assert job.fail_reason is None
 
 
 class TestDeadEndDetection:
@@ -801,3 +896,75 @@ class TestCircuitBreaker:
         settings.pipeline.failure_breaker_enabled = False
         self._judged(session, sample_state, sample_header, failed=40, successful=0)
         assert check(session, settings) is None
+
+
+# ======================================================================
+# Entrypoint expansion backpressure
+# ======================================================================
+
+
+class TestExpansionBackpressure:
+    """The REST API accepts everything immediately and parks it in
+    calculation_entrypoints. Expansion, not submission, is what bounds how
+    much of that buffer becomes jobs and ORCA input directories on disk."""
+
+    def test_backlog_counts_unsubmitted_jobs_and_unstarted_tasks(
+        self, session, sample_task,
+    ):
+        from autodft.engine.pipeline import PipelineWorker
+
+        # sample_task is `created` with no job yet: it will become one.
+        assert sample_task.status == TaskStatus.created
+        assert PipelineWorker._unsubmitted_job_count(session) == 1
+
+        session.add(ComputationJob(task_id=sample_task.id, attempt=1))
+        session.commit()
+        # Now the job exists too and has not reached SLURM, so both count.
+        assert PipelineWorker._unsubmitted_job_count(session) == 2
+
+        sample_task.status = TaskStatus.pending
+        session.add(sample_task)
+        session.commit()
+        assert PipelineWorker._unsubmitted_job_count(session) == 1
+
+    def test_expansion_pauses_above_the_ceiling(self, tmp_path, monkeypatch):
+        """Needs a real on-disk database: tick() opens its own session."""
+        from sqlalchemy import func
+
+        from autodft.db import get_session, init_db, reset_engine
+        from autodft.engine import entrypoint_processor as ep
+        from autodft.engine.pipeline import PipelineWorker
+        from autodft.models.entrypoint import CalculationEntrypoint
+        from autodft.qm.orca.parser import OrcaParser
+
+        settings = _settings(tmp_path)
+        settings.pipeline.max_unsubmitted_jobs = 4  # one molecule's worth
+        monkeypatch.setattr(ep, "_generate_initial_xyz", lambda s: "C 0 0 0\nH 1 0 0\n")
+
+        reset_engine()
+        try:
+            init_db(settings)
+            with get_session(settings) as session:
+                for smiles in ("CCO", "CCC", "CCN", "CCF"):
+                    _queue(session, smiles, request_T1=True, request_ox=True,
+                           request_red=True, request_confsearch=False)
+
+            PipelineWorker(
+                settings=settings, scheduler=_StubScheduler(),
+                qm_engine=OrcaParser(orca=settings.orca),
+            ).tick()
+
+            with get_session(settings) as session:
+                # The first entrypoint yields 4 states -> 4 tasks, which is
+                # the ceiling, so the other three stay queued for a later
+                # tick rather than materialising input directories now.
+                expanded = [
+                    e for e in session.exec(select(CalculationEntrypoint)).all()
+                    if e.time_started is not None
+                ]
+                assert len(expanded) == 1
+                assert session.exec(
+                    select(func.count()).select_from(Molecule)
+                ).one() == 1
+        finally:
+            reset_engine()

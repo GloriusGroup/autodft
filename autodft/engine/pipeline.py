@@ -120,23 +120,24 @@ class PipelineWorker:
             # that rollback also discarded every entrypoint expanded before it
             # in the same tick (including their time_started marks, so they
             # were re-processed indefinitely).
-            # Queried once per tick, not once per entrypoint: this shells out
-            # to squeue, and calling it inside the loop cost a subprocess per
-            # entrypoint for a number that barely moves within one tick.
-            queue_len = self.scheduler.get_queue_length()
+            # Expansion is gated on the database, not on squeue. The REST API
+            # accepts every submission the moment it arrives and parks it in
+            # calculation_entrypoints; that table is the buffer, so a campaign
+            # of any size can be handed over in one go without the submitting
+            # script blocking. What we bound here is how much of that buffer
+            # gets materialised into jobs and ORCA input directories ahead of
+            # the queue, so the on-disk tree grows with what SLURM can
+            # actually absorb.
+            max_backlog = self.settings.pipeline.max_unsubmitted_jobs
             for _ in range(self.settings.pipeline.max_simultaneous_entrypoints):
-                # get_queue_length() returns -1 when squeue fails, and
-                # `-1 > max` is False -- so the only throttle in the system
-                # used to *open* exactly when the scheduler was struggling.
-                # Treat unknown as "too full to expand".
-                if queue_len < 0:
-                    logger.warning("Queue length unknown; skipping entrypoint expansion")
-                    break
-                if queue_len > self.settings.pipeline.max_queue_length:
+                # Re-counted per entrypoint: one expansion adds a task per
+                # requested state, so a single tick can cross the ceiling.
+                backlog = self._unsubmitted_job_count(session)
+                if max_backlog and backlog >= max_backlog:
                     logger.debug(
-                        "Queue length %d exceeds max %d; stopping entrypoint processing",
-                        queue_len,
-                        self.settings.pipeline.max_queue_length,
+                        "%d job(s) awaiting submission (max %d); pausing entrypoint expansion",
+                        backlog,
+                        max_backlog,
                     )
                     break
                 processed = self._run_step(
@@ -170,3 +171,32 @@ class PipelineWorker:
     def _entrypoint_step(self, session) -> None:
         """Process one entrypoint, recording whether there was one to process."""
         self._last_entrypoint_processed = process_next_entrypoint(session, self.settings)
+
+    @staticmethod
+    def _unsubmitted_job_count(session) -> int:
+        """Work that exists in the database but has not reached SLURM.
+
+        Counts jobs created but not yet submitted, plus tasks that have not
+        been turned into a job yet -- both become queue pressure within a
+        tick or two, so both have to hold expansion back.
+        """
+        from sqlalchemy import func
+        from sqlmodel import col, select
+
+        from autodft.models.enums import TaskStatus
+        from autodft.models.job import ComputationJob
+        from autodft.models.task import ComputationTask
+
+        jobs = session.exec(
+            select(func.count()).select_from(ComputationJob).where(
+                col(ComputationJob.slurm_jobid).is_(None),
+                col(ComputationJob.slurm_status).is_(None),
+                col(ComputationJob.success).is_(None),
+            )
+        ).one()
+        tasks = session.exec(
+            select(func.count()).select_from(ComputationTask).where(
+                ComputationTask.status == TaskStatus.created,
+            )
+        ).one()
+        return int(jobs) + int(tasks)

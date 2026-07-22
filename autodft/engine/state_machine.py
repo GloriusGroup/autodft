@@ -26,11 +26,30 @@ from autodft.models.enums import (
 from autodft.models.geometry import MoleculeGeometry
 from autodft.models.header import ComputationHeader
 from autodft.models.job import ComputationJob
+from autodft.models.molecule import Molecule
 from autodft.models.state import MoleculeState
 from autodft.models.task import ComputationTask
 from autodft.qm.base import QMEngine
 
 logger = logging.getLogger(__name__)
+
+
+# The API dashboard runs in a daemon thread of this same process and shares
+# one SQLite file with the worker, and SQLite allows exactly one writer. The
+# heavy steps below interleave row updates with filesystem work on a network
+# mount -- parsing ORCA outputs, writing input decks -- so a step that held a
+# single transaction across the whole batch kept the write lock for minutes.
+# Everything else blocked behind it for the full `busy_timeout` (60 s), which
+# is how a submission script doing one INSERT per molecule ended up timing
+# out mid-campaign. Committing every few items caps the hold at one item's
+# I/O and lets waiting writers through between batches.
+_COMMIT_BATCH = 25
+
+
+def _commit_batch(session: Session, index: int) -> None:
+    """Release the SQLite write lock every ``_COMMIT_BATCH`` items."""
+    if index and index % _COMMIT_BATCH == 0:
+        session.commit()
 
 
 # ======================================================================
@@ -102,7 +121,8 @@ def process_finished_jobs(session: Session, qm_engine: QMEngine) -> None:
     )
     jobs = session.exec(statement).all()
 
-    for job in jobs:
+    for processed, job in enumerate(jobs):
+        _commit_batch(session, processed)
         task = session.get(ComputationTask, job.task_id)
         if task is None:
             logger.error("Job %d references missing task %d", job.id, job.task_id)
@@ -530,7 +550,8 @@ def create_retry_jobs(
         )
     ).all()
 
-    for task in pending_tasks:
+    for processed, task in enumerate(pending_tasks):
+        _commit_batch(session, processed)
         jobs = session.exec(
             select(ComputationJob).where(ComputationJob.task_id == task.id)
         ).all()
@@ -598,7 +619,8 @@ def start_new_tasks(
 
     base_path = settings.comp_data_path
 
-    for task in tasks:
+    for processed, task in enumerate(tasks):
+        _commit_batch(session, processed)
         # Ensure task directory exists
         if not task.task_path:
             state = session.get(MoleculeState, task.state_id)
@@ -636,29 +658,51 @@ def start_new_tasks(
 
 def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settings) -> None:
     """Find jobs that have been created (no slurm_jobid, no slurm_status)
-    and submit them to the scheduler."""
+    and submit them to the scheduler.
 
-    # Capped per tick. Uncapped, one tick that found every follow-up
-    # singlepoint of a large campaign ready at once would sit in this loop
-    # for hours submitting tens of thousands of jobs, with the pipeline
-    # doing nothing else in the meantime.
-    limit = settings.pipeline.max_submissions_per_tick
+    Submission keeps going until the SLURM queue holds
+    ``priority * queue_slots_per_priority`` waiting jobs, where *priority*
+    comes from the entrypoint that created the molecule. This is the only
+    throttle in the system: the REST API accepts every submission
+    immediately, entrypoints buffer in the database, and the queue depth is
+    regulated here rather than at the door.
+    """
+
+    # squeue counts *waiting* (PD) jobs only, so running work never counts
+    # against the cap -- the limit controls how deep the backlog is allowed
+    # to get, not how much may run.
+    queue_len = scheduler.get_queue_length()
+    if queue_len < 0:
+        # -1 means squeue failed. Submitting blind would flood the partition,
+        # so skip this tick; the jobs stay pending and go out on the next one.
+        logger.warning("Queue length unknown; deferring submissions to the next tick")
+        return
+
+    slots = max(1, settings.pipeline.queue_slots_per_priority)
+
+    # Ordered by priority descending so the scarce queue slots go to the
+    # highest-priority work first. Because the cap scales with priority,
+    # the first job that doesn't fit ends the loop: everything after it has
+    # an equal or lower priority, hence an equal or lower cap.
     statement = (
-        select(ComputationJob)
+        select(ComputationJob, col(Molecule.priority))
+        .join(ComputationTask, col(ComputationTask.id) == col(ComputationJob.task_id))
+        .join(MoleculeState, col(MoleculeState.id) == col(ComputationTask.state_id))
+        .join(Molecule, col(Molecule.id) == col(MoleculeState.molecule_id))
         .where(
             col(ComputationJob.slurm_jobid).is_(None),
             col(ComputationJob.slurm_status).is_(None),
             col(ComputationJob.success).is_(None),
+            col(Molecule.archived).is_(False),
         )
-        .order_by(col(ComputationJob.id).asc())
+        .order_by(col(Molecule.priority).desc(), col(ComputationJob.id).asc())
     )
+    # Backstop only: the priority cap above is the real throttle, but a
+    # single tick should never sit in sbatch indefinitely.
+    limit = settings.pipeline.max_submissions_per_tick
     if limit and limit > 0:
         statement = statement.limit(limit)
-    jobs = session.exec(statement).all()
-    if limit and len(jobs) == limit:
-        logger.info(
-            "Submitting the first %d pending job(s) this tick; more remain", limit,
-        )
+    rows = session.exec(statement).all()
 
     # A job that can't be submitted must be recorded as a failed attempt, not
     # skipped. Skipping left `success` NULL forever, so the retry path ignored
@@ -671,7 +715,16 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
         job.time_end = datetime.now(timezone.utc)
         session.add(job)
 
-    for job in jobs:
+    for index, (job, priority) in enumerate(rows):
+        cap = max(1, priority) * slots
+        if queue_len >= cap:
+            logger.info(
+                "Queue holds %d waiting job(s); cap for priority %d is %d -- "
+                "stopping submission (%d job(s) left for a later tick)",
+                queue_len, priority, cap, len(rows) - index,
+            )
+            break
+
         if job.job_path is None:
             _fail(job, "No job_path recorded; input files were never generated")
             continue
@@ -693,6 +746,7 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
             # IS NULL) and submit a second ORCA process into the same
             # directory -- two processes writing one output.out.
             session.commit()
+            queue_len += 1
             logger.info("Job %d submitted (slurm_jobid=%s)", job.id, result.job_id)
         else:
             # sbatch failures are usually transient -- slurmctld restarting,

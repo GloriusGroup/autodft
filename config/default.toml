@@ -19,7 +19,10 @@ data_path = "/data/autodft"
 
 [pipeline]
 max_simultaneous_entrypoints = 40
-max_queue_length = 20
+# SLURM queue slots per unit of entrypoint priority (priority 1 -> 10 waiting
+# jobs). This is the only throttle on submission.
+queue_slots_per_priority = 10
+max_unsubmitted_jobs = 500
 loop_interval_seconds = 30
 max_attempts = 3
 

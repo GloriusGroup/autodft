@@ -75,27 +75,16 @@ def _process_entrypoint_body(
     smiles = entrypoint.smiles
     metadata = json.loads(entrypoint.request_metadata) if entrypoint.request_metadata else {}
 
-    # 1. Create / find molecule
-    molecule = _get_or_create_molecule(session, smiles, metadata, entrypoint.request_metadata)
-
-    # 2. Create / find header entries
-    cs_header = _get_or_create_header(session, entrypoint.header_confsearch)
-    opt_header = _get_or_create_header(session, entrypoint.header_optimization)
-    sp_header = _get_or_create_header(session, entrypoint.header_singlepoint)
-
-    header_ids = {
-        "confsearch": cs_header.id if cs_header else None,
-        "optimization": opt_header.id if opt_header else None,
-        "singlepoint": sp_header.id if sp_header else None,
-    }
-
-    # 3. Determine charge / multiplicity from SMILES
+    # 1. Determine charge / multiplicity from SMILES.
+    #
+    # Everything that needs no database access happens first, on purpose.
+    # This function runs inside the worker's write transaction, and SQLite
+    # allows one writer at a time for the whole process -- including the API
+    # thread serving /api/submit. RDKit embedding is a second or two of pure
+    # computation per molecule; done after the first INSERT it held the write
+    # lock for that whole time and blocked concurrent submissions.
     charge, multiplicity = get_charge_and_multiplicity(smiles)
 
-    base_path = settings.comp_data_path
-
-    # 4. Create states.
-    #
     # Validate before creating anything: process_next_entrypoint rolls the
     # session back on failure, so raising midway would discard the S0 / ox /
     # red states already created for this molecule.
@@ -126,6 +115,26 @@ def _process_entrypoint_body(
     # states of one conformer. It also embeds 4x more often than needed.
     initial_xyz = _generate_initial_xyz(smiles)
 
+    # 2. Create / find molecule -- the first write of the transaction.
+    molecule = _get_or_create_molecule(
+        session, smiles, metadata, entrypoint.request_metadata,
+        priority=entrypoint.priority,
+    )
+
+    # 3. Create / find header entries
+    cs_header = _get_or_create_header(session, entrypoint.header_confsearch)
+    opt_header = _get_or_create_header(session, entrypoint.header_optimization)
+    sp_header = _get_or_create_header(session, entrypoint.header_singlepoint)
+
+    header_ids = {
+        "confsearch": cs_header.id if cs_header else None,
+        "optimization": opt_header.id if opt_header else None,
+        "singlepoint": sp_header.id if sp_header else None,
+    }
+
+    base_path = settings.comp_data_path
+
+    # 4. Create states.
     _create_state(
         session, molecule, smiles, "S0", multiplicity, charge,
         metadata, header_ids, base_path, initial_xyz,
@@ -245,6 +254,7 @@ def _get_or_create_molecule(
     smiles: str,
     metadata: dict,
     raw_metadata: str,
+    priority: int = 10,
 ) -> Molecule:
     """Find or create a ``Molecule`` entry with canonical SMILES."""
     canonical_smiles = _canonicalize_smiles(smiles)
@@ -258,12 +268,18 @@ def _get_or_create_molecule(
     ).first()
 
     if existing is not None:
+        # Resubmitting the same molecule at a higher priority raises it;
+        # a lower one never demotes work that is already in flight.
+        if priority > existing.priority:
+            existing.priority = priority
+            session.add(existing)
         logger.info("Molecule already exists (id=%d)", existing.id)
         return existing
 
     molecule = Molecule(
         smiles=canonical_smiles,
         project_name=project_name,
+        priority=priority,
         metadata_json=raw_metadata,
     )
     session.add(molecule)

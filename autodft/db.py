@@ -111,6 +111,7 @@ def _migrate_sqlite_schema(engine) -> None:
         ("computation_headers", "deleted", "BOOLEAN NOT NULL DEFAULT 0"),
         ("calculation_entrypoints", "processing_error", "TEXT"),
         ("molecules",                "archived",        "BOOLEAN NOT NULL DEFAULT 0"),
+        ("molecules",                "priority",        "INTEGER NOT NULL DEFAULT 10"),
     ]
     # Indexes on the columns the pipeline loop actually filters by. The
     # model-level index=True fields cover foreign keys and lookups but none
@@ -125,6 +126,7 @@ def _migrate_sqlite_schema(engine) -> None:
         ("ix_computation_jobs_success",           "computation_jobs(success)"),
         ("ix_molecule_geometries_origin_task_id", "molecule_geometries(origin_task_id)"),
         ("ix_molecules_project_name",             "molecules(project_name)"),
+        ("ix_molecules_priority",                 "molecules(priority)"),
         ("ix_calculation_entrypoints_queue",
          "calculation_entrypoints(time_started, priority, time_created)"),
     ]

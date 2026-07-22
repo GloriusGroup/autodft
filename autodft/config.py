@@ -83,6 +83,18 @@ class RetryConfig:
 @dataclass
 class PipelineConfig:
     max_simultaneous_entrypoints: int = 40
+    # SLURM queue slots granted per unit of entrypoint priority: a molecule
+    # of priority p may hold up to p * queue_slots_per_priority of its jobs
+    # in the queue at once. This is the only throttle on submission.
+    queue_slots_per_priority: int = 10
+    # Ceiling on jobs that exist in the database but have not been submitted
+    # yet. Entrypoint expansion pauses above this, so the entrypoint table --
+    # not the job table -- absorbs an arbitrarily large campaign. Expansion
+    # deliberately does NOT consult squeue: the submission throttle keeps the
+    # queue short by design, so gating expansion on queue length either never
+    # fired or (when squeue was slow) stalled the whole campaign.
+    max_unsubmitted_jobs: int = 500
+    # Retained for older configs; no longer consulted.
     max_queue_length: int = 20
     loop_interval_seconds: int = 30
     max_attempts: int = 3
@@ -96,9 +108,9 @@ class PipelineConfig:
     failure_breaker_ratio: float = 0.25
     failure_breaker_window: int = 100
     failure_breaker_min_samples: int = 20
-    # Upper bound on sbatch calls in one tick. `max_queue_length` only gates
-    # entrypoint expansion, so follow-up jobs (which vastly outnumber
-    # entrypoints) previously bypassed every throttle. 0 disables the cap.
+    # Backstop on sbatch calls in one tick, so a tick can never sit in
+    # submission indefinitely. The priority cap above is the real throttle
+    # and normally binds first. 0 disables this one.
     max_submissions_per_tick: int = 100
     confsearch: StageConfig = field(default_factory=StageConfig)
     optimization: StageConfig = field(default_factory=StageConfig)

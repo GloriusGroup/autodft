@@ -102,7 +102,8 @@ data_path = "/mnt/share/dft_calculations/autodft_data"
 
 [pipeline]
 max_simultaneous_entrypoints = 50
-max_queue_length             = 50
+queue_slots_per_priority     = 10   # priority p -> p*10 waiting SLURM jobs
+max_unsubmitted_jobs         = 500  # DB backlog ceiling before expansion pauses
 loop_interval_seconds        = 60
 max_attempts                 = 3
 
@@ -295,6 +296,28 @@ Every submission path (CLI, REST, Python) ends up writing the same
 
 `request_S1` is not exposed — S1 isn't supported yet.
 
+### Backpressure and priority
+
+Submission never blocks on the cluster. Every request is accepted the
+moment it arrives and parked in `calculation_entrypoints`, so a script can
+hand over a library of any size in one pass without hanging — that table
+*is* the buffer. Throttling happens downstream, in two places:
+
+* **Jobs → SLURM.** The controller keeps submitting until the queue holds
+  `priority * queue_slots_per_priority` **waiting** jobs (default 10 per
+  unit of priority, so `priority = 1` allows 10 queued jobs, `priority = 5`
+  allows 50). Running jobs are not counted, so this caps the depth of the
+  backlog rather than the throughput. Jobs are ordered by priority, so
+  higher-priority work claims the slots first.
+* **Entrypoints → jobs.** Expansion pauses once `max_unsubmitted_jobs`
+  jobs exist in the database but have not reached SLURM, which keeps the
+  on-disk `comp_data/` tree growing in step with what the cluster can
+  actually absorb.
+
+A molecule inherits its priority from the entrypoint that created it.
+Resubmitting the same molecule at a higher priority raises it; a lower one
+never demotes work already in flight.
+
 ### CLI
 
 ```bash
@@ -359,6 +382,17 @@ curl -X POST http://localhost:8085/api/submit \
            "header_optimization_id": 4,
            "header_singlepoint_id":  6
          }'
+```
+
+For anything library-sized use `POST /api/submit-batch`, which takes the
+same options with `smiles` replaced by `smiles_list`. One request, one
+transaction, and rejections are reported per SMILES instead of failing the
+whole call:
+
+```bash
+curl -X POST http://localhost:8085/api/submit-batch \
+     -H 'Content-Type: application/json' \
+     -d '{"smiles_list": ["CCO", "c1ccccc1"], "project": "alcohols"}'
 ```
 
 The endpoint returns `400` with the RDKit reason if the SMILES is

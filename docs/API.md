@@ -92,7 +92,7 @@ package defaults in `autodft/qm/orca/defaults.py`.
 | `smiles`                                    | str    | *required*    | Validated server-side.                                                                      |
 | `project`                                   | str    | `"default"`   | Used to group molecules and to scope exports / archives.                                    |
 | `author`                                    | str    | `"web"`       | Provenance label stored as `project_author` in `request_metadata`. Nothing branches on it.  |
-| `priority`                                  | int    | `10`          | Higher = served first. Ties broken by submission order.                                     |
+| `priority`                                  | int    | `10`          | Higher = served first, and sets the queue allowance: `priority * queue_slots_per_priority` (default 10) waiting SLURM jobs. Ties broken by submission order. |
 | `request_t1`                                | bool   | `false`       | Build a T1 state and run the full chain on it.                                              |
 | `request_ox`                                | bool   | `false`       | Build a +1 (oxidised) state.                                                                |
 | `request_red`                               | bool   | `false`       | Build a −1 (reduced) state.                                                                 |
@@ -159,6 +159,45 @@ curl -X POST http://localhost:8085/api/submit \
            "header_optimization_id":  4,
            "header_singlepoint_id":   6
          }'
+```
+
+Submission never blocks on the cluster: accepting a molecule is one INSERT
+into `calculation_entrypoints`. Whether it can start now is the
+controller's problem — see *Backpressure and priority* in the README.
+
+### `POST /api/submit-batch`
+
+Queue many molecules under one set of options. Takes every field
+`POST /api/submit` takes, except that `smiles` is replaced by
+`smiles_list` (max 10 000 entries). Use this for anything library-sized: it
+is a single transaction, where N single submissions are N commits and N
+rounds of lock contention with the controller.
+
+Invalid SMILES do **not** fail the request. Each one is reported
+individually so the caller can log what was refused and keep the rest:
+
+```json
+{
+  "queued":   [{"id": 41, "smiles": "c1ccc2[nH]ccc2c1"},
+               {"id": 42, "smiles": "CCO"}],
+  "rejected": [{"smiles": "not-a-smiles",
+                "detail": "RDKit could not parse 'not-a-smiles'."},
+               {"smiles": "C[C]1CC(C#N)C1",
+                "detail": "T1 requires a closed-shell reference, but ..."}],
+  "counts":   {"queued": 2, "rejected": 2}
+}
+```
+
+`400` is returned only when `smiles_list` is empty.
+
+```bash
+curl -X POST http://reaction.uni-muenster.de:60001/api/submit-batch \
+     -H "Content-Type: application/json" \
+     -H "X-AutoDFT-Password: $AUTODFT_PASSWORD" \
+     -d '{"smiles_list": ["c1ccc2[nH]ccc2c1", "CCO"],
+          "project": "heteroarenes", "priority": 1,
+          "request_t1": true, "request_ox": true, "request_red": true,
+          "skip_confsearch": true}'
 ```
 
 ---

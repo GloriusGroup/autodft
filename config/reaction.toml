@@ -25,7 +25,13 @@ data_path = "/mnt/share/dft_calculations/autodft_data"
 
 [pipeline]
 max_simultaneous_entrypoints = 50
-max_queue_length = 50
+# Jobs are submitted until the SLURM queue holds priority * 10 waiting jobs,
+# using the priority of the entrypoint each job came from. Running jobs are
+# not counted, so this bounds the backlog, not the throughput.
+queue_slots_per_priority = 10
+# How much of the entrypoint buffer may be materialised into jobs and ORCA
+# input directories ahead of the queue.
+max_unsubmitted_jobs = 500
 loop_interval_seconds = 60
 max_attempts = 3
 

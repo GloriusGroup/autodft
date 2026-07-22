@@ -2428,31 +2428,38 @@
                 header_singlepoint_id:  hSp.id,
             };
 
-            // ── Submit sequentially; keep track of successes/failures. ─
+            // ── One request for the whole textarea. ───────────────────
+            // Submitting line by line was one HTTP round trip and one SQLite
+            // commit per molecule, each contending with the pipeline worker
+            // for the single write lock. /api/submit-batch is one
+            // transaction and reports rejections per SMILES.
             var submitted = [];
             var failed    = [];
-            for (var i = 0; i < lines.length; i++) {
-                var smi = lines[i];
-                feedback.textContent = 'Submitting ' + (i + 1) + '/' + lines.length + ': ' + smi + ' …';
-                feedback.className = 'submit-feedback';
-                var body = Object.assign({}, commonBody, { smiles: smi });
-                try {
-                    var resp = await fetch('/api/submit', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(body)
+            feedback.textContent = 'Submitting ' + lines.length + ' molecule(s) …';
+            feedback.className = 'submit-feedback';
+            try {
+                var resp = await fetch('/api/submit-batch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(Object.assign({}, commonBody, { smiles_list: lines }))
+                });
+                // Defensive parse — server may emit non-JSON on a 500.
+                var text = await resp.text();
+                var data; try { data = JSON.parse(text); } catch (_) { data = { detail: text.slice(0, 200) }; }
+                if (resp.ok) {
+                    submitted = data.queued || [];
+                    failed = (data.rejected || []).map(function (r) {
+                        return { smiles: r.smiles, error: r.detail };
                     });
-                    // Defensive parse — server may emit non-JSON on a 500.
-                    var text = await resp.text();
-                    var data; try { data = JSON.parse(text); } catch (_) { data = { detail: text.slice(0, 200) }; }
-                    if (resp.ok) {
-                        submitted.push({ smiles: smi, id: data.id });
-                    } else {
-                        failed.push({ smiles: smi, error: data.detail || ('HTTP ' + resp.status) });
-                    }
-                } catch (err) {
-                    failed.push({ smiles: smi, error: err.message });
+                } else {
+                    failed = lines.map(function (smi) {
+                        return { smiles: smi, error: data.detail || ('HTTP ' + resp.status) };
+                    });
                 }
+            } catch (err) {
+                failed = lines.map(function (smi) {
+                    return { smiles: smi, error: err.message };
+                });
             }
 
             // ── Final feedback line. ──────────────────────────────────

@@ -159,3 +159,86 @@ class TestConfigCoercion:
 
         assert isinstance(settings.security.dashboard_password, str)
         assert settings.api.port == 9999
+
+
+class TestBatchSubmission:
+    """A library-sized campaign goes over in one request and one commit.
+
+    Submitted one at a time it was one SQLite commit per molecule, each
+    contending with the pipeline worker for the single write lock -- which
+    is how a submission script ended up timing out mid-run.
+    """
+
+    @pytest.fixture()
+    def db(self, tmp_path, monkeypatch):
+        from autodft.db import init_db, reset_engine
+        from autodft.config import Settings as _Settings
+
+        settings = _Settings()
+        settings.storage.data_path = str(tmp_path)
+        reset_engine()
+        init_db(settings)
+        yield settings
+        reset_engine()
+
+    @staticmethod
+    def _submit(**kwargs):
+        from autodft.api.routes import SubmitBatchRequest, api_submit_batch
+
+        return api_submit_batch(SubmitBatchRequest(**kwargs))
+
+    def test_rejections_do_not_discard_the_rest(self, db):
+        """One bad SMILES used to abort the caller's loop, silently skipping
+        every remaining molecule in the file."""
+        result = self._submit(
+            smiles_list=["CCO", "not-a-smiles", "c1ccccc1"], project="p",
+        )
+        assert result["counts"] == {"queued": 2, "rejected": 1}
+        assert [r["smiles"] for r in result["queued"]] == ["CCO", "c1ccccc1"]
+        assert "not-a-smiles" in result["rejected"][0]["detail"]
+
+    def test_open_shell_is_reported_per_smiles_when_t1_is_requested(self, db):
+        result = self._submit(
+            smiles_list=["CCO", "C[C]1CC(C#N)C1"], project="p", request_t1=True,
+        )
+        assert result["counts"] == {"queued": 1, "rejected": 1}
+        assert "closed-shell" in result["rejected"][0]["detail"]
+
+    def test_the_same_smiles_is_accepted_without_t1(self, db):
+        result = self._submit(
+            smiles_list=["C[C]1CC(C#N)C1"], project="p",
+            request_t1=False, request_ox=True, request_red=True,
+        )
+        assert result["counts"]["queued"] == 1
+
+    def test_options_land_on_every_row(self, db):
+        import json
+
+        from sqlmodel import select
+
+        from autodft.db import get_session
+        from autodft.models import CalculationEntrypoint
+
+        self._submit(
+            smiles_list=["CCO", "c1ccccc1"], project="p", priority=3,
+            skip_confsearch=True, header_optimization="!B3LYP OPT\n",
+        )
+        with get_session(db) as session:
+            rows = session.exec(select(CalculationEntrypoint)).all()
+
+        assert len(rows) == 2
+        for row in rows:
+            assert row.priority == 3
+            assert row.header_confsearch is None  # skip_confsearch
+            assert row.header_optimization == "!B3LYP OPT\n"
+            assert json.loads(row.request_metadata)["request_confsearch"] is False
+
+    def test_an_empty_list_is_a_400(self, db):
+        assert self._submit(smiles_list=[], project="p").status_code == 400
+
+    def test_overlong_smiles_is_rejected_not_parsed(self, db):
+        """RDKit overflows the C stack on very long input, and it runs in a
+        thread of the controller process."""
+        result = self._submit(smiles_list=["C" * 600], project="p")
+        assert result["counts"] == {"queued": 0, "rejected": 1}
+        assert "too long" in result["rejected"][0]["detail"]

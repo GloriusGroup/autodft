@@ -1341,35 +1341,119 @@ def api_validate_smiles(body: ValidateSmilesRequest):
     return validate_smiles(body.smiles)
 
 
-@router.post("/api/submit")
-def api_submit(body: SubmitRequest):
-    """Submit a new molecule to the calculation queue."""
+def _reject_reason(body: SubmitRequest, smiles: str) -> Optional[tuple[str, dict]]:
+    """Why *smiles* cannot be queued under *body*'s options, or None."""
     from autodft.engine.entrypoint_processor import validate_smiles
 
-    check = validate_smiles(body.smiles)
+    check = validate_smiles(smiles)
     if not check["valid"]:
-        return JSONResponse(
-            status_code=400,
-            content={"detail": check["error"] or "Invalid SMILES.", "validation": check},
-        )
+        return (check["error"] or "Invalid SMILES.", check)
 
     # The S0 -> T1 spin change is only defined from a closed-shell reference.
     # Refuse here rather than letting the controller build a state that is
     # either arithmetically impossible (odd electron count with multiplicity
     # 3) or a silent duplicate of S0.
     if body.request_t1 and check["multiplicity"] != 1:
+        return (
+            f"T1 requires a closed-shell reference, but {smiles!r} has "
+            f"multiplicity {check['multiplicity']}. Resubmit without "
+            f"request_t1 — ox and red remain available for open-shell "
+            f"references.",
+            check,
+        )
+    return None
+
+
+@router.post("/api/submit")
+def api_submit(body: SubmitRequest):
+    """Submit a new molecule to the calculation queue.
+
+    Accepting a submission is a single INSERT into ``calculation_entrypoints``
+    -- it never waits on SLURM, on the queue depth, or on anything the worker
+    is doing. Whether the work can start now is the controller's problem, not
+    the caller's.
+    """
+    rejection = _reject_reason(body, body.smiles)
+    if rejection is not None:
+        detail, check = rejection
+        return JSONResponse(
+            status_code=400, content={"detail": detail, "validation": check},
+        )
+
+    with get_session() as session:
+        entry = _new_entrypoint(session, body, body.smiles)
+        session.add(entry)
+        session.commit()
+        session.refresh(entry)
+
+        return {
+            "id": entry.id,
+            "smiles": entry.smiles,
+            "status": "queued",
+            "time_created": entry.time_created.isoformat() if entry.time_created else None,
+        }
+
+
+class SubmitBatchRequest(SubmitRequest):
+    """A :class:`SubmitRequest` whose ``smiles`` is a list.
+
+    ``smiles`` is inherited but unused; ``smiles_list`` carries the molecules.
+    """
+
+    smiles: str = ""
+    smiles_list: list[str] = Field(default_factory=list, max_length=10000)
+
+
+@router.post("/api/submit-batch")
+def api_submit_batch(body: SubmitBatchRequest):
+    """Queue many molecules under one set of options, in one transaction.
+
+    The single-molecule endpoint is fine for a handful, but a library-sized
+    campaign submitted one HTTP request at a time pays a SQLite commit per
+    molecule and competes with the worker for the write lock on every one of
+    them. Here the whole batch is one commit.
+
+    Rejections do not fail the request: every SMILES is reported individually
+    so the caller can log what was refused and keep the rest.
+    """
+    if not body.smiles_list:
         return JSONResponse(
             status_code=400,
-            content={
-                "detail": (
-                    f"T1 requires a closed-shell reference, but {body.smiles!r} has "
-                    f"multiplicity {check['multiplicity']}. Resubmit without "
-                    f"request_t1 — ox and red remain available for open-shell "
-                    f"references."
-                ),
-                "validation": check,
-            },
+            content={"detail": "smiles_list is empty; nothing to queue."},
         )
+
+    accepted: list[tuple[str, CalculationEntrypoint]] = []
+    rejected: list[dict] = []
+
+    with get_session() as session:
+        for smiles in body.smiles_list:
+            if len(smiles) > 512:
+                # Matches the bound on SubmitRequest.smiles: RDKit's parser
+                # overflows the C stack on very long input, and it runs in a
+                # thread of the controller process.
+                rejected.append({"smiles": smiles[:120], "detail": "SMILES too long (>512)."})
+                continue
+            rejection = _reject_reason(body, smiles)
+            if rejection is not None:
+                rejected.append({"smiles": smiles, "detail": rejection[0]})
+                continue
+            entry = _new_entrypoint(session, body, smiles)
+            session.add(entry)
+            accepted.append((smiles, entry))
+
+        session.commit()
+
+        return {
+            "queued": [
+                {"id": entry.id, "smiles": smiles} for smiles, entry in accepted
+            ],
+            "rejected": rejected,
+            "counts": {"queued": len(accepted), "rejected": len(rejected)},
+        }
+
+
+def _new_entrypoint(session, body: SubmitRequest, smiles: str) -> CalculationEntrypoint:
+    """Build (but do not add) the entrypoint row for one SMILES."""
     from autodft.qm.orca.defaults import (
         DEFAULT_HEADER_CONFSEARCH,
         DEFAULT_HEADER_OPTIMIZATION,
@@ -1404,38 +1488,29 @@ def api_submit(body: SubmitRequest):
 
     # Resolve header IDs -> raw text (IDs win over raw text). Falls back
     # to the package defaults when neither is provided.
-    with get_session() as session:
-        def _resolve(text_in: Optional[str], id_in: Optional[int], default: Optional[str]) -> Optional[str]:
-            if id_in is not None:
-                row = session.get(ComputationHeader, id_in)
-                if row is not None:
-                    return row.header_text
-            if text_in:
-                return text_in
-            return default
+    def _resolve(text_in: Optional[str], id_in: Optional[int], default: Optional[str]) -> Optional[str]:
+        if id_in is not None:
+            row = session.get(ComputationHeader, id_in)
+            if row is not None:
+                return row.header_text
+        if text_in:
+            return text_in
+        return default
 
-        h_cs = _resolve(
+    return CalculationEntrypoint(
+        smiles=smiles,
+        request_metadata=json.dumps(request_metadata),
+        priority=body.priority,
+        header_confsearch=_resolve(
             body.header_confsearch, body.header_confsearch_id,
             None if body.skip_confsearch else DEFAULT_HEADER_CONFSEARCH,
-        )
-        h_opt = _resolve(body.header_optimization, body.header_optimization_id, DEFAULT_HEADER_OPTIMIZATION)
-        h_sp = _resolve(body.header_singlepoint, body.header_singlepoint_id, DEFAULT_HEADER_SINGLEPOINT)
-
-        entry = CalculationEntrypoint(
-            smiles=body.smiles,
-            request_metadata=json.dumps(request_metadata),
-            priority=body.priority,
-            header_confsearch=h_cs,
-            header_optimization=h_opt,
-            header_singlepoint=h_sp,
-        )
-        session.add(entry)
-        session.commit()
-        session.refresh(entry)
-
-        return {
-            "id": entry.id,
-            "smiles": entry.smiles,
-            "status": "queued",
-            "time_created": entry.time_created.isoformat() if entry.time_created else None,
-        }
+        ),
+        header_optimization=_resolve(
+            body.header_optimization, body.header_optimization_id,
+            DEFAULT_HEADER_OPTIMIZATION,
+        ),
+        header_singlepoint=_resolve(
+            body.header_singlepoint, body.header_singlepoint_id,
+            DEFAULT_HEADER_SINGLEPOINT,
+        ),
+    )
