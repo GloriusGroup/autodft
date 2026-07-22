@@ -1264,6 +1264,22 @@
             </div>
         </div>
 
+        <div class="submit-section" id="adminBreakerSection">
+            <h2 style="margin-bottom:12px;">Failure circuit breaker</h2>
+            <div class="subtitle" style="margin-bottom:14px;">
+                Job creation and submission stop automatically when too large a
+                share of recently finished tasks failed, so a systematic error
+                cannot consume the whole queue. Fix the cause before resetting.
+            </div>
+            <div id="adminBreakerStatus" class="admin-summary">Loading...</div>
+            <div class="form-row" id="adminBreakerActions" style="display:none;">
+                <button type="button" class="btn btn-danger" id="adminBreakerReset">
+                    Reset breaker and resume submissions
+                </button>
+            </div>
+            <div id="adminBreakerFeedback" class="submit-feedback"></div>
+        </div>
+
         <div class="submit-section">
             <h2 style="margin-bottom:12px;">Wipe a project</h2>
             <div class="subtitle" style="margin-bottom:14px;">
@@ -1793,6 +1809,28 @@
         }
 
         async function loadAdminPage() {
+            // --- circuit breaker ----------------------------------------
+            var breakerBox = document.getElementById('adminBreakerStatus');
+            var breakerActions = document.getElementById('adminBreakerActions');
+            var b = await adminJSON('GET', '/api/admin/circuit-breaker');
+            if (!b.ok) {
+                breakerBox.textContent = 'Could not read breaker status.';
+            } else {
+                var d = b.data;
+                var pct = (d.recent_failure_ratio * 100).toFixed(0);
+                var thr = (d.threshold * 100).toFixed(0);
+                breakerBox.textContent =
+                    (d.tripped ? 'TRIPPED — submissions halted\n' : 'OK — submissions running\n')
+                    + 'recent  : ' + d.recent_failed + ' of ' + d.recent_judged
+                    + ' judged tasks failed (' + pct + '%)\n'
+                    + 'threshold: ' + thr + '% of the last ' + d.window
+                    + (d.tripped && d.state && d.state.tripped_at
+                       ? '\ntripped  : ' + d.state.tripped_at : '');
+                breakerActions.style.display = d.tripped ? '' : 'none';
+                document.getElementById('adminBreakerSection').style.borderLeft =
+                    d.tripped ? '3px solid var(--red)' : '';
+            }
+
             // --- project list -------------------------------------------
             var list = document.getElementById('adminProjectList');
             list.innerHTML = '<div class="empty-state">Loading...</div>';
@@ -1896,6 +1934,21 @@
                 setTimeout(function () { box.remove(); loadAdminPage(); fetchProjects(); }, 1800);
             });
         }
+
+        document.getElementById('adminBreakerReset').addEventListener('click', async function () {
+            var feedback = document.getElementById('adminBreakerFeedback');
+            this.disabled = true;
+            var out = await adminJSON('POST', '/api/admin/circuit-breaker/reset');
+            this.disabled = false;
+            if (!out.ok) {
+                feedback.textContent = out.data.detail || ('HTTP ' + out.status);
+                feedback.className = 'submit-feedback error';
+                return;
+            }
+            feedback.textContent = 'Breaker reset. Submissions resume on the next tick.';
+            feedback.className = 'submit-feedback success';
+            loadAdminPage();
+        });
 
         document.getElementById('adminMoleculeLookup').addEventListener('click', async function () {
             var target = document.getElementById('adminMoleculeResult');

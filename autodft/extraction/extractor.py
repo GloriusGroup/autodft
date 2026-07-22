@@ -73,39 +73,69 @@ class PipelineExtractor:
     # ------------------------------------------------------------------
 
     def get_submission_progress(self) -> dict[str, int]:
-        """Return ``{total, started}`` counts for entrypoints."""
+        """Return ``{total, started}`` counts for entrypoints.
+
+        Matching is on the parsed ``project_name`` rather than a LIKE over
+        the whole JSON blob: `request_metadata.contains("test")` also counted
+        project "test2", any molecule whose SMILES or author happened to
+        contain "test", and treated % and _ as wildcards.
+        """
+        import json as _json
+
         with get_session() as session:
-            total = session.exec(
-                select(CalculationEntrypoint).where(
-                    CalculationEntrypoint.request_metadata.contains(self.project_name)  # type: ignore[union-attr]
-                )
+            rows = session.exec(
+                select(CalculationEntrypoint.request_metadata,
+                       CalculationEntrypoint.time_started)
             ).all()
-            started = [e for e in total if e.time_started is not None]
-            return {"total": len(total), "started": len(started)}
+        total = started = 0
+        for metadata_json, time_started in rows:
+            try:
+                meta = _json.loads(metadata_json) if metadata_json else {}
+            except (ValueError, TypeError):
+                continue
+            if meta.get("project_name") != self.project_name:
+                continue
+            total += 1
+            if time_started is not None:
+                started += 1
+        return {"total": total, "started": started}
 
     def get_success_rate(self) -> dict[str, int]:
-        """Return ``{total_molecules, successful_molecules}``."""
+        """Return ``{total_molecules, successful_molecules}``.
+
+        A molecule counts as successful when it has tasks and every one of
+        them succeeded. Computed with two grouped queries rather than one
+        state query plus one task query per molecule -- the per-molecule
+        version loaded full ORM objects only to count them, and at a few
+        thousand molecules dominated the project endpoint's response time.
+        """
+        from sqlmodel import func
+
         with get_session() as session:
-            molecules = session.exec(
-                select(Molecule).where(Molecule.project_name == self.project_name)
-            ).all()
+            mol_ids = [
+                m for m in session.exec(
+                    select(Molecule.id).where(Molecule.project_name == self.project_name)
+                ).all() if m is not None
+            ]
+            if not mol_ids:
+                return {"total_molecules": 0, "successful_molecules": 0}
 
-            successful = 0
-            for mol in molecules:
-                states = session.exec(
-                    select(MoleculeState).where(MoleculeState.molecule_id == mol.id)
-                ).all()
-                tasks = []
-                for st in states:
-                    tasks.extend(
-                        session.exec(
-                            select(ComputationTask).where(ComputationTask.state_id == st.id)
-                        ).all()
-                    )
-                if tasks and all(t.status == TaskStatus.successful for t in tasks):
-                    successful += 1
+            counts: dict[int, dict[str, int]] = {}
+            for molecule_id, status, count in session.exec(
+                select(MoleculeState.molecule_id, ComputationTask.status, func.count())
+                .select_from(ComputationTask)
+                .join(MoleculeState, ComputationTask.state_id == MoleculeState.id)
+                .where(col(MoleculeState.molecule_id).in_(mol_ids))
+                .group_by(col(MoleculeState.molecule_id), col(ComputationTask.status))
+            ).all():
+                key = status.value if hasattr(status, "value") else str(status)
+                counts.setdefault(molecule_id, {})[key] = count
 
-            return {"total_molecules": len(molecules), "successful_molecules": successful}
+        successful = sum(
+            1 for by_status in counts.values()
+            if by_status and set(by_status) == {TaskStatus.successful.value}
+        )
+        return {"total_molecules": len(mol_ids), "successful_molecules": successful}
 
     # ------------------------------------------------------------------
     # Energy extraction

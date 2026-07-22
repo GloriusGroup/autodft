@@ -729,3 +729,75 @@ class TestRetryReplayOrdering:
 
         # Applied exactly once, against the newest failure.
         assert seen == [str(new_dir)]
+
+
+class TestCircuitBreaker:
+    """max_attempts bounds retries per task; nothing bounded the campaign.
+    A systematic error would fail every molecule in turn, each burning its
+    escalated retry budget."""
+
+    @staticmethod
+    def _judged(session, sample_state, sample_header, failed: int, successful: int):
+        for i in range(failed + successful):
+            session.add(ComputationTask(
+                task_type=TaskType.optimization,
+                state_id=sample_state.id,
+                header_id=sample_header.id,
+                status=TaskStatus.failed if i < failed else TaskStatus.successful,
+            ))
+        session.commit()
+
+    def test_ratio_counts_only_judged_tasks(self, session, sample_state, sample_header):
+        from autodft.engine.circuit_breaker import recent_failure_ratio
+
+        self._judged(session, sample_state, sample_header, failed=3, successful=7)
+        session.add(ComputationTask(   # still running: says nothing either way
+            task_type=TaskType.optimization, state_id=sample_state.id,
+            header_id=sample_header.id, status=TaskStatus.pending,
+        ))
+        session.commit()
+
+        ratio, failed, judged = recent_failure_ratio(session, window=100)
+        assert (failed, judged) == (3, 10)
+        assert ratio == pytest.approx(0.3)
+
+    def test_below_threshold_does_not_trip(self, session, sample_state, sample_header, tmp_path):
+        from autodft.engine.circuit_breaker import check
+
+        settings = _settings(tmp_path)
+        self._judged(session, sample_state, sample_header, failed=6, successful=24)  # 20%
+        assert check(session, settings) is None
+
+    def test_above_threshold_trips_and_latches(self, session, sample_state, sample_header, tmp_path):
+        from autodft.engine.circuit_breaker import check, read_state, reset
+
+        settings = _settings(tmp_path)
+        self._judged(session, sample_state, sample_header, failed=12, successful=24)  # 33%
+
+        tripped = check(session, settings)
+        assert tripped is not None
+        assert tripped["failed"] == 12
+
+        # Latches: once submission stops nothing new is judged, so the ratio
+        # cannot recover on its own and must be cleared deliberately.
+        assert check(session, settings) is not None
+        assert reset(settings.data_path) is True
+        assert read_state(settings.data_path) is None
+
+    def test_too_few_samples_never_trips(self, session, sample_state, sample_header, tmp_path):
+        """Otherwise the first couple of failures in a fresh project would
+        halt everything."""
+        from autodft.engine.circuit_breaker import check
+
+        settings = _settings(tmp_path)
+        self._judged(session, sample_state, sample_header, failed=5, successful=0)  # 100%
+        assert settings.pipeline.failure_breaker_min_samples > 5
+        assert check(session, settings) is None
+
+    def test_disabled_by_config(self, session, sample_state, sample_header, tmp_path):
+        from autodft.engine.circuit_breaker import check
+
+        settings = _settings(tmp_path)
+        settings.pipeline.failure_breaker_enabled = False
+        self._judged(session, sample_state, sample_header, failed=40, successful=0)
+        assert check(session, settings) is None

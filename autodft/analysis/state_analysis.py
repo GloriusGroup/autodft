@@ -275,7 +275,62 @@ def _load_results_from_archive_csv(csv_path: Path) -> list[ConformerResult]:
     return results
 
 
-def analyze_project(project_name: str) -> dict:
+# Cached analyses, keyed by project name. Each entry is
+# (signature, payload); the signature is a cheap pair of aggregates that
+# changes whenever any task in the project is updated, so a stale cache
+# cannot outlive new results.
+_ANALYSIS_CACHE: dict[str, tuple[tuple, dict]] = {}
+
+
+def _cache_signature(project_name: str) -> tuple:
+    """A cheap fingerprint of the project's current results."""
+    with get_session() as session:
+        molecules = session.exec(
+            select(func.count()).select_from(Molecule)
+            .where(Molecule.project_name == project_name)
+        ).one()
+        tasks, latest = session.exec(
+            select(func.count(), func.max(ComputationTask.updated_at))
+            .select_from(ComputationTask)
+            .join(MoleculeState, ComputationTask.state_id == MoleculeState.id)
+            .join(Molecule, MoleculeState.molecule_id == Molecule.id)
+            .where(Molecule.project_name == project_name)
+        ).one()
+    return (molecules, tasks, str(latest))
+
+
+def invalidate_cache(project_name: Optional[str] = None) -> None:
+    """Drop cached analyses (all of them, or one project's)."""
+    if project_name is None:
+        _ANALYSIS_CACHE.clear()
+    else:
+        _ANALYSIS_CACHE.pop(project_name, None)
+
+
+def analyze_project(project_name: str, use_cache: bool = True) -> dict:
+    """Run state analysis for every molecule in a project.
+
+    Results are cached per project. Every call re-reads and re-parses each
+    molecule's ORCA outputs, which on a few thousand molecules is tens of
+    thousands of file reads over a network mount inside a synchronous
+    request handler -- enough to stall the controller for minutes when
+    someone opens the State Analysis tab. The cache is keyed on a
+    fingerprint of the project's task table, so new results invalidate it
+    automatically.
+    """
+    if use_cache:
+        signature = _cache_signature(project_name)
+        cached = _ANALYSIS_CACHE.get(project_name)
+        if cached is not None and cached[0] == signature:
+            return cached[1]
+
+    payload = _analyze_project_uncached(project_name)
+    if use_cache:
+        _ANALYSIS_CACHE[project_name] = (signature, payload)
+    return payload
+
+
+def _analyze_project_uncached(project_name: str) -> dict:
     """Run state analysis for every molecule in a project.
 
     For live projects, energies are read from the on-disk ORCA outputs

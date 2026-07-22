@@ -86,6 +86,16 @@ class PipelineConfig:
     max_queue_length: int = 20
     loop_interval_seconds: int = 30
     max_attempts: int = 3
+    # Global failure circuit breaker. max_attempts bounds retries per task,
+    # but nothing bounded the campaign: a systematic error would fail every
+    # molecule in turn, each burning its full escalated retry budget. When
+    # more than `failure_breaker_ratio` of the last `failure_breaker_window`
+    # judged tasks failed, new job creation and submission stop until an
+    # operator resets it from the dashboard.
+    failure_breaker_enabled: bool = True
+    failure_breaker_ratio: float = 0.25
+    failure_breaker_window: int = 100
+    failure_breaker_min_samples: int = 20
     # Upper bound on sbatch calls in one tick. `max_queue_length` only gates
     # entrypoint expansion, so follow-up jobs (which vastly outnumber
     # entrypoints) previously bypassed every throttle. 0 disables the cap.

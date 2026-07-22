@@ -589,6 +589,13 @@ def start_new_tasks(
         ).order_by(ComputationTask.id.asc())  # type: ignore[union-attr]
     ).all()
 
+    # Molecule.archived was set by archive_project but read by nothing in the
+    # engine, so archiving a project removed its raw files while its tasks
+    # kept being started and submitted -- and _create_job_for_task recreated
+    # the very directory tree that had just been archived, then burned the
+    # retry budget failing against it.
+    tasks = [t for t in tasks if not _molecule_is_archived(session, t)]
+
     base_path = settings.comp_data_path
 
     for task in tasks:
@@ -680,6 +687,12 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
             job.slurm_status = SlurmStatus.PENDING
             job.time_start = datetime.now(timezone.utc)
             session.add(job)
+            # Commit immediately: sbatch has already run, so a later rollback
+            # of this step would leave a real SLURM job with no row pointing
+            # at it, and the next tick would re-select the row (slurm_jobid
+            # IS NULL) and submit a second ORCA process into the same
+            # directory -- two processes writing one output.out.
+            session.commit()
             logger.info("Job %d submitted (slurm_jobid=%s)", job.id, result.job_id)
         else:
             # sbatch failures are usually transient -- slurmctld restarting,
@@ -698,6 +711,17 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
 # ======================================================================
 # Helpers -- job creation & input file generation
 # ======================================================================
+
+def _molecule_is_archived(session: Session, task: ComputationTask) -> bool:
+    """True when the task's molecule has been archived (raw files removed)."""
+    from autodft.models.molecule import Molecule
+
+    state = session.get(MoleculeState, task.state_id)
+    if state is None:
+        return False
+    molecule = session.get(Molecule, state.molecule_id)
+    return bool(molecule is not None and molecule.archived)
+
 
 def _create_job_for_task(
     session: Session,

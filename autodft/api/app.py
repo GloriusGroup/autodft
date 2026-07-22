@@ -36,6 +36,23 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     if settings is not None:
         set_active_settings(settings)
 
+        # The shipped config carries the placeholder password, and the
+        # deployment binds 0.0.0.0. That combination exposes every endpoint
+        # -- including the destructive admin routes -- to anyone who can
+        # reach the port. Warn rather than refuse: locking an operator out of
+        # their own controller on startup would be worse.
+        if (
+            settings.security.dashboard_password == "password"
+            and settings.api.host in ("0.0.0.0", "::")
+        ):
+            logger.warning(
+                "SECURITY: the dashboard password is still the default while "
+                "listening on %s. Every endpoint, including the admin wipe and "
+                "database reset, is reachable by anyone who can connect. Set "
+                "AUTODFT_PASSWORD or [security].dashboard_password.",
+                settings.api.host,
+            )
+
     app = FastAPI(
         title="AutoDFT Dashboard",
         version=__version__,

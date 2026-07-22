@@ -509,42 +509,48 @@ def api_project_detail(name: str):
             .where(Molecule.project_name == name)
             .order_by(col(Molecule.created_at).desc())
         ).all()
+        mol_ids = [m.id for m in mols if m.id is not None]
+
+        # Two grouped queries instead of five COUNTs per molecule. At 3000
+        # molecules the per-molecule version measured 9.1 s per request, on a
+        # page the dashboard polls every 5 seconds per open tab -- each call
+        # holding a threadpool slot and a SQLite connection while the worker
+        # competes for the write lock.
+        states_per_mol: dict[int, int] = {}
+        tasks_per_mol: dict[int, dict[str, int]] = {}
+        if mol_ids:
+            for molecule_id, count in session.exec(
+                select(MoleculeState.molecule_id, func.count())
+                .where(col(MoleculeState.molecule_id).in_(mol_ids))
+                .group_by(col(MoleculeState.molecule_id))
+            ).all():
+                states_per_mol[molecule_id] = count
+
+            for molecule_id, status, count in session.exec(
+                select(MoleculeState.molecule_id, ComputationTask.status, func.count())
+                .select_from(ComputationTask)
+                .join(MoleculeState, ComputationTask.state_id == MoleculeState.id)
+                .where(col(MoleculeState.molecule_id).in_(mol_ids))
+                .group_by(col(MoleculeState.molecule_id), col(ComputationTask.status))
+            ).all():
+                bucket = tasks_per_mol.setdefault(molecule_id, {})
+                key = status.value if hasattr(status, "value") else str(status)
+                bucket[key] = bucket.get(key, 0) + count
+
         mol_rows = []
         for m in mols:
-            n_states = session.exec(
-                select(func.count()).select_from(MoleculeState).where(MoleculeState.molecule_id == m.id)
-            ).one()
-            n_tasks = session.exec(
-                select(func.count())
-                .select_from(ComputationTask)
-                .join(MoleculeState, ComputationTask.state_id == MoleculeState.id)
-                .where(MoleculeState.molecule_id == m.id)
-            ).one()
-            n_succ = session.exec(
-                select(func.count())
-                .select_from(ComputationTask)
-                .join(MoleculeState, ComputationTask.state_id == MoleculeState.id)
-                .where(MoleculeState.molecule_id == m.id, ComputationTask.status == TaskStatus.successful)
-            ).one()
-            n_failed = session.exec(
-                select(func.count())
-                .select_from(ComputationTask)
-                .join(MoleculeState, ComputationTask.state_id == MoleculeState.id)
-                .where(MoleculeState.molecule_id == m.id, ComputationTask.status == TaskStatus.failed)
-            ).one()
-            n_in_flight = session.exec(
-                select(func.count())
-                .select_from(ComputationTask)
-                .join(MoleculeState, ComputationTask.state_id == MoleculeState.id)
-                .where(
-                    MoleculeState.molecule_id == m.id,
-                    col(ComputationTask.status).in_([TaskStatus.created, TaskStatus.pending]),
-                )
-            ).one()
+            by_status = tasks_per_mol.get(m.id, {})
+            n_tasks = sum(by_status.values())
+            n_succ = by_status.get(TaskStatus.successful.value, 0)
+            n_failed = by_status.get(TaskStatus.failed.value, 0)
+            n_in_flight = (
+                by_status.get(TaskStatus.created.value, 0)
+                + by_status.get(TaskStatus.pending.value, 0)
+            )
             mol_rows.append({
                 "id": m.id,
                 "smiles": m.smiles,
-                "states": n_states,
+                "states": states_per_mol.get(m.id, 0),
                 "tasks": n_tasks,
                 "successful": n_succ,
                 "failed": n_failed,
@@ -1240,6 +1246,42 @@ def api_molecule_wipe(molecule_id: int, body: WipeRequest):
             status_code=500,
             content={"detail": f"Wipe failed: {type(exc).__name__}: {exc}"},
         )
+
+
+@router.get("/api/admin/circuit-breaker")
+def api_circuit_breaker_status():
+    """Whether the global failure breaker has halted new submissions."""
+    from autodft.engine import circuit_breaker
+
+    settings = get_active_settings()
+    state = circuit_breaker.read_state(settings.data_path)
+    with get_session() as session:
+        ratio, failed, judged = circuit_breaker.recent_failure_ratio(
+            session, settings.pipeline.failure_breaker_window,
+        )
+    return {
+        "tripped": state is not None,
+        "state": state,
+        "recent_failure_ratio": round(ratio, 4),
+        "recent_failed": failed,
+        "recent_judged": judged,
+        "threshold": settings.pipeline.failure_breaker_ratio,
+        "window": settings.pipeline.failure_breaker_window,
+    }
+
+
+@router.post("/api/admin/circuit-breaker/reset")
+def api_circuit_breaker_reset():
+    """Clear the breaker so the pipeline resumes creating and submitting jobs.
+
+    Deliberately manual: once submission stops no new tasks are judged, so
+    the failure ratio cannot recover on its own. Fix the cause first.
+    """
+    from autodft.engine import circuit_breaker
+
+    settings = get_active_settings()
+    was_tripped = circuit_breaker.reset(settings.data_path)
+    return {"reset": was_tripped, "tripped": False}
 
 
 @router.get("/api/admin/reset-preview")

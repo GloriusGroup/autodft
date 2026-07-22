@@ -23,6 +23,7 @@ from autodft.engine.state_machine import (
     update_running_jobs,
     update_task_statuses,
 )
+from autodft.engine import circuit_breaker
 from autodft.qm.base import QMEngine
 
 logger = logging.getLogger(__name__)
@@ -144,6 +145,17 @@ class PipelineWorker:
                 )
                 if not processed or not self._last_entrypoint_processed:
                     break
+
+            # Stop here when the campaign is failing systematically. Work
+            # already submitted keeps running; only new jobs are blocked.
+            breaker = circuit_breaker.check(session, self.settings)
+            if breaker is not None:
+                logger.critical(
+                    "Circuit breaker active -- not creating or submitting jobs. %s",
+                    breaker.get("detail", ""),
+                )
+                logger.debug("--- Pipeline tick complete (breaker) ---")
+                return
 
             self._run_step(session, "6a: create retry jobs",
                            lambda: create_retry_jobs(session, self.settings, self.qm_engine))
