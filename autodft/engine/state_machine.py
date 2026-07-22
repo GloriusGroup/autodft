@@ -16,7 +16,13 @@ from sqlmodel import Session, col, select
 
 from autodft.config import Settings
 from autodft.engine.scheduler import Scheduler
-from autodft.models.enums import SlurmStatus, TaskStatus, TaskType
+from autodft.models.enums import (
+    TERMINAL_SLURM_STATES,
+    TRANSIENT_SLURM_STATES,
+    SlurmStatus,
+    TaskStatus,
+    TaskType,
+)
 from autodft.models.geometry import MoleculeGeometry
 from autodft.models.header import ComputationHeader
 from autodft.models.job import ComputationJob
@@ -35,12 +41,11 @@ def update_running_jobs(session: Session, scheduler: Scheduler) -> None:
     """Query jobs with RUNNING/PENDING/UNKNOWN slurm_status and refresh
     their state from the scheduler."""
 
+    # Poll everything that is not finished. Listing only RUNNING/PENDING/
+    # UNKNOWN meant a job that passed through COMPLETING was never re-polled
+    # and kept that status permanently.
     statement = select(ComputationJob).where(
-        col(ComputationJob.slurm_status).in_([
-            SlurmStatus.RUNNING,
-            SlurmStatus.PENDING,
-            SlurmStatus.UNKNOWN,
-        ])
+        col(ComputationJob.slurm_status).in_(sorted(TRANSIENT_SLURM_STATES))
     )
     jobs = session.exec(statement).all()
 
@@ -60,7 +65,7 @@ def update_running_jobs(session: Session, scheduler: Scheduler) -> None:
             job.id, job.slurm_jobid, job.slurm_status, new_status,
         )
         job.slurm_status = new_status
-        if new_status in (SlurmStatus.COMPLETED, SlurmStatus.FAILED, SlurmStatus.TIMEOUT):
+        if new_status in TERMINAL_SLURM_STATES:
             job.time_end = datetime.now(timezone.utc)
         session.add(job)
 
@@ -77,21 +82,21 @@ def process_finished_jobs(session: Session, qm_engine: QMEngine) -> None:
     geometries for successful confsearch/optimization jobs.
     """
 
-    # Anything that is not still queued or running is terminal. The previous
-    # whitelist (COMPLETED / FAILED / TIMEOUT) silently swallowed every other
-    # SLURM outcome: CANCELLED, OUT_OF_MEMORY, NODE_FAIL, PREEMPTED,
-    # BOOT_FAIL, DEADLINE. `slurm_status` holds the raw sacct string, so those
-    # values matched neither this query nor the polling filter in
-    # update_running_jobs() — the job kept `success = NULL` forever and its
-    # task sat `pending` with no error anywhere. OUT_OF_MEMORY is exactly the
-    # failure the resource-escalation retry exists to fix, so escalation could
-    # never fire for a real OOM kill.
-    non_terminal = [SlurmStatus.RUNNING, SlurmStatus.PENDING, SlurmStatus.UNKNOWN]
+    # An explicit terminal whitelist. The original list (COMPLETED / FAILED /
+    # TIMEOUT) silently swallowed CANCELLED, OUT_OF_MEMORY, NODE_FAIL and
+    # PREEMPTED -- those jobs kept `success = NULL` forever and their tasks
+    # sat `pending` with no error anywhere, which also meant the resource
+    # escalation could never fire for a real OOM kill.
+    #
+    # Inverting it to "anything not RUNNING/PENDING/UNKNOWN" over-corrected:
+    # COMPLETING, SUSPENDED, CONFIGURING and REQUEUED are *not* finished, and
+    # parsing a job mid-epilog marks a healthy run failed with
+    # ['Termination'] -- which is exactly the trigger that escalates its
+    # retry to 32 ranks for 4 days.
     statement = (
         select(ComputationJob)
         .where(
-            col(ComputationJob.slurm_status).is_not(None),
-            col(ComputationJob.slurm_status).not_in(non_terminal),
+            col(ComputationJob.slurm_status).in_(sorted(TERMINAL_SLURM_STATES)),
             col(ComputationJob.success).is_(None),
         )
     )
@@ -154,6 +159,14 @@ def process_finished_jobs(session: Session, qm_engine: QMEngine) -> None:
             job.success = False
             job.fail_reason = f"Geometry extraction failed: {type(exc).__name__}: {exc}"[:500]
             session.add(job)
+            # Drop anything the failed extraction already wrote. Leaving
+            # partial rows behind means the eventual successful retry mixes
+            # them into "keep the N lowest conformers", since they carry the
+            # same origin_task_id.
+            for partial in session.exec(
+                select(MoleculeGeometry).where(MoleculeGeometry.origin_task_id == task.id)
+            ).all():
+                session.delete(partial)
 
     session.flush()
 
@@ -172,12 +185,20 @@ def _create_conformer_geometries(
     made the "keep the N lowest" ORDER BY in _followup_confsearch an
     all-ties sort, so which conformers survived depended on SQLite's row
     order rather than on their energies.
+
+    Note the scale: GOAT's ensemble table reports energies **relative to the
+    global minimum in kcal/mol**, while _create_optimization_geometry stores
+    absolute Hartree. Both only ever feed per-task ORDER BYs, which stay
+    internally homogeneous, but never mix the two in one comparison -- which
+    is why the fallback below is a positional rank rather than the run's
+    absolute energy. (The parser already returns the ensemble sorted by
+    energy, so the index preserves that order.)
     """
     for i, xyz_data in enumerate(conformers):
         if conformer_energies is not None and i < len(conformer_energies):
             geom_energy = conformer_energies[i]
         else:
-            geom_energy = energy
+            geom_energy = float(i)
         geom = MoleculeGeometry(
             state_id=task.state_id,
             xyz_data=xyz_data,
@@ -346,7 +367,13 @@ def _followups_were_expected(task: ComputationTask, metadata: dict) -> bool:
     creating nothing is the correct outcome rather than a dead end.
     """
     if task.task_type == TaskType.confsearch:
-        return bool(metadata.get("request_optimization", True))
+        if not metadata.get("request_optimization", True):
+            return False
+        # Asking for zero conformers legitimately produces zero followups.
+        for key, value in metadata.items():
+            if key.startswith("max_conformers_") and not value:
+                return False
+        return True
     if task.task_type == TaskType.optimization:
         return bool(metadata.get("request_singlepoint", True))
     return False
@@ -527,10 +554,17 @@ def create_retry_jobs(
         )
 
         next_attempt = failed_count + 1
-        _create_job_for_task(
-            session, task, next_attempt, settings,
-            qm_engine=qm_engine, previous_failed_job=last_failed,
-        )
+        # Per task: retry-strategy application reads files from previous job
+        # directories, which archive/cleanup may have removed. One raising
+        # task must not discard every other task's retry job for the tick.
+        try:
+            _create_job_for_task(
+                session, task, next_attempt, settings,
+                qm_engine=qm_engine, previous_failed_job=last_failed,
+            )
+        except Exception:  # noqa: BLE001 - one bad task must not stop the rest
+            logger.exception("Failed to create retry job for task %d", task.id)
+            continue
         logger.info(
             "Created retry job (attempt %d) for task %d",
             next_attempt, task.id,
@@ -573,7 +607,13 @@ def start_new_tasks(
             task_dir.mkdir(parents=True, exist_ok=True)
             task.task_path = str(task_dir)
 
-        _create_job_for_task(session, task, attempt=1, settings=settings, qm_engine=qm_engine)
+        # Per task, for the same reason as create_retry_jobs: one task that
+        # raises here used to discard the whole step for every molecule.
+        try:
+            _create_job_for_task(session, task, attempt=1, settings=settings, qm_engine=qm_engine)
+        except Exception:  # noqa: BLE001 - one bad task must not stop the rest
+            logger.exception("Failed to create first job for task %d", task.id)
+            continue
 
         task.status = TaskStatus.pending
         task.updated_at = datetime.now(timezone.utc)
@@ -642,9 +682,15 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
             session.add(job)
             logger.info("Job %d submitted (slurm_jobid=%s)", job.id, result.job_id)
         else:
-            # Previously left untouched, so the job was re-selected and
-            # resubmitted every tick without ever counting as an attempt.
-            _fail(job, f"sbatch failed: {result.error}")
+            # sbatch failures are usually transient -- slurmctld restarting,
+            # a socket timeout, a QOS submit limit that clears. Failing the
+            # job here would burn a whole attempt (three ticks, 90 s, and the
+            # task is dead) for a calculation that never ran. Record the
+            # reason for visibility but leave success NULL so the next tick
+            # retries; the per-tick submission cap bounds the retry rate.
+            logger.error("Job %d: sbatch failed (will retry): %s", job.id, result.error)
+            job.fail_reason = f"sbatch failed (retrying): {result.error}"[:500]
+            session.add(job)
 
     session.flush()
 
@@ -719,15 +765,13 @@ def _generate_job_files(
     # Fetch header text
     header = session.get(ComputationHeader, task.header_id)
     if header is None:
-        logger.error("Header %d not found for task %d", task.header_id, task.id)
-        return
+        return _fail_task(session, task, job, f"Header {task.header_id} not found")
     header_text = header.header_text
 
     # Fetch state for base charge / multiplicity
     state = session.get(MoleculeState, task.state_id)
     if state is None:
-        logger.error("State %d not found for task %d", task.state_id, task.id)
-        return
+        return _fail_task(session, task, job, f"State {task.state_id} not found")
 
     # --- Gap 2 fix: Adjust charge/multiplicity for vertical excitations ---
     # A task whose charge/multiplicity can't be resolved must not silently
@@ -735,17 +779,13 @@ def _generate_job_files(
     try:
         charge, multiplicity = _get_job_charge_multiplicity(task.task_type, state)
     except ValueError as exc:
-        logger.error("Cannot resolve charge/multiplicity for task %d: %s", task.id, exc)
-        task.status = TaskStatus.failed
-        session.add(task)
-        session.flush()
-        return
+        return _fail_task(session, task, job,
+                          f"Cannot resolve charge/multiplicity: {exc}")
 
     # Fetch input geometry
     geom = session.get(MoleculeGeometry, task.input_geometry_id)
     if geom is None:
-        logger.error("Geometry %d not found for task %d", task.input_geometry_id, task.id)
-        return
+        return _fail_task(session, task, job, f"Input geometry {task.input_geometry_id} not found")
 
     # Write QM input
     qm_engine.generate_input(
@@ -783,6 +823,25 @@ def _generate_job_files(
             session, job_path, task, previous_failed_job, attempt,
             charge, multiplicity, settings,
         )
+
+
+def _fail_task(
+    session: Session, task: ComputationTask, job: ComputationJob, reason: str,
+) -> None:
+    """Mark a task and its job failed when input files cannot be generated.
+
+    Setting only `task.status` here does not survive: start_new_tasks()
+    overwrites it with `pending` immediately after this returns. Failing the
+    *job* is what actually sticks, and it makes the task visible through the
+    normal attempt accounting instead of leaving it stalled in `created`
+    forever with nothing ever revisiting it.
+    """
+    logger.error("Task %d: %s", task.id, reason)
+    job.success = False
+    job.fail_reason = reason[:500]
+    job.time_end = datetime.now(timezone.utc)
+    session.add(job)
+    session.flush()
 
 
 def _get_job_charge_multiplicity(
@@ -888,6 +947,7 @@ def _apply_retry_modifications(
     """Read the generated input/submit files and apply retry strategies."""
     from autodft.qm.orca.retry import (
         FailureInfo,
+        PerturbImaginaryMode,
         apply_retry_strategies,
         build_strategies,
     )
@@ -921,13 +981,22 @@ def _apply_retry_modifications(
     if not prior_failures:
         prior_failures = [failed_job]
 
-    strategies = build_strategies(settings)
+    all_strategies = build_strategies(settings)
+    # Geometry perturbation is NOT replayable: it rewrites *xyzfile into an
+    # inline *xyz block, so a second application silently no-ops, and running
+    # it over the oldest failure first means the geometry that survives comes
+    # from attempt 1 -- discarding the re-optimised structure the later
+    # attempt produced. It reads files from the failed job's directory too,
+    # which older attempts may no longer have. So: replay the text-only
+    # strategies over every prior failure, then apply perturbation once,
+    # against the most recent failure.
+    replayable = [s for s in all_strategies if not isinstance(s, PerturbImaginaryMode)]
+    perturbations = [s for s in all_strategies if isinstance(s, PerturbImaginaryMode)]
+
     applied: list[str] = []
     for prior in prior_failures:
         failure = FailureInfo(
             fail_reason=prior.fail_reason or "",
-            # Perturbation reads the *failed* attempt's output, so each
-            # FailureInfo must point at its own job directory.
             previous_job_path=prior.job_path or "",
             attempt=attempt,
             charge=charge,
@@ -938,9 +1007,25 @@ def _apply_retry_modifications(
             failure=failure,
             input_content=input_content,
             submit_content=submit_content,
-            strategies=strategies,
+            strategies=replayable,
         )
         applied.append(f"attempt {prior.attempt}: {prior.fail_reason}")
+
+    if perturbations:
+        latest = prior_failures[-1]
+        input_content, submit_content = apply_retry_strategies(
+            task_type=task.task_type.value,
+            failure=FailureInfo(
+                fail_reason=latest.fail_reason or "",
+                previous_job_path=latest.job_path or "",
+                attempt=attempt,
+                charge=charge,
+                multiplicity=multiplicity,
+            ),
+            input_content=input_content,
+            submit_content=submit_content,
+            strategies=perturbations,
+        )
 
     input_file.write_text(input_content, encoding="utf-8")
     submit_file.write_text(submit_content, encoding="utf-8")

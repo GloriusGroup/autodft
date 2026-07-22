@@ -96,6 +96,25 @@ def _process_entrypoint_body(
 
     # 4. Create states.
     #
+    # Validate before creating anything: process_next_entrypoint rolls the
+    # session back on failure, so raising midway would discard the S0 / ox /
+    # red states already created for this molecule.
+    if metadata.get("request_T1", False) and multiplicity != 1:
+        # The spin-change chain (S0 <-> T1 and the vert_spin_change
+        # singlepoints hanging off it) is only defined from a closed-shell
+        # reference. Deriving T1 as S0 + 2 keeps the electron-count parity
+        # correct, but for an open-shell reference the result is not a
+        # triplet at all: a doublet would give a quartet, and a reference
+        # that is already a triplet would give a duplicate of S0 whose
+        # "triplet energy" comes out as ~0. Reject instead of computing
+        # something that looks fine and isn't.
+        raise ValueError(
+            f"T1 was requested for a reference state with multiplicity "
+            f"{multiplicity}. The S0 -> T1 spin change is only defined from a "
+            f"closed-shell singlet. Nothing was submitted for this molecule; "
+            f"resubmit without request_T1 to get S0 / ox / red."
+        )
+
     # The initial geometry is embedded ONCE and shared by every state.
     # _create_state used to call _generate_initial_xyz() itself, so S0, T1,
     # ox and red each started from a *different* random ETKDG conformer of
@@ -113,21 +132,6 @@ def _process_entrypoint_body(
     )
 
     if metadata.get("request_T1", False):
-        # The spin-change chain (S0 <-> T1 and the vert_spin_change
-        # singlepoints hanging off it) is only defined from a closed-shell
-        # reference. Deriving T1 as S0 + 2 keeps the electron-count parity
-        # correct, but for an open-shell reference the result is not a
-        # triplet at all: a doublet would give a quartet, and a reference
-        # that is already a triplet would give a duplicate of S0 whose
-        # "triplet energy" comes out as ~0. Reject instead of computing
-        # something that looks fine and isn't.
-        if multiplicity != 1:
-            raise ValueError(
-                f"T1 was requested for a reference state with multiplicity "
-                f"{multiplicity}. The S0 -> T1 spin change is only defined "
-                f"from a closed-shell singlet; resubmit without request_T1 "
-                f"(ox / red are unaffected and remain available)."
-            )
         _create_state(
             session, molecule, smiles, "T1", multiplicity + 2, charge,
             metadata, header_ids, base_path, initial_xyz,

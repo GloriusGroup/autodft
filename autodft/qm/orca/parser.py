@@ -533,13 +533,21 @@ class OrcaParser(QMEngine):
         still terminated "normally" in 4.5 s, and was recorded as a success
         with no downstream calculations.
         """
+        lowered = content.lower()
         for marker in (
-            "GOAT ERROR",
-            "ORCA finished by error termination",
-            "Aborting the run",
-            "ORCA TERMINATED ABNORMALLY",
+            "goat error",
+            "orca finished by error termination",
+            "orca terminated abnormally",
         ):
-            if marker.lower() in content.lower():
+            if marker in lowered:
                 logger.warning("ORCA error banner detected: %r", marker)
                 return False
+
+        # "Aborting the run" is also printed by the internal-coordinate
+        # optimiser, which then recovers with "Trying Cartesian step" -- on
+        # its own it would fail healthy jobs. Only treat it as fatal when the
+        # optimiser really did give up.
+        if "aborting the run" in lowered and "geometry optimization failed" in lowered:
+            logger.warning("ORCA aborted the run and the optimisation failed")
+            return False
         return True

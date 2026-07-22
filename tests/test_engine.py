@@ -391,11 +391,13 @@ class TestSubmitPendingJobs:
         assert job.success is False
         assert "Submit script missing" in job.fail_reason
 
-    def test_sbatch_failure_counts_as_a_failed_attempt(
+    def test_sbatch_failure_is_recorded_but_retried(
         self, session, task_with_job, tmp_path,
     ):
-        """Otherwise the job is resubmitted every tick, forever, without ever
-        counting against max_attempts."""
+        """sbatch failures are usually transient -- slurmctld restarting, a
+        socket timeout, a QOS limit clearing. Failing the job would burn an
+        attempt for a calculation that never ran, so the reason is recorded
+        for visibility but success stays NULL and the next tick retries."""
         _, job = task_with_job
         job.job_path = str(tmp_path)
         (tmp_path / "submit.cmd").write_text("#!/bin/bash\n")
@@ -404,8 +406,9 @@ class TestSubmitPendingJobs:
 
         submit_pending_jobs(session, _StubScheduler(succeed=False), Settings())
         session.refresh(job)
-        assert job.success is False
+        assert job.success is None
         assert "sbatch failed" in job.fail_reason
+        assert job.slurm_jobid is None
 
     def test_a_good_submission_records_the_slurm_id(self, session, task_with_job, tmp_path):
         _, job = task_with_job
@@ -598,3 +601,131 @@ class TestRetryStrategies:
         resources = [s for s in build_strategies(settings) if isinstance(s, IncreaseResources)]
         assert resources[0].nprocs == 64
         assert resources[0].mem_per_core == 7000
+
+
+# ======================================================================
+# Regressions introduced by the 0.2.0 work itself
+# ======================================================================
+
+
+class TestSlurmStateClassification:
+    """The first fix here over-corrected: inverting the terminal whitelist to
+    "anything not RUNNING/PENDING/UNKNOWN" swept in states that mean the job
+    is still going."""
+
+    @pytest.mark.parametrize(
+        "status", ["COMPLETING", "SUSPENDED", "CONFIGURING", "REQUEUED", "RESIZING"],
+    )
+    def test_transient_states_are_not_parsed(self, session, task_with_job, tmp_path, status):
+        """A job in COMPLETING (epilog, node drain) parsed mid-write would be
+        marked failed with ['Termination'] -- the exact reason that escalates
+        its retry to 32 ranks for four days."""
+        _, job = task_with_job
+        job.slurm_status = status
+        job.job_path = str(tmp_path)
+        session.add(job)
+        session.commit()
+
+        process_finished_jobs(session, _StubEngine(QMResult(success=True, checks={})))
+        session.refresh(job)
+        assert job.success is None
+
+    @pytest.mark.parametrize(
+        "status",
+        ["COMPLETED", "FAILED", "TIMEOUT", "CANCELLED", "OUT_OF_MEMORY",
+         "NODE_FAIL", "PREEMPTED", "BOOT_FAIL", "DEADLINE"],
+    )
+    def test_terminal_states_are_judged(self, session, task_with_job, tmp_path, status):
+        _, job = task_with_job
+        job.slurm_status = status
+        job.job_path = str(tmp_path)
+        session.add(job)
+        session.commit()
+
+        process_finished_jobs(session, _StubEngine(QMResult(success=True, checks={})))
+        session.refresh(job)
+        assert job.success is not None
+
+    def test_transient_states_stay_in_the_polling_set(self):
+        """Otherwise a job that passes through COMPLETING is never re-polled
+        and keeps that status permanently."""
+        from autodft.models.enums import TERMINAL_SLURM_STATES, TRANSIENT_SLURM_STATES
+
+        assert "COMPLETING" in TRANSIENT_SLURM_STATES
+        assert "UNKNOWN" in TRANSIENT_SLURM_STATES
+        assert not (TRANSIENT_SLURM_STATES & TERMINAL_SLURM_STATES)
+
+
+class TestConformerRankingScale:
+    def test_never_compares_corrected_against_uncorrected(self):
+        """e_combined = e_singlepoint + (G - E_el), and that correction is
+        positive and large, so a conformer missing it would win every time."""
+        from autodft.extraction.extractor import ConformerResult, PipelineExtractor
+
+        corrected = ConformerResult(
+            molecule_id=1, smiles="CCO", state="S0", conformer_index=1, opt_task_id=1,
+            e_singlepoint=-500.50, e_correction=0.15, e_combined=-500.35,
+        )
+        uncorrected = ConformerResult(
+            molecule_id=1, smiles="CCO", state="S0", conformer_index=2, opt_task_id=2,
+            e_singlepoint=-500.48, e_correction=None, e_combined=None,
+        )
+
+        picked = PipelineExtractor._pick_reported_conformer([corrected, uncorrected])
+        assert picked is corrected
+
+    def test_falls_back_to_singlepoint_only_when_nothing_is_corrected(self):
+        from autodft.extraction.extractor import ConformerResult, PipelineExtractor
+
+        a = ConformerResult(molecule_id=1, smiles="CCO", state="S0", conformer_index=1,
+                            opt_task_id=1, e_singlepoint=-500.20)
+        b = ConformerResult(molecule_id=1, smiles="CCO", state="S0", conformer_index=2,
+                            opt_task_id=2, e_singlepoint=-500.60)
+        assert PipelineExtractor._pick_reported_conformer([a, b]) is b
+
+
+class TestRetryReplayOrdering:
+    def test_perturbation_uses_the_most_recent_failure(
+        self, session, sample_task, sample_header, tmp_path, monkeypatch,
+    ):
+        """Replaying perturbation over every prior failure meant the geometry
+        that survived came from attempt 1, discarding the later re-optimised
+        structure -- and the second application silently no-ops, because the
+        first already replaced *xyzfile with an inline block."""
+        from autodft.engine import state_machine as sm
+        from autodft.qm.orca import retry as retry_mod
+
+        old_dir, new_dir = tmp_path / "job_1", tmp_path / "job_2"
+        for d in (old_dir, new_dir):
+            d.mkdir()
+        (tmp_path / "input.inp").write_text("!M062X OPT FREQ\n%pal nprocs 4 end\n*xyzfile 0 1 input.xyz\n")
+        (tmp_path / "submit.cmd").write_text("#SBATCH --ntasks-per-node=4\n")
+
+        seen: list[str] = []
+
+        class _Probe(retry_mod.PerturbImaginaryMode):
+            def applies(self, failure, task_type):
+                return True
+
+            def modify(self, input_content, submit_content, failure):
+                seen.append(failure.previous_job_path)
+                return input_content, submit_content
+
+        monkeypatch.setattr(retry_mod, "build_strategies", lambda settings=None: [_Probe()])
+
+        for attempt, job_dir in ((1, old_dir), (2, new_dir)):
+            session.add(ComputationJob(
+                task_id=sample_task.id, attempt=attempt, success=False,
+                fail_reason="['Imaginary Frequencies']", job_path=str(job_dir),
+            ))
+        session.commit()
+        last = session.exec(
+            select(ComputationJob).where(ComputationJob.attempt == 2)
+        ).first()
+
+        sm._apply_retry_modifications(
+            session, tmp_path, sample_task, last, 3, 0, 1, Settings(),
+        )
+
+        # Applied exactly once, against the newest failure.
+        assert seen == [str(new_dir)]

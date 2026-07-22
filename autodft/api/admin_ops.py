@@ -426,15 +426,12 @@ def reset_database(
 
     freed = 0
     if delete_files:
-        for root in (comp_root, export_root):
-            freed += _dir_size(root)
-            if root.exists():
-                for child in root.iterdir():
-                    if child.is_dir():
-                        shutil.rmtree(child)
-                    else:
-                        child.unlink()
-                logger.warning("Emptied data directory %s", root)
+        # Measure now, delete *after* the rows are committed. Deleting first
+        # meant that any failure in between -- a lock timeout while the
+        # controller holds the write lock across network I/O, an FK error --
+        # left an empty filesystem with every row intact, after which the
+        # pipeline marks every job "Job path missing" en masse.
+        freed = sum(_dir_size(root) for root in (comp_root, export_root))
 
     # Same cycle-breaking order as the per-project wipe.
     session.exec(delete(ComputationJob))
@@ -454,6 +451,24 @@ def reset_database(
         session.exec(delete(ComputationHeader))
 
     session.commit()
+
+    if delete_files:
+        data_root = comp_root.parent if comp_root.parent == export_root.parent else None
+        for root in (comp_root, export_root):
+            if not root.exists():
+                continue
+            # Guard against a config where comp_data_path or export_data_path
+            # IS the data path: emptying it would unlink autodft.db from
+            # under the open session.
+            if data_root is not None and root == data_root:
+                logger.error("Refusing to empty %s: it is the data root", root)
+                continue
+            for child in root.iterdir():
+                if child.is_dir():
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
+            logger.warning("Emptied data directory %s", root)
 
     if not keep_headers:
         from autodft.db import _seed_default_headers, get_engine

@@ -178,15 +178,34 @@ class PipelineExtractor:
         # e_combined (electronic + thermal correction), falling back to the
         # bare singlepoint when no correction is available.
         if not all_conformers and results:
-            def _rank(res: ConformerResult) -> float:
-                for value in (res.e_combined, res.e_singlepoint):
-                    if value is not None:
-                        return value
-                return float("inf")
-
-            results = [min(results, key=_rank)]
+            picked = self._pick_reported_conformer(results)
+            results = [picked] if picked is not None else []
 
         return results
+
+    @staticmethod
+    def _pick_reported_conformer(
+        results: list[ConformerResult],
+    ) -> Optional[ConformerResult]:
+        """Return the lowest-energy conformer, ranking on a single scale.
+
+        ``e_combined = e_singlepoint + (G - E_el)`` and that correction is
+        positive and large (~0.1-0.2 Ha), so ranking a mixed pool by
+        "e_combined, else e_singlepoint" lets any conformer *missing* a
+        thermal correction -- truncated output, an optimisation header
+        without Freq -- beat every properly corrected one unconditionally.
+        Prefer the corrected pool; fall back to bare electronic energies only
+        when nothing has a correction.
+        """
+        if not results:
+            return None
+        corrected = [r for r in results if r.e_combined is not None]
+        if corrected:
+            return min(corrected, key=lambda r: r.e_combined)
+        bare = [r for r in results if r.e_singlepoint is not None]
+        if bare:
+            return min(bare, key=lambda r: r.e_singlepoint)
+        return results[0]
 
     def _extract_conformer_energies(
         self,
