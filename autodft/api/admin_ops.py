@@ -32,6 +32,7 @@ from typing import Optional
 
 from sqlmodel import Session, col, delete, select, update
 
+from autodft.paths import safe_subdirectory
 from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.models.geometry import MoleculeGeometry
 from autodft.models.job import ComputationJob
@@ -205,7 +206,9 @@ def preview_project_wipe(
 
     comp_dirs = [comp_root / f"mol_{mid}" for mid in molecule_ids]
     comp_bytes = sum(_dir_size(d) for d in comp_dirs)
-    export_dir = export_root / name
+    # Never build this by concatenation: `name` comes straight from the URL
+    # and `..` would resolve to the data root.
+    export_dir = safe_subdirectory(export_root, name)
     export_bytes = _dir_size(export_dir)
 
     return {
@@ -251,6 +254,10 @@ def wipe_project(
     if name in PROTECTED_PROJECT_NAMES:
         raise ValueError(f"Project {name!r} is protected and cannot be wiped.")
 
+    # Resolve the export directory before deleting anything: an unsafe name
+    # must fail here, not halfway through an rmtree.
+    export_dir = safe_subdirectory(export_root, name) if delete_exports else None
+
     molecule_ids = _project_molecule_ids(session, name)
     entrypoint_ids = _queued_entrypoint_ids(session, name)
     if not molecule_ids and not entrypoint_ids:
@@ -267,8 +274,7 @@ def wipe_project(
             removed_dirs += 1
 
     export_removed = False
-    if delete_exports:
-        export_dir = export_root / name
+    if export_dir is not None:
         freed += _dir_size(export_dir)
         export_removed = _remove_tree(export_dir)
 

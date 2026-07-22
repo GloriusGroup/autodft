@@ -94,10 +94,22 @@ def _process_entrypoint_body(
 
     base_path = settings.comp_data_path
 
-    # 4. Create states
+    # 4. Create states.
+    #
+    # The initial geometry is embedded ONCE and shared by every state.
+    # _create_state used to call _generate_initial_xyz() itself, so S0, T1,
+    # ox and red each started from a *different* random ETKDG conformer of
+    # the same molecule (the embedder is unseeded). With a conformer search
+    # in front that washes out, but on the skip_confsearch path each state
+    # optimises straight from its own random starting point, so every
+    # cross-state quantity -- adiabatic IP/EA, the S0->T1 gap -- becomes a
+    # difference between two different conformers rather than between two
+    # states of one conformer. It also embeds 4x more often than needed.
+    initial_xyz = _generate_initial_xyz(smiles)
+
     _create_state(
         session, molecule, smiles, "S0", multiplicity, charge,
-        metadata, header_ids, base_path,
+        metadata, header_ids, base_path, initial_xyz,
     )
 
     if metadata.get("request_T1", False):
@@ -118,7 +130,7 @@ def _process_entrypoint_body(
             )
         _create_state(
             session, molecule, smiles, "T1", multiplicity + 2, charge,
-            metadata, header_ids, base_path,
+            metadata, header_ids, base_path, initial_xyz,
         )
 
     if metadata.get("request_ox", False):
@@ -126,7 +138,7 @@ def _process_entrypoint_body(
         ox_mult = calculate_altered_multiplicity(multiplicity, charge, ox_charge)
         _create_state(
             session, molecule, smiles, "ox", ox_mult, ox_charge,
-            metadata, header_ids, base_path,
+            metadata, header_ids, base_path, initial_xyz,
         )
 
     if metadata.get("request_red", False):
@@ -134,7 +146,7 @@ def _process_entrypoint_body(
         red_mult = calculate_altered_multiplicity(multiplicity, charge, red_charge)
         _create_state(
             session, molecule, smiles, "red", red_mult, red_charge,
-            metadata, header_ids, base_path,
+            metadata, header_ids, base_path, initial_xyz,
         )
 
     # 5. Mark entrypoint as started
@@ -393,6 +405,7 @@ def _create_state(
     metadata: dict,
     header_ids: dict,
     base_path: Path,
+    initial_xyz: str,
 ) -> None:
     """Create a ``MoleculeState``, its initial geometry, and a confsearch task.
 
@@ -457,11 +470,11 @@ def _create_state(
     # Create directories
     _create_state_directories(base_path, molecule.id, state.id, description)
 
-    # Generate initial geometry
-    xyz_data = _generate_initial_xyz(smiles)
+    # Every state of a molecule starts from the same embedded geometry --
+    # see the note at the call site.
     geom = MoleculeGeometry(
         state_id=state.id,
-        xyz_data=xyz_data,
+        xyz_data=initial_xyz,
         energy=None,
         label="initial",
     )

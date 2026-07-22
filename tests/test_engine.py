@@ -12,6 +12,7 @@ tmp_path are involved.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 from sqlmodel import Session, select
@@ -533,8 +534,44 @@ class TestRetryStrategies:
         )
         new_input, new_submit = strategy.modify(inp, submit, failure)
         assert "%maxcore 8000" in new_input
-        # The allocation follows the kept %maxcore, not the retry default.
+        # With no memory ceiling configured the allocation follows the kept
+        # %maxcore, not the retry default.
         assert f"--mem={32 * (8000 + 50)}" in new_submit
+
+    def test_memory_ceiling_reduces_ranks_not_per_rank_memory(self):
+        """32 ranks x 4050 MB is 126 GB; if no node has that the job sits
+        PENDING forever and, via the queue-length throttle, stalls the
+        campaign. Clamping --mem alone would instead let ORCA allocate more
+        per rank than SLURM granted."""
+        from autodft.qm.orca.retry import FailureInfo, IncreaseResources
+
+        strategy = IncreaseResources(nprocs=32, mem_per_core=4000, max_mem_per_job_mb=64000)
+        inp = "!M062X\n%maxcore 1500\n%pal nprocs 8 end\n"
+        submit = "#SBATCH --ntasks-per-node=8\n#SBATCH --mem=12400\n#SBATCH --time=1-00:00:00\n"
+        failure = FailureInfo(
+            fail_reason="['Termination']", previous_job_path="", attempt=2,
+            charge=0, multiplicity=1,
+        )
+        new_input, new_submit = strategy.modify(inp, submit, failure)
+
+        ranks = int(re.search(r"nprocs (\d+)", new_input).group(1))
+        assert ranks == 64000 // 4050          # reduced to fit the ceiling
+        assert "%maxcore 4000" in new_input    # per-rank memory untouched
+        assert f"--ntasks-per-node={ranks}" in new_submit
+        assert int(re.search(r"--mem=(\d+)", new_submit).group(1)) <= 64000
+
+    def test_rank_count_never_drops_below_the_header(self):
+        """Fitting the memory ceiling must not turn escalation into a downgrade."""
+        from autodft.qm.orca.retry import FailureInfo, IncreaseResources
+
+        strategy = IncreaseResources(nprocs=32, mem_per_core=4000, max_mem_per_job_mb=8000)
+        inp = "!M062X\n%maxcore 16000\n%pal nprocs 12 end\n"
+        failure = FailureInfo(
+            fail_reason="['Termination']", previous_job_path="", attempt=2,
+            charge=0, multiplicity=1,
+        )
+        new_input, _ = strategy.modify(inp, "", failure)
+        assert "nprocs 12" in new_input
 
     def test_tighten_convergence_is_not_a_noop_on_tightscf_headers(self):
         """Every shipped header contains TightSCF, and the old guard made the

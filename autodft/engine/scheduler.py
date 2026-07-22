@@ -57,6 +57,14 @@ class Scheduler(ABC):
         """Cancel a running/pending job.  Return ``True`` on success."""
         ...
 
+    def get_statuses(self, job_ids: list[str]) -> dict[str, str]:
+        """Return ``{job_id: status}`` for many jobs at once.
+
+        Default implementation falls back to one :meth:`get_status` call per
+        job; schedulers that can answer in bulk should override it.
+        """
+        return {jid: self.get_status(jid) for jid in job_ids}
+
 
 # ---------------------------------------------------------------------------
 # SLURM implementation
@@ -65,9 +73,30 @@ class Scheduler(ABC):
 class SlurmScheduler(Scheduler):
     """Production scheduler that delegates to SLURM CLI tools."""
 
+    # sacct/scancel were always invoked directly while sbatch/squeue went
+    # through `bash -l -c`, which re-sources the (NFS-homed) login profile on
+    # every call. Measured on the controller: `bash -l -c true` takes 1.05 s
+    # against 2.5 ms for a direct exec -- 400x, paid per submission. At a few
+    # hundred submissions per tick that alone exceeds the loop interval.
+    #
+    # So: use the binary directly when it is on PATH, and only fall back to a
+    # login shell when it isn't (which is the only case the wrapper was ever
+    # buying anything).
+    _LOGIN_SHELL = ["bash", "-l", "-c"]
+
     def __init__(self, partition: str = "CPU", nice: int = 1000) -> None:
         self.partition = partition
         self.nice = nice
+
+    @staticmethod
+    def _command(argv: list[str]) -> list[str]:
+        """Return *argv* directly, or wrapped in a login shell if needed."""
+        import shutil
+
+        if shutil.which(argv[0]) is not None:
+            return argv
+        logger.debug("%s not on PATH; falling back to a login shell", argv[0])
+        return SlurmScheduler._LOGIN_SHELL + [" ".join(str(a) for a in argv)]
 
     # -- submit ------------------------------------------------------------
 
@@ -83,7 +112,7 @@ class SlurmScheduler(Scheduler):
         """
         nice_val = nice if nice is not None else self.nice
         script_path = Path(script_path)
-        cmd = ["bash", "-l", "-c", f"sbatch --nice={nice_val} {script_path}"]
+        cmd = self._command(["sbatch", f"--nice={nice_val}", str(script_path)])
         env = os.environ.copy()
 
         try:
@@ -133,20 +162,68 @@ class SlurmScheduler(Scheduler):
             logger.error("sacct query failed for job %s: %s", job_id, exc.stderr)
             return "UNKNOWN"
 
+    # Job ids per sacct invocation. The command line has to stay well under
+    # ARG_MAX and slurmdbd answers a batched query in roughly the time of a
+    # single one.
+    _SACCT_CHUNK = 500
+
+    def get_statuses(self, job_ids: list[str]) -> dict[str, str]:
+        """Query many jobs in one ``sacct`` call per chunk.
+
+        One subprocess per in-flight job per tick does not scale: at 3000
+        in-flight jobs that is 3000 sacct round-trips every loop, minutes of
+        wall clock and enough load to degrade slurmdbd for everyone else on
+        the cluster. Batching turns 3000 queries into 6.
+        """
+        out: dict[str, str] = {}
+        if not job_ids:
+            return out
+
+        env = os.environ.copy()
+        for start in range(0, len(job_ids), self._SACCT_CHUNK):
+            chunk = [str(j) for j in job_ids[start:start + self._SACCT_CHUNK]]
+            cmd = self._command([
+                "sacct", "-j", ",".join(chunk), "--format=JobID,State", "--noheader",
+            ])
+            try:
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, check=True, env=env,
+                )
+            except subprocess.CalledProcessError as exc:
+                logger.error("Batched sacct query failed: %s", exc.stderr)
+                continue
+
+            for line in result.stdout.splitlines():
+                parts = line.split()
+                if len(parts) < 2:
+                    continue
+                # Steps appear as "12345.batch" / "12345.0"; keep the parent.
+                job_id = parts[0].split(".")[0]
+                if job_id in chunk and job_id not in out:
+                    out[job_id] = parts[1]
+
+        missing = [j for j in job_ids if str(j) not in out]
+        if missing:
+            logger.warning("sacct returned no state for %d job(s)", len(missing))
+        for job_id in missing:
+            out[str(job_id)] = "UNKNOWN"
+        return out
+
     # -- queue length ------------------------------------------------------
 
     def get_queue_length(self) -> int:
         """Count pending jobs in the configured partition via ``squeue``."""
         env = os.environ.copy()
-        cmd = ["bash", "-l", "-c", f"squeue -t PD -p {self.partition} | wc -l"]
+        # `-h` suppresses the header, so no `| wc -l` and no shell needed.
+        cmd = self._command([
+            "squeue", "-t", "PD", "-p", self.partition, "-h", "-o", "%i",
+        ])
 
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, check=True, env=env,
             )
-            count = int(result.stdout.strip())
-            # squeue includes a header line; subtract 1 unless result is 0
-            return max(count - 1, 0)
+            return len([ln for ln in result.stdout.splitlines() if ln.strip()])
         except (subprocess.CalledProcessError, ValueError) as exc:
             logger.error("Failed to query SLURM queue length: %s", exc)
             return -1

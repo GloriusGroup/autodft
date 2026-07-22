@@ -14,10 +14,13 @@ via environment variables.
 
 from __future__ import annotations
 
+import logging
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -62,6 +65,19 @@ class RetryConfig:
     increased_time_limit: str = "4-00:00:00"
     increased_nprocs: int = 32
     increased_mem_per_core: int = 4000
+    # Ceiling on the SLURM --mem of an escalated job, in MB. 0 disables it.
+    #
+    # SET THIS to the memory of the largest node in your partition. The
+    # defaults above multiply out to 32 * (4000 + 50) = 126 GB per job; if no
+    # node has that much the job sits PENDING forever with ReqNodeNotAvail,
+    # and because the queue-length throttle counts pending jobs, a pile of
+    # them stalls entrypoint expansion for the whole campaign.
+    #
+    # When the ceiling is hit the *rank count* is reduced to fit, never the
+    # per-rank %maxcore -- lowering that would starve a job that died
+    # needing more memory per rank. Defaults to 0 so that enabling it is a
+    # deliberate choice made against real hardware.
+    max_mem_per_job_mb: int = 0
 
 
 @dataclass
@@ -70,6 +86,10 @@ class PipelineConfig:
     max_queue_length: int = 20
     loop_interval_seconds: int = 30
     max_attempts: int = 3
+    # Upper bound on sbatch calls in one tick. `max_queue_length` only gates
+    # entrypoint expansion, so follow-up jobs (which vastly outnumber
+    # entrypoints) previously bypassed every throttle. 0 disables the cap.
+    max_submissions_per_tick: int = 100
     confsearch: StageConfig = field(default_factory=StageConfig)
     optimization: StageConfig = field(default_factory=StageConfig)
     singlepoint: StageConfig = field(default_factory=StageConfig)
@@ -191,6 +211,11 @@ def _dict_to_dataclass(cls: type, data: dict[str, Any]) -> Any:
     return cls(**kwargs)
 
 
+# Settings whose environment override is genuinely an integer. Everything
+# else is left as the string it arrived as.
+_INT_SETTINGS = {"port", "loop_interval_seconds"}
+
+
 def _apply_env_overrides(data: dict[str, Any]) -> None:
     """Override config values from environment variables.
 
@@ -227,11 +252,18 @@ def _apply_env_overrides(data: dict[str, Any]) -> None:
         target = data
         for part in path[:-1]:
             target = target.setdefault(part, {})
-        # Attempt int conversion for numeric fields
-        try:
-            value = int(value)  # type: ignore[assignment]
-        except (ValueError, TypeError):
-            pass
+        # Only coerce the keys that are genuinely numeric. Coercing every
+        # override meant AUTODFT_PASSWORD=123456 produced an int password:
+        # issue_token() then raised AttributeError on .encode() and every
+        # single request 500'd, with nothing pointing at the cause.
+        if path[-1] in _INT_SETTINGS:
+            try:
+                value = int(value)  # type: ignore[assignment]
+            except (ValueError, TypeError):
+                logger.warning(
+                    "Ignoring non-numeric value %r for %s", value, ".".join(path),
+                )
+                continue
         target[path[-1]] = value
 
 

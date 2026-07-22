@@ -119,8 +119,18 @@ class PipelineWorker:
             # that rollback also discarded every entrypoint expanded before it
             # in the same tick (including their time_started marks, so they
             # were re-processed indefinitely).
+            # Queried once per tick, not once per entrypoint: this shells out
+            # to squeue, and calling it inside the loop cost a subprocess per
+            # entrypoint for a number that barely moves within one tick.
+            queue_len = self.scheduler.get_queue_length()
             for _ in range(self.settings.pipeline.max_simultaneous_entrypoints):
-                queue_len = self.scheduler.get_queue_length()
+                # get_queue_length() returns -1 when squeue fails, and
+                # `-1 > max` is False -- so the only throttle in the system
+                # used to *open* exactly when the scheduler was struggling.
+                # Treat unknown as "too full to expand".
+                if queue_len < 0:
+                    logger.warning("Queue length unknown; skipping entrypoint expansion")
+                    break
                 if queue_len > self.settings.pipeline.max_queue_length:
                     logger.debug(
                         "Queue length %d exceeds max %d; stopping entrypoint processing",

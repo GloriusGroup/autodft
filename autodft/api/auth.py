@@ -46,7 +46,11 @@ def verify_token(token: str, password: str) -> bool:
     if expires_at < int(time.time()):
         return False
     expected = _sign(password, expires_at)
-    return hmac.compare_digest(sig, expected)
+    # Bytes for the same reason as the header comparison in
+    # is_authenticated(): the cookie value is attacker-controlled.
+    return hmac.compare_digest(
+        sig.encode("utf-8", "replace"), expected.encode("utf-8")
+    )
 
 
 def _sign(password: str, expires_at: int) -> str:
@@ -61,9 +65,15 @@ def is_authenticated(request: Request, settings: Settings) -> bool:
     """True iff the request carries a valid cookie OR a matching header."""
     password = settings.security.dashboard_password
 
-    # Header path — scripts / curl / Python urllib
+    # Header path — scripts / curl / Python urllib.
+    # Compare as bytes: compare_digest refuses str operands containing
+    # non-ASCII, and both the header and the cookie are attacker-controlled,
+    # so a single high byte otherwise raised TypeError out of the auth
+    # middleware and turned every request into a logged 500.
     header_val = request.headers.get(HEADER_NAME)
-    if header_val and hmac.compare_digest(header_val, password):
+    if header_val and hmac.compare_digest(
+        header_val.encode("utf-8", "replace"), password.encode("utf-8")
+    ):
         return True
 
     # Cookie path — browser flow via /login

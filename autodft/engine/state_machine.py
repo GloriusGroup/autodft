@@ -44,10 +44,17 @@ def update_running_jobs(session: Session, scheduler: Scheduler) -> None:
     )
     jobs = session.exec(statement).all()
 
+    # One batched query instead of one subprocess per job. See
+    # SlurmScheduler.get_statuses -- the per-job loop cost minutes per tick
+    # once a few thousand jobs were in flight.
+    statuses = scheduler.get_statuses(
+        [str(j.slurm_jobid) for j in jobs if j.slurm_jobid is not None]
+    )
+
     for job in jobs:
         if job.slurm_jobid is None:
             continue
-        new_status = scheduler.get_status(str(job.slurm_jobid))
+        new_status = statuses.get(str(job.slurm_jobid), SlurmStatus.UNKNOWN)
         logger.debug(
             "Job %d (slurm %s): %s -> %s",
             job.id, job.slurm_jobid, job.slurm_status, new_status,
@@ -584,12 +591,27 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
     """Find jobs that have been created (no slurm_jobid, no slurm_status)
     and submit them to the scheduler."""
 
-    statement = select(ComputationJob).where(
-        col(ComputationJob.slurm_jobid).is_(None),
-        col(ComputationJob.slurm_status).is_(None),
-        col(ComputationJob.success).is_(None),
+    # Capped per tick. Uncapped, one tick that found every follow-up
+    # singlepoint of a large campaign ready at once would sit in this loop
+    # for hours submitting tens of thousands of jobs, with the pipeline
+    # doing nothing else in the meantime.
+    limit = settings.pipeline.max_submissions_per_tick
+    statement = (
+        select(ComputationJob)
+        .where(
+            col(ComputationJob.slurm_jobid).is_(None),
+            col(ComputationJob.slurm_status).is_(None),
+            col(ComputationJob.success).is_(None),
+        )
+        .order_by(col(ComputationJob.id).asc())
     )
+    if limit and limit > 0:
+        statement = statement.limit(limit)
     jobs = session.exec(statement).all()
+    if limit and len(jobs) == limit:
+        logger.info(
+            "Submitting the first %d pending job(s) this tick; more remain", limit,
+        )
 
     # A job that can't be submitted must be recorded as a failed attempt, not
     # skipped. Skipping left `success` NULL forever, so the retry path ignored

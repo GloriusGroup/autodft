@@ -111,10 +111,14 @@ class IncreaseResources(RetryStrategy):
         nprocs: int = 32,
         mem_per_core: int = 4000,
         time_limit: str = INCREASED_TIME,
+        # 0 = no ceiling. Set from [pipeline.retry] in the config; see
+        # RetryConfig.max_mem_per_job_mb for why it defaults to off.
+        max_mem_per_job_mb: int = 0,
     ):
         self.nprocs = nprocs
         self.mem_per_core = mem_per_core
         self.time_limit = time_limit
+        self.max_mem_per_job_mb = max_mem_per_job_mb
 
     def applies(self, failure: FailureInfo, task_type: str) -> bool:
         return "Termination" in failure.fail_reason
@@ -141,6 +145,33 @@ class IncreaseResources(RetryStrategy):
         target_maxcore = self.mem_per_core
         if current_maxcore is not None:
             target_maxcore = max(self.mem_per_core, int(current_maxcore.group(1)))
+
+        # The escalated allocation must fit on a real node. 32 ranks at
+        # 4000 MB each is 126 GB; if no node in the partition has that, the
+        # job sits PENDING with ReqNodeNotAvail forever -- and since the
+        # queue-length throttle counts pending jobs, a pile of them stalls
+        # the whole campaign.
+        #
+        # Reduce the *core count* to fit rather than the per-rank memory:
+        # clamping --mem alone would leave ORCA free to allocate more per
+        # rank than SLURM granted, which is an OOM by construction. Never
+        # drop below the header's original core count -- that would make the
+        # escalation a downgrade.
+        current_nprocs = re.search(
+            r"%pal\s+nprocs\s+(\d+)\s+end", input_content, re.IGNORECASE,
+        )
+        original_nprocs = int(current_nprocs.group(1)) if current_nprocs else 1
+        target_nprocs = self.nprocs
+        if self.max_mem_per_job_mb:
+            affordable = max(1, self.max_mem_per_job_mb // (target_maxcore + 50))
+            if affordable < target_nprocs:
+                target_nprocs = max(affordable, original_nprocs)
+                logger.warning(
+                    "Escalation to %d ranks x %d MB exceeds max_mem_per_job_mb %d; "
+                    "using %d ranks instead",
+                    self.nprocs, target_maxcore, self.max_mem_per_job_mb, target_nprocs,
+                )
+
         input_content = re.sub(
             r"%maxcore\s+\d+",
             f"%maxcore {target_maxcore}",
@@ -149,18 +180,26 @@ class IncreaseResources(RetryStrategy):
         )
         input_content = re.sub(
             r"%pal\s+nprocs\s+\d+\s+end",
-            f"%pal nprocs {self.nprocs} end",
+            f"%pal nprocs {target_nprocs} end",
             input_content,
             flags=re.IGNORECASE,
         )
 
         # --- submit.cmd modifications ---
-        # Size the SLURM allocation from the %maxcore ORCA actually got, not
-        # from the retry default, so the two can't contradict each other.
-        total_mem = self.nprocs * (target_maxcore + 50)
+        # Size the SLURM allocation from the %maxcore and rank count ORCA
+        # actually got, so the two can never contradict each other.
+        total_mem = target_nprocs * (target_maxcore + 50)
+        if self.max_mem_per_job_mb and total_mem > self.max_mem_per_job_mb:
+            # Only reachable when the header's own request already exceeds
+            # the ceiling; honouring it beats silently starving the job.
+            logger.warning(
+                "Header requests %d MB, above max_mem_per_job_mb %d; honouring "
+                "the header -- check that a node this large exists",
+                total_mem, self.max_mem_per_job_mb,
+            )
         submit_content = re.sub(
             r"#SBATCH --ntasks-per-node=\d+",
-            f"#SBATCH --ntasks-per-node={self.nprocs}",
+            f"#SBATCH --ntasks-per-node={target_nprocs}",
             submit_content,
         )
         submit_content = re.sub(
@@ -390,6 +429,7 @@ def build_strategies(settings=None) -> list[RetryStrategy]:
             nprocs=retry_cfg.increased_nprocs,
             mem_per_core=retry_cfg.increased_mem_per_core,
             time_limit=retry_cfg.increased_time_limit,
+            max_mem_per_job_mb=retry_cfg.max_mem_per_job_mb,
         ),
         IncreaseMaxIter(max_iter=opt_cfg.max_iter),
         TightenConvergence(),

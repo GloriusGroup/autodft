@@ -42,6 +42,13 @@ def get_engine(settings: Settings | None = None):
                 cursor = dbapi_conn.cursor()
                 cursor.execute("PRAGMA journal_mode=WAL")
                 cursor.execute("PRAGMA foreign_keys=ON")
+                # The controller holds the write lock across filesystem work
+                # on a network mount, which can take tens of seconds when a
+                # tick creates many task directories. With SQLite's 5 s
+                # default, every concurrent write -- dashboard submissions,
+                # header edits -- failed with "database is locked" for the
+                # whole window. Wait instead of failing.
+                cursor.execute("PRAGMA busy_timeout=60000")
                 cursor.close()
 
     return _engine
@@ -105,6 +112,23 @@ def _migrate_sqlite_schema(engine) -> None:
         ("calculation_entrypoints", "processing_error", "TEXT"),
         ("molecules",                "archived",        "BOOLEAN NOT NULL DEFAULT 0"),
     ]
+    # Indexes on the columns the pipeline loop actually filters by. The
+    # model-level index=True fields cover foreign keys and lookups but none
+    # of the hot-path status columns, so every tick was doing full table
+    # scans -- tolerable at 45k rows, but `depends_on_task_id` and
+    # `origin_task_id` are scanned once *per task* in the followup and
+    # extraction loops, which is quadratic in campaign size.
+    indexes = [
+        ("ix_computation_tasks_status",           "computation_tasks(status)"),
+        ("ix_computation_tasks_depends_on",       "computation_tasks(depends_on_task_id)"),
+        ("ix_computation_jobs_slurm_status",      "computation_jobs(slurm_status)"),
+        ("ix_computation_jobs_success",           "computation_jobs(success)"),
+        ("ix_molecule_geometries_origin_task_id", "molecule_geometries(origin_task_id)"),
+        ("ix_molecules_project_name",             "molecules(project_name)"),
+        ("ix_calculation_entrypoints_queue",
+         "calculation_entrypoints(time_started, priority, time_created)"),
+    ]
+
     with engine.connect() as conn:
         for table, column, coltype in additions:
             existing = {
@@ -113,6 +137,10 @@ def _migrate_sqlite_schema(engine) -> None:
             if column not in existing:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}"))
                 conn.commit()
+
+        for name, definition in indexes:
+            conn.execute(text(f"CREATE INDEX IF NOT EXISTS {name} ON {definition}"))
+        conn.commit()
 
 
 @contextmanager

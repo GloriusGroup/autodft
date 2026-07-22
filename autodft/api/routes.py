@@ -11,7 +11,7 @@ from typing import Optional
 from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlmodel import col, func, select
 
 from autodft.api.auth import COOKIE_NAME, issue_token
@@ -58,8 +58,14 @@ def login_submit(request: Request,
                  password: str = Form(...),
                  next: str = Form("/")):
     """Validate the submitted password and set the session cookie."""
+    import hmac
+
     settings = get_active_settings()
-    if password != settings.security.dashboard_password:
+    # Constant-time, matching the header/cookie paths in auth.py.
+    if not hmac.compare_digest(
+        password.encode("utf-8", "replace"),
+        str(settings.security.dashboard_password).encode("utf-8"),
+    ):
         # Re-render the form with an error message. Status stays 200 so
         # the browser keeps the URL stable.
         return templates.TemplateResponse(
@@ -119,7 +125,10 @@ def get_active_settings():
 
 
 class SubmitRequest(BaseModel):
-    smiles: str
+    # Bounded: RDKit's SMILES parser overflows the C stack on very long
+    # input and takes the whole process down with it -- and the dashboard
+    # runs in a thread of the pipeline worker, so that kills the controller.
+    smiles: str = Field(max_length=512)
     project: str = "default"
     # Provenance label stored in request_metadata as `project_author`.
     # Nothing in the pipeline branches on it. Defaults to "web" so the
@@ -155,6 +164,16 @@ class SubmitRequest(BaseModel):
     header_optimization_id: Optional[int] = None
     header_singlepoint_id: Optional[int] = None
 
+    @field_validator("project")
+    @classmethod
+    def _check_project(cls, value: str) -> str:
+        # The project name becomes a directory name under the data root and
+        # a path segment in several routes, so it is constrained here rather
+        # than at each use site.
+        from autodft.paths import validate_project_name
+
+        return validate_project_name(value)
+
 
 class HeaderCreate(BaseModel):
     header_text: str
@@ -184,6 +203,22 @@ def dashboard(request: Request):
 # ---------------------------------------------------------------------------
 # JSON API
 # ---------------------------------------------------------------------------
+
+
+def _reject_bad_project(name: str):
+    """Return a 400 JSONResponse if *name* can't be used, else None.
+
+    Applied to every route with a `{name}` path parameter: Starlette matches
+    `[^/]+`, which includes `..`, and several of these routes build a
+    filesystem path from it.
+    """
+    from autodft.paths import InvalidProjectName, validate_project_name
+
+    try:
+        validate_project_name(name)
+    except InvalidProjectName as exc:
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
+    return None
 
 
 @router.get("/api/overview")
@@ -459,6 +494,9 @@ def api_projects():
 @router.get("/api/projects/{name}")
 def api_project_detail(name: str):
     """Per-project view: molecules, submission progress, and success rate."""
+    bad = _reject_bad_project(name)
+    if bad is not None:
+        return bad
     from autodft.extraction.extractor import PipelineExtractor
 
     extractor = PipelineExtractor(name)
@@ -564,6 +602,9 @@ def api_project_molecules_detail(name: str):
     Each conformer = one ``optimization`` task; its dependent singlepoint
     family is looked up via ``ComputationTask.depends_on_task_id``.
     """
+    bad = _reject_bad_project(name)
+    if bad is not None:
+        return bad
     from autodft.models.geometry import MoleculeGeometry
 
     # Build the molecule list and gather all the related rows in a few
@@ -676,6 +717,9 @@ def api_project_state_analysis(name: str):
     the CSV/JSON exporters and this endpoint share the same energy
     extraction.
     """
+    bad = _reject_bad_project(name)
+    if bad is not None:
+        return bad
     from autodft.analysis.state_analysis import analyze_project
     return analyze_project(name)
 
@@ -688,6 +732,9 @@ def api_project_state_analysis_export(name: str):
     Energies in Hartree (Eh) so users can convert downstream as needed;
     redox potentials in V vs SCE.
     """
+    bad = _reject_bad_project(name)
+    if bad is not None:
+        return bad
     from fastapi.responses import Response
 
     from autodft.analysis.state_analysis import analyze_project, build_xlsx_bytes
@@ -748,6 +795,9 @@ def api_project_archive(name: str, body: ArchiveRequest):
 
     Wraps any unexpected exception so the response is always JSON.
     """
+    bad = _reject_bad_project(name)
+    if bad is not None:
+        return bad
     from autodft.extraction.extractor import PipelineExtractor
 
     if name in PROTECTED_PROJECT_NAMES:
@@ -802,6 +852,9 @@ def api_project_export(
     gone) — returns 409. Wraps any unexpected exception so the response
     body is always JSON.
     """
+    bad = _reject_bad_project(name)
+    if bad is not None:
+        return bad
     from autodft.extraction.extractor import PipelineExtractor
 
     if format not in {"csv", "json", "files"}:
@@ -1102,6 +1155,9 @@ def _confirmation_error(expected: str, got: str) -> JSONResponse:
 @router.get("/api/admin/projects/{name}/wipe-preview")
 def api_project_wipe_preview(name: str):
     """What a wipe of this project would delete. Read-only."""
+    bad = _reject_bad_project(name)
+    if bad is not None:
+        return bad
     from autodft.api import admin_ops
 
     settings = get_active_settings()
@@ -1117,6 +1173,9 @@ def api_project_wipe(name: str, body: WipeRequest):
 
     Requires ``confirm`` to equal the project name exactly. Irreversible.
     """
+    bad = _reject_bad_project(name)
+    if bad is not None:
+        return bad
     from autodft.api import admin_ops
 
     if body.confirm != name:
@@ -1224,7 +1283,7 @@ def api_reset_database(body: ResetRequest):
 
 
 class ValidateSmilesRequest(BaseModel):
-    smiles: str
+    smiles: str = Field(max_length=512)
 
 
 @router.post("/api/validate-smiles")
