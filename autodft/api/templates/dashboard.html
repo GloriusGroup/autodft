@@ -724,6 +724,47 @@
         .btn.btn-danger { background: var(--red); }
         .btn.btn-danger:hover { background: #f87171; }
 
+        /* ── Admin page ─────────────────────────────────────────────── */
+        .admin-danger {
+            border: 1px solid var(--red);
+            border-radius: 8px;
+        }
+        .admin-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border);
+            flex-wrap: wrap;
+        }
+        .admin-row:last-child { border-bottom: none; }
+        .admin-row .admin-name { font-weight: 600; min-width: 220px; }
+        .admin-row .admin-meta { color: var(--text-secondary); font-size: 13px; flex: 1; }
+        .admin-summary {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 13px;
+            color: var(--text-secondary);
+            white-space: pre-wrap;
+            margin-bottom: 12px;
+        }
+        .admin-check {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+        }
+        .admin-check input { width: auto; }
+        .admin-confirm {
+            background: var(--bg-card);
+            border: 1px solid var(--red);
+            border-radius: 8px;
+            padding: 14px;
+            margin-top: 10px;
+        }
+        .admin-confirm .admin-summary { margin-bottom: 10px; }
+
         /* Molecules table: merged rowspans + tick marks */
         .mol-table { table-layout: auto; }
         .mol-table td { vertical-align: middle; }
@@ -1013,6 +1054,7 @@
             <a class="nav-item nav-sub" data-route="projects.molecules"      href="#/projects/molecules">Molecules</a>
             <a class="nav-item nav-sub" data-route="projects.state-analysis" href="#/projects/state-analysis">State Analysis</a>
             <a class="nav-item" data-route="headers"  href="#/headers"> <span class="nav-icon">&#9881;</span> Headers</a>
+            <a class="nav-item" data-route="admin"    href="#/admin">   <span class="nav-icon">&#9888;</span> Admin</a>
             <div class="sidebar-footer">
                 <div class="status-indicator">
                     <div class="status-dot" id="statusDot"></div>
@@ -1205,6 +1247,72 @@
 
         </section>
         <!-- /PAGE: Headers -->
+
+
+        <!-- ============================================================ -->
+        <!-- PAGE: Admin                                                  -->
+        <!-- ============================================================ -->
+        <section class="page" data-page="admin">
+        <div class="page-header">
+            <div>
+                <h1>Admin</h1>
+                <div class="subtitle">
+                    Permanently remove calculations and their files. Every action
+                    here shows what it will delete first and requires the exact
+                    name typed back. None of it can be undone.
+                </div>
+            </div>
+        </div>
+
+        <div class="submit-section">
+            <h2 style="margin-bottom:12px;">Wipe a project</h2>
+            <div class="subtitle" style="margin-bottom:14px;">
+                Deletes the database rows, every <code>comp_data/mol_*</code>
+                directory belonging to the project, its queued submissions, and
+                its exported data.
+            </div>
+            <div class="admin-list" id="adminProjectList">
+                <div class="empty-state">Loading...</div>
+            </div>
+        </div>
+
+        <div class="submit-section">
+            <h2 style="margin-bottom:12px;">Wipe a single calculation</h2>
+            <div class="subtitle" style="margin-bottom:14px;">
+                Removes one molecule with its states, tasks, jobs and raw files.
+                The project's exported CSV is left as-is &mdash; re-export to refresh it.
+            </div>
+            <div class="form-row">
+                <input type="number" id="adminMoleculeId" placeholder="Molecule ID" style="max-width:180px;">
+                <button type="button" class="btn" id="adminMoleculeLookup">Look up</button>
+            </div>
+            <div id="adminMoleculeResult" style="margin-top:14px;"></div>
+        </div>
+
+        <div class="submit-section admin-danger">
+            <h2 style="margin-bottom:12px;">Reset the entire database</h2>
+            <div class="subtitle" style="margin-bottom:14px;">
+                Empties every table and every data directory. Saved headers are
+                kept unless you untick the box below.
+            </div>
+            <div id="adminResetSummary" class="admin-summary">Loading...</div>
+            <label class="admin-check">
+                <input type="checkbox" id="adminResetFiles" checked>
+                Also delete all raw and exported files on disk
+            </label>
+            <label class="admin-check">
+                <input type="checkbox" id="adminKeepHeaders" checked>
+                Keep saved computation headers
+            </label>
+            <div class="form-row" style="margin-top:14px;">
+                <input type="text" id="adminResetConfirm" placeholder="Type: RESET THE DATABASE" style="max-width:280px;">
+                <button type="button" class="btn btn-danger" id="adminResetBtn">Reset database</button>
+            </div>
+            <div id="adminResetFeedback" class="submit-feedback"></div>
+        </div>
+
+        </section>
+        <!-- /PAGE: Admin -->
 
 
         <!-- ============================================================ -->
@@ -1617,7 +1725,7 @@
         var ROUTES = [
             'submit', 'status',
             'projects.summary', 'projects.molecules', 'projects.state-analysis',
-            'headers',
+            'headers', 'admin',
         ];
 
         function normaliseRoute(raw) {
@@ -1649,9 +1757,227 @@
             if (route === 'projects.molecules')      fetchProjects().then(loadMoleculesPage);
             if (route === 'projects.state-analysis') fetchProjects().then(loadStateAnalysisPage);
             if (route === 'status')                  fetchFailed();
+            if (route === 'admin')                   loadAdminPage();
         }
 
         window.addEventListener('hashchange', function () { activateRoute(currentRoute()); });
+
+        // ── Admin page ───────────────────────────────────────────────────
+        // Every destructive action is two steps: fetch a preview of exactly
+        // what would be deleted, then require the user to type the project
+        // name / SMILES back before the wipe call is made. The preview is a
+        // GET and deletes nothing, so it is safe to render on page load.
+
+        function adminEscape(s) {
+            return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+            });
+        }
+
+        async function adminJSON(method, url, body) {
+            var opts = { method: method, headers: { 'Accept': 'application/json' } };
+            if (body !== undefined) {
+                opts.headers['Content-Type'] = 'application/json';
+                opts.body = JSON.stringify(body);
+            }
+            var resp = await fetch(url, opts);
+            var text = await resp.text();
+            var data; try { data = JSON.parse(text); } catch (_) { data = { detail: text.slice(0, 300) }; }
+            return { ok: resp.ok, status: resp.status, data: data };
+        }
+
+        function adminRowsLine(rows) {
+            return Object.keys(rows).map(function (k) {
+                return rows[k] + ' ' + k.replace(/_/g, ' ');
+            }).join(', ');
+        }
+
+        async function loadAdminPage() {
+            // --- project list -------------------------------------------
+            var list = document.getElementById('adminProjectList');
+            list.innerHTML = '<div class="empty-state">Loading...</div>';
+            var res = await adminJSON('GET', '/api/projects');
+            if (!res.ok) {
+                list.innerHTML = '<div class="empty-state">Could not load projects.</div>';
+            } else if (!res.data.length) {
+                list.innerHTML = '<div class="empty-state">No projects yet.</div>';
+            } else {
+                list.innerHTML = '';
+                res.data.forEach(function (p) {
+                    var row = document.createElement('div');
+                    row.className = 'admin-row';
+                    var protectedNote = p.protected
+                        ? '<span class="admin-meta">protected &mdash; cannot be wiped</span>'
+                        : '<span class="admin-meta">' + p.molecules + ' molecules, '
+                          + p.tasks_total + ' tasks</span>';
+                    row.innerHTML =
+                        '<span class="admin-name">' + adminEscape(p.name) + '</span>' + protectedNote;
+                    if (!p.protected) {
+                        var btn = document.createElement('button');
+                        btn.type = 'button';
+                        btn.className = 'btn btn-danger';
+                        btn.textContent = 'Wipe';
+                        btn.addEventListener('click', function () { adminPrepareProjectWipe(p.name, row); });
+                        row.appendChild(btn);
+                    }
+                    list.appendChild(row);
+                });
+            }
+
+            // --- reset summary ------------------------------------------
+            var summary = document.getElementById('adminResetSummary');
+            var r = await adminJSON('GET', '/api/admin/reset-preview');
+            if (!r.ok) {
+                summary.textContent = 'Could not load database summary.';
+            } else {
+                var d = r.data;
+                summary.textContent =
+                    'projects : ' + (d.projects.join(', ') || '(none)') + '\n'
+                    + 'rows     : ' + adminRowsLine(d.rows) + '\n'
+                    + 'raw data : ' + d.files.comp_data_human + '\n'
+                    + 'exports  : ' + d.files.export_human + '\n'
+                    + 'total    : ' + d.files.total_human;
+            }
+        }
+
+        async function adminPrepareProjectWipe(name, row) {
+            var existing = row.parentNode.querySelector('.admin-confirm');
+            if (existing) existing.remove();
+
+            var res = await adminJSON('GET', '/api/admin/projects/' + encodeURIComponent(name) + '/wipe-preview');
+            if (!res.ok) { alert('Could not load preview: ' + (res.data.detail || res.status)); return; }
+            var p = res.data;
+
+            var box = document.createElement('div');
+            box.className = 'admin-confirm';
+            box.innerHTML =
+                '<div class="admin-summary">'
+                + 'This permanently deletes from <strong>' + adminEscape(name) + '</strong>:\n'
+                + '  ' + adminRowsLine(p.rows) + '\n'
+                + '  raw data   ' + p.files.comp_data_human + ' in ' + p.files.comp_data_dirs + ' directories\n'
+                + '  exports    ' + p.files.export_human + '\n'
+                + '  total      ' + p.files.total_human
+                + '</div>'
+                + '<label class="admin-check"><input type="checkbox" class="adm-exports" checked> '
+                + 'Also delete exported data</label>'
+                + '<div class="form-row" style="margin-top:10px;">'
+                + '<input type="text" class="adm-confirm" placeholder="Type the project name: ' + adminEscape(name) + '" style="max-width:280px;">'
+                + '<button type="button" class="btn btn-danger adm-go">Wipe permanently</button>'
+                + '<button type="button" class="btn adm-cancel">Cancel</button>'
+                + '</div>'
+                + '<div class="submit-feedback adm-feedback"></div>';
+            row.parentNode.insertBefore(box, row.nextSibling);
+
+            box.querySelector('.adm-cancel').addEventListener('click', function () { box.remove(); });
+            box.querySelector('.adm-go').addEventListener('click', async function () {
+                var feedback = box.querySelector('.adm-feedback');
+                var typed = box.querySelector('.adm-confirm').value;
+                if (typed !== name) {
+                    feedback.textContent = 'Type the project name exactly to confirm.';
+                    feedback.className = 'submit-feedback error adm-feedback';
+                    return;
+                }
+                this.disabled = true;
+                feedback.textContent = 'Wiping...';
+                feedback.className = 'submit-feedback adm-feedback';
+                var out = await adminJSON('POST', '/api/admin/projects/' + encodeURIComponent(name) + '/wipe', {
+                    confirm: typed,
+                    delete_exports: box.querySelector('.adm-exports').checked,
+                });
+                if (!out.ok) {
+                    feedback.textContent = out.data.detail || ('HTTP ' + out.status);
+                    feedback.className = 'submit-feedback error adm-feedback';
+                    this.disabled = false;
+                    return;
+                }
+                feedback.textContent = 'Wiped ' + adminRowsLine(out.data.rows)
+                    + ' and freed ' + out.data.freed_human + '.';
+                feedback.className = 'submit-feedback success adm-feedback';
+                setTimeout(function () { box.remove(); loadAdminPage(); fetchProjects(); }, 1800);
+            });
+        }
+
+        document.getElementById('adminMoleculeLookup').addEventListener('click', async function () {
+            var target = document.getElementById('adminMoleculeResult');
+            var id = parseInt(document.getElementById('adminMoleculeId').value, 10);
+            if (!Number.isFinite(id)) {
+                target.innerHTML = '<div class="submit-feedback error">Enter a molecule ID.</div>';
+                return;
+            }
+            var res = await adminJSON('GET', '/api/admin/molecules/' + id + '/wipe-preview');
+            if (!res.ok) {
+                target.innerHTML = '<div class="submit-feedback error">'
+                    + adminEscape(res.data.detail || ('HTTP ' + res.status)) + '</div>';
+                return;
+            }
+            var p = res.data;
+            target.innerHTML =
+                '<div class="admin-confirm">'
+                + '<div class="admin-summary">'
+                + 'molecule #' + p.molecule_id + '  ' + adminEscape(p.smiles) + '\n'
+                + 'project  : ' + adminEscape(p.project) + '\n'
+                + 'rows     : ' + adminRowsLine(p.rows) + '\n'
+                + 'raw data : ' + p.files.human
+                + '</div>'
+                + '<div class="form-row" style="margin-top:10px;">'
+                + '<input type="text" id="adminMolConfirm" placeholder="Type the SMILES to confirm" style="max-width:320px;">'
+                + '<button type="button" class="btn btn-danger" id="adminMolGo">Wipe permanently</button>'
+                + '</div>'
+                + '<div class="submit-feedback" id="adminMolFeedback"></div>'
+                + '</div>';
+
+            document.getElementById('adminMolGo').addEventListener('click', async function () {
+                var feedback = document.getElementById('adminMolFeedback');
+                var typed = document.getElementById('adminMolConfirm').value;
+                if (typed !== p.smiles) {
+                    feedback.textContent = 'Type the SMILES exactly to confirm.';
+                    feedback.className = 'submit-feedback error';
+                    return;
+                }
+                this.disabled = true;
+                var out = await adminJSON('POST', '/api/admin/molecules/' + p.molecule_id + '/wipe',
+                                          { confirm: typed });
+                if (!out.ok) {
+                    feedback.textContent = out.data.detail || ('HTTP ' + out.status);
+                    feedback.className = 'submit-feedback error';
+                    this.disabled = false;
+                    return;
+                }
+                feedback.textContent = 'Wiped molecule #' + out.data.molecule_id
+                    + ', freed ' + out.data.freed_human + '.';
+                feedback.className = 'submit-feedback success';
+                loadAdminPage();
+            });
+        });
+
+        document.getElementById('adminResetBtn').addEventListener('click', async function () {
+            var feedback = document.getElementById('adminResetFeedback');
+            var typed = document.getElementById('adminResetConfirm').value;
+            if (typed !== 'RESET THE DATABASE') {
+                feedback.textContent = 'Type RESET THE DATABASE exactly to confirm.';
+                feedback.className = 'submit-feedback error';
+                return;
+            }
+            this.disabled = true;
+            feedback.textContent = 'Resetting...';
+            feedback.className = 'submit-feedback';
+            var out = await adminJSON('POST', '/api/admin/reset-database', {
+                confirm: typed,
+                delete_files: document.getElementById('adminResetFiles').checked,
+                keep_headers: document.getElementById('adminKeepHeaders').checked,
+            });
+            this.disabled = false;
+            if (!out.ok) {
+                feedback.textContent = out.data.detail || ('HTTP ' + out.status);
+                feedback.className = 'submit-feedback error';
+                return;
+            }
+            document.getElementById('adminResetConfirm').value = '';
+            feedback.textContent = 'Database reset. Removed ' + adminRowsLine(out.data.rows)
+                + ', freed ' + out.data.freed_human + '.';
+            feedback.className = 'submit-feedback success';
+            loadAdminPage();
+        });
 
         // ── Skip Conformer Search toggle ─────────────────────────────────
 

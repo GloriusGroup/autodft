@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -1062,6 +1063,164 @@ def api_delete_header(header_id: int):
         session.add(header)
         session.commit()
         return {"id": header_id, "deleted": True}
+
+
+# ---------------------------------------------------------------------------
+# Admin -- destructive maintenance
+#
+# Every wipe is two calls: a preview that only counts, then the wipe itself
+# with the exact confirmation string echoed back. The confirmation is the
+# project name / molecule SMILES / "RESET THE DATABASE", which is also what
+# the preview response reports as `confirmation_required`.
+# ---------------------------------------------------------------------------
+
+
+class WipeRequest(BaseModel):
+    confirm: str
+    # Project wipes remove <export_data>/<project>/ as well by default.
+    delete_exports: bool = True
+
+
+class ResetRequest(BaseModel):
+    confirm: str
+    delete_files: bool = True
+    keep_headers: bool = True
+
+
+def _confirmation_error(expected: str, got: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=400,
+        content={
+            "detail": (
+                f"Confirmation mismatch. Type exactly {expected!r} to proceed "
+                f"(received {got!r}). Nothing was deleted."
+            )
+        },
+    )
+
+
+@router.get("/api/admin/projects/{name}/wipe-preview")
+def api_project_wipe_preview(name: str):
+    """What a wipe of this project would delete. Read-only."""
+    from autodft.api import admin_ops
+
+    settings = get_active_settings()
+    with get_session() as session:
+        return admin_ops.preview_project_wipe(
+            session, name, settings.comp_data_path, settings.export_data_path,
+        )
+
+
+@router.post("/api/admin/projects/{name}/wipe")
+def api_project_wipe(name: str, body: WipeRequest):
+    """Permanently delete a project: DB rows, raw comp_data, exported data.
+
+    Requires ``confirm`` to equal the project name exactly. Irreversible.
+    """
+    from autodft.api import admin_ops
+
+    if body.confirm != name:
+        return _confirmation_error(name, body.confirm)
+
+    settings = get_active_settings()
+    try:
+        with get_session() as session:
+            return admin_ops.wipe_project(
+                session, name, settings.comp_data_path, settings.export_data_path,
+                delete_exports=body.delete_exports,
+            )
+    except ValueError as exc:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+    except Exception as exc:
+        logging.getLogger(__name__).exception("Wipe failed for project %r", name)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Wipe failed: {type(exc).__name__}: {exc}"},
+        )
+
+
+@router.get("/api/admin/molecules/{molecule_id}/wipe-preview")
+def api_molecule_wipe_preview(molecule_id: int):
+    """What wiping this single calculation would delete. Read-only."""
+    from autodft.api import admin_ops
+
+    settings = get_active_settings()
+    with get_session() as session:
+        preview = admin_ops.preview_molecule_wipe(
+            session, molecule_id, settings.comp_data_path,
+        )
+    if preview is None:
+        return JSONResponse(status_code=404, content={"detail": f"Molecule {molecule_id} not found"})
+    return preview
+
+
+@router.post("/api/admin/molecules/{molecule_id}/wipe")
+def api_molecule_wipe(molecule_id: int, body: WipeRequest):
+    """Delete one molecule with its states, tasks, jobs and raw files.
+
+    Requires ``confirm`` to equal the molecule's SMILES exactly.
+    """
+    from autodft.api import admin_ops
+
+    settings = get_active_settings()
+    try:
+        with get_session() as session:
+            mol = session.get(Molecule, molecule_id)
+            if mol is None:
+                return JSONResponse(
+                    status_code=404, content={"detail": f"Molecule {molecule_id} not found"},
+                )
+            if body.confirm != mol.smiles:
+                return _confirmation_error(mol.smiles, body.confirm)
+            return admin_ops.wipe_molecule(session, molecule_id, settings.comp_data_path)
+    except ValueError as exc:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+    except Exception as exc:
+        logging.getLogger(__name__).exception("Wipe failed for molecule %d", molecule_id)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Wipe failed: {type(exc).__name__}: {exc}"},
+        )
+
+
+@router.get("/api/admin/reset-preview")
+def api_reset_preview():
+    """Everything currently in the database and on disk. Read-only."""
+    from autodft.api import admin_ops
+
+    settings = get_active_settings()
+    with get_session() as session:
+        return admin_ops.preview_database_reset(
+            session, settings.comp_data_path, settings.export_data_path,
+        )
+
+
+@router.post("/api/admin/reset-database")
+def api_reset_database(body: ResetRequest):
+    """Empty every pipeline table, and by default every data directory.
+
+    Requires ``confirm`` to equal ``RESET THE DATABASE`` exactly. Saved
+    headers are kept unless ``keep_headers`` is false, in which case the
+    standard set is reseeded.
+    """
+    from autodft.api import admin_ops
+
+    if body.confirm != admin_ops.RESET_CONFIRMATION:
+        return _confirmation_error(admin_ops.RESET_CONFIRMATION, body.confirm)
+
+    settings = get_active_settings()
+    try:
+        with get_session() as session:
+            return admin_ops.reset_database(
+                session, settings.comp_data_path, settings.export_data_path,
+                delete_files=body.delete_files, keep_headers=body.keep_headers,
+            )
+    except Exception as exc:
+        logging.getLogger(__name__).exception("Database reset failed")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Reset failed: {type(exc).__name__}: {exc}"},
+        )
 
 
 class ValidateSmilesRequest(BaseModel):
