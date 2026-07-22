@@ -373,6 +373,30 @@ _DEFAULT_STRATEGIES: list[RetryStrategy] = [
 ]
 
 
+def build_strategies(settings=None) -> list[RetryStrategy]:
+    """Strategy chain honouring ``[pipeline.retry]`` from the TOML config.
+
+    The escalation numbers used to be hardcoded here while ``RetryConfig``
+    sat in config.py read by nothing, so editing the config silently did
+    nothing at all.
+    """
+    if settings is None:
+        return list(_DEFAULT_STRATEGIES)
+
+    retry_cfg = settings.pipeline.retry
+    opt_cfg = settings.pipeline.optimization
+    return [
+        IncreaseResources(
+            nprocs=retry_cfg.increased_nprocs,
+            mem_per_core=retry_cfg.increased_mem_per_core,
+            time_limit=retry_cfg.increased_time_limit,
+        ),
+        IncreaseMaxIter(max_iter=opt_cfg.max_iter),
+        TightenConvergence(),
+        PerturbImaginaryMode(displacement=opt_cfg.displacement),
+    ]
+
+
 def apply_retry_strategies(
     task_type: str,
     failure: FailureInfo,

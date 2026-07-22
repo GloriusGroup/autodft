@@ -293,17 +293,56 @@ def start_followup_tasks(session: Session, settings: Settings) -> None:
 
         metadata = json.loads(state.metadata_json) if state.metadata_json else {}
 
+        before = _count_tasks_depending_on(session, task.id)
+
         if task.task_type == TaskType.confsearch:
             _followup_confsearch(session, task, state, metadata)
         elif task.task_type == TaskType.optimization:
             _followup_optimization(session, task, state, metadata)
 
+        session.flush()
+        created = _count_tasks_depending_on(session, task.id) - before
+
         # Mark follow-ups as consumed
         task.has_followups = False
         task.updated_at = datetime.now(timezone.utc)
+
+        # A task that was supposed to spawn work and spawned none is a dead
+        # end: has_followups is cleared and nothing ever revisits it, so the
+        # state just stops with everything looking green. Fail it instead so
+        # it is visible in the dashboard. Zero is only legitimate when the
+        # downstream stage was not requested.
+        if created == 0 and _followups_were_expected(task, metadata):
+            logger.error(
+                "Task %d (%s) completed but produced no follow-up tasks; "
+                "marking it failed so the dead end is visible",
+                task.id, task.task_type.value,
+            )
+            task.status = TaskStatus.failed
+
         session.add(task)
 
     session.flush()
+
+
+def _count_tasks_depending_on(session: Session, task_id: int) -> int:
+    """How many tasks currently hang off *task_id*."""
+    return len(session.exec(
+        select(ComputationTask.id).where(ComputationTask.depends_on_task_id == task_id)
+    ).all())
+
+
+def _followups_were_expected(task: ComputationTask, metadata: dict) -> bool:
+    """Whether this task should have produced downstream work.
+
+    False when the user explicitly turned the next stage off, in which case
+    creating nothing is the correct outcome rather than a dead end.
+    """
+    if task.task_type == TaskType.confsearch:
+        return bool(metadata.get("request_optimization", True))
+    if task.task_type == TaskType.optimization:
+        return bool(metadata.get("request_singlepoint", True))
+    return False
 
 
 def _followup_confsearch(
@@ -719,7 +758,7 @@ def _generate_job_files(
     # --- Gap 1 fix: Apply failure-specific retry strategies on retries ---
     if attempt > 1 and previous_failed_job is not None:
         _apply_retry_modifications(
-            job_path, task, previous_failed_job, attempt,
+            session, job_path, task, previous_failed_job, attempt,
             charge, multiplicity, settings,
         )
 
@@ -815,6 +854,7 @@ def _parse_resources_from_header(
 
 
 def _apply_retry_modifications(
+    session: Session,
     job_path: Path,
     task: ComputationTask,
     failed_job: ComputationJob,
@@ -824,7 +864,11 @@ def _apply_retry_modifications(
     settings: Settings,
 ) -> None:
     """Read the generated input/submit files and apply retry strategies."""
-    from autodft.qm.orca.retry import FailureInfo, apply_retry_strategies
+    from autodft.qm.orca.retry import (
+        FailureInfo,
+        apply_retry_strategies,
+        build_strategies,
+    )
 
     input_file = job_path / "input.inp"
     submit_file = job_path / "submit.cmd"
@@ -836,26 +880,51 @@ def _apply_retry_modifications(
     input_content = input_file.read_text(encoding="utf-8")
     submit_content = submit_file.read_text(encoding="utf-8")
 
-    failure = FailureInfo(
-        fail_reason=failed_job.fail_reason or "",
-        previous_job_path=failed_job.job_path or "",
-        attempt=attempt,
-        charge=charge,
-        multiplicity=multiplicity,
-    )
+    # Replay every previous failure of this task, oldest first, not just the
+    # most recent one. input.inp and submit.cmd are regenerated from the
+    # header on every attempt, so applying only the latest failure's
+    # strategies silently reverted earlier ones: a job that died on
+    # 'Termination' (attempt 1 -> more cores) and then on 'Optimization
+    # Convergence' (attempt 2) was rebuilt at the *original* core count for
+    # attempt 3, dropping the resource increase on the attempt that needed
+    # it most.
+    prior_failures = session.exec(
+        select(ComputationJob)
+        .where(
+            ComputationJob.task_id == task.id,
+            col(ComputationJob.success).is_(False),
+        )
+        .order_by(col(ComputationJob.attempt).asc())
+    ).all()
+    if not prior_failures:
+        prior_failures = [failed_job]
 
-    new_input, new_submit = apply_retry_strategies(
-        task_type=task.task_type.value,
-        failure=failure,
-        input_content=input_content,
-        submit_content=submit_content,
-    )
+    strategies = build_strategies(settings)
+    applied: list[str] = []
+    for prior in prior_failures:
+        failure = FailureInfo(
+            fail_reason=prior.fail_reason or "",
+            # Perturbation reads the *failed* attempt's output, so each
+            # FailureInfo must point at its own job directory.
+            previous_job_path=prior.job_path or "",
+            attempt=attempt,
+            charge=charge,
+            multiplicity=multiplicity,
+        )
+        input_content, submit_content = apply_retry_strategies(
+            task_type=task.task_type.value,
+            failure=failure,
+            input_content=input_content,
+            submit_content=submit_content,
+            strategies=strategies,
+        )
+        applied.append(f"attempt {prior.attempt}: {prior.fail_reason}")
 
-    input_file.write_text(new_input, encoding="utf-8")
-    submit_file.write_text(new_submit, encoding="utf-8")
+    input_file.write_text(input_content, encoding="utf-8")
+    submit_file.write_text(submit_content, encoding="utf-8")
     logger.info(
-        "Applied retry strategies for job in %s (attempt %d, reason=%s)",
-        job_path, attempt, failed_job.fail_reason,
+        "Applied retry strategies for job in %s (attempt %d) accumulating %s",
+        job_path, attempt, applied,
     )
 
 
