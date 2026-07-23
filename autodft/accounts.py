@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, col, select
 
 from autodft.models.entrypoint import CalculationEntrypoint
@@ -112,10 +113,32 @@ def resolve_api_key(session: Session, key: str) -> Optional[User]:
     return user
 
 
-def touch(session: Session, user: User) -> None:
-    """Record that *user* was seen, cheaply and without failing a request."""
-    user.last_seen_at = datetime.now(timezone.utc)
+# How stale last_seen_at may get before it is rewritten.
+_TOUCH_INTERVAL_SECONDS = 300
+
+
+def touch(session: Session, user: User) -> bool:
+    """Record that *user* was seen. Returns whether anything changed.
+
+    Coarse on purpose. This runs on every authenticated request, and
+    writing each time meant one SQLite write-lock acquisition per API
+    call -- ~130 ms per commit on this deployment's network mount,
+    contending with the pipeline worker for the single writer. That is
+    exactly the contention that made a submission script time out
+    mid-campaign. "Last seen, to the nearest five minutes" is all this
+    field is ever read for.
+    """
+    now = datetime.now(timezone.utc)
+    last = user.last_seen_at
+    if last is not None:
+        if last.tzinfo is None:
+            # SQLite hands back naive datetimes.
+            last = last.replace(tzinfo=timezone.utc)
+        if (now - last).total_seconds() < _TOUCH_INTERVAL_SECONDS:
+            return False
+    user.last_seen_at = now
     session.add(user)
+    return True
 
 
 # ----------------------------------------------------------------------
@@ -145,7 +168,19 @@ def get_or_create_project(session: Session, owner: User, name: str) -> Project:
 
     project = Project(owner_id=owner.id, name=bare, qualified_name=qualified)
     session.add(project)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        # Two submissions for a new project can both pass the check above
+        # before either commits. SQLite's single writer makes the window
+        # small, not absent, and losing the race must not 500 a
+        # submission -- the row the other caller wrote is the one we want.
+        session.rollback()
+        existing = get_project(session, qualified)
+        if existing is None:
+            raise
+        logger.debug("Lost the race creating %r; using the existing row", qualified)
+        return existing
     session.refresh(project)
     logger.info("Created project %r", qualified)
     return project

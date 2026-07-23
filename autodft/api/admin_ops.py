@@ -60,15 +60,24 @@ PROTECTED_PROJECT_NAMES = {"default"}
 def is_protected(name: str) -> bool:
     """Whether *name* names a project that may never be wiped.
 
-    Compares the *bare* name. Since projects became ``owner/project``, a
-    literal set membership test stopped matching: the migration renames
-    ``default`` to ``admin/default``, and the protected project silently
-    became wipeable.
+    Only the *shared* default is protected -- ``admin/default``, and the
+    bare ``default`` a database that predates the migration still uses.
+
+    Two mistakes are possible here and this avoids both. Comparing the
+    whole string stopped matching once the migration renamed ``default``
+    to ``admin/default``, silently unprotecting it. Comparing only the bare
+    segment over-corrected: ``project`` defaults to ``"default"`` on every
+    submission, so each user acquires an ``alice/default`` that no one
+    could ever wipe.
     """
+    from autodft.accounts import ADMIN_USERNAME
     from autodft.paths import normalise_project_name
 
-    bare = normalise_project_name(name or "").rsplit("/", 1)[-1]
-    return bare in PROTECTED_PROJECT_NAMES
+    normalised = normalise_project_name(name or "")
+    owner, separator, bare = normalised.partition("/")
+    if not separator:
+        return normalised in PROTECTED_PROJECT_NAMES      # pre-migration
+    return bare in PROTECTED_PROJECT_NAMES and owner == ADMIN_USERNAME
 
 RESET_CONFIRMATION = "RESET THE DATABASE"
 

@@ -296,3 +296,73 @@ class TestCliSubmission:
         monkeypatch.setattr("autodft.db.get_session", _session)
         with pytest.raises(typer.Exit):
             cli._qualified_project("screening", "nobody")
+
+
+class TestTouchIsCheap:
+    """`touch` runs on every authenticated request. A write each time is
+    one SQLite write-lock acquisition per API call -- ~130 ms per commit on
+    the deployment's network mount, contending with the pipeline worker for
+    the single writer. That is what made a submission script time out."""
+
+    def test_the_first_call_records_the_time(self, session):
+        user, _ = accounts.create_user(session, "mhoffmann")
+        assert accounts.touch(session, user) is True
+        assert user.last_seen_at is not None
+
+    def test_a_second_call_moments_later_writes_nothing(self, session):
+        user, _ = accounts.create_user(session, "mhoffmann")
+        accounts.touch(session, user)
+        session.commit()
+        assert accounts.touch(session, user) is False
+
+    def test_it_writes_again_once_the_timestamp_is_stale(self, session):
+        from datetime import datetime, timedelta, timezone
+
+        user, _ = accounts.create_user(session, "mhoffmann")
+        user.last_seen_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        session.add(user)
+        session.commit()
+        assert accounts.touch(session, user) is True
+
+    def test_a_naive_stored_timestamp_does_not_raise(self, session):
+        """SQLite hands back naive datetimes; subtracting one from an aware
+        `now` is a TypeError, which would have 500'd every request."""
+        from datetime import datetime, timedelta
+
+        user, _ = accounts.create_user(session, "mhoffmann")
+        user.last_seen_at = datetime.utcnow() - timedelta(seconds=5)
+        assert accounts.touch(session, user) is False
+
+
+class TestProjectCreationRace:
+    def test_losing_the_race_returns_the_other_callers_row(self, session, monkeypatch):
+        """Two submissions for a new project can both pass the existence
+        check before either commits. SQLite's single writer makes that
+        window small, not absent, and it must not 500 a submission."""
+        user, _ = accounts.create_user(session, "mhoffmann")
+        winner = accounts.get_or_create_project(session, user, "screening")
+
+        # The loser's path: the check says "absent", so the INSERT collides
+        # with the row that is really there, and the recovery lookup finds
+        # it. Capture the real function before patching over it.
+        real = accounts.get_project
+        calls = {"n": 0}
+
+        def _absent_once(session_, name):
+            calls["n"] += 1
+            return None if calls["n"] == 1 else real(session_, name)
+
+        monkeypatch.setattr(accounts, "get_project", _absent_once)
+        again = accounts.get_or_create_project(session, user, "screening")
+
+        assert again.id == winner.id
+        assert calls["n"] == 2  # checked, collided, looked again
+
+    def test_a_genuine_integrity_error_still_surfaces(self, session, monkeypatch):
+        """Swallowing every IntegrityError would hide real constraint bugs."""
+        user, _ = accounts.create_user(session, "mhoffmann")
+        accounts.get_or_create_project(session, user, "screening")
+
+        monkeypatch.setattr(accounts, "get_project", lambda s, n: None)
+        with pytest.raises(Exception):
+            accounts.get_or_create_project(session, user, "screening")

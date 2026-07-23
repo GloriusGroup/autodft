@@ -258,35 +258,48 @@ def _reject_bad_project(name: str):
 
 
 @router.get("/api/overview")
-def api_overview():
-    """Pipeline overview statistics."""
+def api_overview(identity: Identity = Depends(current_identity)):
+    """Pipeline overview statistics, counting only the caller's work.
+
+    Global counts here told every user exactly how much everyone else was
+    running -- and, since the numbers are what the dashboard's front page
+    is built from, made the whole page describe someone else's campaign.
+    """
     with get_session() as session:
         molecule_count = session.exec(
-            select(func.count()).select_from(Molecule)
+            scope_molecules(
+                select(func.count()).select_from(Molecule), session, identity,
+            )
         ).one()
 
         task_counts = {}
         for status in TaskStatus:
             count = session.exec(
-                select(func.count())
-                .select_from(ComputationTask)
-                .where(ComputationTask.status == status)
+                scope_tasks(
+                    select(func.count())
+                    .select_from(ComputationTask)
+                    .where(ComputationTask.status == status),
+                    session, identity,
+                )
             ).one()
             task_counts[status.value] = count
 
         job_counts: dict[str, int] = {}
         rows = session.exec(
-            select(ComputationJob.slurm_status, func.count())
-            .group_by(ComputationJob.slurm_status)
+            scope_jobs(
+                select(ComputationJob.slurm_status, func.count())
+                .select_from(ComputationJob),
+                session, identity,
+            ).group_by(ComputationJob.slurm_status)
         ).all()
         for slurm_status, count in rows:
             job_counts[slurm_status or "unknown"] = count
 
-        queue_length = session.exec(
-            select(func.count())
-            .select_from(CalculationEntrypoint)
+        queued = session.exec(
+            select(CalculationEntrypoint)
             .where(col(CalculationEntrypoint.time_started).is_(None))
-        ).one()
+        ).all()
+        queue_length = len(visible_entrypoints(queued, session, identity))
 
     return {
         "molecules": molecule_count,
@@ -990,17 +1003,22 @@ def api_project_export(
 
 
 @router.get("/api/entrypoints/failed")
-def api_failed_entrypoints():
+def api_failed_entrypoints(identity: Identity = Depends(current_identity)):
     """Entrypoints that hit a processing error and were never expanded
     into molecules/tasks (e.g. unparseable SMILES). Surface these so the
-    user can fix the input and resubmit."""
+    user can fix the input and resubmit.
+
+    Filtered to the caller: a failed entrypoint carries the SMILES that was
+    submitted, so an unfiltered list handed every user everyone else's
+    structures.
+    """
     with get_session() as session:
         stmt = (
             select(CalculationEntrypoint)
             .where(col(CalculationEntrypoint.processing_error).is_not(None))
             .order_by(col(CalculationEntrypoint.time_started).desc())
         )
-        entries = session.exec(stmt).all()
+        entries = visible_entrypoints(session.exec(stmt).all(), session, identity)
         return [
             {
                 "id": e.id,

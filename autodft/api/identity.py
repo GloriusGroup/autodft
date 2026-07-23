@@ -72,8 +72,10 @@ def resolve_identity(
     if key:
         user = accounts.resolve_api_key(session, key)
         if user is not None:
-            accounts.touch(session, user)
-            session.commit()
+            # Commit only when the timestamp actually moved: a write per
+            # request would put every API call behind the SQLite writer.
+            if accounts.touch(session, user):
+                session.commit()
             return _from_user(user)
         return None
 

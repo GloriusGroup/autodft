@@ -406,15 +406,24 @@ class TestProtectedProjects:
     """
 
     @pytest.mark.parametrize("name", [
-        "default", "admin/default", "nhoelter/default", "admin:default",
+        "default",          # a database that predates the migration
+        "admin/default",    # what the migration renames it to
+        "admin:default",    # the URL spelling of the same thing
     ])
-    def test_every_form_of_the_name_is_protected(self, name):
+    def test_the_shared_default_is_protected_in_every_spelling(self, name):
         assert admin_ops.is_protected(name) is True
 
     @pytest.mark.parametrize("name", [
         "phenols", "admin/phenols", "admin/defaults", "default_2",
     ])
     def test_other_projects_are_not(self, name):
+        assert admin_ops.is_protected(name) is False
+
+    @pytest.mark.parametrize("name", ["nhoelter/default", "alice/default"])
+    def test_a_users_own_default_is_wipeable(self, name):
+        """`project` defaults to "default" on every submission, so each
+        user acquires one. Protecting the bare segment would have left
+        every user with a project nobody could ever remove."""
         assert admin_ops.is_protected(name) is False
 
     def test_the_wipe_refuses_the_qualified_form(self, session, project, tmp_path):
