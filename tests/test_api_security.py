@@ -20,8 +20,11 @@ from autodft.paths import InvalidProjectName, safe_subdirectory, validate_projec
 class TestProjectNameValidation:
     @pytest.mark.parametrize(
         "name",
-        ["..", ".", "", "../../etc", "a/b", "a\\b", "x" * 65, " leading", "-leading",
-         "semi;colon", "new\nline", "%wildcard"],
+        ["..", ".", "", "../../etc", "a\\b", "x" * 65, " leading", "-leading",
+         "semi;colon", "new\nline", "%wildcard",
+         # Qualified names are legal now, so each half is validated
+         # separately and more than one separator is refused outright.
+         "a/b/c", "../b", "a/..", "a/", "/b", "a/ b"],
     )
     def test_rejects_dangerous_names(self, name):
         with pytest.raises(InvalidProjectName):
@@ -30,7 +33,9 @@ class TestProjectNameValidation:
     @pytest.mark.parametrize(
         "name",
         ["default", "phenols", "additives_heteroarenes_new", "fhw_radicals_1",
-         "a", "Project.2024", "x" * 64],
+         "a", "Project.2024", "x" * 64,
+         # owner/project, the form every project takes since accounts
+         "admin/phenols", "nhoelter/Project.2024"],
     )
     def test_accepts_real_names(self, name):
         assert validate_project_name(name) == name
@@ -65,28 +70,28 @@ class TestDestructiveRoutesRejectTraversal:
         (tmp_path / "CANARY").write_text("must survive")
         return settings, tmp_path
 
-    def test_wipe_preview_rejects_traversal(self, wired):
+    def test_wipe_preview_rejects_traversal(self, wired, admin_identity):
         from autodft.api.routes import api_project_wipe_preview
 
         _, tmp_path = wired
-        response = api_project_wipe_preview("..")
+        response = api_project_wipe_preview("..", admin_identity)
         assert response.status_code == 400
         assert (tmp_path / "CANARY").exists()
 
-    def test_wipe_rejects_traversal(self, wired):
+    def test_wipe_rejects_traversal(self, wired, admin_identity):
         from autodft.api.routes import WipeRequest, api_project_wipe
 
         _, tmp_path = wired
-        response = api_project_wipe("..", WipeRequest(confirm=".."))
+        response = api_project_wipe("..", WipeRequest(confirm=".."), admin_identity)
         assert response.status_code == 400
         assert (tmp_path / "CANARY").exists()
         assert (tmp_path / "comp_data").exists()
         assert (tmp_path / "export_data").exists()
 
-    def test_export_rejects_traversal(self, wired):
+    def test_export_rejects_traversal(self, wired, admin_identity):
         from autodft.api.routes import api_project_export
 
-        response = api_project_export("..", format="csv")
+        response = api_project_export("..", format="csv", identity=admin_identity)
         assert response.status_code == 400
 
 
@@ -139,7 +144,9 @@ class TestAuthDoesNotCrashOnHostileInput:
         assert is_authenticated(_Request({}, {"autodft_auth": "9999999999.ü"}), settings) is False
 
     def test_verify_token_on_non_ascii_signature(self):
-        assert verify_token("9999999999.ü", "password") is False
+        # None, not "": a token that fails to verify has no username, and
+        # "" is what a valid pre-accounts token returns.
+        assert verify_token("9999999999.ü", "password") is None
 
     def test_a_valid_header_still_authenticates(self):
         settings = Settings()
@@ -181,37 +188,39 @@ class TestBatchSubmission:
         yield settings
         reset_engine()
 
-    @staticmethod
-    def _submit(**kwargs):
+    @pytest.fixture()
+    def _submit(self, admin_identity):
         from autodft.api.routes import SubmitBatchRequest, api_submit_batch
 
-        return api_submit_batch(SubmitBatchRequest(**kwargs))
+        def submit(**kwargs):
+            return api_submit_batch(SubmitBatchRequest(**kwargs), admin_identity)
+        return submit
 
-    def test_rejections_do_not_discard_the_rest(self, db):
+    def test_rejections_do_not_discard_the_rest(self, db, _submit):
         """One bad SMILES used to abort the caller's loop, silently skipping
         every remaining molecule in the file."""
-        result = self._submit(
+        result = _submit(
             smiles_list=["CCO", "not-a-smiles", "c1ccccc1"], project="p",
         )
         assert result["counts"] == {"queued": 2, "rejected": 1}
         assert [r["smiles"] for r in result["queued"]] == ["CCO", "c1ccccc1"]
         assert "not-a-smiles" in result["rejected"][0]["detail"]
 
-    def test_open_shell_is_reported_per_smiles_when_t1_is_requested(self, db):
-        result = self._submit(
+    def test_open_shell_is_reported_per_smiles_when_t1_is_requested(self, db, _submit):
+        result = _submit(
             smiles_list=["CCO", "C[C]1CC(C#N)C1"], project="p", request_t1=True,
         )
         assert result["counts"] == {"queued": 1, "rejected": 1}
         assert "closed-shell" in result["rejected"][0]["detail"]
 
-    def test_the_same_smiles_is_accepted_without_t1(self, db):
-        result = self._submit(
+    def test_the_same_smiles_is_accepted_without_t1(self, db, _submit):
+        result = _submit(
             smiles_list=["C[C]1CC(C#N)C1"], project="p",
             request_t1=False, request_ox=True, request_red=True,
         )
         assert result["counts"]["queued"] == 1
 
-    def test_options_land_on_every_row(self, db):
+    def test_options_land_on_every_row(self, db, _submit):
         import json
 
         from sqlmodel import select
@@ -219,7 +228,7 @@ class TestBatchSubmission:
         from autodft.db import get_session
         from autodft.models import CalculationEntrypoint
 
-        self._submit(
+        _submit(
             smiles_list=["CCO", "c1ccccc1"], project="p", priority=3,
             skip_confsearch=True, header_optimization="!B3LYP OPT\n",
         )
@@ -233,12 +242,12 @@ class TestBatchSubmission:
             assert row.header_optimization == "!B3LYP OPT\n"
             assert json.loads(row.request_metadata)["request_confsearch"] is False
 
-    def test_an_empty_list_is_a_400(self, db):
-        assert self._submit(smiles_list=[], project="p").status_code == 400
+    def test_an_empty_list_is_a_400(self, db, _submit):
+        assert _submit(smiles_list=[], project="p").status_code == 400
 
-    def test_overlong_smiles_is_rejected_not_parsed(self, db):
+    def test_overlong_smiles_is_rejected_not_parsed(self, db, _submit):
         """RDKit overflows the C stack on very long input, and it runs in a
         thread of the controller process."""
-        result = self._submit(smiles_list=["C" * 600], project="p")
+        result = _submit(smiles_list=["C" * 600], project="p")
         assert result["counts"] == {"queued": 0, "rejected": 1}
         assert "too long" in result["rejected"][0]["detail"]

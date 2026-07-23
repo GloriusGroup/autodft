@@ -21,6 +21,19 @@ from autodft.models import (
 
 
 @pytest.fixture()
+def admin_identity():
+    """The caller for tests that invoke route handlers directly.
+
+    Handlers take their identity through a FastAPI dependency, which only
+    resolves when the request goes through the app. Calling one as a plain
+    function has to supply it.
+    """
+    from autodft.api.identity import Identity
+
+    return Identity(username="admin", is_admin=True, user_id=None)
+
+
+@pytest.fixture()
 def engine():
     """Create an in-memory SQLite engine with all tables."""
     eng = create_engine(

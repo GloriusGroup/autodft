@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import time
+from typing import Optional
 
 from fastapi import Request
 
@@ -27,36 +28,59 @@ COOKIE_NAME = "autodft_auth"
 HEADER_NAME = "X-AutoDFT-Password"
 
 
-def issue_token(password: str, lifetime_seconds: int) -> str:
-    """Mint a session token that's valid until ``now + lifetime_seconds``."""
+def issue_token(password: str, lifetime_seconds: int, username: str = "") -> str:
+    """Mint a session token valid until ``now + lifetime_seconds``.
+
+    The token carries the username it was issued for, so the cookie says
+    *who* is logged in and not merely *that* someone is. It stays
+    stateless: the username is inside the signed payload, so it cannot be
+    edited without the dashboard password.
+    """
     expires_at = int(time.time()) + int(lifetime_seconds)
-    sig = _sign(password, expires_at)
-    return f"{expires_at}.{sig}"
+    payload = f"{expires_at}.{username}"
+    return f"{payload}.{_sign(password, payload)}"
 
 
-def verify_token(token: str, password: str) -> bool:
-    """Return True iff *token* was issued for *password* and hasn't expired."""
+def verify_token(token: str, password: str) -> Optional[str]:
+    """The username *token* was issued for, or None if it does not verify.
+
+    Returns the empty string for a valid pre-accounts token, which carried
+    no username. Callers distinguish "no session" (None) from "a session
+    with no user attached" ("") -- the latter resolves to admin, so
+    sessions opened before the upgrade keep working until they expire.
+    """
     if not token or "." not in token:
-        return False
+        return None
+    parts = token.split(".")
+    if len(parts) == 2:
+        expires_str, sig = parts        # legacy: {expires}.{sig}
+        username = ""
+    elif len(parts) == 3:
+        expires_str, username, sig = parts
+    else:
+        return None
+
     try:
-        expires_str, sig = token.split(".", 1)
         expires_at = int(expires_str)
-    except (ValueError, AttributeError):
-        return False
+    except (ValueError, TypeError):
+        return None
     if expires_at < int(time.time()):
-        return False
-    expected = _sign(password, expires_at)
+        return None
+
+    payload = expires_str if len(parts) == 2 else f"{expires_str}.{username}"
     # Bytes for the same reason as the header comparison in
     # is_authenticated(): the cookie value is attacker-controlled.
-    return hmac.compare_digest(
-        sig.encode("utf-8", "replace"), expected.encode("utf-8")
-    )
+    if not hmac.compare_digest(
+        sig.encode("utf-8", "replace"), _sign(password, payload).encode("utf-8")
+    ):
+        return None
+    return username
 
 
-def _sign(password: str, expires_at: int) -> str:
+def _sign(password: str, payload) -> str:
     return hmac.new(
         password.encode("utf-8"),
-        str(expires_at).encode("utf-8"),
+        str(payload).encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
 
@@ -78,7 +102,7 @@ def is_authenticated(request: Request, settings: Settings) -> bool:
 
     # Cookie path — browser flow via /login
     cookie = request.cookies.get(COOKIE_NAME)
-    if cookie and verify_token(cookie, password):
+    if cookie and verify_token(cookie, password) is not None:
         return True
 
     return False

@@ -74,16 +74,40 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
 
         # Resolve settings lazily so test setups that call create_app()
         # without a settings argument still work.
+        from autodft.api.identity import resolve_identity
         from autodft.api.routes import get_active_settings
-        if is_authenticated(request, get_active_settings()):
+        from autodft.db import get_session
+
+        settings = get_active_settings()
+        identity = None
+        try:
+            with get_session() as session:
+                identity = resolve_identity(request, settings, session)
+        except Exception:  # noqa: BLE001 - never let auth 500 the whole app
+            logger.exception("Could not resolve the caller's identity")
+
+        if identity is not None:
+            # Stashed here so handlers reach it through a dependency
+            # instead of re-parsing headers.
+            request.state.identity = identity
+
+            # Coarse gate, deliberately duplicated with the per-route
+            # checks. The destructive endpoints are the ones where a
+            # missing check is unrecoverable, so they are refused at a
+            # single choke point as well as at the handler.
+            if path.startswith("/api/admin/") and not identity.is_admin:
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "This operation requires the admin account."},
+                )
             return await call_next(request)
 
         if path.startswith("/api/"):
             return JSONResponse(
                 status_code=401,
-                content={"detail": "Authentication required. "
-                                   "Send the password via the X-AutoDFT-Password "
-                                   "header or sign in at /login first."},
+                content={"detail": "Authentication required. Send your API key via "
+                                   "the X-AutoDFT-API-Key header, or sign in at "
+                                   "/login first."},
             )
         return RedirectResponse(url=f"/login?next={quote(path)}", status_code=303)
 

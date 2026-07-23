@@ -39,7 +39,7 @@ class UserRole(str, Enum):
 # names under export_data, and they have to round-trip through
 # "owner/project" without ambiguity.
 USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,31}$")
-PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 API_KEY_PREFIX = "adft_"
 _API_KEY_BYTES = 24  # -> 32 url-safe characters
@@ -92,7 +92,7 @@ def validate_project_name(raw: str) -> str:
     candidate = (raw or "").strip()
     if not PROJECT_NAME_RE.match(candidate):
         raise ValueError(
-            f"Invalid project name {raw!r}. Use 1-128 characters: letters, "
+            f"Invalid project name {raw!r}. Use 1-64 characters: letters, "
             f"digits, '.', '_' or '-'. In particular '/' is not allowed, "
             f"because projects are addressed as 'owner/project'."
         )

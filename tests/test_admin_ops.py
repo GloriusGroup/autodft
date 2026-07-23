@@ -366,16 +366,32 @@ class TestBackgroundRemoval:
 
 
 class TestConcurrentWipeOverHttp:
-    def test_the_route_answers_409_instead_of_piling_up(self):
+    def test_the_route_answers_409_instead_of_piling_up(
+        self, admin_identity, tmp_path,
+    ):
         """What the user hits: start one wipe, try a second while it runs."""
         import json
 
+        from autodft.api import routes
         from autodft.api.routes import WipeRequest, api_project_wipe
+        from autodft.config import Settings
+        from autodft.db import init_db, reset_engine
+
+        # The handler resolves the project's owner before it claims the
+        # lock, so it needs a real database rather than the default
+        # settings' /data.
+        settings = Settings()
+        settings.storage.data_path = str(tmp_path)
+        reset_engine()
+        init_db(settings)
+        routes.set_active_settings(settings)
 
         with admin_ops.exclusive("wipe of project 'victim'"):
             response = api_project_wipe(
                 "other", WipeRequest(confirm="other", delete_exports=True),
+                admin_identity,
             )
 
         assert response.status_code == 409
         assert "still running" in json.loads(response.body)["detail"]
+        reset_engine()
