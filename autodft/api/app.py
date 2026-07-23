@@ -36,6 +36,18 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
     if settings is not None:
         set_active_settings(settings)
 
+        # Bind the database engine to these settings too. Routes and the
+        # auth middleware open sessions with a bare get_session(), which
+        # resolves through the module-level engine singleton -- and if
+        # nothing has created it yet, that falls back to the *default*
+        # data_path. In the controller init_db() runs first and hides
+        # this, so it only shows up when the app is built on its own:
+        # every request then reads a different database than the one
+        # configured, and every API key is rejected as unknown.
+        from autodft.db import get_engine
+
+        get_engine(settings)
+
         # The shipped config carries the placeholder password, and the
         # deployment binds 0.0.0.0. That combination exposes every endpoint
         # -- including the destructive admin routes -- to anyone who can

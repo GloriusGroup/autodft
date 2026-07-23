@@ -545,3 +545,20 @@ class TestHeaderOwnership:
             headers=app_env["owner"], json={"description": "changed"},
         )
         assert response.status_code == 403
+
+
+def test_create_app_binds_the_database_to_its_settings(tmp_path):
+    """Routes open sessions with a bare get_session(), which resolves via
+    the engine singleton. If create_app does not bind it, the app reads
+    the default /data/autodft instead of the configured path -- and every
+    API key is rejected as unknown, which is how this was found.
+    """
+    from autodft.db import get_engine, reset_engine
+
+    settings = Settings()
+    settings.storage.data_path = str(tmp_path)
+    reset_engine()
+    create_app(settings)
+
+    assert str(tmp_path) in str(get_engine().url)
+    reset_engine()
