@@ -445,6 +445,28 @@ Full route list:
 | POST   | `/api/admin/reset-database`         | **destructive**: every pipeline table and data directory       |
 | GET    | `/api/admin/wipe-status`            | progress of a deletion still running in the background        |
 | GET    | `/api/admin/circuit-breaker`        | whether the failure breaker has halted submissions            |
+| GET    | `/api/whoami`                       | the signed-in account and the projects it owns                |
+| GET    | `/api/cluster`                      | read-only queue depth + breaker state, for every account      |
+| GET    | `/api/admin/users`                  | list accounts                                                 |
+| POST   | `/api/admin/users`                  | create an account; the response carries its API key, once     |
+| POST   | `/api/admin/users/{name}/rotate-key`| new key; the old one stops working immediately                |
+| POST   | `/api/admin/projects/{name}/reassign`| move a project to another owner                              |
+
+### Accounts
+
+One **admin** account reaches everything. Every other account is a
+**user**: one API key, their own projects, nothing else. Users sign in
+with username + API key, submit with the key in `X-AutoDFT-API-Key`, and
+see only their own work. The `author` on their submissions is their
+username and is not editable.
+
+Projects are namespaced per owner — stored as `owner/project`, written
+`owner:project` in a URL, and submitted as a bare name that lands in the
+caller's namespace. Two people can each have a `screening`.
+
+The existing `X-AutoDFT-Password` header still works and means admin, so
+scripts and the CLI carry over unchanged. Full detail, including account
+management, is in [`docs/API.md`](docs/API.md) §0.
 
 Every destructive endpoint requires an exact confirmation string, refuses
 to run while another one is in flight (409), and deletes the rows before

@@ -10,39 +10,91 @@ schema at `GET /docs` and `GET /openapi.json`.
 
 ---
 
-## 0. Authentication
+## 0. Accounts and authentication
 
-Every endpoint — including the HTML dashboard and `/docs` — requires
-the password set via `[security].dashboard_password` in the controller's
-TOML config (default `"password"`).
+There is one **admin** account and any number of **users**. Admin reaches
+everything. A user reaches only their own projects — listing, reading,
+exporting, submitting — and cannot reach `/api/admin/*` at all.
 
-* **Browser** — visiting any protected URL redirects to `/login`
-  (HTML form). On success the server sets an HMAC-signed `autodft_auth`
-  cookie. `GET /logout` clears it.
-* **Scripts** — send the password via the `X-AutoDFT-Password` header
-  on every request. No cookie needed.
+### Credentials
+
+| Credential | Sent as | Resolves to |
+|---|---|---|
+| API key | `X-AutoDFT-API-Key: adft_…` or `Authorization: Bearer adft_…` | the key's owner |
+| Shared password | `X-AutoDFT-Password: …` | admin |
+| Session cookie | `autodft_auth`, set by `/login` | whoever signed in |
+
+A key is `adft_` plus 32 random characters. It is shown **once**, when the
+account is created or the key is rotated, and stored only as
+`sha256(key)` — it can never be read back, only replaced. Rotating takes
+effect immediately.
+
+The shared password keeps working and means admin, which is what lets
+existing scripts, the CLI and saved curl invocations survive the upgrade
+untouched.
 
 ```bash
-# Header path
+# A user, with their key
 curl -s http://localhost:8085/api/overview \
-     -H "X-AutoDFT-Password: password"
+     -H "X-AutoDFT-API-Key: adft_7Kq2XnR4..."
 
-# Browser path
+# Browser: username + API key
 curl -i -c cookies.txt -X POST http://localhost:8085/login \
-     -d 'password=password&next=/'                          # 303 + Set-Cookie
+     -d 'username=mhoffmann&password=adft_7Kq2XnR4...&next=/'
 curl -s -b cookies.txt http://localhost:8085/api/overview
 ```
 
-Unauthenticated requests to `/api/*` return:
+`GET /api/whoami` answers `{"username", "is_admin", "projects"}`.
 
-```json
-HTTP 401
-{ "detail": "Authentication required. Send the password via the "
-            "X-AutoDFT-Password header or sign in at /login first." }
-```
+Unauthenticated `/api/*` requests get **401**; unauthenticated browser
+requests get a **303** to `/login?next=<original-path>`. A key belonging
+to a deactivated account stops working immediately, as does a session
+cookie issued to it.
 
-Unauthenticated browser requests get an HTTP 303 redirect to
-`/login?next=<original-path>`.
+### Project namespaces
+
+Every project belongs to someone and is stored as `owner/project`, so two
+people can each have a `screening`. Three forms appear:
+
+| Where | Form | Note |
+|---|---|---|
+| stored | `mhoffmann/screening` | in `molecules.project_name` |
+| in a URL | `mhoffmann:screening` | `/api/projects/mhoffmann:screening` |
+| in a submit body | `screening` | qualified with the caller's namespace |
+
+The URL form uses `:` rather than `/` because `/api/projects/{name}`
+matches a single path segment, a percent-encoded slash is normalised back
+to a separator before routing, and a `/api/projects/{owner}/{name}` route
+would collide with `/api/projects/{name}/export` for any project called
+"export".
+
+Submitting is unchanged: send the bare name and it lands in your own
+namespace. Submitting to a name someone else owns creates *your* project
+of that name rather than joining theirs.
+
+The `author` field is your username and is not editable. Admin may still
+set it freely, which is what labels work submitted on someone's behalf.
+
+Reads outside your namespace answer **404**, not 403 — a 403 would
+confirm the project exists.
+
+### Managing accounts (admin only)
+
+| Endpoint | Does |
+|---|---|
+| `GET /api/admin/users` | every account, with projects and molecule counts |
+| `POST /api/admin/users` | create one; the response carries the key, once |
+| `POST /api/admin/users/{username}/rotate-key` | new key, old one dead immediately |
+| `POST /api/admin/users/{username}?active=false` | deactivate |
+| `POST /api/admin/projects/{name}/reassign` | move a project to another owner |
+
+There is no delete-user. An account whose projects still hold hundreds of
+gigabytes should not disappear in one click: wipe or reassign the
+projects first, then deactivate.
+
+`GET /api/cluster` is readable by everyone and reports only
+`breaker_tripped` and `queued_entrypoints`, so a user can tell "my jobs
+are stuck" from "the pipeline is halted" without asking an administrator.
 
 ---
 

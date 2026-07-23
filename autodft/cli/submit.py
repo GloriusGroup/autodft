@@ -57,8 +57,32 @@ def _check_t1_reference(smiles: str, request_t1: bool) -> None:
         console.print(f"[yellow]{check['warning']}[/yellow]")
 
 
+def _qualified_project(project: str, user: str) -> tuple[str, str]:
+    """Resolve ``--project`` against ``--user``'s namespace.
+
+    The CLI writes entrypoints straight to the database, so it has no
+    request and no API key to identify it. Without this it would create
+    rows under a bare project name that no longer resolves to an owner,
+    leaving the work visible only to admin. The project is created if it
+    does not exist, exactly as an API submission would.
+    """
+    from autodft import accounts
+    from autodft.db import get_session
+
+    with get_session() as session:
+        account = accounts.get_user_by_username(session, user)
+        if account is None:
+            console.print(
+                f"[red]No user named {user!r}. Create one on the admin page, "
+                f"or pass --user with an existing name.[/red]"
+            )
+            raise typer.Exit(code=1)
+        return accounts.get_or_create_project(session, account, project).qualified_name, account.username
+
+
 def _build_request_metadata(
     project_name: str,
+    project_author: str,
     request_t1: bool,
     request_ox: bool,
     request_red: bool,
@@ -72,7 +96,7 @@ def _build_request_metadata(
     """Build the request_metadata JSON string."""
     metadata = {
         "project_name": project_name,
-        "project_author": "user",
+        "project_author": project_author,
         "request_S1": False,
         "request_T1": request_t1,
         "request_ox": request_ox,
@@ -94,6 +118,10 @@ def _build_request_metadata(
 def submit(
     smiles: str = typer.Option(..., "--smiles", help="SMILES string of the molecule"),
     project: str = typer.Option(..., "--project", help="Project name"),
+    user: str = typer.Option(
+        "admin", "--user",
+        help="Account to submit as; the project lands in their namespace",
+    ),
     priority: int = typer.Option(10, "--priority", help="Queue priority (higher = more urgent)"),
     request_t1: bool = typer.Option(False, "--request-t1", help="Request T1 state calculations"),
     request_ox: bool = typer.Option(False, "--request-ox", help="Request oxidation state calculations"),
@@ -122,9 +150,11 @@ def submit(
 ) -> None:
     """Submit a single molecule by SMILES string."""
     _check_t1_reference(smiles, request_t1)
+    qualified, author = _qualified_project(project, user)
 
     request_metadata = _build_request_metadata(
-        project_name=project,
+        project_name=qualified,
+        project_author=author,
         request_t1=request_t1,
         request_ox=request_ox,
         request_red=request_red,
@@ -165,6 +195,10 @@ def submit(
 def submit_batch(
     file: Path = typer.Option(..., "--file", help="CSV file with SMILES (one per line or with header)"),
     project: str = typer.Option(..., "--project", help="Project name"),
+    user: str = typer.Option(
+        "admin", "--user",
+        help="Account to submit as; the project lands in their namespace",
+    ),
     priority: int = typer.Option(10, "--priority", help="Queue priority (higher = more urgent)"),
     request_t1: bool = typer.Option(False, "--request-t1", help="Request T1 state calculations"),
     request_ox: bool = typer.Option(False, "--request-ox", help="Request oxidation state calculations"),
@@ -195,9 +229,11 @@ def submit_batch(
     if not file.exists():
         console.print(f"[red]File not found:[/red] {file}")
         raise typer.Exit(code=1)
+    qualified, author = _qualified_project(project, user)
 
     request_metadata = _build_request_metadata(
-        project_name=project,
+        project_name=qualified,
+        project_author=author,
         request_t1=request_t1,
         request_ox=request_ox,
         request_red=request_red,

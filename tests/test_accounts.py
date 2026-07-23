@@ -257,3 +257,42 @@ class TestReassignment:
 
         with pytest.raises(accounts.AccountError, match="already has"):
             accounts.reassign_project(session, "mhoffmann/screening", two)
+
+
+class TestCliSubmission:
+    """The CLI writes entrypoints straight to the database, with no request
+    and no API key. Without an owner it would create rows under a bare
+    project name that resolves to nobody."""
+
+    def test_it_lands_in_the_named_users_namespace(self, session, monkeypatch, tmp_path):
+        from contextlib import contextmanager
+
+        from autodft.cli import submit as cli
+
+        @contextmanager
+        def _session(*args, **kwargs):
+            yield session
+
+        monkeypatch.setattr("autodft.db.get_session", _session)
+        accounts.create_user(session, "mhoffmann")
+
+        qualified, author = cli._qualified_project("screening", "mhoffmann")
+
+        assert qualified == "mhoffmann/screening"
+        assert author == "mhoffmann"
+        assert accounts.get_project(session, qualified) is not None
+
+    def test_an_unknown_user_is_refused(self, session, monkeypatch):
+        from contextlib import contextmanager
+
+        import typer
+
+        from autodft.cli import submit as cli
+
+        @contextmanager
+        def _session(*args, **kwargs):
+            yield session
+
+        monkeypatch.setattr("autodft.db.get_session", _session)
+        with pytest.raises(typer.Exit):
+            cli._qualified_project("screening", "nobody")

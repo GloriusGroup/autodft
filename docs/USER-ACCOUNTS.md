@@ -1,6 +1,7 @@
 # User accounts — design
 
-Status: **in progress** on `feature/user-accounts`.
+Status: **implemented** on `feature/user-accounts`, phases 1-5 complete.
+See [UPGRADE-user-accounts.md](UPGRADE-user-accounts.md) for the rollout.
 Target: admin + per-user accounts, API keys, per-user project namespaces.
 
 ## 1. What this adds
@@ -134,9 +135,12 @@ has to change. What does change:
 * **Submission** — the request body keeps sending a *bare* name; the
   server qualifies it with the caller's username. Existing submit scripts
   are unaffected.
-* **Routes** — new `/api/projects/{owner}/{name}…`. The old
-  `/api/projects/{name}` stays as a resolver: it means "my project called
-  `{name}`", and for admin it resolves to a unique match or answers 409
+* **Routes** — a project is addressed `owner:project` in a URL. Not
+  `{owner}/{name}`: that collides with `/api/projects/{name}/export` for
+  any project called "export", and a percent-encoded slash is normalised
+  back to a separator before routing, so `owner%2Fproject` never reaches
+  the handler either. `/api/projects/{name}` still accepts a bare name,
+  meaning "mine"; for admin it resolves to a unique match or answers 409
   listing the candidates. Old bookmarks and CLI invocations keep working.
 * **Exports** — `export_data/{owner}/{name}`. `safe_subdirectory` gains a
   two-segment form; both segments are validated, so a crafted owner or
