@@ -1102,9 +1102,42 @@ def api_headers(
     return {"defaults": defaults, "custom": db_headers}
 
 
+def _caller_id(session, identity: Identity):
+    """The caller's user row id, or None when accounts are not set up."""
+    from autodft import accounts
+
+    user = accounts.get_user_by_username(session, identity.username)
+    return None if user is None else user.id
+
+
+def _may_change_header(session, identity: Identity, header) -> bool:
+    """Whether *identity* may edit or remove *header*.
+
+    Everyone uses every header; only its owner or admin changes one.
+    """
+    if identity.is_admin:
+        return True
+    owner_id = getattr(header, "owner_id", None)
+    return owner_id is not None and owner_id == _caller_id(session, identity)
+
+
+_HEADER_FORBIDDEN = {
+    "detail": "This header belongs to another user. Create your own copy "
+              "instead, or ask an administrator to change it."
+}
+
+
 @router.post("/api/headers")
-def api_create_header(body: HeaderCreate):
-    """Create a new custom computation header."""
+def api_create_header(
+    body: HeaderCreate, identity: Identity = Depends(current_identity),
+):
+    """Create a new custom computation header, owned by the caller.
+
+    Anyone may create one, and anyone may *use* anyone's -- a method
+    library is only useful shared. Only the owner (or admin) may later
+    change or remove it, because editing a header silently changes what
+    the next submission referencing it computes.
+    """
     if body.kind and body.kind not in {"confsearch", "optimization", "singlepoint"}:
         return JSONResponse(
             status_code=400,
@@ -1116,6 +1149,7 @@ def api_create_header(body: HeaderCreate):
             description=body.description,
             kind=body.kind,
             validated=body.validated,
+            owner_id=_caller_id(session, identity),
         )
         session.add(header)
         session.commit()
@@ -1130,8 +1164,11 @@ def api_create_header(body: HeaderCreate):
 
 
 @router.put("/api/headers/{header_id}")
-def api_update_header(header_id: int, body: HeaderUpdate):
-    """Update fields on an existing header."""
+def api_update_header(
+    header_id: int, body: HeaderUpdate,
+    identity: Identity = Depends(current_identity),
+):
+    """Update fields on an existing header. Owner or admin only."""
     if body.kind is not None and body.kind not in {"", "confsearch", "optimization", "singlepoint"}:
         return JSONResponse(
             status_code=400,
@@ -1141,6 +1178,8 @@ def api_update_header(header_id: int, body: HeaderUpdate):
         header = session.get(ComputationHeader, header_id)
         if header is None:
             return JSONResponse(status_code=404, content={"detail": "Header not found"})
+        if not _may_change_header(session, identity, header):
+            return JSONResponse(status_code=403, content=_HEADER_FORBIDDEN)
         if body.header_text is not None:
             header.header_text = body.header_text
         if body.description is not None:
@@ -1162,8 +1201,10 @@ def api_update_header(header_id: int, body: HeaderUpdate):
 
 
 @router.delete("/api/headers/{header_id}")
-def api_delete_header(header_id: int):
-    """Soft-delete a custom header.
+def api_delete_header(
+    header_id: int, identity: Identity = Depends(current_identity),
+):
+    """Soft-delete a custom header. Owner or admin only.
 
     Refused only when an *in-flight* task (status ``created`` or
     ``pending``) still references it directly or through its state.
@@ -1178,6 +1219,8 @@ def api_delete_header(header_id: int):
         header = session.get(ComputationHeader, header_id)
         if header is None:
             return JSONResponse(status_code=404, content={"detail": "Header not found"})
+        if not _may_change_header(session, identity, header):
+            return JSONResponse(status_code=403, content=_HEADER_FORBIDDEN)
 
         # 1. Direct references on ComputationTask
         direct_inflight = session.exec(
@@ -1279,8 +1322,8 @@ def _admin_scheduler(settings):
         return None
 
 
-@router.get("/api/admin/wipe-status")
-def api_wipe_status():
+@router.get("/api/wipe-status")
+def api_wipe_status(identity: Identity = Depends(current_identity)):
     """Whether a destructive operation is still deleting files.
 
     A project wipe and a database reset answer as soon as the rows are gone
@@ -1290,6 +1333,11 @@ def api_wipe_status():
     from autodft.api import admin_ops
 
     operation = admin_ops.current_operation()
+    if not identity.is_admin:
+        # The label names the project being wiped, which may be someone
+        # else's. A user only needs to know that they have to wait.
+        return {"running": operation is not None, "operation": None,
+                "file_removal": None}
     return {
         "running": operation is not None,
         "operation": operation,
@@ -1297,7 +1345,7 @@ def api_wipe_status():
     }
 
 
-@router.get("/api/admin/projects/{name}/wipe-preview")
+@router.get("/api/projects/{name}/wipe-preview")
 def api_project_wipe_preview(
     name: str, identity: Identity = Depends(current_identity),
 ):
@@ -1316,7 +1364,7 @@ def api_project_wipe_preview(
         )
 
 
-@router.post("/api/admin/projects/{name}/wipe")
+@router.post("/api/projects/{name}/wipe")
 def api_project_wipe(
     name: str, body: WipeRequest,
     identity: Identity = Depends(current_identity),
@@ -1324,8 +1372,11 @@ def api_project_wipe(
     """Permanently delete a project: DB rows, raw comp_data, exported data.
 
     Requires ``confirm`` to equal the project name exactly. Irreversible.
+
+    Scoped, not admin-only: a user may wipe their own projects. The name
+    is resolved through :func:`resolve_project`, so someone else's answers
+    404 exactly as it does for a read.
     """
-    require_admin(identity)
     bad = _reject_bad_project(name)
     if bad is not None:
         return bad
@@ -1357,7 +1408,7 @@ def api_project_wipe(
         )
 
 
-@router.get("/api/admin/molecules/{molecule_id}/wipe-preview")
+@router.get("/api/molecules/{molecule_id}/wipe-preview")
 def api_molecule_wipe_preview(
     molecule_id: int, identity: Identity = Depends(current_identity),
 ):
@@ -1366,6 +1417,7 @@ def api_molecule_wipe_preview(
 
     settings = get_active_settings()
     with get_session() as session:
+        require_molecule(session, identity, molecule_id)
         preview = admin_ops.preview_molecule_wipe(
             session, molecule_id, settings.comp_data_path,
         )
@@ -1374,27 +1426,23 @@ def api_molecule_wipe_preview(
     return preview
 
 
-@router.post("/api/admin/molecules/{molecule_id}/wipe")
+@router.post("/api/molecules/{molecule_id}/wipe")
 def api_molecule_wipe(
     molecule_id: int, body: WipeRequest,
     identity: Identity = Depends(current_identity),
 ):
     """Delete one molecule with its states, tasks, jobs and raw files.
 
-    Requires ``confirm`` to equal the molecule's SMILES exactly.
+    Requires ``confirm`` to equal the molecule's SMILES exactly. A user
+    may wipe their own molecules; someone else's answers 404.
     """
-    require_admin(identity)
     from autodft.api import admin_ops
 
     settings = get_active_settings()
     try:
         with admin_ops.exclusive(f"wipe of molecule {molecule_id}"):
             with get_session() as session:
-                mol = session.get(Molecule, molecule_id)
-                if mol is None:
-                    return JSONResponse(
-                        status_code=404, content={"detail": f"Molecule {molecule_id} not found"},
-                    )
+                mol = require_molecule(session, identity, molecule_id)
                 if body.confirm != mol.smiles:
                     return _confirmation_error(mol.smiles, body.confirm)
                 return admin_ops.wipe_molecule(

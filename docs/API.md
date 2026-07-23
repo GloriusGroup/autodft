@@ -92,6 +92,18 @@ There is no delete-user. An account whose projects still hold hundreds of
 gigabytes should not disappear in one click: wipe or reassign the
 projects first, then deactivate.
 
+### Saved headers
+
+Every signed-in account may list, use and create headers — a method
+library is only useful shared. Editing or deleting one is the **owner's**
+or admin's: a header change silently alters what the next submission
+referencing it computes. Someone else's answers **403** with a suggestion
+to copy it, rather than 404, because you can already see it in the
+listing.
+
+The four seeded defaults belong to `admin`, as does anything created
+before accounts existed.
+
 `GET /api/cluster` is readable by everyone and reports only
 `breaker_tripped` and `queued_entrypoints`, so a user can tell "my jobs
 are stuck" from "the pipeline is halted" without asking an administrator.
@@ -450,18 +462,23 @@ Every one of these is irreversible and comes in two halves: a
 `GET …/wipe-preview` (or `/api/admin/reset-preview`) that only counts, and
 a `POST` that acts and requires `confirm` to echo an exact string.
 
-| Endpoint | Confirm with | Deletes |
-|---|---|---|
-| `GET /api/admin/projects/{name}/wipe-preview` | — | nothing |
-| `POST /api/admin/projects/{name}/wipe` | the project name | its rows, `comp_data/mol_*`, and (unless `delete_exports: false`) `export_data/{name}` |
-| `GET /api/admin/molecules/{id}/wipe-preview` | — | nothing |
-| `POST /api/admin/molecules/{id}/wipe` | the molecule's SMILES | that molecule's rows and `comp_data/mol_{id}` |
-| `GET /api/admin/reset-preview` | — | nothing |
-| `POST /api/admin/reset-database` | `RESET THE DATABASE` | every pipeline table; data directories unless `delete_files: false`; headers only if `keep_headers: false` |
-| `GET /api/admin/wipe-status` | — | nothing; reports the deletion still in flight |
+| Endpoint | Who | Confirm with | Deletes |
+|---|---|---|---|
+| `GET /api/projects/{name}/wipe-preview` | owner or admin | — | nothing |
+| `POST /api/projects/{name}/wipe` | owner or admin | the **qualified** project name | its rows, `comp_data/mol_*`, and (unless `delete_exports: false`) the export directory |
+| `GET /api/molecules/{id}/wipe-preview` | owner or admin | — | nothing |
+| `POST /api/molecules/{id}/wipe` | owner or admin | the molecule's SMILES | that molecule's rows and `comp_data/mol_{id}` |
+| `GET /api/admin/reset-preview` | admin | — | nothing |
+| `POST /api/admin/reset-database` | admin | `RESET THE DATABASE` | every pipeline table; data directories unless `delete_files: false`; headers only if `keep_headers: false` |
+| `GET /api/wipe-status` | anyone | — | nothing; reports the deletion still in flight |
 
-`default` is protected and cannot be wiped. Saved headers are shared
-across projects and are never touched by a project or molecule wipe.
+A user may wipe their own projects and molecules; someone else's answers
+**404**, the same as a read, since a 403 would confirm it exists. Only the
+shared `admin/default` is protected — your own `alice/default` is an
+ordinary project. `wipe-status` tells a non-admin only *that* something is
+running: the label names the project, which may not be theirs.
+
+Saved headers are never touched by a project or molecule wipe.
 
 Four properties worth knowing:
 
@@ -481,7 +498,7 @@ Four properties worth knowing:
   much is under them. Measured on a 300-file tree: **0.14 s to stage
   against 9.8 s to delete**, and only the staging is inside the request.
   The response's `file_removal` object reports progress, and
-  `GET /api/admin/wipe-status` follows it to completion.
+  `GET /api/wipe-status` follows it to completion.
 * **SLURM is stopped first.** Jobs the scheduler still has queued or
   running are `scancel`ed before their directories disappear; the count
   comes back as `jobs_cancelled`.

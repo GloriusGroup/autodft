@@ -1265,7 +1265,7 @@
         <div class="page-header">
             <div>
                 <h1>Admin</h1>
-                <div class="subtitle">
+                <div class="subtitle" id="adminPageSubtitle">
                     Permanently remove calculations and their files. Every action
                     here shows what it will delete first and requires the exact
                     name typed back. None of it can be undone.
@@ -1273,7 +1273,7 @@
             </div>
         </div>
 
-        <div class="submit-section">
+        <div class="submit-section" id="adminUsersSection">
             <h2 style="margin-bottom:12px;">Users</h2>
             <div class="subtitle" style="margin-bottom:14px;">
                 Each user gets one API key. They submit with it, sign in with
@@ -1348,7 +1348,7 @@
             <div id="adminMoleculeResult" style="margin-top:14px;"></div>
         </div>
 
-        <div class="submit-section admin-danger">
+        <div class="submit-section admin-danger" id="adminResetSection">
             <h2 style="margin-bottom:12px;">Reset the entire database</h2>
             <div class="subtitle" style="margin-bottom:14px;">
                 Empties every table and every data directory. Saved headers are
@@ -1874,7 +1874,7 @@
         async function refreshRemovalBanner() {
             var section = document.getElementById('adminRemovalSection');
             var box = document.getElementById('adminRemovalStatus');
-            var out = await adminJSON('GET', '/api/admin/wipe-status');
+            var out = await adminJSON('GET', '/api/wipe-status');
             var running = out.ok && out.data.running;
             section.style.display = running ? '' : 'none';
             if (removalTimer) { clearTimeout(removalTimer); removalTimer = null; }
@@ -2056,7 +2056,7 @@
             var existing = row.parentNode.querySelector('.admin-confirm');
             if (existing) existing.remove();
 
-            var res = await adminJSON('GET', '/api/admin/projects/' + projectPath(name) + '/wipe-preview');
+            var res = await adminJSON('GET', '/api/projects/' + projectPath(name) + '/wipe-preview');
             if (!res.ok) { alert('Could not load preview: ' + (res.data.detail || res.status)); return; }
             var p = res.data;
 
@@ -2092,7 +2092,7 @@
                 this.disabled = true;
                 feedback.textContent = 'Wiping...';
                 feedback.className = 'submit-feedback adm-feedback';
-                var out = await adminJSON('POST', '/api/admin/projects/' + projectPath(name) + '/wipe', {
+                var out = await adminJSON('POST', '/api/projects/' + projectPath(name) + '/wipe', {
                     confirm: typed,
                     delete_exports: box.querySelector('.adm-exports').checked,
                 });
@@ -2131,7 +2131,7 @@
                 target.innerHTML = '<div class="submit-feedback error">Enter a molecule ID.</div>';
                 return;
             }
-            var res = await adminJSON('GET', '/api/admin/molecules/' + id + '/wipe-preview');
+            var res = await adminJSON('GET', '/api/molecules/' + id + '/wipe-preview');
             if (!res.ok) {
                 target.innerHTML = '<div class="submit-feedback error">'
                     + adminEscape(res.data.detail || ('HTTP ' + res.status)) + '</div>';
@@ -2162,7 +2162,7 @@
                     return;
                 }
                 this.disabled = true;
-                var out = await adminJSON('POST', '/api/admin/molecules/' + p.molecule_id + '/wipe',
+                var out = await adminJSON('POST', '/api/molecules/' + p.molecule_id + '/wipe',
                                           { confirm: typed });
                 if (!out.ok) {
                     feedback.textContent = out.data.detail || ('HTTP ' + out.status);
@@ -3572,11 +3572,23 @@
                     author.title = 'Submissions are recorded under your username.';
                 }
             }
+            // The Admin page stays reachable: a user may wipe their own
+            // projects and calculations there. Only the sections that act
+            // on everyone's data are removed -- the server refuses them
+            // regardless, this stops the page offering them.
             if (!ME.is_admin) {
-                document.querySelectorAll('[data-route="admin"]').forEach(function (el) {
-                    el.style.display = 'none';
-                });
-                if (currentRoute().indexOf('admin') === 0) { location.hash = '#/status'; }
+                ['adminUsersSection', 'adminResetSection', 'adminBreakerSection']
+                    .forEach(function (id) {
+                        var el = document.getElementById(id);
+                        if (el) { el.remove(); }
+                    });
+                var heading = document.getElementById('adminPageSubtitle');
+                if (heading) {
+                    heading.textContent = 'Permanently remove your own calculations '
+                        + 'and their files. Every action shows what it will delete '
+                        + 'first and requires the exact name typed back. None of it '
+                        + 'can be undone.';
+                }
             }
         }
 

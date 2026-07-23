@@ -128,6 +128,7 @@ def _bootstrap_accounts(engine, settings) -> None:
                 "=" * 68, admin.username, key, "=" * 68,
             )
 
+        accounts.adopt_ownerless_headers(session, admin)
         plan = accounts.migrate_projects_to_admin(session, admin)
         if plan["projects"]:
             accounts.migrate_export_directories(
@@ -149,6 +150,7 @@ def _migrate_sqlite_schema(engine) -> None:
         ("calculation_entrypoints", "processing_error", "TEXT"),
         ("molecules",                "archived",        "BOOLEAN NOT NULL DEFAULT 0"),
         ("molecules",                "priority",        "INTEGER NOT NULL DEFAULT 10"),
+        ("computation_headers",      "owner_id",        "INTEGER"),
     ]
     # Indexes on the columns the pipeline loop actually filters by. The
     # model-level index=True fields cover foreign keys and lookups but none
@@ -164,6 +166,7 @@ def _migrate_sqlite_schema(engine) -> None:
         ("ix_molecule_geometries_origin_task_id", "molecule_geometries(origin_task_id)"),
         ("ix_molecules_project_name",             "molecules(project_name)"),
         ("ix_molecules_priority",                 "molecules(priority)"),
+        ("ix_computation_headers_owner_id",       "computation_headers(owner_id)"),
         ("ix_calculation_entrypoints_queue",
          "calculation_entrypoints(time_started, priority, time_created)"),
     ]

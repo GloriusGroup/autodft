@@ -354,6 +354,28 @@ def migrate_projects_to_admin(
     return plan
 
 
+def adopt_ownerless_headers(session: Session, admin: User) -> int:
+    """Give admin every header that has no owner.
+
+    The four seeded methods and anything created before accounts existed.
+    Leaving them ownerless would mean nobody could edit them, since the
+    permission check is "owner or admin" -- admin still could, but the
+    intent is clearer written down than inferred.
+    """
+    from autodft.models.header import ComputationHeader
+
+    orphans = session.exec(
+        select(ComputationHeader).where(col(ComputationHeader.owner_id).is_(None))
+    ).all()
+    for header in orphans:
+        header.owner_id = admin.id
+        session.add(header)
+    if orphans:
+        session.commit()
+        logger.warning("Assigned %d ownerless header(s) to %r", len(orphans), admin.username)
+    return len(orphans)
+
+
 def migrate_export_directories(
     export_root: Path, admin_username: str, projects: list[str], *, dry_run: bool = False,
 ) -> dict:

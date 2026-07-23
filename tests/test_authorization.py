@@ -33,11 +33,6 @@ PUBLIC = {"/login", "/logout"}
 # Admin only. Enforced twice: at the middleware, because a missing check
 # on a destructive route is unrecoverable, and again in the handler.
 ADMIN_ONLY = {
-    "/api/admin/wipe-status",
-    "/api/admin/projects/{name}/wipe-preview",
-    "/api/admin/projects/{name}/wipe",
-    "/api/admin/molecules/{molecule_id}/wipe-preview",
-    "/api/admin/molecules/{molecule_id}/wipe",
     "/api/admin/circuit-breaker",
     "/api/admin/circuit-breaker/reset",
     "/api/admin/reset-preview",
@@ -63,6 +58,12 @@ SCOPED = {
     "/api/projects/{name}/state-analysis/export",
     "/api/projects/{name}/archive",
     "/api/projects/{name}/export",
+    # Destructive, but scoped: a user may wipe their own work, and
+    # someone else's project answers 404 exactly as a read does.
+    "/api/projects/{name}/wipe",
+    "/api/projects/{name}/wipe-preview",
+    "/api/molecules/{molecule_id}/wipe",
+    "/api/molecules/{molecule_id}/wipe-preview",
     "/api/entrypoints/failed",
     "/api/submit",
     "/api/submit-batch",
@@ -75,6 +76,7 @@ SHARED = {
     "/api/headers/{header_id}",
     "/api/cluster",           # read-only queue depth + breaker state
     "/api/whoami",            # who am I, and what may I do
+    "/api/wipe-status",       # is a deletion in flight; label admin-only
 }
 
 
@@ -323,22 +325,67 @@ class TestDestructiveRoutes:
     @pytest.mark.parametrize("path,method", [
         ("/api/admin/reset-database", "post"),
         ("/api/admin/circuit-breaker/reset", "post"),
-        ("/api/admin/projects/owner%2Fscreening/wipe", "post"),
+        ("/api/admin/users", "post"),
     ])
-    def test_a_user_cannot_reach_them(self, app_env, path, method):
+    def test_a_user_cannot_reach_the_admin_ones(self, app_env, path, method):
         response = getattr(app_env["client"], method)(
             path, headers=app_env["owner"], json={"confirm": "anything"},
         )
         assert response.status_code == 403
 
-    def test_a_user_cannot_wipe_even_their_own_project(self, app_env):
-        """Project wipe stays admin-only; a user removes their work through
-        the archive flow, which keeps the rows."""
-        response = app_env["client"].post(
-            "/api/admin/projects/owner%2Fscreening/wipe",
+    def test_a_user_may_wipe_their_own_project(self, app_env):
+        client = app_env["client"]
+        preview = client.get(
+            "/api/projects/owner:screening/wipe-preview", headers=app_env["owner"],
+        )
+        assert preview.status_code == 200
+        assert preview.json()["rows"]["molecules"] == 1
+
+        response = client.post(
+            "/api/projects/owner:screening/wipe",
             headers=app_env["owner"], json={"confirm": "owner/screening"},
         )
-        assert response.status_code == 403
+        assert response.status_code == 200, response.text
+        assert response.json()["wiped"] is True
+        assert client.get("/api/projects", headers=app_env["owner"]).json() == []
+
+    def test_but_not_someone_elses(self, app_env):
+        """404 rather than 403, for the same reason reads are: a 403 would
+        confirm the project exists."""
+        client = app_env["client"]
+        assert client.get(
+            "/api/projects/stranger:screening/wipe-preview", headers=app_env["owner"],
+        ).status_code == 404
+        assert client.post(
+            "/api/projects/stranger:screening/wipe",
+            headers=app_env["owner"], json={"confirm": "stranger/screening"},
+        ).status_code == 404
+        # ...and the project is still there for its owner.
+        assert client.get(
+            "/api/projects", headers=app_env["stranger"],
+        ).json()[0]["name"] == "stranger/screening"
+
+    def test_a_wrong_confirmation_still_refuses(self, app_env):
+        response = app_env["client"].post(
+            "/api/projects/owner:screening/wipe",
+            headers=app_env["owner"], json={"confirm": "screening"},
+        )
+        assert response.status_code == 400
+
+    def test_the_wipe_status_label_is_not_shown_to_users(self, app_env):
+        """It names the project being wiped, which may be someone else's."""
+        from autodft.api import admin_ops
+
+        with admin_ops.exclusive("wipe of project 'stranger/secret'"):
+            as_user = app_env["client"].get(
+                "/api/wipe-status", headers=app_env["owner"],
+            ).json()
+            as_admin = app_env["client"].get(
+                "/api/wipe-status", headers=app_env["admin"],
+            ).json()
+
+        assert as_user == {"running": True, "operation": None, "file_removal": None}
+        assert "stranger/secret" in as_admin["operation"]
 
 
 class TestClusterStatus:
@@ -407,3 +454,89 @@ class TestLogin:
         )
         assert response.status_code == 200
         assert "Incorrect username or key" in response.text
+
+
+class TestHeaderOwnership:
+    """Everyone may *use* every saved method -- a library is only useful
+    shared -- but editing one silently changes what the next submission
+    referencing it computes, so changes are the owner's or admin's."""
+
+    @staticmethod
+    def _create(client, headers, description):
+        return client.post("/api/headers", headers=headers, json={
+            "header_text": "!B3LYP def2-SVP OPT\n",
+            "description": description,
+            "kind": "optimization",
+        })
+
+    def test_anyone_may_create_and_it_is_theirs(self, app_env):
+        response = self._create(app_env["client"], app_env["owner"], "owner's method")
+        assert response.status_code == 200
+        from sqlmodel import select
+
+        from autodft.models import ComputationHeader, User
+        with get_session() as session:
+            header = session.get(ComputationHeader, response.json()["id"])
+            user = session.exec(select(User).where(User.username == "owner")).one()
+            assert header.owner_id == user.id
+
+    def test_everyone_can_still_see_and_use_it(self, app_env):
+        made = self._create(app_env["client"], app_env["owner"], "owner's method")
+        listing = app_env["client"].get("/api/headers", headers=app_env["stranger"])
+        assert listing.status_code == 200
+        # The listing splits package defaults from stored rows.
+        stored = listing.json()["custom"]
+        assert made.json()["id"] in [h["id"] for h in stored]
+
+    def test_someone_else_cannot_edit_it(self, app_env):
+        made = self._create(app_env["client"], app_env["owner"], "owner's method")
+        response = app_env["client"].put(
+            f"/api/headers/{made.json()['id']}",
+            headers=app_env["stranger"], json={"description": "hijacked"},
+        )
+        assert response.status_code == 403
+        assert "another user" in response.json()["detail"]
+
+    def test_someone_else_cannot_delete_it(self, app_env):
+        made = self._create(app_env["client"], app_env["owner"], "owner's method")
+        response = app_env["client"].delete(
+            f"/api/headers/{made.json()['id']}", headers=app_env["stranger"],
+        )
+        assert response.status_code == 403
+
+    def test_the_owner_can(self, app_env):
+        made = self._create(app_env["client"], app_env["owner"], "owner's method")
+        assert app_env["client"].put(
+            f"/api/headers/{made.json()['id']}",
+            headers=app_env["owner"], json={"description": "revised"},
+        ).status_code == 200
+
+    def test_admin_can_change_anyones(self, app_env):
+        made = self._create(app_env["client"], app_env["owner"], "owner's method")
+        assert app_env["client"].put(
+            f"/api/headers/{made.json()['id']}",
+            headers=app_env["admin"], json={"description": "corrected"},
+        ).status_code == 200
+
+    def test_the_seeded_defaults_belong_to_admin(self, app_env):
+        """They predate accounts; ownerless would mean nobody owns them."""
+        from sqlmodel import select
+
+        from autodft.models import ComputationHeader, User
+        with get_session() as session:
+            admin = session.exec(select(User).where(User.username == "admin")).one()
+            seeded = session.exec(select(ComputationHeader)).all()
+            assert seeded, "expected the standard headers to be seeded"
+            assert all(h.owner_id == admin.id for h in seeded)
+
+    def test_a_user_cannot_edit_a_seeded_default(self, app_env):
+        from sqlmodel import select
+
+        from autodft.models import ComputationHeader
+        with get_session() as session:
+            first = session.exec(select(ComputationHeader)).first()
+        response = app_env["client"].put(
+            f"/api/headers/{first.id}",
+            headers=app_env["owner"], json={"description": "changed"},
+        )
+        assert response.status_code == 403
