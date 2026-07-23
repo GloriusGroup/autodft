@@ -105,6 +105,8 @@ max_simultaneous_entrypoints = 50
 queue_slots_per_priority     = 10   # priority p -> p*10 waiting SLURM jobs
 max_unsubmitted_jobs         = 500  # DB backlog ceiling before expansion pauses
 loop_interval_seconds        = 60
+max_submission_seconds_per_tick = 30  # yield after this much time in sbatch
+max_submissions_per_tick     = 0   # 0 = no count limit; the queue cap throttles
 max_attempts                 = 3
 
 [slurm]
@@ -303,12 +305,21 @@ moment it arrives and parked in `calculation_entrypoints`, so a script can
 hand over a library of any size in one pass without hanging — that table
 *is* the buffer. Throttling happens downstream, in two places:
 
-* **Jobs → SLURM.** The controller keeps submitting until the queue holds
-  `priority * queue_slots_per_priority` **waiting** jobs (default 10 per
-  unit of priority, so `priority = 1` allows 10 queued jobs, `priority = 5`
-  allows 50). Running jobs are not counted, so this caps the depth of the
-  backlog rather than the throughput. Jobs are ordered by priority, so
+* **Jobs → SLURM.** The controller keeps submitting until `squeue` really
+  reports `priority * queue_slots_per_priority` of **our own waiting**
+  jobs (default 10 per unit of priority, so `priority = 1` allows 10
+  queued jobs, `priority = 5` allows 50). Running jobs never count, so on
+  an idle partition submission continues until the cluster is full and
+  jobs finally begin to queue. The queue depth is re-read from `squeue`
+  every few submissions rather than assumed, because a job SLURM starts
+  immediately is running, not waiting. Jobs are ordered by priority, so
   higher-priority work claims the slots first.
+
+  One tick yields after `max_submission_seconds_per_tick` so a long
+  submission run cannot starve status polling; it resumes on the next
+  tick. `max_submissions_per_tick` is an optional count backstop, off by
+  default — when it was on it became the binding constraint and capped
+  the fill rate at one backstop-full per tick.
 * **Entrypoints → jobs.** Expansion pauses once `max_unsubmitted_jobs`
   jobs exist in the database but have not reached SLURM, which keeps the
   on-disk `comp_data/` tree growing in step with what the cluster can

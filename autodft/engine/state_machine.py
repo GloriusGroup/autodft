@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
+from time import monotonic
 from pathlib import Path
 from typing import Optional
 
@@ -675,8 +676,14 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
     regulated here rather than at the door.
 
     The cap counts jobs that are *waiting*. A job SLURM starts straight away
-    is running, not queued, and must stop counting against it -- otherwise
-    the pipeline fills the cluster at one cap-full per tick and no faster.
+    is running, not queued, and must stop counting against it: submission
+    keeps going until squeue actually reports that many of our jobs in PD.
+    On an idle partition that means the loop runs until the cluster is full
+    and jobs finally begin to queue, which is the point.
+
+    One tick is bounded by wall clock rather than by a job count, so a long
+    submission run cannot starve status polling -- it yields and resumes on
+    the next tick with the queue state it left behind.
     """
 
     # squeue counts our own waiting (PD) jobs only, so running work never
@@ -708,12 +715,17 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
         )
         .order_by(col(Molecule.priority).desc(), col(ComputationJob.id).asc())
     )
-    # Backstop only: the priority cap above is the real throttle, but a
-    # single tick should never sit in sbatch indefinitely.
+    # Backstop only, disabled by default: the priority cap above is the
+    # real throttle. A count limit here used to bind first and cap the fill
+    # rate at one limit-full per tick.
     limit = settings.pipeline.max_submissions_per_tick
     if limit and limit > 0:
         statement = statement.limit(limit)
     rows = session.exec(statement).all()
+
+    deadline = (
+        monotonic() + max(1.0, settings.pipeline.max_submission_seconds_per_tick)
+    )
 
     # A job that can't be submitted must be recorded as a failed attempt, not
     # skipped. Skipping left `success` NULL forever, so the retry path ignored
@@ -735,6 +747,13 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
     since_poll = 0
 
     for index, (job, priority) in enumerate(rows):
+        if monotonic() >= deadline:
+            logger.info(
+                "Submission budget for this tick spent after %d job(s); "
+                "%d left for the next one", index, len(rows) - index,
+            )
+            break
+
         if since_poll >= _QUEUE_RECHECK_EVERY:
             since_poll = 0
             fresh = scheduler.get_queue_length()

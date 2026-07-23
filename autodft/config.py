@@ -108,10 +108,17 @@ class PipelineConfig:
     failure_breaker_ratio: float = 0.25
     failure_breaker_window: int = 100
     failure_breaker_min_samples: int = 20
-    # Backstop on sbatch calls in one tick, so a tick can never sit in
-    # submission indefinitely. The priority cap above is the real throttle
-    # and normally binds first. 0 disables this one.
-    max_submissions_per_tick: int = 100
+    # Backstop on sbatch calls in one tick. 0 (the default) disables it:
+    # the real throttle is the priority cap on *waiting* jobs, and a count
+    # limit here silently became the binding constraint instead -- a tick
+    # would stop at 100 with the partition idle, and the next one was 60 s
+    # away, so the pipeline could only ever fill the cluster at 100 jobs a
+    # minute no matter how much of it was free.
+    max_submissions_per_tick: int = 0
+    # What actually bounds one tick: wall clock, not a job count. Submission
+    # must not run so long that status polling and job creation are starved,
+    # so it yields after this many seconds and resumes on the next tick.
+    max_submission_seconds_per_tick: float = 30.0
     confsearch: StageConfig = field(default_factory=StageConfig)
     optimization: StageConfig = field(default_factory=StageConfig)
     singlepoint: StageConfig = field(default_factory=StageConfig)

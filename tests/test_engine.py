@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 
 import pytest
 from sqlmodel import Session, select
@@ -551,6 +552,55 @@ class TestPriorityThrottle:
         submit_pending_jobs(session, scheduler, Settings())
 
         assert scheduler.submitted == 40  # not 10
+
+    def test_it_keeps_going_until_the_cluster_is_actually_full(
+        self, session, sample_task, tmp_path,
+    ):
+        """The point of the throttle: submit until SLURM really has
+        `priority * 10` of our jobs waiting. A count limit per tick used to
+        bind first, so an idle partition was filled 100 jobs a minute no
+        matter how much of it was free."""
+        self._many_ready(session, sample_task, tmp_path, priority=1, count=250)
+        scheduler = _StubScheduler(queue_length=0, queues=False)
+
+        submit_pending_jobs(session, scheduler, Settings())
+
+        assert scheduler.submitted == 250
+
+    def test_one_tick_yields_on_wall_clock_not_on_a_job_count(
+        self, session, sample_task, tmp_path,
+    ):
+        """Submission must not run so long that status polling starves.
+        The bound is time, because that is what actually matters -- 20 slow
+        sbatch calls can cost more than 2000 fast ones."""
+        self._many_ready(session, sample_task, tmp_path, priority=1, count=60)
+
+        class _SlowScheduler(_StubScheduler):
+            def submit(self, script, nice=0):
+                time.sleep(0.02)
+                return super().submit(script, nice)
+
+        settings = Settings()
+        settings.pipeline.max_submission_seconds_per_tick = 0.1
+        scheduler = _SlowScheduler(queue_length=0, queues=False)
+
+        submit_pending_jobs(session, scheduler, settings)
+
+        # Stopped early, but made real progress rather than stalling.
+        assert 0 < scheduler.submitted < 60
+
+    def test_the_count_backstop_still_applies_when_configured(
+        self, session, sample_task, tmp_path,
+    ):
+        """Off by default, but an operator can still pin it."""
+        self._many_ready(session, sample_task, tmp_path, priority=1, count=40)
+        settings = Settings()
+        settings.pipeline.max_submissions_per_tick = 7
+        scheduler = _StubScheduler(queue_length=0, queues=False)
+
+        submit_pending_jobs(session, scheduler, settings)
+
+        assert scheduler.submitted == 7
 
     def test_a_partition_that_makes_jobs_wait_still_stops_at_the_cap(
         self, session, sample_task, tmp_path,
