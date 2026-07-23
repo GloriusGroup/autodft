@@ -335,17 +335,30 @@ class _StubEngine:
 
 
 class _StubScheduler:
-    def __init__(self, succeed=True, queue_length=0):
+    """*queues* models whether SLURM makes submitted jobs wait.
+
+    False is an idle partition: every job starts at once, so the waiting
+    count stays where it was. True is a busy one: each submission joins the
+    queue. The distinction is the whole point of the throttle.
+    """
+
+    def __init__(self, succeed=True, queue_length=0, queues=False):
         self.succeed = succeed
         self.queue_length = queue_length
+        self.queues = queues
+        self.submitted = 0
 
     def get_queue_length(self):
-        return self.queue_length
+        if self.queue_length < 0:
+            return -1
+        return self.queue_length + (self.submitted if self.queues else 0)
 
     def get_status(self, job_id):
         return SlurmStatus.RUNNING
 
     def submit(self, script, nice=0):
+        self.submitted += 1
+
         class _Result:
             success = self.succeed
             job_id = "4242" if self.succeed else None
@@ -507,6 +520,50 @@ class TestPriorityThrottle:
         submit_pending_jobs(session, _StubScheduler(), Settings())
         session.refresh(job)
         assert job.slurm_jobid is None
+
+    @staticmethod
+    def _many_ready(session, sample_task, tmp_path, priority, count):
+        """*count* submittable jobs, all on molecules at *priority*."""
+        state = session.get(MoleculeState, sample_task.state_id)
+        molecule = session.get(Molecule, state.molecule_id)
+        molecule.priority = priority
+        session.add(molecule)
+        (tmp_path / "submit.cmd").write_text("#!/bin/bash\n")
+        jobs = []
+        for attempt in range(1, count + 1):
+            job = ComputationJob(
+                task_id=sample_task.id, attempt=attempt, job_path=str(tmp_path),
+            )
+            session.add(job)
+            jobs.append(job)
+        session.commit()
+        return jobs
+
+    def test_jobs_that_start_at_once_do_not_count_against_the_cap(
+        self, session, sample_task, tmp_path,
+    ):
+        """The cap is on *waiting* jobs. On an idle partition nothing waits,
+        so submission should keep going -- it used to stop after one cap-full
+        per tick because every submitted job was counted as queued."""
+        self._many_ready(session, sample_task, tmp_path, priority=1, count=40)
+        scheduler = _StubScheduler(queue_length=0, queues=False)
+
+        submit_pending_jobs(session, scheduler, Settings())
+
+        assert scheduler.submitted == 40  # not 10
+
+    def test_a_partition_that_makes_jobs_wait_still_stops_at_the_cap(
+        self, session, sample_task, tmp_path,
+    ):
+        """The other half: when submissions really do queue, the re-poll sees
+        them and the cap holds."""
+        self._many_ready(session, sample_task, tmp_path, priority=1, count=40)
+        scheduler = _StubScheduler(queue_length=0, queues=True)
+
+        submit_pending_jobs(session, scheduler, Settings())
+
+        # 10 (the cap) plus at most one recheck interval of overshoot.
+        assert 10 <= scheduler.submitted <= 10 + 5
 
     def test_unknown_queue_length_defers_rather_than_floods(
         self, session, sample_task, tmp_path,

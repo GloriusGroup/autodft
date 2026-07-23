@@ -656,21 +656,32 @@ def start_new_tasks(
 # Step 7 -- Submit pending (unsubmitted) jobs to the scheduler
 # ======================================================================
 
+# Submissions between squeue polls inside one tick. Small enough that jobs
+# SLURM starts immediately stop counting against the cap quickly, large
+# enough that a few hundred submissions do not become a few hundred
+# subprocesses.
+_QUEUE_RECHECK_EVERY = 5
+
+
 def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settings) -> None:
     """Find jobs that have been created (no slurm_jobid, no slurm_status)
     and submit them to the scheduler.
 
     Submission keeps going until the SLURM queue holds
-    ``priority * queue_slots_per_priority`` waiting jobs, where *priority*
-    comes from the entrypoint that created the molecule. This is the only
-    throttle in the system: the REST API accepts every submission
+    ``priority * queue_slots_per_priority`` of *our own* waiting jobs, where
+    *priority* comes from the entrypoint that created the molecule. This is
+    the only throttle in the system: the REST API accepts every submission
     immediately, entrypoints buffer in the database, and the queue depth is
     regulated here rather than at the door.
+
+    The cap counts jobs that are *waiting*. A job SLURM starts straight away
+    is running, not queued, and must stop counting against it -- otherwise
+    the pipeline fills the cluster at one cap-full per tick and no faster.
     """
 
-    # squeue counts *waiting* (PD) jobs only, so running work never counts
-    # against the cap -- the limit controls how deep the backlog is allowed
-    # to get, not how much may run.
+    # squeue counts our own waiting (PD) jobs only, so running work never
+    # counts against the cap -- the limit controls how deep the backlog is
+    # allowed to get, not how much may run.
     queue_len = scheduler.get_queue_length()
     if queue_len < 0:
         # -1 means squeue failed. Submitting blind would flood the partition,
@@ -715,7 +726,21 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
         job.time_end = datetime.now(timezone.utc)
         session.add(job)
 
+    # Between polls the count is incremented optimistically, which assumes
+    # every submitted job sits in the queue. On an idle partition none of
+    # them does -- they start immediately -- so re-reading the real waiting
+    # count is what lets the loop keep going and actually fill the cluster.
+    # One squeue per _QUEUE_RECHECK_EVERY submissions, not per submission:
+    # the optimistic increment bounds the overshoot in between.
+    since_poll = 0
+
     for index, (job, priority) in enumerate(rows):
+        if since_poll >= _QUEUE_RECHECK_EVERY:
+            since_poll = 0
+            fresh = scheduler.get_queue_length()
+            if fresh >= 0:
+                queue_len = fresh
+
         cap = max(1, priority) * slots
         if queue_len >= cap:
             logger.info(
@@ -747,6 +772,7 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
             # directory -- two processes writing one output.out.
             session.commit()
             queue_len += 1
+            since_poll += 1
             logger.info("Job %d submitted (slurm_jobid=%s)", job.id, result.job_id)
         else:
             # sbatch failures are usually transient -- slurmctld restarting,
