@@ -423,10 +423,23 @@ Full route list:
 | DELETE | `/api/headers/{id}`                 | soft-delete (blocked when in-flight task references it)       |
 | POST   | `/api/validate-smiles`              | validate a SMILES string (used by the live form)              |
 | POST   | `/api/submit`                       | submit a new SMILES                                           |
+| POST   | `/api/submit-batch`                 | submit many SMILES in one request (see below)                 |
 | GET    | `/api/projects`                     | list projects with summary counts                             |
 | GET    | `/api/projects/{name}`              | per-project molecules + progress + success rate               |
 | POST   | `/api/projects/{name}/export`       | trigger CSV/JSON/files export (`?format=&all_conformers=`)    |
 | POST   | `/api/projects/{name}/archive`      | **destructive**: CSV+filtered files, wipe comp_data, drop project rows |
+| GET    | `/api/admin/…/wipe-preview`         | what a project / molecule wipe would delete — counts only     |
+| POST   | `/api/admin/projects/{name}/wipe`   | **destructive**: a project's rows, `comp_data`, exports        |
+| POST   | `/api/admin/molecules/{id}/wipe`    | **destructive**: one molecule's rows and files                 |
+| POST   | `/api/admin/reset-database`         | **destructive**: every pipeline table and data directory       |
+| GET    | `/api/admin/wipe-status`            | progress of a deletion still running in the background        |
+| GET    | `/api/admin/circuit-breaker`        | whether the failure breaker has halted submissions            |
+
+Every destructive endpoint requires an exact confirmation string, refuses
+to run while another one is in flight (409), and deletes the rows before
+the files. The files themselves are renamed aside and unlinked on a
+background thread, so the request returns in well under a second while a
+project-sized deletion runs for minutes — poll `wipe-status` for that.
 
 Field-level reference for each endpoint, including every option of
 `POST /api/submit`, is in [`docs/API.md`](docs/API.md).
