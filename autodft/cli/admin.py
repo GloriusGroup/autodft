@@ -137,7 +137,7 @@ def export(
     format: str = typer.Option("csv", "--format", help="Export format: csv or json"),
     output: Optional[Path] = typer.Option(
         None, "--output", "-o",
-        help="Output file path (default: <export_data>/<project>.<format>)",
+        help="Output file path (default: <export_data>/<owner>/<project>/<project>.<format>)",
     ),
     config: Optional[str] = typer.Option(None, "--config", help="Path to config TOML file"),
     all_conformers: bool = typer.Option(False, "--all-conformers", help="Include all conformers (not just primary)"),
@@ -150,7 +150,14 @@ def export(
     settings.ensure_directories()
 
     if output is None:
-        output = settings.export_data_path / f"{project}.{format}"
+        # The project directory, then the *bare* name as the filename.
+        # `export_data / f"{project}.csv"` on a namespaced project wrote to
+        # export_data/admin/screening.csv, whose parent may not exist.
+        from autodft.paths import project_file_stem, safe_subdirectory
+
+        out_dir = safe_subdirectory(settings.export_data_path, project)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        output = out_dir / f"{project_file_stem(project)}.{format}"
 
     extractor = PipelineExtractor(project)
 
@@ -170,7 +177,7 @@ def export_files(
     project: str = typer.Option(..., "--project", help="Project name"),
     output_dir: Optional[Path] = typer.Option(
         None, "--output-dir", "-o",
-        help="Destination directory (default: <export_data>/<project>/)",
+        help="Destination directory (default: <export_data>/<owner>/<project>/)",
     ),
     config: Optional[str] = typer.Option(None, "--config", help="Path to config TOML file"),
     all_conformers: bool = typer.Option(False, "--all-conformers", help="Include all conformers"),
@@ -183,7 +190,9 @@ def export_files(
     settings.ensure_directories()
 
     if output_dir is None:
-        output_dir = settings.export_data_path / project
+        from autodft.paths import safe_subdirectory
+
+        output_dir = safe_subdirectory(settings.export_data_path, project)
 
     extractor = PipelineExtractor(project)
     count = extractor.export_calculation_files(output_dir, all_conformers=all_conformers)

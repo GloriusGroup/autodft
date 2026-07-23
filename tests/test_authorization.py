@@ -367,6 +367,19 @@ class TestWhoami:
         response = app_env["client"].get("/api/whoami", headers=app_env["admin"])
         assert response.json()["is_admin"] is True
 
+    def test_it_reports_what_the_caller_owns_not_what_they_can_see(self, app_env):
+        """Admin sees every project; it still owns only its own. Reporting
+        visibility here made admin's own projects vanish from the list."""
+        client = app_env["client"]
+        admin_projects = client.get("/api/whoami", headers=app_env["admin"]).json()["projects"]
+        assert "screening" not in admin_projects   # that one belongs to `owner`
+
+        client.post("/api/submit", headers=app_env["admin"],
+                    json={"smiles": "CCO", "project": "mine"})
+        assert client.get(
+            "/api/whoami", headers=app_env["admin"],
+        ).json()["projects"] == ["mine"]
+
 
 class TestLogin:
     def test_username_and_key_sign_in(self, app_env, tmp_path):

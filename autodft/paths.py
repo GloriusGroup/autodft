@@ -23,6 +23,7 @@ from pathlib import Path
 __all__ = [
     "InvalidProjectName",
     "normalise_project_name",
+    "project_file_stem",
     "project_segments",
     "safe_subdirectory",
     "validate_project_name",
@@ -85,6 +86,17 @@ def validate_project_name(name: str) -> str:
     """Return *name* unchanged, or raise :class:`InvalidProjectName`."""
     project_segments(name)
     return name
+
+
+def project_file_stem(name: str) -> str:
+    """The filename stem to use *inside* a project's export directory.
+
+    The bare name, never the qualified one: the directory already encodes
+    the owner, so ``f"{name}.csv"`` on ``admin/screening`` produced
+    ``export_data/admin/screening/admin/screening.csv`` -- a path whose
+    parent was never created, so the export raised FileNotFoundError.
+    """
+    return project_segments(name)[-1]
 
 
 def safe_subdirectory(root: Path, name: str) -> Path:

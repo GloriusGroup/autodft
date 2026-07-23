@@ -243,7 +243,7 @@ def _parse_float(s: Optional[str]) -> Optional[float]:
 def _load_results_from_archive_csv(csv_path: Path) -> list[ConformerResult]:
     """Reconstruct ConformerResult rows from a frozen archive CSV.
 
-    The archive step writes <export>/<project>/<project>.csv with every
+    The archive step writes <export>/<owner>/<project>/<project>.csv with every
     column we need for state analysis (all energies in Hartree, plus
     opt_task_id so we can still resolve geometries from the DB for
     Kabsch RMSD). Used when output.out files have been wiped from
@@ -365,7 +365,12 @@ def _analyze_project_uncached(project_name: str) -> dict:
         try:
             from autodft.api.routes import get_active_settings
             settings = get_active_settings()
-            csv_path = settings.export_data_path / project_name / f"{project_name}.csv"
+            from autodft.paths import project_file_stem, safe_subdirectory
+
+            csv_path = (
+                safe_subdirectory(settings.export_data_path, project_name)
+                / f"{project_file_stem(project_name)}.csv"
+            )
         except Exception:
             csv_path = None
         if csv_path and csv_path.is_file():

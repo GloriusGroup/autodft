@@ -959,16 +959,21 @@ def api_project_export(
                 content={"detail": f"Project {name!r} is archived — source files are no longer on disk."},
             )
 
-        out_root = settings.export_data_path / name
+        from autodft.paths import project_file_stem, safe_subdirectory
+
+        # safe_subdirectory rather than a bare join: it nests the owner
+        # segment and keeps the containment check on both halves.
+        out_root = safe_subdirectory(settings.export_data_path, name)
         out_root.mkdir(parents=True, exist_ok=True)
+        stem = project_file_stem(name)
 
         extractor = PipelineExtractor(name)
         if format == "csv":
-            target = out_root / f"{name}.csv"
+            target = out_root / f"{stem}.csv"
             extractor.export_summary_csv(target, all_conformers=all_conformers)
             return {"format": format, "path": str(target)}
         if format == "json":
-            target = out_root / f"{name}.json"
+            target = out_root / f"{stem}.json"
             extractor.export_summary_json(target, all_conformers=all_conformers)
             return {"format": format, "path": str(target)}
         # files
@@ -1397,15 +1402,20 @@ def api_whoami(identity: Identity = Depends(current_identity)):
     The dashboard uses this to decide what to render: a user has no admin
     section, no other people's projects, and a locked author field.
     """
+    from autodft import accounts
+
     with get_session() as session:
-        owned = visible_projects(session, identity)
+        user = accounts.get_user_by_username(session, identity.username)
+        # What the caller *owns*, which is not the same as what they can
+        # see: admin sees everything, and reporting that as ownership made
+        # its own projects vanish from this list.
+        owned = [] if user is None else accounts.projects_owned_by(session, user)
+        names = sorted(p.name for p in owned)
     return {
         "username": identity.username,
         "is_admin": identity.is_admin,
         # Bare names: the owner is the caller, so the prefix is noise here.
-        "projects": (
-            [] if owned is None else sorted(n.split("/", 1)[-1] for n in owned)
-        ),
+        "projects": names,
     }
 
 

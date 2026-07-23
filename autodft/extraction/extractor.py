@@ -529,13 +529,15 @@ class PipelineExtractor:
         if not clean_exts:
             raise ValueError("At least one extension is required.")
 
-        project_export_dir = export_root / self.project_name
+        from autodft.paths import project_file_stem, safe_subdirectory
+
+        project_export_dir = safe_subdirectory(export_root, self.project_name)
         project_export_dir.mkdir(parents=True, exist_ok=True)
         raw_dir = project_export_dir / "raw"
 
         # 1) CSV summary first — if extraction fails we abort before
         #    touching anything destructive.
-        csv_path = project_export_dir / f"{self.project_name}.csv"
+        csv_path = project_export_dir / f"{project_file_stem(self.project_name)}.csv"
         self.export_summary_csv(csv_path, all_conformers=all_conformers)
 
         # 2) Filtered copy of comp_data tree.
