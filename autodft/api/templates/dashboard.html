@@ -1056,6 +1056,10 @@
             <a class="nav-item" data-route="headers"  href="#/headers"> <span class="nav-icon">&#9881;</span> Headers</a>
             <a class="nav-item" data-route="admin"    href="#/admin">   <span class="nav-icon">&#9888;</span> Admin</a>
             <div class="sidebar-footer">
+                <div id="identityLine" style="margin-bottom:8px;">
+                    Signed in as <strong id="identityName">…</strong>
+                    <a href="/logout" style="color:var(--text-muted); margin-left:6px;">Sign out</a>
+                </div>
                 <div class="status-indicator">
                     <div class="status-dot" id="statusDot"></div>
                     <span id="statusText">Connected</span>
@@ -1094,6 +1098,11 @@
                         <div class="form-group" style="flex: 1; min-width: 140px;">
                             <label for="project">Project</label>
                             <input type="text" id="project" name="project" placeholder="default" value="default">
+                        </div>
+                        <div class="form-group" style="flex: 0; min-width: 130px;" id="authorGroup">
+                            <label for="author">Author</label>
+                            <input type="text" id="author" name="author" value="web"
+                                   title="Recorded as the provenance of every molecule you submit">
                         </div>
                         <div class="form-group" style="flex: 0; min-width: 90px;">
                             <label for="priority">Priority</label>
@@ -1261,6 +1270,30 @@
                     here shows what it will delete first and requires the exact
                     name typed back. None of it can be undone.
                 </div>
+            </div>
+        </div>
+
+        <div class="submit-section">
+            <h2 style="margin-bottom:12px;">Users</h2>
+            <div class="subtitle" style="margin-bottom:14px;">
+                Each user gets one API key. They submit with it, sign in with
+                it, and see only their own projects. A key is shown once, at
+                creation or rotation, and is stored only as a hash &mdash; it
+                can never be read back, only replaced.
+            </div>
+            <div class="form-row">
+                <input type="text" id="newUserName" placeholder="username" style="max-width:180px;"
+                       autocapitalize="none" spellcheck="false">
+                <input type="text" id="newUserDisplay" placeholder="display name (optional)" style="max-width:220px;">
+                <select id="newUserRole" style="max-width:120px;">
+                    <option value="user">user</option>
+                    <option value="admin">admin</option>
+                </select>
+                <button type="button" class="btn" id="adminCreateUser">Create user</button>
+            </div>
+            <div id="adminUserFeedback" class="submit-feedback"></div>
+            <div class="admin-list" id="adminUserList" style="margin-top:14px;">
+                <div class="empty-state">Loading...</div>
             </div>
         </div>
 
@@ -1845,8 +1878,102 @@
             removalTimer = setTimeout(refreshRemovalBanner, 5000);
         }
 
+        // A key exists in exactly one place after this returns: the
+        // screen. Make that impossible to miss rather than logging it to a
+        // toast that disappears in two seconds.
+        function showNewKey(box, data) {
+            box.innerHTML = '<div class="admin-summary" style="margin-top:10px;">'
+                + '<strong>API key for ' + escHtml(data.username) + '</strong><br>'
+                + '<code style="user-select:all; font-size:0.95rem;">'
+                + escHtml(data.api_key) + '</code><br>'
+                + '<span style="color:var(--text-muted);">Copy it now. It is stored '
+                + 'only as a hash and cannot be shown again &mdash; if it is lost, '
+                + 'rotate it.</span></div>';
+        }
+
+        async function loadUsers() {
+            var list = document.getElementById('adminUserList');
+            if (!list) { return; }
+            var out = await adminJSON('GET', '/api/admin/users');
+            if (!out.ok) {
+                list.innerHTML = '<div class="empty-state">Could not load users.</div>';
+                return;
+            }
+            if (!out.data.length) {
+                list.innerHTML = '<div class="empty-state">No users yet.</div>';
+                return;
+            }
+            list.innerHTML = out.data.map(function (u) {
+                return '<div class="admin-row" data-user="' + escHtml(u.username) + '">'
+                    + '<div><strong>' + escHtml(u.username) + '</strong>'
+                    + (u.role === 'admin' ? ' <span style="color:var(--accent);">admin</span>' : '')
+                    + (u.active ? '' : ' <span style="color:var(--red);">inactive</span>')
+                    + '<br><span style="color:var(--text-muted);">'
+                    + escHtml(u.api_key_prefix) + '&hellip; &middot; '
+                    + u.projects.length + ' project(s) &middot; '
+                    + u.molecules + ' molecule(s)</span></div>'
+                    + '<div><button type="button" class="btn adm-rotate">Rotate key</button> '
+                    + '<button type="button" class="btn adm-toggle">'
+                    + (u.active ? 'Deactivate' : 'Reactivate') + '</button></div>'
+                    + '<div class="adm-userkey"></div></div>';
+            }).join('');
+
+            list.querySelectorAll('.adm-rotate').forEach(function (btn) {
+                btn.addEventListener('click', async function () {
+                    var row = btn.closest('.admin-row');
+                    var name = row.getAttribute('data-user');
+                    if (!confirm('Rotate the key for ' + name + '? Their current key '
+                                 + 'stops working immediately.')) { return; }
+                    var out = await adminJSON('POST', '/api/admin/users/'
+                        + encodeURIComponent(name) + '/rotate-key');
+                    if (out.ok) { showNewKey(row.querySelector('.adm-userkey'), out.data); }
+                });
+            });
+            list.querySelectorAll('.adm-toggle').forEach(function (btn) {
+                btn.addEventListener('click', async function () {
+                    var row = btn.closest('.admin-row');
+                    var name = row.getAttribute('data-user');
+                    var activate = btn.textContent.trim() === 'Reactivate';
+                    await adminJSON('POST', '/api/admin/users/'
+                        + encodeURIComponent(name) + '?active=' + activate);
+                    loadUsers();
+                });
+            });
+        }
+
+        (function () {
+            var btn = document.getElementById('adminCreateUser');
+            if (!btn) { return; }
+            btn.addEventListener('click', async function () {
+                var feedback = document.getElementById('adminUserFeedback');
+                var name = document.getElementById('newUserName').value.trim();
+                if (!name) {
+                    feedback.textContent = 'Enter a username.';
+                    feedback.className = 'submit-feedback error';
+                    return;
+                }
+                var out = await adminJSON('POST', '/api/admin/users', {
+                    username: name,
+                    display_name: document.getElementById('newUserDisplay').value.trim(),
+                    role: document.getElementById('newUserRole').value,
+                });
+                if (!out.ok) {
+                    feedback.textContent = out.data.detail || ('HTTP ' + out.status);
+                    feedback.className = 'submit-feedback error';
+                    return;
+                }
+                feedback.className = 'submit-feedback success';
+                feedback.textContent = 'Created ' + out.data.username + '.';
+                showNewKey(feedback, out.data);
+                document.getElementById('newUserName').value = '';
+                document.getElementById('newUserDisplay').value = '';
+                loadUsers();
+            });
+        })();
+
         async function loadAdminPage() {
             refreshRemovalBanner();
+            loadUsers();
 
             // --- circuit breaker ----------------------------------------
             var breakerBox = document.getElementById('adminBreakerStatus');
@@ -2449,6 +2576,7 @@
             var hSp  = pickHeader('headerSinglepoint');
             var commonBody = {
                 project: document.getElementById('project').value.trim() || 'default',
+                author: document.getElementById('author').value.trim() || 'web',
                 priority: parseInt(document.getElementById('priority').value, 10) || 10,
                 skip_confsearch: document.getElementById('skipConfsearch').checked,
                 request_t1:  document.getElementById('requestT1').checked,
@@ -3413,7 +3541,39 @@
             syncIcon(document.documentElement.getAttribute('data-theme') || 'dark');
         })();
 
+        // Who is signed in. Everything user-facing keys off this: the
+        // admin section is not rendered at all for a normal user, and the
+        // author field is theirs and not editable -- a provenance label
+        // anyone may set is not provenance. The server enforces both
+        // regardless; this only stops the UI offering what it would refuse.
+        var ME = { username: '', is_admin: false, projects: [] };
+
+        async function loadIdentity() {
+            var out = await adminJSON('GET', '/api/whoami');
+            if (!out.ok) { return; }
+            ME = out.data;
+            var name = document.getElementById('identityName');
+            if (name) { name.textContent = ME.username + (ME.is_admin ? ' (admin)' : ''); }
+
+            var author = document.getElementById('author');
+            if (author) {
+                author.value = ME.username;
+                if (!ME.is_admin) {
+                    author.readOnly = true;
+                    author.style.opacity = '0.6';
+                    author.title = 'Submissions are recorded under your username.';
+                }
+            }
+            if (!ME.is_admin) {
+                document.querySelectorAll('[data-route="admin"]').forEach(function (el) {
+                    el.style.display = 'none';
+                });
+                if (currentRoute().indexOf('admin') === 0) { location.hash = '#/status'; }
+            }
+        }
+
         // Initial load
+        loadIdentity().then(function () { activateRoute(currentRoute()); });
         fetchHeaders();
         refreshAll();
         activateRoute(currentRoute());
