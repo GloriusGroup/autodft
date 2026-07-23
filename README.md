@@ -47,11 +47,14 @@ compute node** (NFS / Lustre / BeeGFS).
 
 ## Install
 
-The project ships with a `uv.lock`. Fastest path is `uv`:
+Dependencies are declared as ranges in `pyproject.toml`; there is no
+lockfile, so an install resolves to the newest compatible versions.
+Fastest path is `uv`:
 
 ```bash
 # from the project root
-uv sync                      # creates .venv/ from uv.lock
+uv venv .venv
+uv pip install -e ".[dev]"   # dev extras bring pytest + httpx
 source .venv/bin/activate
 ```
 

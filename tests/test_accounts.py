@@ -327,10 +327,13 @@ class TestTouchIsCheap:
     def test_a_naive_stored_timestamp_does_not_raise(self, session):
         """SQLite hands back naive datetimes; subtracting one from an aware
         `now` is a TypeError, which would have 500'd every request."""
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
 
         user, _ = accounts.create_user(session, "mhoffmann")
-        user.last_seen_at = datetime.utcnow() - timedelta(seconds=5)
+        # Deliberately naive, which is what SQLite hands back.
+        user.last_seen_at = (
+            datetime.now(timezone.utc) - timedelta(seconds=5)
+        ).replace(tzinfo=None)
         assert accounts.touch(session, user) is False
 
 
