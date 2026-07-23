@@ -535,7 +535,7 @@ def api_projects(identity: Identity = Depends(current_identity)):
                 "tasks_failed": n_failed,
                 "tasks_successful": n_succ,
                 "archived": n_arch == n_mol and n_mol > 0,
-                "protected": name in PROTECTED_PROJECT_NAMES,
+                "protected": _is_protected(name),
             })
         return out
 
@@ -636,7 +636,7 @@ def api_project_detail(
         "name": name,
         "status": status,
         "archived": archived_project,
-        "protected": name in PROTECTED_PROJECT_NAMES,
+        "protected": _is_protected(name),
         "in_flight_molecules": in_flight_molecules,
         "in_flight_tasks": in_flight_tasks_total,
         "completed_molecules": total_mols - in_flight_molecules,
@@ -839,6 +839,13 @@ class ArchiveRequest(BaseModel):
 PROTECTED_PROJECT_NAMES = {"default"}
 
 
+def _is_protected(name: str) -> bool:
+    """Bare-name check; see admin_ops.is_protected for why."""
+    from autodft.api.admin_ops import is_protected
+
+    return is_protected(name)
+
+
 def _project_is_archived(session, name: str) -> Optional[bool]:
     """Return True/False if every molecule in the project is archived,
     or None if the project doesn't exist."""
@@ -875,7 +882,7 @@ def api_project_archive(
         name = resolve_project(session, identity, name)
     from autodft.extraction.extractor import PipelineExtractor
 
-    if name in PROTECTED_PROJECT_NAMES:
+    if _is_protected(name):
         return JSONResponse(
             status_code=409,
             content={"detail": f"Project {name!r} is protected and cannot be archived."},

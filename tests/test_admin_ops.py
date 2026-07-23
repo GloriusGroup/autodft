@@ -395,3 +395,32 @@ class TestConcurrentWipeOverHttp:
         assert response.status_code == 409
         assert "still running" in json.loads(response.body)["detail"]
         reset_engine()
+
+
+class TestProtectedProjects:
+    """`default` stays unwipeable after it becomes `admin/default`.
+
+    The check was a literal set membership test, so namespacing silently
+    unprotected it -- the one project that must never be wiped became
+    wipeable by the migration that renamed it.
+    """
+
+    @pytest.mark.parametrize("name", [
+        "default", "admin/default", "nhoelter/default", "admin:default",
+    ])
+    def test_every_form_of_the_name_is_protected(self, name):
+        assert admin_ops.is_protected(name) is True
+
+    @pytest.mark.parametrize("name", [
+        "phenols", "admin/phenols", "admin/defaults", "default_2",
+    ])
+    def test_other_projects_are_not(self, name):
+        assert admin_ops.is_protected(name) is False
+
+    def test_the_wipe_refuses_the_qualified_form(self, session, project, tmp_path):
+        session.add(Molecule(smiles="CCO", project_name="admin/default"))
+        session.commit()
+        with pytest.raises(ValueError, match="protected"):
+            admin_ops.wipe_project(
+                session, "admin/default", project["comp_root"], project["export_root"],
+            )
