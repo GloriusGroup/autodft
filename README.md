@@ -305,9 +305,14 @@ moment it arrives and parked in `calculation_entrypoints`, so a script can
 hand over a library of any size in one pass without hanging — that table
 *is* the buffer. Throttling happens downstream, in two places:
 
-* **Jobs → SLURM.** The controller keeps submitting until `squeue` really
-  reports `priority * queue_slots_per_priority` of **our own waiting**
-  jobs (default 10 per unit of priority, so `priority = 1` allows 10
+* **Jobs → SLURM.** The controller keeps submitting until `squeue` reports
+  `priority * queue_slots_per_priority` of **our own jobs waiting for the
+  cluster** — jobs slurmctld has evaluated and cannot start yet. A job is
+  `PD` from the moment `sbatch` returns, because SLURM schedules on its own
+  cycle rather than on submit, so jobs whose pending *reason* is still
+  `None` are not counted: doing so made the loop measure its own
+  submissions and stop after one capful on an idle partition. Otherwise
+  the cap works as before (default 10 per unit of priority, so `priority = 1` allows 10
   queued jobs, `priority = 5` allows 50). Running jobs never count, so on
   an idle partition submission continues until the cluster is full and
   jobs finally begin to queue. The queue depth is re-read from `squeue`

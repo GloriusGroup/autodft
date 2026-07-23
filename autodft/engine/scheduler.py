@@ -50,8 +50,16 @@ class Scheduler(ABC):
 
     @abstractmethod
     def get_queue_length(self) -> int:
-        """Return the number of pending jobs in the queue."""
+        """Return the number of jobs genuinely waiting in the queue."""
         ...
+
+    def get_pending_breakdown(self) -> tuple[int, int]:
+        """``(waiting_for_the_cluster, awaiting_the_scheduler)``.
+
+        Schedulers that cannot tell the two apart report everything as
+        waiting, which is the conservative reading.
+        """
+        return self.get_queue_length(), 0
 
     @abstractmethod
     def cancel(self, job_id: str) -> bool:
@@ -216,29 +224,67 @@ class SlurmScheduler(Scheduler):
 
     # -- queue length ------------------------------------------------------
 
-    def get_queue_length(self) -> int:
-        """Count our own pending jobs in the configured partition.
+    # squeue reason codes meaning "slurmctld has not evaluated this job
+    # yet", as opposed to "this job is waiting for the cluster". A job is
+    # PENDING from the instant sbatch returns -- SLURM does not schedule on
+    # submit, it schedules on its own cycle -- so counting raw PD made the
+    # submission loop measure the jobs it had just submitted and stop after
+    # one capful, on a completely idle partition.
+    _UNSCHEDULED_REASONS = {"none", "null", "(null)", ""}
 
-        Scoped to the controller's user: this number is now the sole input to
-        the submission throttle, and counting the whole partition meant any
-        other group queueing work on it would stop the pipeline submitting
-        anything at all.
+    def get_pending_breakdown(self) -> tuple[int, int]:
+        """``(waiting_for_the_cluster, awaiting_the_scheduler)``.
+
+        Both counts are our own jobs in the configured partition. The first
+        is what the throttle means by "queued": slurmctld has looked at the
+        job and cannot start it yet. The second is jobs sbatch has accepted
+        but the scheduler has not considered.
+
+        Returns ``(-1, -1)`` if squeue could not be queried.
         """
         env = os.environ.copy()
         user = getpass.getuser()
-        # `-h` suppresses the header, so no `| wc -l` and no shell needed.
+        # %r is the pending reason. `-h` suppresses the header.
         cmd = self._command([
-            "squeue", "-t", "PD", "-p", self.partition, "-u", user, "-h", "-o", "%i",
+            "squeue", "-t", "PD", "-p", self.partition, "-u", user,
+            "-h", "-o", "%i|%r",
         ])
 
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, check=True, env=env,
             )
-            return len([ln for ln in result.stdout.splitlines() if ln.strip()])
         except (subprocess.CalledProcessError, ValueError) as exc:
             logger.error("Failed to query SLURM queue length: %s", exc)
-            return -1
+            return -1, -1
+
+        waiting = unscheduled = 0
+        reasons: dict[str, int] = {}
+        for line in result.stdout.splitlines():
+            if not line.strip():
+                continue
+            _, _, reason = line.partition("|")
+            reason = reason.strip()
+            reasons[reason] = reasons.get(reason, 0) + 1
+            if reason.lower() in self._UNSCHEDULED_REASONS:
+                unscheduled += 1
+            else:
+                waiting += 1
+
+        if reasons:
+            # Logged so the reason vocabulary of this cluster is visible;
+            # the set above is the only site-specific assumption here.
+            logger.debug("Pending reasons: %s", reasons)
+        return waiting, unscheduled
+
+    def get_queue_length(self) -> int:
+        """Our own jobs that are genuinely waiting for the cluster.
+
+        Excludes jobs the scheduler has not evaluated yet -- see
+        :meth:`get_pending_breakdown`.
+        """
+        waiting, _ = self.get_pending_breakdown()
+        return waiting
 
     # -- cancel ------------------------------------------------------------
 

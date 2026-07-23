@@ -615,6 +615,73 @@ class TestPriorityThrottle:
         # 10 (the cap) plus at most one recheck interval of overshoot.
         assert 10 <= scheduler.submitted <= 10 + 5
 
+    def test_jobs_the_scheduler_has_not_looked_at_do_not_count(
+        self, session, sample_task, tmp_path,
+    ):
+        """A job is PENDING from the instant sbatch returns -- SLURM
+        schedules on its own cycle, not on submit. Counting raw PD made the
+        loop measure its own submissions and stop after one capful on a
+        completely idle cluster."""
+        self._many_ready(session, sample_task, tmp_path, priority=1, count=40)
+
+        class _JustSubmitted(_StubScheduler):
+            """Everything submitted shows up PD with no reason yet."""
+
+            def get_pending_breakdown(self):
+                return 0, self.submitted
+
+            def get_queue_length(self):
+                return 0
+
+        scheduler = _JustSubmitted()
+        submit_pending_jobs(session, scheduler, Settings())
+
+        assert scheduler.submitted == 40
+
+    def test_jobs_waiting_on_resources_do_count(
+        self, session, sample_task, tmp_path,
+    ):
+        """The other side: once slurmctld says a job is waiting for the
+        cluster, the cap applies."""
+        self._many_ready(session, sample_task, tmp_path, priority=1, count=40)
+
+        class _ClusterFull(_StubScheduler):
+            def get_pending_breakdown(self):
+                return self.submitted, 0
+
+            def get_queue_length(self):
+                return self.submitted
+
+        scheduler = _ClusterFull()
+        submit_pending_jobs(session, scheduler, Settings())
+
+        assert 10 <= scheduler.submitted <= 15
+
+    def test_a_scheduler_without_a_breakdown_still_works(
+        self, session, sample_task, tmp_path,
+    ):
+        """LocalScheduler and any third-party one only expose a count."""
+        self._many_ready(session, sample_task, tmp_path, priority=1, count=5)
+
+        class _CountOnly:
+            submitted = 0
+
+            def get_queue_length(self):
+                return 0
+
+            def submit(self, script, nice=0):
+                _CountOnly.submitted += 1
+
+                class _R:
+                    success = True
+                    job_id = "1"
+                    error = None
+                return _R()
+
+        scheduler = _CountOnly()
+        submit_pending_jobs(session, scheduler, Settings())
+        assert _CountOnly.submitted == 5
+
     def test_unknown_queue_length_defers_rather_than_floods(
         self, session, sample_task, tmp_path,
     ):

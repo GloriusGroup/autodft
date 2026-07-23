@@ -664,6 +664,19 @@ def start_new_tasks(
 _QUEUE_RECHECK_EVERY = 5
 
 
+def _pending_breakdown(scheduler: Scheduler) -> tuple[int, int]:
+    """``(waiting_for_the_cluster, awaiting_the_scheduler)`` from *scheduler*.
+
+    Falls back to treating every pending job as waiting for schedulers that
+    cannot distinguish the two -- the conservative reading, and what the
+    local test scheduler does.
+    """
+    getter = getattr(scheduler, "get_pending_breakdown", None)
+    if getter is None:
+        return scheduler.get_queue_length(), 0
+    return getter()
+
+
 def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settings) -> None:
     """Find jobs that have been created (no slurm_jobid, no slurm_status)
     and submit them to the scheduler.
@@ -689,7 +702,7 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
     # squeue counts our own waiting (PD) jobs only, so running work never
     # counts against the cap -- the limit controls how deep the backlog is
     # allowed to get, not how much may run.
-    queue_len = scheduler.get_queue_length()
+    queue_len, unscheduled = _pending_breakdown(scheduler)
     if queue_len < 0:
         # -1 means squeue failed. Submitting blind would flood the partition,
         # so skip this tick; the jobs stay pending and go out on the next one.
@@ -756,16 +769,17 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
 
         if since_poll >= _QUEUE_RECHECK_EVERY:
             since_poll = 0
-            fresh = scheduler.get_queue_length()
+            fresh, unscheduled = _pending_breakdown(scheduler)
             if fresh >= 0:
                 queue_len = fresh
 
         cap = max(1, priority) * slots
         if queue_len >= cap:
             logger.info(
-                "Queue holds %d waiting job(s); cap for priority %d is %d -- "
-                "stopping submission (%d job(s) left for a later tick)",
-                queue_len, priority, cap, len(rows) - index,
+                "%d job(s) waiting for the cluster (+%d not yet scheduled); "
+                "cap for priority %d is %d -- stopping submission "
+                "(%d job(s) left for a later tick)",
+                queue_len, unscheduled, priority, cap, len(rows) - index,
             )
             break
 
