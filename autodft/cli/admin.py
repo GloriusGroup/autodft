@@ -44,6 +44,61 @@ def init_database(
     logger.info("Database initialized: %s", settings.database_url)
 
 
+@app.command("list-users")
+def list_users(
+    config: Optional[str] = typer.Option(None, "--config", help="Path to config TOML file"),
+) -> None:
+    """List the accounts, their role, and the prefix of their API key."""
+    from autodft.config import load_settings
+    from autodft.models.user import User
+
+    init_db(load_settings(config))
+    with get_session() as session:
+        users = session.exec(select(User).order_by(col(User.username))).all()
+        if not users:
+            console.print("[yellow]No accounts.[/yellow]")
+            return
+        for user in users:
+            seen = user.last_seen_at.strftime("%Y-%m-%d %H:%M") if user.last_seen_at else "never"
+            flags = "admin" if user.is_admin else "user"
+            if not user.active:
+                flags += ", disabled"
+            console.print(
+                f"  {user.username:<16} {flags:<18} key {user.api_key_prefix}...  "
+                f"last seen {seen}"
+            )
+
+
+@app.command("rotate-key")
+def rotate_key(
+    username: str = typer.Argument(..., help="Account whose key to replace"),
+    config: Optional[str] = typer.Option(None, "--config", help="Path to config TOML file"),
+) -> None:
+    """Issue a new API key for an account, printing it once.
+
+    This is the recovery path when a key is lost — the admin key included.
+    It is deliberately local: it needs a shell on the controller and write
+    access to the database, rather than a shared secret that would be a
+    second, weaker way into every account.
+
+    The old key stops working immediately. Browser sessions already open
+    are unaffected; they expire on their own.
+    """
+    from autodft import accounts
+    from autodft.config import load_settings
+
+    init_db(load_settings(config))
+    with get_session() as session:
+        user = accounts.get_user_by_username(session, username)
+        if user is None:
+            console.print(f"[red]No account named {username!r}.[/red]")
+            raise typer.Exit(code=1)
+        key = accounts.rotate_api_key(session, user)
+
+    console.print(f"[green]New API key for {user.username}:[/green] {key}")
+    console.print("[yellow]Shown once. The previous key is now invalid.[/yellow]")
+
+
 @app.command("reset-task")
 def reset_task(
     task_id: int = typer.Argument(..., help="ID of the task to reset"),

@@ -140,11 +140,15 @@ class ApiConfig:
 
 @dataclass
 class SecurityConfig:
-    # Password required to access the dashboard and the /api/* endpoints.
-    # Sent either as a cookie (browser flow via /login) or via the
-    # X-AutoDFT-Password header (scripts). The default is intentionally
-    # weak — change it in your deployment config.
-    dashboard_password: str = "password"
+    # The key that SIGNS the session cookie. It is not a credential and
+    # nobody types it: access is a username plus a personal API key, and
+    # there is no shared password any more.
+    #
+    # Leave it unset. A random secret is then generated once and kept in
+    # `<data_path>/.session_secret`, so sessions survive a restart and no
+    # secret has to live in a config file that gets copied around. Set it
+    # explicitly only to share sessions across several controllers.
+    session_secret: Optional[str] = None
     # How long the session cookie stays valid, in seconds. Default: 7 days.
     session_lifetime_seconds: int = 7 * 24 * 3600
 
@@ -207,6 +211,70 @@ class Settings:
         self.comp_data_path.mkdir(parents=True, exist_ok=True)
         self.export_data_path.mkdir(parents=True, exist_ok=True)
 
+    def session_secret(self) -> str:
+        """The key that signs session cookies.
+
+        Configured value if there is one, otherwise a random secret
+        persisted next to the database. Persisted rather than generated
+        per process because a fresh key on every restart would log
+        everyone out on every restart.
+        """
+        if self.security.session_secret:
+            return self.security.session_secret
+        return _persisted_secret(self.data_path / ".session_secret")
+
+
+# ---------------------------------------------------------------------------
+# Session secret
+# ---------------------------------------------------------------------------
+
+# Keyed by path: reading the file on every request would put a filesystem
+# round-trip (on NFS, here) in front of every authenticated call.
+_SECRET_CACHE: dict[str, str] = {}
+
+
+def _persisted_secret(path: Path) -> str:
+    """Read the secret at *path*, creating it on first use.
+
+    Created with O_EXCL and mode 0600, so two controllers starting at once
+    cannot end up with different secrets: the loser of the race reads what
+    the winner wrote instead of overwriting it.
+    """
+    key = str(path)
+    cached = _SECRET_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    import os
+    import secrets
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        secret = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        # An unwritable data path must not take the dashboard down. The
+        # cost is that sessions do not survive this process.
+        logger.warning(
+            "Cannot persist the session secret at %s (%s); using a "
+            "process-local one, so logins will not survive a restart.",
+            path, exc,
+        )
+        secret = secrets.token_urlsafe(32)
+    else:
+        secret = secrets.token_urlsafe(32)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(secret)
+
+    if not secret:
+        # An empty file would key every HMAC with b"" — regenerate.
+        secret = secrets.token_urlsafe(32)
+        path.write_text(secret, encoding="utf-8")
+
+    _SECRET_CACHE[key] = secret
+    return secret
+
 
 # ---------------------------------------------------------------------------
 # Loader
@@ -256,6 +324,7 @@ def _apply_env_overrides(data: dict[str, Any]) -> None:
         AUTODFT_PARTITION     -> slurm.partition
         AUTODFT_API_PORT      -> api.port
         AUTODFT_LOOP_INTERVAL -> pipeline.loop_interval_seconds
+        AUTODFT_SESSION_SECRET-> security.session_secret
     """
     import os
 
@@ -271,7 +340,7 @@ def _apply_env_overrides(data: dict[str, Any]) -> None:
         ("AUTODFT_ORCA_EXTRA",     ["orca", "extra_args"]),
         ("AUTODFT_NBO_EXE",        ["orca", "nbo_exe"]),
         ("AUTODFT_TMP_DIR",        ["orca", "tmp_dir"]),
-        ("AUTODFT_PASSWORD",       ["security", "dashboard_password"]),
+        ("AUTODFT_SESSION_SECRET", ["security", "session_secret"]),
     ]
 
     for env_key, path in env_map:
@@ -282,7 +351,7 @@ def _apply_env_overrides(data: dict[str, Any]) -> None:
         for part in path[:-1]:
             target = target.setdefault(part, {})
         # Only coerce the keys that are genuinely numeric. Coercing every
-        # override meant AUTODFT_PASSWORD=123456 produced an int password:
+        # override meant a numeric-looking secret arrived as an int:
         # issue_token() then raised AttributeError on .encode() and every
         # single request 500'd, with nothing pointing at the cause.
         if path[-1] in _INT_SETTINGS:

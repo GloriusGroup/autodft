@@ -44,9 +44,8 @@ BASE_URL = "http://localhost:8085"
 # Your API key ("adft_..."), read from the environment so the script can
 # be shared without it:  export AUTODFT_API_KEY=adft_...
 # It is sent as X-AutoDFT-API-Key and identifies the account, which is
-# what limits the counts below to your own projects. The pre-accounts
-# X-AutoDFT-Password header still works and counts as admin (who sees
-# everything).
+# what limits the counts below to your own projects. An admin key sees
+# everything.
 API_KEY = os.environ.get("AUTODFT_API_KEY", "")
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "reaction.toml"
 USER = "admin"              # owner of PROJECT

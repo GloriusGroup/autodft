@@ -22,7 +22,6 @@ exporting, submitting — and cannot reach `/api/admin/*` at all.
 | Credential | Sent as | Resolves to |
 |---|---|---|
 | API key | `X-AutoDFT-API-Key: adft_…` or `Authorization: Bearer adft_…` | the key's owner |
-| Shared password | `X-AutoDFT-Password: …` | admin |
 | Session cookie | `autodft_auth`, set by `/login` | whoever signed in |
 
 A key is `adft_` plus 32 random characters. It is shown **once**, when the
@@ -35,9 +34,11 @@ is logged once, in a banner. Every other key comes from
 `POST /api/admin/users` (or the dashboard's Admin → Users), which is the
 only place it is ever shown.
 
-The shared password keeps working and means admin, which is what lets
-existing scripts, the CLI and saved curl invocations survive the upgrade
-untouched.
+There is no shared password. `X-AutoDFT-Password` was removed in 0.5.5:
+it authenticated a crowd rather than a caller, it resolved to admin — so
+every holder had the destructive routes — and it made `project_author`
+unattributable. Scripts that still send it get **401**; swap the header
+for `X-AutoDFT-API-Key`.
 
 ```bash
 # A user, with their key
@@ -50,9 +51,10 @@ curl -i -c cookies.txt -X POST http://localhost:8085/login \
 curl -s -b cookies.txt http://localhost:8085/api/overview
 ```
 
-Admin may instead leave `username` blank and give the dashboard password,
-which is the pre-accounts path and the way back in when the admin key has
-been lost.
+Lost a key, admin's included? `autodft admin rotate-key <user>` issues a
+new one and prints it once. It is deliberately local — a shell on the
+controller and write access to the database — rather than a second,
+weaker credential reachable over the network.
 
 `GET /api/whoami` answers `{"username", "is_admin", "projects"}`, where
 `projects` lists the **bare** names you own — the owner is you, so the
@@ -85,8 +87,8 @@ Submitting is unchanged: send the bare name and it lands in your own
 namespace. Submitting to a name someone else owns creates *your* project
 of that name rather than joining theirs.
 
-The `author` field is your username and is not editable. Admin may still
-set it freely, which is what labels work submitted on someone's behalf.
+The `author` field is your username and is not editable — admin included.
+To record work as someone else, submit it with their key.
 
 Reads outside your namespace answer **404**, not 403 — a 403 would
 confirm the project exists.
@@ -168,7 +170,7 @@ package defaults in `autodft/qm/orca/defaults.py`.
 | ------------------------------------------- | ------ | ------------- | ------------------------------------------------------------------------------------------- |
 | `smiles`                                    | str    | *required*    | Validated server-side. Max 512 characters — RDKit's parser overflows the C stack on longer input, and it runs inside the controller process. |
 | `project`                                   | str    | `"default"`   | A **bare** name, qualified with your namespace on the way in (`screening` → `alice/screening`) and created on first use. Groups molecules and scopes exports / archives. |
-| `author`                                    | str    | `"web"`       | Provenance label stored as `project_author` in `request_metadata`. Nothing branches on it. **Ignored for non-admins**, who are recorded under their own username; admin may set it freely. |
+| `author`                                    | str    | `"web"`       | **Accepted and ignored.** The provenance label stored as `project_author` in `request_metadata` is always the calling account's username, admin included. The field is still accepted so pre-accounts scripts do not get a 422; the real value comes back in the response. |
 | `priority`                                  | int    | `10`          | Higher = served first, and sets the queue allowance: `priority * queue_slots_per_priority` (default 10) waiting SLURM jobs. Ties broken by submission order. |
 | `request_t1`                                | bool   | `false`       | Build a T1 state and run the full chain on it.                                              |
 | `request_ox`                                | bool   | `false`       | Build a +1 (oxidised) state.                                                                |
@@ -274,7 +276,7 @@ caller can log what was refused and keep the rest:
 ```bash
 curl -X POST http://reaction.uni-muenster.de:60001/api/submit-batch \
      -H "Content-Type: application/json" \
-     -H "X-AutoDFT-Password: $AUTODFT_PASSWORD" \
+     -H "X-AutoDFT-API-Key: $AUTODFT_API_KEY" \
      -d '{"smiles_list": ["c1ccc2[nH]ccc2c1", "CCO"],
           "project": "heteroarenes", "priority": 1,
           "request_t1": true, "request_ox": true, "request_red": true,

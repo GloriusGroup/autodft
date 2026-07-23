@@ -1,6 +1,6 @@
 [project]
 name = "autodft"
-version = "0.5.0"
+version = "0.5.5"
 description = "Automated DFT calculation pipeline with SQLite backend and SLURM integration"
 requires-python = ">=3.10"
 dependencies = [

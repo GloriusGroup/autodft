@@ -15,8 +15,8 @@ Everyone else is a **user**. A user gets a username and one API key. With
 that key they submit jobs, read results and export, over the same REST API
 the admin uses — but they only ever see their own projects. On the website
 they log in with username + API key and every page is filtered to them.
-The `author` recorded on their submissions is their username and they
-cannot set it to anything else.
+The `author` recorded on their submissions is their username and nobody,
+admin included, can set it to anything else.
 
 Non-goals for this branch: groups or shared projects, per-key scopes
 (read-only keys), SSO/LDAP, audit log. All are additive later.
@@ -85,22 +85,26 @@ for something the string already answers.
 ```
 X-AutoDFT-API-Key: adft_…      → the user who owns that key
 Authorization: Bearer adft_…   → same
-X-AutoDFT-Password: <secret>   → the admin identity (unchanged)
 autodft_auth cookie            → whoever logged in
 ```
 
-Keeping the existing password header mapped to admin is what lets the
-current CLI, the campaign scripts and any saved curl keep working across
-the upgrade.
+`X-AutoDFT-Password` was kept through 0.5.0–0.5.4 so the CLI, the
+campaign scripts and saved curl invocations survived the upgrade. It was
+removed in 0.5.5: a shared secret authenticates a crowd rather than a
+caller, it resolved to admin — so every holder of it had the destructive
+routes — and it left `project_author` saying "admin" no matter who ran
+the script. Recovery from a lost key is `autodft admin rotate-key`,
+which needs a shell on the controller rather than a network credential.
 
 Keys are `adft_` + 32 url-safe random characters, shown **once** at
 creation and stored only as `sha256(key)`. Lookup is by hash, so the
 lookup is an index hit rather than a scan.
 
-The session cookie today signs `{expires}` with the dashboard password.
-It becomes `{expires}.{username}` signed the same way — still stateless,
-still invalidated wholesale when the dashboard password changes, but now
-it carries who you are.
+The session cookie is `{expires}.{username}` signed with
+`Settings.session_secret()` — a random value generated once into
+`<data_path>/.session_secret`. Still stateless, still invalidated
+wholesale if that file is deleted, but nobody can type it: it signs, it
+does not authenticate.
 
 Resolution happens once in the auth middleware and is stashed on
 `request.state.identity`; handlers take it through a `current_identity`
@@ -169,10 +173,12 @@ has to change. What does change:
 
 ## 7. Submissions and the author field
 
-`SubmitRequest.author` is ignored for non-admins and forced to the
-caller's username; admin may still set it freely (it labels work they
-submit on someone's behalf). The dashboard form shows the field
-pre-filled and disabled for users.
+`SubmitRequest.author` is accepted and ignored: the recorded author is
+always the calling account's username, admin included. An exemption for
+admin would be an exemption for whoever holds the shared dashboard
+password, which is the one credential that is not personal. To record
+work as someone else, submit it with their key. The dashboard form shows
+the field pre-filled and read-only for everyone.
 
 Submitting to a project name the caller does not own creates *their* copy
 in their namespace rather than joining someone else's — with namespacing

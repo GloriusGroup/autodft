@@ -79,8 +79,13 @@ host = "0.0.0.0"
 port = 8085
 
 [security]
-# Password required to access the dashboard and the /api/* endpoints.
-# Sent either via the login form (cookie-based session) or as the
-# X-AutoDFT-Password header (scripts). CHANGE THIS in production.
-dashboard_password       = "password"
+# There is no shared password. Access is a username plus that account's
+# API key (`X-AutoDFT-API-Key` for scripts, the login form for browsers);
+# `autodft admin rotate-key <user>` issues a new one if it is lost.
+#
+# `session_secret` only SIGNS the session cookie -- nobody types it. Left
+# unset, a random secret is generated once into
+# <data_path>/.session_secret, so sessions survive restarts without a
+# secret living in this file.
+# session_secret         = ""
 session_lifetime_seconds = 604800   # 7 days

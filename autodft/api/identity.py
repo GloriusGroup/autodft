@@ -4,16 +4,18 @@ Resolution happens once, in the auth middleware, and is stashed on
 ``request.state.identity``. Handlers reach it through the
 :func:`current_identity` dependency rather than re-parsing headers.
 
-Three credentials resolve to an identity:
+Two credentials resolve to an identity, and both name a person:
 
 ``X-AutoDFT-API-Key`` / ``Authorization: Bearer``
     A user's key. Looked up by SHA-256 hash, so it is an index hit.
-``X-AutoDFT-Password``
-    The pre-accounts shared secret, mapped to the admin account. Keeping
-    it working is what lets the existing CLI, campaign scripts and saved
-    curl invocations survive the upgrade.
 ``autodft_auth`` cookie
-    Set by the login form; carries the username it was issued for.
+    Set by the login form once a key has been presented there; carries
+    the username it was issued for.
+
+The pre-accounts ``X-AutoDFT-Password`` header is gone. A shared secret
+authenticates a crowd, not a caller, and it resolved to admin — so it
+handed every holder the destructive routes and made ``author``
+unattributable.
 
 Scoping is expressed as "the project names this caller may see", with
 ``None`` meaning unrestricted. Every data route funnels through that, so
@@ -22,7 +24,6 @@ there is one definition of visibility rather than one per endpoint.
 
 from __future__ import annotations
 
-import hmac
 import logging
 from dataclasses import dataclass
 from typing import Optional
@@ -31,7 +32,7 @@ from fastapi import HTTPException, Request
 from sqlmodel import Session, col, select
 
 from autodft import accounts
-from autodft.api.auth import COOKIE_NAME, HEADER_NAME, verify_token
+from autodft.api.auth import COOKIE_NAME, verify_token
 from autodft.config import Settings
 from autodft.models.job import ComputationJob
 from autodft.models.molecule import Molecule
@@ -79,17 +80,9 @@ def resolve_identity(
             return _from_user(user)
         return None
 
-    # The shared dashboard password: admin, as it has always been.
-    password = settings.security.dashboard_password
-    header_val = request.headers.get(HEADER_NAME)
-    if header_val and hmac.compare_digest(
-        header_val.encode("utf-8", "replace"), password.encode("utf-8")
-    ):
-        return _admin_identity(session)
-
     cookie = request.cookies.get(COOKIE_NAME)
     if cookie:
-        username = verify_token(cookie, password)
+        username = verify_token(cookie, settings.session_secret())
         if username:
             user = accounts.get_user_by_username(session, username)
             if user is not None and user.active:
@@ -103,18 +96,6 @@ def resolve_identity(
 
 def _from_user(user: User) -> Identity:
     return Identity(username=user.username, is_admin=user.is_admin, user_id=user.id)
-
-
-def _admin_identity(session: Session) -> Identity:
-    """The identity behind the shared password.
-
-    Bound to the real admin row when one exists so that ownership checks
-    and the author field have a username to work with.
-    """
-    admin = accounts.get_user_by_username(session, accounts.ADMIN_USERNAME)
-    if admin is not None:
-        return _from_user(admin)
-    return Identity(username=accounts.ADMIN_USERNAME, is_admin=True)
 
 
 # ----------------------------------------------------------------------

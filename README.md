@@ -94,8 +94,8 @@ The loader merges three layers, highest-priority last:
 2. the file you pass via `--config`
 3. environment variables (`AUTODFT_*`)
 
-For production, the entire config is anchored on `data_path`, the ORCA
-section, and a dashboard password:
+For production, the entire config is anchored on `data_path` and the
+ORCA section:
 
 ```toml
 # config/reaction.toml
@@ -137,10 +137,10 @@ host    = "0.0.0.0"
 port    = 8085
 
 [security]
-# Required to access the dashboard and /api/* endpoints. Change this
-# in production. Browsers sign in at /login (sets a cookie); scripts
-# send the same value via the X-AutoDFT-Password header.
-dashboard_password       = "password"
+# There is no shared password: access is a username plus that account's
+# API key. `session_secret` only signs the session cookie and is
+# generated into <data_path>/.session_secret when left unset.
+# session_secret         = ""
 session_lifetime_seconds = 604800   # 7 days
 ```
 
@@ -159,7 +159,7 @@ Override individual values without editing the file:
 | `AUTODFT_ORCA_EXTRA`    | `orca.extra_args`                         |
 | `AUTODFT_NBO_EXE`       | `orca.nbo_exe`                            |
 | `AUTODFT_TMP_DIR`       | `orca.tmp_dir`                            |
-| `AUTODFT_PASSWORD`      | `security.dashboard_password`             |
+| `AUTODFT_SESSION_SECRET` | `security.session_secret`                |
 
 ---
 
@@ -189,8 +189,8 @@ may use them, only their owner or admin may change them.
 
 The same first run also **creates the `admin` account and logs its API
 key once**, in a banner. That key is stored only as a hash, so copy it
-out of the log — if you miss it, sign in with the dashboard password and
-rotate it from the Admin page. See
+out of the log — if you miss it, run
+`autodft admin rotate-key admin --config config/reaction.toml`. See
 [`docs/UPGRADE-user-accounts.md`](docs/UPGRADE-user-accounts.md) when the
 database predates accounts.
 
@@ -217,20 +217,20 @@ autodft run --scheduler local --once   # single tick, then exit
 
 ## Authentication
 
-Every route except `/login` and `/logout` needs a credential. Three are
-accepted, and all three resolve to an account:
+Every route except `/login` and `/logout` needs a credential. There is
+exactly one, and it names a person:
 
 * **API key** — `X-AutoDFT-API-Key: adft_…` (or
-  `Authorization: Bearer adft_…`) identifies the key's owner. This is how
-  a normal user calls the API.
-* **Shared password** — `X-AutoDFT-Password: …`, the value of
-  `[security].dashboard_password` (default `"password"`, **change it in
-  production**), means *admin*. Scripts and CLI invocations written
-  before accounts existed keep working unchanged.
-* **Session cookie** — `autodft_auth`, set by `/login`. Browsers sign in
-  with **username + API key**; admin may leave the username blank and
-  give the dashboard password instead. 7-day default lifetime;
+  `Authorization: Bearer adft_…`) identifies the key's owner. Admin
+  included: there is no shared password, because a secret everyone knows
+  authenticates a crowd rather than a caller.
+* **Session cookie** — `autodft_auth`, set by `/login`, where a browser
+  exchanges **username + API key** for it once. 7-day default lifetime;
   `/logout` clears it.
+
+Lost a key — the admin key included? `autodft admin rotate-key <user>`
+issues a new one. It needs a shell on the controller, which is the point:
+recovery is local rather than a second, weaker credential.
 
 ```bash
 # Browser flow — visit http://localhost:8085/ and you'll be redirected
@@ -239,10 +239,6 @@ accepted, and all three resolve to an account:
 # Script flow — header on every request:
 curl -s http://localhost:8085/api/overview \
      -H "X-AutoDFT-API-Key: adft_7Kq2XnR4..." | jq .
-
-# ...or as admin, with the shared password:
-curl -s http://localhost:8085/api/overview \
-     -H "X-AutoDFT-Password: password" | jq .
 
 # Which account am I, and what do I own?
 curl -s http://localhost:8085/api/whoami \
@@ -253,8 +249,8 @@ Keys are minted by admin — Admin → Users in the dashboard, or
 `POST /api/admin/users` — and shown **once**, at creation or rotation.
 Unauthenticated `/api/*` requests get 401; browser requests get a 303 to
 `/login`. The example scripts under `examples/` read their credential
-from a constant at the top of the file (`AUTODFT_API_KEY`, or the shared
-password for admin) — set it to match your deployment.
+from a constant at the top of the file (`AUTODFT_API_KEY`) — set it to
+match your deployment.
 
 Field-level detail on credentials, namespaces and account management is
 in [`docs/API.md`](docs/API.md) §0.
@@ -346,7 +342,8 @@ Every submission path (CLI, REST, Python) ends up writing the same
 
 The `project` you send is a **bare** name and lands in your own
 namespace: `screening` submitted by `alice` is stored as
-`alice/screening`. `author` is your username unless you are admin.
+`alice/screening`. `author` is always your username — the field is
+accepted and ignored, admin included.
 
 ### Backpressure and priority
 
@@ -422,8 +419,7 @@ autodft submit submit --smiles CC --project quick --skip-confsearch
 ### REST API
 
 The controller exposes a JSON API on the same port as the dashboard.
-Every call carries a credential — the API key below, or
-`X-AutoDFT-Password` to act as admin. The shortest path:
+Every call carries an API key. The shortest path:
 
 ```bash
 export AUTODFT_API_KEY=adft_7Kq2XnR4...
@@ -538,15 +534,15 @@ is either scoped to the caller's own projects or deliberately shared
 One **admin** account reaches everything. Every other account is a
 **user**: one API key, their own projects, nothing else. Users sign in
 with username + API key, submit with the key in `X-AutoDFT-API-Key`, and
-see only their own work. The `author` on their submissions is their
-username and is not editable.
+see only their own work. The `author` on a submission is always the
+calling account's username and is not editable by anyone, admin included.
 
 Projects are namespaced per owner — stored as `owner/project`, written
 `owner:project` in a URL, and submitted as a bare name that lands in the
 caller's namespace. Two people can each have a `screening`.
 
-The existing `X-AutoDFT-Password` header still works and means admin, so
-scripts and the CLI carry over unchanged. Full detail, including account
+The shared `X-AutoDFT-Password` header has been removed: every caller
+now presents a key that names them. Full detail, including account
 management, is in [`docs/API.md`](docs/API.md) §0.
 
 End to end, as a new user (`$K` is the key admin handed you):

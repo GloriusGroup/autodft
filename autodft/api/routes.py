@@ -70,14 +70,13 @@ def login_submit(request: Request,
                  password: str = Form(...),
                  username: str = Form(""),
                  next: str = Form("/")):
-    """Sign in with a username and API key, or with the admin password.
+    """Sign in with a username and that account's API key.
 
-    Leaving the username blank and giving the dashboard password is the
-    pre-accounts path, kept so an operator locked out of the admin key can
-    still get in.
+    The key is the only credential; the browser exchanges it here for a
+    session cookie so it is not re-sent on every request. Admin included
+    — an operator who loses the admin key rotates it with
+    ``autodft admin rotate-key``, which needs the machine, not a secret.
     """
-    import hmac
-
     from autodft import accounts
 
     settings = get_active_settings()
@@ -89,12 +88,6 @@ def login_submit(request: Request,
             user = accounts.resolve_api_key(session, password)
             if user is not None and user.username == username:
                 resolved = user.username
-    elif hmac.compare_digest(
-        # Constant-time, matching the header/cookie paths in auth.py.
-        password.encode("utf-8", "replace"),
-        str(settings.security.dashboard_password).encode("utf-8"),
-    ):
-        resolved = accounts.ADMIN_USERNAME
 
     if resolved is None:
         # One message for every failure: distinguishing "no such user"
@@ -107,7 +100,7 @@ def login_submit(request: Request,
         )
 
     token = issue_token(
-        settings.security.dashboard_password,
+        settings.session_secret(),
         settings.security.session_lifetime_seconds,
         resolved,
     )
@@ -166,9 +159,10 @@ class SubmitRequest(BaseModel):
     # runs in a thread of the pipeline worker, so that kills the controller.
     smiles: str = Field(max_length=512)
     project: str = "default"
-    # Provenance label stored in request_metadata as `project_author`.
-    # Nothing in the pipeline branches on it. Defaults to "web" so the
-    # dashboard form keeps labelling its own submissions as before.
+    # Accepted and IGNORED: the author recorded in request_metadata as
+    # `project_author` is always the calling account's username. The field
+    # survives only so pre-accounts scripts that still send it are not
+    # rejected with a 422. See `_submission_owner`.
     author: str = "web"
     priority: int = 10
     request_t1: bool = False
@@ -1913,10 +1907,12 @@ def api_submit_batch(
 def _submission_owner(session, identity: Identity, body: SubmitRequest) -> tuple[str, str]:
     """The qualified project and the author to record for this submission.
 
-    The author is the caller's username and, for a non-admin, is not
-    negotiable: a provenance label anyone may set is not provenance. Admin
-    keeps the free-text field, which is what labels work submitted on
-    someone else's behalf.
+    The author is always the caller's username -- admin included. A
+    provenance label anyone may set is not provenance, and an exemption
+    for admin is an exemption for whoever holds the shared password. Work
+    submitted for someone else is submitted with their key, or labelled
+    in the project name. ``body.author`` is accepted and ignored so that
+    pre-accounts scripts still post; the real value is echoed back.
 
     The project name in the body is *bare* and is qualified with the
     caller's namespace, so existing submit scripts keep working unchanged
@@ -1928,12 +1924,12 @@ def _submission_owner(session, identity: Identity, body: SubmitRequest) -> tuple
     user = accounts.get_user_by_username(session, identity.username)
     if user is None:
         # No account row: the shared-password admin on a database that has
-        # not been bootstrapped. Leave the submission exactly as it was.
-        return body.project, body.author
+        # not been bootstrapped. The project name cannot be qualified, but
+        # the author is still the caller and not the body.
+        return body.project, identity.username
 
     project = accounts.get_or_create_project(session, user, body.project)
-    author = body.author if identity.is_admin else user.username
-    return project.qualified_name, author
+    return project.qualified_name, user.username
 
 
 def _new_entrypoint(

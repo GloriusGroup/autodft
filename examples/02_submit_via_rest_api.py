@@ -29,9 +29,9 @@ BASE_URL = "http://localhost:8085"
 #     export AUTODFT_API_KEY=adft_...
 #
 # Sent as X-AutoDFT-API-Key on every request; "Authorization: Bearer
-# adft_..." is accepted too. The old X-AutoDFT-Password header still
-# works and resolves to the admin account, which is why pre-accounts
-# scripts did not break — but it makes every submission admin's.
+# adft_..." is accepted too. It is the only credential there is: the
+# shared X-AutoDFT-Password header was removed, because a secret every
+# user knows names nobody and it resolved to admin.
 API_KEY = os.environ.get("AUTODFT_API_KEY", "")
 DEFAULT_PROJECT = "alcohols"
 TIMEOUT_SECONDS = 30
@@ -54,8 +54,8 @@ def call(method: str, path: str, body: dict | None = None) -> object:
     """One JSON HTTP round-trip. Raises ``APIError`` on non-2xx."""
     if not API_KEY:
         raise RuntimeError(
-            "Set AUTODFT_API_KEY to your API key (or swap the header below "
-            "for X-AutoDFT-Password to call as admin)."
+            "Set AUTODFT_API_KEY to your API key. Ask an administrator for "
+            "one, or run: autodft admin rotate-key <you>."
         )
     data = json.dumps(body).encode() if body is not None else None
     headers = {"Accept": "application/json", "X-AutoDFT-API-Key": API_KEY}
@@ -117,7 +117,7 @@ def submit(smiles: str, project: str, **fields) -> dict:
     ``project`` stays a *bare* name: the server qualifies it with your
     namespace, so this ends up as ``<you>/<project>`` and never collides
     with a colleague's project of the same name. An ``author`` field is
-    ignored unless you are admin — it is forced to your username.
+    accepted and ignored: it is always your username, admin included.
     """
     payload = {"smiles": smiles, "project": project}
     payload.update(fields)

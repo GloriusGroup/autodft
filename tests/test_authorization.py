@@ -106,7 +106,9 @@ def app_env(tmp_path):
             "admin": {"X-AutoDFT-API-Key": admin_key},
             "owner": {"X-AutoDFT-API-Key": owner_key},
             "stranger": {"X-AutoDFT-API-Key": stranger_key},
-            "password": {"X-AutoDFT-Password": settings.security.dashboard_password},
+            # The retired shared secret. Kept in the fixture so the test
+            # below can assert it is refused rather than silently dropped.
+            "password": {"X-AutoDFT-Password": "password"},
         }
     reset_engine()
 
@@ -195,10 +197,34 @@ class TestProjectVisibility:
         names = {p["name"] for p in response.json()}
         assert {"owner/screening", "stranger/screening"} <= names
 
-    def test_the_shared_password_still_authenticates_as_admin(self, app_env):
+    def test_the_shared_password_is_no_longer_a_credential(self, app_env):
+        """It authenticated a crowd and resolved to admin.
+
+        Anyone who could reach the port and knew one string held the
+        destructive routes, and every submission it made was authored by
+        "admin" regardless of who ran it.
+        """
         response = app_env["client"].get("/api/projects", headers=app_env["password"])
+        assert response.status_code == 401
+
+    def test_no_credential_at_all_is_refused(self, app_env):
+        assert app_env["client"].get("/api/projects").status_code == 401
+
+    def test_the_password_cannot_submit(self, app_env):
+        response = app_env["client"].post(
+            "/api/submit", headers=app_env["password"],
+            json={"smiles": "CCO", "project": "screening"},
+        )
+        assert response.status_code == 401
+
+    def test_the_password_cannot_sign_in(self, app_env):
+        """The login form took a blank username plus the password."""
+        response = app_env["client"].post(
+            "/login", data={"username": "", "password": "password"},
+            follow_redirects=False,
+        )
         assert response.status_code == 200
-        assert len(response.json()) >= 2
+        assert "Incorrect username or key" in response.text
 
     def test_a_bare_name_means_my_own(self, app_env):
         """Two users have a project called 'screening'; each gets theirs."""
@@ -295,7 +321,13 @@ class TestSubmission:
         assert response.json()["project"] == "owner/screening"
         assert response.json()["author"] == "owner"
 
-    def test_admin_may_still_label_work_it_submits_for_someone(self, app_env):
+    def test_admin_gets_no_exemption(self, app_env):
+        """Admin is a caller like any other, not a free-text label.
+
+        An exemption for admin is an exemption for whoever holds the
+        shared dashboard password, which is the one credential that is
+        not personal.
+        """
         response = app_env["client"].post(
             "/api/submit",
             headers=app_env["admin"],
@@ -307,7 +339,8 @@ class TestSubmission:
             import json as _json
             entry = session.get(CalculationEntrypoint, response.json()["id"])
             metadata = _json.loads(entry.request_metadata)
-        assert metadata["project_author"] == "MHT/NHO"
+        assert metadata["project_author"] == "admin"
+        assert response.json()["author"] == "admin"
 
     def test_submitting_to_a_name_someone_else_owns_creates_my_own(self, app_env):
         """With namespaces this is the natural reading, and it removes a

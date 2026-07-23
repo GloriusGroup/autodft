@@ -65,5 +65,9 @@ host = "0.0.0.0"
 port = 8080
 
 [security]
-dashboard_password       = "password"
+# There is no shared password: access is a username plus a personal API
+# key. `session_secret` only SIGNS the session cookie; leave it unset and
+# a random one is generated into <data_path>/.session_secret on first
+# start. Set it only to share sessions across several controllers.
+# session_secret         = ""
 session_lifetime_seconds = 604800

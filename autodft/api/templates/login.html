@@ -121,7 +121,7 @@
             <input type="hidden" name="next" value="{{ next or '/' }}">
             <label for="username">Username</label>
             <input type="text" id="username" name="username" autocomplete="username"
-                   autocapitalize="none" spellcheck="false" autofocus>
+                   autocapitalize="none" spellcheck="false" autofocus required>
             <label for="password">API key</label>
             <input type="password" id="password" name="password"
                    autocomplete="current-password" required>
@@ -132,9 +132,6 @@
             Your API key is the same credential your scripts send in the
             <code>X-AutoDFT-API-Key</code> header. Ask an administrator if
             you do not have one, or if yours needs rotating.
-            <br><br>
-            Administrators may leave the username blank and sign in with the
-            shared dashboard password instead.
         </div>
     </div>
 </body>

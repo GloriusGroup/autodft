@@ -45,9 +45,8 @@ Start the controller. On the first boot it will:
 1. create the `users` and `projects` tables
 2. create the `admin` account and **log its API key once**, in a banner.
    That key exists nowhere else — it is stored only as a hash. Copy it out
-   of the log immediately. If you miss it, sign in with the shared
-   dashboard password (still valid, still means admin) and rotate the key
-   from the admin page.
+   of the log immediately. If you miss it, run
+   `autodft admin rotate-key admin` on the controller.
 3. give every saved header that has no owner — the six seeded methods and
    anything created before accounts existed — to `admin`
 4. move every project into `admin/`, rewriting molecules and queued
@@ -62,7 +61,6 @@ qualified is skipped.
 
 Nothing that was working stops working:
 
-* `X-AutoDFT-Password` still authenticates, as admin
 * submit scripts still send a bare project name; it is qualified with the
   caller's namespace
 * the CLI gains `--user`, defaulting to `admin`

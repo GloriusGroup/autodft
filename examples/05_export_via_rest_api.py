@@ -33,8 +33,8 @@ BASE_URL = "http://localhost:8085"
 # Your API key ("adft_..."), from the environment so the script carries no
 # credential:  export AUTODFT_API_KEY=adft_...
 # Sent as X-AutoDFT-API-Key; it tells the controller which account is
-# calling, and hence which projects are yours to export or archive. The
-# old X-AutoDFT-Password header still works and resolves to admin.
+# calling, and hence which projects are yours to export or archive. It
+# is the only credential: there is no shared password.
 API_KEY = os.environ.get("AUTODFT_API_KEY", "")
 OWNER = "admin"     # namespace PROJECT lives in
 PROJECT = "Test"    # bare name
@@ -75,8 +75,8 @@ def call(method: str, path: str, body: dict | None = None,
          params: dict | None = None) -> object:
     if not API_KEY:
         raise RuntimeError(
-            "Set AUTODFT_API_KEY to your API key (or swap the header below "
-            "for X-AutoDFT-Password to call as admin)."
+            "Set AUTODFT_API_KEY to your API key. Ask an administrator for "
+            "one, or run: autodft admin rotate-key <you>."
         )
     url = BASE_URL + path
     if params:

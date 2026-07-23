@@ -10,7 +10,6 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from autodft import __version__
-from autodft.api.auth import is_authenticated
 from autodft.api.routes import public_router, router, set_active_settings
 from autodft.config import Settings
 
@@ -48,22 +47,10 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
 
         get_engine(settings)
 
-        # The shipped config carries the placeholder password, and the
-        # deployment binds 0.0.0.0. That combination exposes every endpoint
-        # -- including the destructive admin routes -- to anyone who can
-        # reach the port. Warn rather than refuse: locking an operator out of
-        # their own controller on startup would be worse.
-        if (
-            settings.security.dashboard_password == "password"
-            and settings.api.host in ("0.0.0.0", "::")
-        ):
-            logger.warning(
-                "SECURITY: the dashboard password is still the default while "
-                "listening on %s. Every endpoint, including the admin wipe and "
-                "database reset, is reachable by anyone who can connect. Set "
-                "AUTODFT_PASSWORD or [security].dashboard_password.",
-                settings.api.host,
-            )
+        # Bind the signing key now rather than on the first login, so a
+        # data path that cannot be written announces itself at startup
+        # instead of silently logging everyone out on the next restart.
+        settings.session_secret()
 
     app = FastAPI(
         title="AutoDFT Dashboard",

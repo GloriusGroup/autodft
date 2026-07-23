@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from autodft.api.auth import is_authenticated, verify_token
+from autodft.api.auth import issue_token, verify_token
 from autodft.config import Settings
 from autodft.paths import InvalidProjectName, safe_subdirectory, validate_project_name
 
@@ -131,40 +131,80 @@ class _Request:
 
 
 class TestAuthDoesNotCrashOnHostileInput:
-    """hmac.compare_digest refuses non-ASCII str operands. Both the header
-    and the cookie are attacker-controlled, so a single high byte turned
-    every request into a logged 500 -- pre-auth."""
-
-    def test_non_ascii_password_header(self):
-        settings = Settings()
-        assert is_authenticated(_Request({"X-AutoDFT-Password": "ü"}), settings) is False
-
-    def test_non_ascii_cookie(self):
-        settings = Settings()
-        assert is_authenticated(_Request({}, {"autodft_auth": "9999999999.ü"}), settings) is False
+    """hmac.compare_digest refuses non-ASCII str operands. The cookie is
+    attacker-controlled, so a single high byte turned every request into a
+    logged 500 -- pre-auth."""
 
     def test_verify_token_on_non_ascii_signature(self):
-        # None, not "": a token that fails to verify has no username, and
-        # "" is what a valid pre-accounts token returns.
-        assert verify_token("9999999999.ü", "password") is None
+        assert verify_token("9999999999.alice.ü", "s3cret") is None
 
-    def test_a_valid_header_still_authenticates(self):
+    def test_verify_token_on_a_non_ascii_username(self):
+        assert verify_token("9999999999.ü.deadbeef", "s3cret") is None
+
+    def test_a_valid_token_round_trips(self):
+        token = issue_token("s3cret", 60, "alice")
+        assert verify_token(token, "s3cret") == "alice"
+
+    def test_a_token_signed_with_another_secret_is_rejected(self):
+        assert verify_token(issue_token("s3cret", 60, "alice"), "other") is None
+
+    def test_an_expired_token_is_rejected(self):
+        assert verify_token(issue_token("s3cret", -1, "alice"), "s3cret") is None
+
+    def test_the_legacy_two_part_token_is_rejected(self):
+        """Pre-accounts cookies were {expires}.{sig} and resolved to admin.
+
+        They cannot verify under the new secret anyway, but the shape is
+        refused outright so it can never be revived by accident.
+        """
+        assert verify_token("9999999999.deadbeef", "s3cret") is None
+
+
+class TestSessionSecret:
+    """It signs cookies; it is never a credential anyone can send."""
+
+    def test_it_is_generated_and_persisted(self, tmp_path):
         settings = Settings()
-        password = settings.security.dashboard_password
-        assert is_authenticated(_Request({"X-AutoDFT-Password": password}), settings) is True
+        settings.storage.data_path = str(tmp_path)
+        first = settings.session_secret()
+
+        assert first
+        secret_file = tmp_path / ".session_secret"
+        assert secret_file.read_text().strip() == first
+        # 0600: readable by the controller's user and nobody else.
+        assert secret_file.stat().st_mode & 0o077 == 0
+
+    def test_it_survives_a_restart(self, tmp_path):
+        """A fresh key per process would log everyone out on every restart."""
+        from autodft.config import _SECRET_CACHE
+
+        settings = Settings()
+        settings.storage.data_path = str(tmp_path)
+        first = settings.session_secret()
+
+        _SECRET_CACHE.clear()          # as if the process had restarted
+        assert settings.session_secret() == first
+
+    def test_an_explicit_secret_wins(self, tmp_path):
+        settings = Settings()
+        settings.storage.data_path = str(tmp_path)
+        settings.security.session_secret = "configured"
+
+        assert settings.session_secret() == "configured"
+        assert not (tmp_path / ".session_secret").exists()
 
 
 class TestConfigCoercion:
     def test_only_numeric_settings_are_int_coerced(self, monkeypatch):
-        """AUTODFT_PASSWORD=123456 used to produce an int password, after
-        which issue_token() raised on .encode() and every request 500'd."""
+        """A numeric-looking secret used to arrive as an int, after which
+        issue_token() raised on .encode() and every request 500'd."""
         from autodft.config import load_settings
 
-        monkeypatch.setenv("AUTODFT_PASSWORD", "123456")
+        monkeypatch.setenv("AUTODFT_SESSION_SECRET", "123456")
         monkeypatch.setenv("AUTODFT_API_PORT", "9999")
         settings = load_settings()
 
-        assert isinstance(settings.security.dashboard_password, str)
+        assert isinstance(settings.security.session_secret, str)
         assert settings.api.port == 9999
 
 

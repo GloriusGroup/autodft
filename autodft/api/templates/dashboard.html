@@ -3557,9 +3557,10 @@
 
         // Who is signed in. Everything user-facing keys off this: the
         // admin section is not rendered at all for a normal user, and the
-        // author field is theirs and not editable -- a provenance label
-        // anyone may set is not provenance. The server enforces both
-        // regardless; this only stops the UI offering what it would refuse.
+        // author field is the signed-in username and never editable, admin
+        // included -- a provenance label anyone may set is not provenance.
+        // The server enforces both regardless; this only stops the UI
+        // offering what it would refuse.
         var ME = { username: '', is_admin: false, projects: [] };
 
         async function loadIdentity() {
@@ -3572,11 +3573,9 @@
             var author = document.getElementById('author');
             if (author) {
                 author.value = ME.username;
-                if (!ME.is_admin) {
-                    author.readOnly = true;
-                    author.style.opacity = '0.6';
-                    author.title = 'Submissions are recorded under your username.';
-                }
+                author.readOnly = true;
+                author.style.opacity = '0.6';
+                author.title = 'Submissions are recorded under your username.';
             }
             // The Admin page stays reachable: a user may wipe their own
             // projects and calculations there. Only the sections that act
