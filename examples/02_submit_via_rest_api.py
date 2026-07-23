@@ -3,11 +3,17 @@
 Stdlib-only HTTP client (``urllib`` + ``json``). Configure the controller
 URL at the top of the file and import / call the helpers from your own
 Python code, or just run this script to see them in action.
+
+Requests carry an API key, so the controller knows *which account* is
+calling. That matters for two reasons: what you get back is scoped to
+your own projects, and the project you submit to lands in your namespace
+rather than in a shared global one.
 """
 
 from __future__ import annotations
 
 import json
+import os
 from urllib import error, request
 
 
@@ -16,10 +22,17 @@ from urllib import error, request
 # ---------------------------------------------------------------------------
 
 BASE_URL = "http://localhost:8085"
-# Password from [security].dashboard_password in the controller's TOML
-# config. Sent via the X-AutoDFT-Password header on every request — no
-# need to walk through /login from a script.
-PASSWORD = "password"
+# Your personal key ("adft_..."), issued when the account was created and
+# recoverable only by rotating it. Kept in the environment rather than in
+# the file so a script can be shared without the credential:
+#
+#     export AUTODFT_API_KEY=adft_...
+#
+# Sent as X-AutoDFT-API-Key on every request; "Authorization: Bearer
+# adft_..." is accepted too. The old X-AutoDFT-Password header still
+# works and resolves to the admin account, which is why pre-accounts
+# scripts did not break — but it makes every submission admin's.
+API_KEY = os.environ.get("AUTODFT_API_KEY", "")
 DEFAULT_PROJECT = "alcohols"
 TIMEOUT_SECONDS = 30
 
@@ -39,8 +52,13 @@ class APIError(RuntimeError):
 
 def call(method: str, path: str, body: dict | None = None) -> object:
     """One JSON HTTP round-trip. Raises ``APIError`` on non-2xx."""
+    if not API_KEY:
+        raise RuntimeError(
+            "Set AUTODFT_API_KEY to your API key (or swap the header below "
+            "for X-AutoDFT-Password to call as admin)."
+        )
     data = json.dumps(body).encode() if body is not None else None
-    headers = {"Accept": "application/json", "X-AutoDFT-Password": PASSWORD}
+    headers = {"Accept": "application/json", "X-AutoDFT-API-Key": API_KEY}
     if body is not None:
         headers["Content-Type"] = "application/json"
     req = request.Request(BASE_URL + path, data=data, method=method, headers=headers)
@@ -61,6 +79,15 @@ def call(method: str, path: str, body: dict | None = None) -> object:
 # ---------------------------------------------------------------------------
 # Public helpers
 # ---------------------------------------------------------------------------
+
+
+def whoami() -> dict:
+    """``GET /api/whoami`` — the account behind the key, and its projects.
+
+    Cheapest way to check a key works before a long submission run. The
+    project names it returns are bare, because their owner is you.
+    """
+    return call("GET", "/api/whoami")
 
 
 def validate_smiles(smiles: str) -> dict:
@@ -86,6 +113,11 @@ def submit(smiles: str, project: str, **fields) -> dict:
     """``POST /api/submit``. Returns the server response on success.
 
     ``fields`` are the same body fields documented in ``docs/API.md``.
+
+    ``project`` stays a *bare* name: the server qualifies it with your
+    namespace, so this ends up as ``<you>/<project>`` and never collides
+    with a colleague's project of the same name. An ``author`` field is
+    ignored unless you are admin — it is forced to your username.
     """
     payload = {"smiles": smiles, "project": project}
     payload.update(fields)
@@ -110,6 +142,11 @@ def failed_entrypoints() -> list:
 
 
 if __name__ == "__main__":
+    # 0) Who is this key? Everything below is scoped to that account.
+    me = whoami()
+    print(f"signed in as {me['username']} (admin={me['is_admin']}), "
+          f"{len(me['projects'])} project(s): {', '.join(me['projects']) or '-'}")
+
     # 1) Pre-flight validation: same call the dashboard form makes on
     #    every keystroke (debounced).
     for smi in ("CCO", "c1ccc(O)cc1", "[Fe+2]", "not a smiles"):

@@ -251,3 +251,50 @@ class TestBatchSubmission:
         result = _submit(smiles_list=["C" * 600], project="p")
         assert result["counts"] == {"queued": 0, "rejected": 1}
         assert "too long" in result["rejected"][0]["detail"]
+
+
+class TestSubmitEchoesWhereItLanded:
+    """The caller sends a *bare* project name and the server qualifies it
+    with their namespace. Without echoing the result back, a script cannot
+    tell which project its molecules went into without a second request."""
+
+    @pytest.fixture()
+    def submit(self, tmp_path):
+        from autodft import accounts
+        from autodft.api.identity import Identity
+        from autodft.api.routes import SubmitBatchRequest, SubmitRequest, api_submit, api_submit_batch
+        from autodft.config import Settings as _Settings
+        from autodft.db import get_session, init_db, reset_engine
+
+        settings = _Settings()
+        settings.storage.data_path = str(tmp_path)
+        reset_engine()
+        init_db(settings)
+        with get_session(settings) as session:
+            accounts.create_user(session, "mhoffmann")
+        identity = Identity(username="mhoffmann", is_admin=False, user_id=None)
+        with get_session(settings) as session:
+            from autodft.models import User
+            from sqlmodel import select
+            identity = Identity(
+                username="mhoffmann", is_admin=False,
+                user_id=session.exec(select(User).where(User.username == "mhoffmann")).one().id,
+            )
+        yield api_submit, api_submit_batch, SubmitRequest, SubmitBatchRequest, identity
+        reset_engine()
+
+    def test_a_single_submission_reports_its_project(self, submit):
+        api_submit, _, SubmitRequest, _, identity = submit
+        result = api_submit(
+            SubmitRequest(smiles="CCO", project="alcohols", author="ignored"), identity,
+        )
+        assert result["project"] == "mhoffmann/alcohols"
+        assert result["author"] == "mhoffmann"
+
+    def test_a_batch_reports_it_once(self, submit):
+        _, api_submit_batch, _, SubmitBatchRequest, identity = submit
+        result = api_submit_batch(
+            SubmitBatchRequest(smiles_list=["CCO", "CCN"], project="alcohols"), identity,
+        )
+        assert result["project"] == "mhoffmann/alcohols"
+        assert result["counts"]["queued"] == 2

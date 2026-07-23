@@ -6,13 +6,19 @@ Two equivalent ways to look at what the controller is doing:
   runs on the controller host where the SQLite file is local.
 * ``snapshot_via_api`` — pure HTTP. Use this from anywhere else.
 
-Configure ``BASE_URL`` / ``PROJECT`` / ``CONFIG_PATH`` at the top, then
-import the helpers or run the file directly.
+Configure ``BASE_URL`` / ``USER`` / ``PROJECT`` / ``CONFIG_PATH`` at the
+top, then import the helpers or run the file directly.
+
+Projects are owned, and stored as ``owner/project``. The two backends
+spell that differently: the database holds the slash form, while a URL
+writes it ``owner:project`` (a slash would be a second path segment, and
+percent-encoding one is rejected).
 """
 
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from urllib import error, request
@@ -27,6 +33,7 @@ from autodft.models.enums import TaskStatus
 from autodft.models.job import ComputationJob
 from autodft.models.molecule import Molecule
 from autodft.models.task import ComputationTask
+from autodft.models.user import qualify
 
 
 # ---------------------------------------------------------------------------
@@ -34,10 +41,16 @@ from autodft.models.task import ComputationTask
 # ---------------------------------------------------------------------------
 
 BASE_URL = "http://localhost:8085"
-# Sent on every HTTP request via the X-AutoDFT-Password header.
-PASSWORD = "password"
+# Your API key ("adft_..."), read from the environment so the script can
+# be shared without it:  export AUTODFT_API_KEY=adft_...
+# It is sent as X-AutoDFT-API-Key and identifies the account, which is
+# what limits the counts below to your own projects. The pre-accounts
+# X-AutoDFT-Password header still works and counts as admin (who sees
+# everything).
+API_KEY = os.environ.get("AUTODFT_API_KEY", "")
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "reaction.toml"
-PROJECT = "Test"            # set to None to skip per-project block
+USER = "admin"              # owner of PROJECT
+PROJECT = "Test"            # bare name; set to None to skip per-project block
 WATCH_INTERVAL = 0           # >0 = refresh every N seconds; 0 = one shot
 HTTP_TIMEOUT = 10
 
@@ -52,7 +65,14 @@ init_db(load_settings(CONFIG_PATH if CONFIG_PATH.exists() else None))
 # ---------------------------------------------------------------------------
 
 
-def snapshot_via_db(project: str | None = None) -> dict:
+def snapshot_via_db(project: str | None = None, user: str = USER) -> dict:
+    """Counts straight from SQLite. *project* is the bare name.
+
+    The global counters are pipeline-wide — a direct database read has no
+    caller and so no scoping. Only the per-project block is namespaced,
+    and it has to be: molecules store the qualified ``owner/project``, so
+    ``PipelineExtractor("Test")`` would silently match nothing.
+    """
     with get_session() as session:
         molecules = session.exec(select(func.count(Molecule.id))).one()
         running = session.exec(
@@ -106,9 +126,10 @@ def snapshot_via_db(project: str | None = None) -> dict:
     }
 
     if project:
-        ext = PipelineExtractor(project)
-        summary[f"{project}_progress"] = ext.get_submission_progress()
-        summary[f"{project}_success_rate"] = ext.get_success_rate()
+        qualified = qualify(user, project)      # "admin/Test"
+        ext = PipelineExtractor(qualified)
+        summary[f"{qualified}_progress"] = ext.get_submission_progress()
+        summary[f"{qualified}_success_rate"] = ext.get_success_rate()
 
     return summary
 
@@ -122,7 +143,7 @@ def snapshot_via_db(project: str | None = None) -> dict:
 def _http_get(path: str) -> object:
     req = request.Request(BASE_URL + path, headers={
         "Accept": "application/json",
-        "X-AutoDFT-Password": PASSWORD,
+        "X-AutoDFT-API-Key": API_KEY,
     })
     try:
         with request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
@@ -131,13 +152,22 @@ def _http_get(path: str) -> object:
         return {"error": str(exc), "path": path}
 
 
-def snapshot_via_api(project: str | None = None) -> dict:
+def snapshot_via_api(project: str | None = None, user: str = USER) -> dict:
+    """The same picture over HTTP, already scoped to the key's account.
+
+    ``/api/cluster`` is the one honest global reading a non-admin gets:
+    queue depth plus whether the failure circuit breaker has tripped, so
+    "my jobs are stuck" can be told apart from "the pipeline is halted".
+    """
     snap: dict = {
+        "whoami": _http_get("/api/whoami"),
         "overview": _http_get("/api/overview"),
+        "cluster": _http_get("/api/cluster"),
         "failed_entrypoints": _http_get("/api/entrypoints/failed"),
     }
     if project:
-        snap["project"] = _http_get(f"/api/projects/{project}")
+        # owner:project — the URL spelling of the stored "owner/project".
+        snap["project"] = _http_get(f"/api/projects/{user}:{project}")
     return snap
 
 
@@ -168,6 +198,9 @@ def watch(via: str = "db", interval: int = WATCH_INTERVAL, project: str | None =
 
 if __name__ == "__main__":
     # Quick demo: show both backends side-by-side, one snapshot each.
+    if not API_KEY:
+        print("(AUTODFT_API_KEY is unset — the REST snapshot will 401)")
+
     print("=== snapshot via DB ===")
     print(json.dumps(snapshot_via_db(PROJECT), indent=2, default=str))
 

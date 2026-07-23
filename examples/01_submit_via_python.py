@@ -4,6 +4,12 @@ Writes ``CalculationEntrypoint`` rows straight into the database the
 controller polls — no CLI, no HTTP. The same options that the dashboard
 form and REST endpoint expose are available here as keyword arguments.
 
+Projects belong to accounts: they are stored as ``owner/project``. There
+is no request here and so no API key to identify the caller, which is why
+``USER`` below says whose namespace the work lands in — exactly what
+``autodft submit --user`` does. Writing a bare project name would create
+rows nobody owns, visible only to admin.
+
 Run it as a script::
 
     python examples/01_submit_via_python.py
@@ -18,6 +24,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from autodft import accounts
 from autodft.config import load_settings
 from autodft.db import get_session, init_db
 from autodft.engine.entrypoint_processor import validate_smiles
@@ -40,10 +47,16 @@ from sqlmodel import select
 
 CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "reaction.toml"
 
+# The account these submissions are made as. Its projects are stored as
+# ``<USER>/<project>``, and only that account (plus admin) sees them.
+USER = "admin"
+
 
 # ---------------------------------------------------------------------------
 # Engine init. ``init_db`` is idempotent: safe to call from any importing
-# module; it just makes sure the data path and tables exist.
+# module; it just makes sure the data path and tables exist. It also
+# creates the admin account on a fresh database, so ``USER = "admin"``
+# always resolves.
 # ---------------------------------------------------------------------------
 
 SETTINGS = load_settings(CONFIG_PATH if CONFIG_PATH.exists() else None)
@@ -55,8 +68,27 @@ init_db(SETTINGS)
 # ---------------------------------------------------------------------------
 
 
+def qualified_project(project: str, user: str = USER) -> tuple[str, str]:
+    """Resolve a bare project name into ``(owner/project, owner)``.
+
+    Creates the project row on first use, exactly as an API submission
+    would. Two people may each have a project called ``phenols``; they are
+    different projects because the owner is part of the stored name.
+    """
+    with get_session() as session:
+        account = accounts.get_user_by_username(session, user)
+        if account is None:
+            raise ValueError(
+                f"No account named {user!r}. Create one on the admin page "
+                f"(or via POST /api/admin/users) before submitting as them."
+            )
+        row = accounts.get_or_create_project(session, account, project)
+        return row.qualified_name, account.username
+
+
 def make_metadata(
     project: str,
+    author: str,
     *,
     request_t1: bool = False,
     request_ox: bool = False,
@@ -75,10 +107,16 @@ def make_metadata(
 
     Every keyword mirrors one body field of ``POST /api/submit``. ``S1``
     is intentionally absent — it's not supported yet.
+
+    ``project`` must already be qualified (``owner/project``) — the
+    controller matches molecules on this string verbatim. Use
+    :func:`qualified_project` to build it. ``author`` is a provenance
+    label; over REST the server forces it to the caller's username, so
+    record the owning account here too.
     """
     return json.dumps({
         "project_name": project,
-        "project_author": "python_example",
+        "project_author": author,
         "request_S1": False,
         "request_T1": request_t1,
         "request_ox": request_ox,
@@ -99,6 +137,7 @@ def submit(
     smiles: str,
     project: str,
     *,
+    user: str = USER,
     priority: int = 10,
     header_confsearch: str | None = DEFAULT_HEADER_CONFSEARCH,
     header_optimization: str | None = DEFAULT_HEADER_OPTIMIZATION,
@@ -107,6 +146,10 @@ def submit(
 ) -> int:
     """Validate, then queue one entrypoint. Returns the new row id.
 
+    ``project`` is the bare name; it is qualified with *user*'s namespace
+    before the row is written, the same way ``POST /api/submit`` qualifies
+    it with the caller's.
+
     Raises ``ValueError`` if the SMILES is invalid — same check the
     REST endpoint runs before writing the row.
     """
@@ -114,10 +157,12 @@ def submit(
     if not check["valid"]:
         raise ValueError(f"Invalid SMILES {smiles!r}: {check['error']}")
 
+    qualified, author = qualified_project(project, user)
+
     with get_session() as session:
         entry = CalculationEntrypoint(
             smiles=smiles,
-            request_metadata=make_metadata(project, **metadata_kwargs),
+            request_metadata=make_metadata(qualified, author, **metadata_kwargs),
             priority=priority,
             header_confsearch=header_confsearch,
             header_optimization=header_optimization,
@@ -146,9 +191,11 @@ def header_by_description(kind: str, contains: str) -> ComputationHeader | None:
 
 
 if __name__ == "__main__":
-    # 1) Minimal: S0 only, defaults everywhere.
+    # 1) Minimal: S0 only, defaults everywhere. "alcohols" is bare here
+    #    and lands as "<USER>/alcohols" — that is the name the dashboard,
+    #    the extractor and the export directory all use.
     eid = submit("CCO", project="alcohols")
-    print(f"#{eid}  CCO  (defaults)")
+    print(f"#{eid}  CCO  (defaults, project={USER}/alcohols)")
 
     # 2) Full coverage: T1 / ox / red, per-state conformer caps,
     #    vertical excitations off, non-default priority, g-xTB

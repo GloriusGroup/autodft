@@ -1838,6 +1838,11 @@ def api_submit(
             "id": entry.id,
             "smiles": entry.smiles,
             "status": "queued",
+            # Echoed because the caller sent a *bare* name and the server
+            # qualified it. Without this a script cannot tell which
+            # namespace its work landed in without a second request.
+            "project": project_name,
+            "author": author,
             "time_created": entry.time_created.isoformat() if entry.time_created else None,
         }
 
@@ -1899,6 +1904,8 @@ def api_submit_batch(
                 {"id": entry.id, "smiles": smiles} for smiles, entry in accepted
             ],
             "rejected": rejected,
+            "project": project_name,
+            "author": author,
             "counts": {"queued": len(accepted), "rejected": len(rejected)},
         }
 

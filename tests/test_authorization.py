@@ -290,6 +290,10 @@ class TestSubmission:
             metadata = _json.loads(entry.request_metadata)
         assert metadata["project_author"] == "owner"
         assert metadata["project_name"] == "owner/screening"
+        # Echoed back, so a script can tell where its work landed without
+        # a second request -- the name it sent was bare.
+        assert response.json()["project"] == "owner/screening"
+        assert response.json()["author"] == "owner"
 
     def test_admin_may_still_label_work_it_submits_for_someone(self, app_env):
         response = app_env["client"].post(
@@ -314,6 +318,7 @@ class TestSubmission:
             json={"smiles": "CCO", "project": "screening"},
         )
         assert response.status_code == 200
+        assert response.json()["project"] == "stranger/screening"
         with get_session() as session:
             from autodft.models import CalculationEntrypoint
             import json as _json
