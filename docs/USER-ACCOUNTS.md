@@ -1,7 +1,9 @@
 # User accounts — design
 
-Status: **implemented** on `feature/user-accounts`, phases 1-5 complete.
-See [UPGRADE-user-accounts.md](UPGRADE-user-accounts.md) for the rollout.
+Status: **merged into `main` in 0.5.0** (commit `fb2a962`), phases 1-5
+complete. This is the design record; the reference for what the API now
+does is [API.md](API.md) §0, and the rollout is described in
+[UPGRADE-user-accounts.md](UPGRADE-user-accounts.md).
 Target: admin + per-user accounts, API keys, per-user project namespaces.
 
 ## 1. What this adds
@@ -43,9 +45,15 @@ resolves to the worktree. Nothing on this branch reads or writes the live
 database, and no migration runs against it until the branch is merged and
 the controller is deliberately restarted.
 
+(Historical, as of the merge: the branch is on `main` and the worktree is
+gone. The migration now runs against the live database the first time the
+controller is restarted — see
+[UPGRADE-user-accounts.md](UPGRADE-user-accounts.md).)
+
 ## 3. Data model
 
-Two new tables. **`molecules` is not altered** — `project_name` keeps
+Two new tables and one new column: `computation_headers.owner_id`, so a
+saved method has an owner (see §5). **`molecules` is not altered** — `project_name` keeps
 holding a string, it just holds a qualified one now, so every existing
 query, join and group-by keeps working untouched.
 
@@ -108,10 +116,20 @@ Three categories, and **every** `/api/*` route must be in exactly one:
 * **scoped** — everything else: filtered to the caller's projects, or the
   whole database when the caller is admin
 
+As built, two things ended up scoped that the first draft had as
+admin-only. **Wiping** a project or a molecule moved out of
+`/api/admin/*` — a user may destroy their own work, and someone else's
+answers 404 exactly as a read does; only the shared `admin/default` stays
+protected. **Saved headers** are shared for reading and creation and
+owned for modification: anyone may list, use and create one, only its
+owner or admin may edit or delete it (403, not 404 — it is already
+visible in the listing).
+
 The failure mode to design against is not a wrong check, it is a *missing*
-one on a route someone adds in six months. So: a test enumerates
-`app.routes` and asserts each `/api/*` path appears in one of the three
-sets. A new route with no decision recorded fails the suite.
+one on a route someone adds in six months. So: a test enumerates the
+routers' paths and asserts each `/api/*` one appears in one of the three
+sets (`tests/test_authorization.py`). A new route with no decision
+recorded fails the suite.
 
 Reads that are not theirs return **404**, not 403 — a 403 confirms the
 project exists. Writes to something that exists but is not theirs also
@@ -184,11 +202,14 @@ mechanism:
 1. create `users` and `projects`
 2. create the `admin` user; generate its API key and **log it once** with
    a banner (it cannot be recovered afterwards, only rotated)
-3. for every distinct `molecules.project_name`, create a `Project` owned
-   by admin and rewrite the column from `X` to `admin/X`
-4. move `export_data/X` to `export_data/admin/X`
+3. adopt every ownerless `ComputationHeader` — the seeded methods and
+   anything predating accounts — into admin
+4. for every distinct `molecules.project_name`, create a `Project` owned
+   by admin and rewrite the column from `X` to `admin/X`, in `molecules`
+   and inside each queued entrypoint's metadata JSON
+5. move `export_data/X` to `export_data/admin/X`
 
-Step 3 rewrites production rows and step 4 moves directories, so this is
+Step 4 rewrites production rows and step 5 moves directories, so this is
 the one genuinely irreversible part of the change. It gets: a dry-run
 mode that reports what it would do, a test against a copy of a real
 database, and a documented instruction to snapshot `autodft.db` first.
@@ -206,8 +227,9 @@ file and the export tree — not the calculations.
 * migration: build a database in the pre-migration shape, migrate, assert
   every molecule reachable and owned by admin, and that a second run is a
   no-op
-* regression: the existing 230 tests must pass unchanged, since every one
-  of them exercises the admin path
+* regression: every pre-existing test must pass unchanged, since all of them
+  exercise the admin path (the suite stood at 230 when this was written
+  and at 378 once the work landed)
 
 ## 11. Phases
 

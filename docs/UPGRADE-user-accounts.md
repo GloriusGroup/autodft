@@ -48,11 +48,13 @@ Start the controller. On the first boot it will:
    of the log immediately. If you miss it, sign in with the shared
    dashboard password (still valid, still means admin) and rotate the key
    from the admin page.
-3. move every project into `admin/`, rewriting molecules and queued
+3. give every saved header that has no owner — the six seeded methods and
+   anything created before accounts existed — to `admin`
+4. move every project into `admin/`, rewriting molecules and queued
    entrypoints
-4. move `export_data/X` to `export_data/admin/X`
+5. move `export_data/X` to `export_data/admin/X`
 
-Steps 2–4 are idempotent. A second boot does nothing, and a run
+Steps 2–5 are idempotent. A second boot does nothing, and a run
 interrupted partway resumes cleanly, because a name that is already
 qualified is skipped.
 
@@ -69,7 +71,17 @@ What changes for you:
 
 * project URLs are `owner:project` — `/api/projects/admin:phenols`
 * `GET /api/projects` returns qualified names
-* exports live one directory deeper
+* exports live one directory deeper —
+  `export_data/admin/phenols/phenols.csv`
+* the CLI's *reading* commands go straight to the database and have no
+  account behind them, so `--project` there wants the qualified name:
+  `autodft admin export --project admin/phenols`,
+  `autodft status molecules --project admin/phenols`,
+  `autodft admin progress --project admin/phenols`,
+  `autodft admin requeue-failed --project admin/phenols`. The same holds
+  for `PipelineExtractor("admin/phenols")` in your own scripts.
+  `autodft submit` is the exception: it takes a bare name plus `--user`,
+  and qualifies the two itself.
 
 Create the other accounts from the dashboard's admin page. Each person
 gets their key once; hand it over out of band. To give someone their

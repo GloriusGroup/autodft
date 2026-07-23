@@ -34,7 +34,7 @@ the production config (`config/reaction.toml`):
 /mnt/share/dft_calculations/autodft_data/
 ├── autodft.db        # SQLModel / SQLite database (WAL)
 ├── comp_data/        # per-molecule SLURM working directories
-└── export_data/      # CSV / JSON / raw-file exports
+└── export_data/      # CSV / JSON / raw-file exports, as <owner>/<project>/
 ```
 
 The same path **must be reachable by both the controller and every SLURM
@@ -105,9 +105,11 @@ max_simultaneous_entrypoints = 50
 queue_slots_per_priority     = 10   # priority p -> p*10 waiting SLURM jobs
 max_unsubmitted_jobs         = 500  # DB backlog ceiling before expansion pauses
 loop_interval_seconds        = 60
+max_attempts                 = 3
+# The two submission-throttle keys are not in the shipped file; the values
+# below are the defaults that apply when they are absent.
 max_submission_seconds_per_tick = 30  # yield after this much time in sbatch
 max_submissions_per_tick     = 0   # 0 = no count limit; the queue cap throttles
-max_attempts                 = 3
 
 [slurm]
 partition = "CPU"
@@ -165,7 +167,7 @@ autodft admin init-db --config config/reaction.toml
 ```
 
 This creates `data_path`, the `comp_data/` and `export_data/`
-subdirectories, the SQLite database, all tables, **and seeds the four
+subdirectories, the SQLite database, all tables, **and seeds the six
 standard ORCA headers** into the `computation_headers` table on the
 first run:
 
@@ -174,10 +176,20 @@ first run:
 | 1 | confsearch   | GOAT GFN2-xTB conformer ensemble       |
 | 2 | confsearch   | GOAT g-xTB conformer ensemble          |
 | 3 | optimization | wB97X-D3 / def2-TZVP TightOpt + Freq   |
-| 4 | singlepoint  | wB97X-D3 / def2-QZVPD KeepDens + Freq  |
+| 4 | optimization | B3LYP / def2-SVP Opt + Freq            |
+| 5 | singlepoint  | wB97X-D3 / def2-QZVPD KeepDens         |
+| 6 | singlepoint  | B3LYP / def2-TZVP                      |
 
 The headers can be edited / extended in the dashboard's **Headers** page
-or via the `/api/headers` endpoints.
+or via the `/api/headers` endpoints. All six belong to `admin`; anyone
+may use them, only their owner or admin may change them.
+
+The same first run also **creates the `admin` account and logs its API
+key once**, in a banner. That key is stored only as a hash, so copy it
+out of the log — if you miss it, sign in with the dashboard password and
+rotate it from the Admin page. See
+[`docs/UPGRADE-user-accounts.md`](docs/UPGRADE-user-accounts.md) when the
+database predates accounts.
 
 ---
 
@@ -202,36 +214,55 @@ autodft run --scheduler local --once   # single tick, then exit
 
 ## Authentication
 
-The dashboard and the `/api/*` endpoints are gated by a single shared
-password — `[security].dashboard_password` in your config TOML (default
-`"password"`, **change it in production**). Two ways to authenticate:
+Every route except `/login` and `/logout` needs a credential. Three are
+accepted, and all three resolve to an account:
 
-* **Browser** — first request to any non-public path redirects to
-  `/login`. The form accepts the password and sets an HMAC-signed
-  session cookie (7-day default lifetime). `/logout` clears it.
-* **Scripts** — send the password on every request via the
-  `X-AutoDFT-Password` header. No cookie required.
+* **API key** — `X-AutoDFT-API-Key: adft_…` (or
+  `Authorization: Bearer adft_…`) identifies the key's owner. This is how
+  a normal user calls the API.
+* **Shared password** — `X-AutoDFT-Password: …`, the value of
+  `[security].dashboard_password` (default `"password"`, **change it in
+  production**), means *admin*. Scripts and CLI invocations written
+  before accounts existed keep working unchanged.
+* **Session cookie** — `autodft_auth`, set by `/login`. Browsers sign in
+  with **username + API key**; admin may leave the username blank and
+  give the dashboard password instead. 7-day default lifetime;
+  `/logout` clears it.
 
 ```bash
-# Browser flow — visit http://localhost:8085/ and you'll be redirected.
+# Browser flow — visit http://localhost:8085/ and you'll be redirected
+# to /login.
 
 # Script flow — header on every request:
 curl -s http://localhost:8085/api/overview \
+     -H "X-AutoDFT-API-Key: adft_7Kq2XnR4..." | jq .
+
+# ...or as admin, with the shared password:
+curl -s http://localhost:8085/api/overview \
      -H "X-AutoDFT-Password: password" | jq .
+
+# Which account am I, and what do I own?
+curl -s http://localhost:8085/api/whoami \
+     -H "X-AutoDFT-API-Key: adft_7Kq2XnR4..." | jq .
 ```
 
-All example scripts under `examples/` carry a `PASSWORD = "password"`
-constant at the top — update it to match your deployment. The auth check
-also kicks in on the live SMILES validator, the headers manager, and
-every project / export endpoint, so leaking the dashboard URL alone is
-not enough to access the API.
+Keys are minted by admin — Admin → Users in the dashboard, or
+`POST /api/admin/users` — and shown **once**, at creation or rotation.
+Unauthenticated `/api/*` requests get 401; browser requests get a 303 to
+`/login`. The example scripts under `examples/` read their credential
+from a constant at the top of the file (`AUTODFT_API_KEY`, or the shared
+password for admin) — set it to match your deployment.
+
+Field-level detail on credentials, namespaces and account management is
+in [`docs/API.md`](docs/API.md) §0.
 
 ---
 
 ## Dashboard
 
-The single-page UI at `http://<host>:8085/` has a left sidebar with four
-pages:
+The single-page UI at `http://<host>:8085/` has a left sidebar with five
+pages. Everything on them is filtered to the signed-in account; admin
+sees the whole database:
 
 * **Job Submission** — the submission form. SMILES (validated live —
   RDKit error or canonical / atom-count / charge / mult shown inline
@@ -241,7 +272,9 @@ pages:
   requested (default **1 per state**), and three kind-filtered header
   dropdowns. The Submit button is disabled while the SMILES isn't
   valid; the server re-validates anyway, so direct API users also get
-  HTTP 400 on bad input.
+  HTTP 400 on bad input. The Author field is pre-filled with your
+  username and is read-only unless you are admin, and the project you
+  type lands in your own namespace.
 * **Current Status** — five live stat cards (Queued / Pending /
   Running / Failed / Molecules), three tables (queued entrypoints,
   SLURM-pending jobs, currently running jobs), and a **Failed
@@ -249,11 +282,13 @@ pages:
   tasks.
 * **Project Overview** — pick a project from the dropdown to see its
   molecules, submission progress, success rate, and per-row task
-  counts. The Export panel has three buttons: **Export CSV**,
-  **Export JSON**, and **Export all files** (destructive archive — see
-  below). An "include all conformers" toggle controls whether every
-  conformer's energies are written or just the lowest-energy one per
-  state.
+  counts. Three subpages: **Summary**, **Molecules** (per-conformer
+  status with a rendered structure) and **State Analysis** (triplet /
+  redox energies, downloadable as XLSX). The Export panel has three
+  buttons: **Export CSV**, **Export JSON**, and **Export all files**
+  (destructive archive — see below). An "include all conformers" toggle
+  controls whether every conformer's energies are written or just the
+  lowest-energy one per state.
 * **Headers** — create, edit, soft-delete computation headers. Each
   has a `kind` (confsearch / optimization / singlepoint / any), a
   free-form description (shown in the submission dropdowns), and the
@@ -261,16 +296,24 @@ pages:
   `%xtb XTBInputString "--gxtb" end`, `%cpcm SMD true SMDsolvent "water" end`,
   or `%pal nprocs N end` are supported verbatim. Headers referenced
   by `created` or `pending` tasks can't be deleted; finished
-  (successful / failed) references no longer block the delete.
+  (successful / failed) references no longer block the delete. Anyone
+  may create and use a header; only its owner (or admin) may edit or
+  delete one — someone else's answers 403 with a hint to copy it.
+* **Admin** — wipe one of your projects or a single molecule (each
+  shows a preview and wants the exact name typed back), and, for admin
+  only, the **Users** section (create an account, rotate a key,
+  deactivate), the failure circuit breaker and the database reset.
 
 **"Export all files" / project archive** — opens a confirmation modal
 listing the destructive steps it will take and lets you edit the
 extension whitelist (`.inp .xyz .out` by default). On confirm it writes
 the CSV, copies only files matching those extensions into
-`<export_data>/<project>/raw/`, deletes every `<comp_data>/mol_*/` for
-the project, and removes the project's rows from the database so it
-disappears from Project Overview. Refuses to run while any task is
-still in flight.
+`<export_data>/<owner>/<project>/raw/`, and deletes every
+`<comp_data>/mol_*/` for the project. The database rows are **kept** and
+flagged `archived`, so the project stays browsable in Project Overview
+— what is gone is the raw tree on disk, which also means an archived
+project can no longer be exported (409). Refused for the protected
+`admin/default` project and for a project that is already archived.
 
 Refresh poll is every 5 s; the sidebar footer shows connectivity and
 last-refresh time.
@@ -297,6 +340,10 @@ Every submission path (CLI, REST, Python) ends up writing the same
   is set.
 
 `request_S1` is not exposed — S1 isn't supported yet.
+
+The `project` you send is a **bare** name and lands in your own
+namespace: `screening` submitted by `alice` is stored as
+`alice/screening`. `author` is your username unless you are admin.
 
 ### Backpressure and priority
 
@@ -336,9 +383,16 @@ never demotes work already in flight.
 
 ### CLI
 
+The CLI writes to the database directly, so it has no API key to
+identify itself: `--user` names the account whose namespace the project
+lands in, and defaults to `admin`.
+
 ```bash
-# minimal — defaults all the way
+# minimal — defaults all the way (project becomes admin/alcohols)
 autodft submit submit --smiles CCO --project alcohols
+
+# submit on someone's behalf — project becomes alice/phenols
+autodft submit submit --smiles CCO --project phenols --user alice
 
 # full coverage of all options
 autodft submit submit \
@@ -365,10 +419,14 @@ autodft submit submit --smiles CC --project quick --skip-confsearch
 ### REST API
 
 The controller exposes a JSON API on the same port as the dashboard.
-The shortest path:
+Every call carries a credential — the API key below, or
+`X-AutoDFT-Password` to act as admin. The shortest path:
 
 ```bash
+export AUTODFT_API_KEY=adft_7Kq2XnR4...
+
 curl -X POST http://localhost:8085/api/submit \
+     -H "X-AutoDFT-API-Key: $AUTODFT_API_KEY" \
      -H 'Content-Type: application/json' \
      -d '{"smiles": "CCO", "project": "alcohols"}'
 ```
@@ -377,6 +435,7 @@ A full body using every option:
 
 ```bash
 curl -X POST http://localhost:8085/api/submit \
+     -H "X-AutoDFT-API-Key: $AUTODFT_API_KEY" \
      -H 'Content-Type: application/json' \
      -d '{
            "smiles": "c1ccc(O)cc1",
@@ -407,6 +466,7 @@ whole call:
 
 ```bash
 curl -X POST http://localhost:8085/api/submit-batch \
+     -H "X-AutoDFT-API-Key: $AUTODFT_API_KEY" \
      -H 'Content-Type: application/json' \
      -d '{"smiles_list": ["CCO", "c1ccccc1"], "project": "alcohols"}'
 ```
@@ -417,15 +477,23 @@ invalid — no row is queued. Validate a SMILES without submitting via
 
 ```bash
 curl -X POST http://localhost:8085/api/validate-smiles \
+     -H "X-AutoDFT-API-Key: $AUTODFT_API_KEY" \
      -H 'Content-Type: application/json' -d '{"smiles":"xxx"}'
 # -> {"valid": false, "error": "RDKit could not parse 'xxx'.", ...}
 ```
 
-Full route list:
+Full route list. `{name}` is a project, written `owner:project` in a URL
+(a bare name means "mine"). `/api/admin/*` is admin-only; everything else
+is either scoped to the caller's own projects or deliberately shared
+(the headers library, cluster status, SMILES validation):
 
 | Method | Path                                | Purpose                                                       |
 | ------ | ----------------------------------- | ------------------------------------------------------------- |
 | GET    | `/`                                 | HTML dashboard (SPA)                                          |
+| GET/POST | `/login`                          | sign-in form and its submission — no credential needed        |
+| GET    | `/logout`                           | clear the session cookie — no credential needed               |
+| GET    | `/api/whoami`                       | the signed-in account and the projects it owns                |
+| GET    | `/api/cluster`                      | read-only queue depth + breaker state, for every account      |
 | GET    | `/api/overview`                     | counts of molecules / tasks / jobs / queue                    |
 | GET    | `/api/molecules`                    | list molecules (`?project=&limit=&offset=`)                   |
 | GET    | `/api/molecules/{id}`               | full molecule with states / tasks / jobs                      |
@@ -434,26 +502,31 @@ Full route list:
 | GET    | `/api/queue`                        | unstarted entrypoints                                         |
 | GET    | `/api/entrypoints/failed`           | entrypoints whose processing raised before any task was made  |
 | GET    | `/api/headers`                      | seeded defaults + custom headers (`?kind=…&include_deleted=`) |
-| POST   | `/api/headers`                      | create a custom header                                        |
-| PUT    | `/api/headers/{id}`                 | update header text / description / kind / validated           |
-| DELETE | `/api/headers/{id}`                 | soft-delete (blocked when in-flight task references it)       |
+| POST   | `/api/headers`                      | create a custom header, owned by you                          |
+| PUT    | `/api/headers/{id}`                 | update text / description / kind / validated (owner or admin) |
+| DELETE | `/api/headers/{id}`                 | soft-delete (owner or admin; blocked by in-flight tasks)      |
 | POST   | `/api/validate-smiles`              | validate a SMILES string (used by the live form)              |
 | POST   | `/api/submit`                       | submit a new SMILES                                           |
 | POST   | `/api/submit-batch`                 | submit many SMILES in one request (see below)                 |
 | GET    | `/api/projects`                     | list projects with summary counts                             |
 | GET    | `/api/projects/{name}`              | per-project molecules + progress + success rate               |
+| GET    | `/api/projects/{name}/molecules-detail` | per-conformer status for every molecule                   |
+| GET    | `/api/projects/{name}/state-analysis` | triplet / redox / reorganisation energies                   |
+| GET    | `/api/projects/{name}/state-analysis/export` | the same, as a multi-sheet XLSX                      |
 | POST   | `/api/projects/{name}/export`       | trigger CSV/JSON/files export (`?format=&all_conformers=`)    |
-| POST   | `/api/projects/{name}/archive`      | **destructive**: CSV+filtered files, wipe comp_data, drop project rows |
-| GET    | `/api/admin/…/wipe-preview`         | what a project / molecule wipe would delete — counts only     |
-| POST   | `/api/admin/projects/{name}/wipe`   | **destructive**: a project's rows, `comp_data`, exports        |
-| POST   | `/api/admin/molecules/{id}/wipe`    | **destructive**: one molecule's rows and files                 |
+| POST   | `/api/projects/{name}/archive`      | **destructive**: CSV+filtered files, then wipe `comp_data`     |
+| GET    | `/api/projects/{name}/wipe-preview` | what a project wipe would delete — counts only                |
+| POST   | `/api/projects/{name}/wipe`         | **destructive**: a project's rows, `comp_data`, exports        |
+| GET    | `/api/molecules/{id}/wipe-preview`  | what a molecule wipe would delete — counts only               |
+| POST   | `/api/molecules/{id}/wipe`          | **destructive**: one molecule's rows and files                 |
+| GET    | `/api/wipe-status`                  | progress of a deletion still running in the background        |
+| GET    | `/api/admin/circuit-breaker`        | breaker state with the failure ratio behind it (admin)        |
+| POST   | `/api/admin/circuit-breaker/reset`  | clear the breaker and resume submissions (admin)              |
+| GET    | `/api/admin/reset-preview`          | everything a database reset would delete — counts only        |
 | POST   | `/api/admin/reset-database`         | **destructive**: every pipeline table and data directory       |
-| GET    | `/api/admin/wipe-status`            | progress of a deletion still running in the background        |
-| GET    | `/api/admin/circuit-breaker`        | whether the failure breaker has halted submissions            |
-| GET    | `/api/whoami`                       | the signed-in account and the projects it owns                |
-| GET    | `/api/cluster`                      | read-only queue depth + breaker state, for every account      |
 | GET    | `/api/admin/users`                  | list accounts                                                 |
 | POST   | `/api/admin/users`                  | create an account; the response carries its API key, once     |
+| POST   | `/api/admin/users/{name}`           | deactivate / reactivate (`?active=false`)                     |
 | POST   | `/api/admin/users/{name}/rotate-key`| new key; the old one stops working immediately                |
 | POST   | `/api/admin/projects/{name}/reassign`| move a project to another owner                              |
 
@@ -473,11 +546,41 @@ The existing `X-AutoDFT-Password` header still works and means admin, so
 scripts and the CLI carry over unchanged. Full detail, including account
 management, is in [`docs/API.md`](docs/API.md) §0.
 
-Every destructive endpoint requires an exact confirmation string, refuses
-to run while another one is in flight (409), and deletes the rows before
-the files. The files themselves are renamed aside and unlinked on a
-background thread, so the request returns in well under a second while a
-project-sized deletion runs for minutes — poll `wipe-status` for that.
+End to end, as a new user (`$K` is the key admin handed you):
+
+```bash
+K="X-AutoDFT-API-Key: adft_7Kq2XnR4..."
+H="http://localhost:8085"
+
+# 1. who am I?
+curl -s -H "$K" $H/api/whoami            # -> {"username":"alice", ...}
+
+# 2. submit — the bare project name lands in your namespace
+curl -s -X POST -H "$K" -H 'Content-Type: application/json' \
+     -d '{"smiles":"CCO","project":"screening"}' $H/api/submit
+
+# 3. find it — the listing shows the qualified name. It appears once the
+#    controller has expanded the entrypoint into a molecule; until then
+#    the project is only in /api/whoami.
+curl -s -H "$K" $H/api/projects          # -> [{"name":"alice/screening", ...}]
+
+# 4. read it — ':' replaces '/' in the URL (a bare name means yours)
+curl -s -H "$K" "$H/api/projects/alice:screening"
+
+# 5. export it — writes <export_data>/alice/screening/screening.csv
+curl -s -X POST -H "$K" \
+     "$H/api/projects/alice:screening/export?format=csv"
+```
+
+Every wipe and the database reset require an exact confirmation string
+(the qualified project name, the molecule's SMILES, or `RESET THE
+DATABASE`), refuse to run while another one is in flight (409), and
+delete the rows before the files. The files themselves are renamed aside
+and unlinked on a background thread, so the request returns in well under
+a second while a project-sized deletion runs for minutes — poll
+`GET /api/wipe-status` for that. The archive endpoint is the exception:
+it is destructive but takes no confirmation string, because the
+dashboard's modal is the confirmation.
 
 Field-level reference for each endpoint, including every option of
 `POST /api/submit`, is in [`docs/API.md`](docs/API.md).
@@ -505,14 +608,18 @@ from autodft.qm.orca.defaults import (
 
 ## Monitor
 
+The CLI talks to the database directly, with no account behind it, so
+`--project` wants the **qualified** name (`admin/phenols`, not
+`phenols`) — that is the string stored on every molecule:
+
 ```bash
-autodft status overview                    # totals
-autodft status queue                       # waiting entrypoints
-autodft status molecules --project phenols
-autodft status molecule 42                 # one molecule's full tree
+autodft status overview                          # totals
+autodft status queue                             # waiting entrypoints
+autodft status molecules --project admin/phenols
+autodft status molecule 42                       # one molecule's full tree
 autodft status tasks --status pending
 autodft status jobs --status RUNNING
-autodft admin progress --project phenols   # submission / success rate
+autodft admin progress --project admin/phenols   # submission / success rate
 ```
 
 Or hit the same data over HTTP (`/api/overview`, `/api/tasks?status=…`,
@@ -522,15 +629,18 @@ Or hit the same data over HTTP (`/api/overview`, `/api/tasks?status=…`,
 
 ## Export
 
+Exports are written under `<export_data>/<owner>/<project>/`, and the
+CLI takes the qualified project name.
+
 Energy summary:
 
 ```bash
-# CSV — default destination is <export_data>/<project>.csv
-autodft admin export --project phenols --config config/reaction.toml
+# CSV — default destination is <export_data>/admin/phenols/phenols.csv
+autodft admin export --project admin/phenols --config config/reaction.toml
 
 # JSON, all conformers, custom path
 autodft admin export \
-    --project phenols --format json --all-conformers \
+    --project admin/phenols --format json --all-conformers \
     --output /tmp/phenols.json
 ```
 
@@ -538,12 +648,13 @@ Raw ORCA files (standardised naming `mol_<id>/<state>/conf<N>_<task>_…`):
 
 ```bash
 autodft admin export-files \
-    --project phenols --config config/reaction.toml
-# -> /mnt/share/dft_calculations/autodft_data/export_data/phenols/
+    --project admin/phenols --config config/reaction.toml
+# -> /mnt/share/dft_calculations/autodft_data/export_data/admin/phenols/
 ```
 
-Or click **Project Overview → Export** in the dashboard, which calls the
-same endpoint and writes into the same `<export_data>/<project>/`.
+Or click **Project Overview → Export** in the dashboard, which calls
+`POST /api/projects/{name}/export` and writes into the same
+`<export_data>/<owner>/<project>/`.
 
 Strip large temporaries from successful job directories:
 
@@ -557,7 +668,8 @@ Programmatically (see `examples/04_export_results.py`):
 ```python
 from autodft.extraction.extractor import PipelineExtractor
 
-ext = PipelineExtractor("phenols")
+# The qualified name, exactly as it is stored on the molecules.
+ext = PipelineExtractor("admin/phenols")
 ext.export_summary_csv("phenols.csv")
 ext.export_calculation_files("./raw")
 ```
@@ -580,7 +692,7 @@ Recovering:
 
 ```bash
 autodft admin reset-task 17                          # one task back to 'created'
-autodft admin requeue-failed --project phenols       # bulk requeue
+autodft admin requeue-failed --project admin/phenols # bulk requeue
 autodft admin cleanup --days 30                      # purge old completed entrypoints
 ```
 
@@ -626,8 +738,11 @@ autodft/
 │   ├── extraction/       PipelineExtractor (CSV / JSON / files)
 │   ├── models/           SQLModel tables
 │   ├── qm/orca/          ORCA input/output + seeded default headers
+│   ├── accounts.py       users, API keys, project ownership, migration
+│   ├── paths.py          project-name validation + safe export paths
 │   ├── config.py         Settings dataclasses + TOML/env loader
 │   └── db.py             SQLite engine + sessions + header seed
+├── docs/                 API reference, accounts design, upgrade note
 ├── examples/             see table above
 └── tests/                pytest suite
 ```

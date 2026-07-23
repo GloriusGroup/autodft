@@ -6,7 +6,8 @@ unless noted. Errors come back as HTTP 4xx/5xx with a JSON body
 `{"detail": "...", ...}`.
 
 For interactive exploration, the controller also serves the OpenAPI
-schema at `GET /docs` and `GET /openapi.json`.
+schema at `GET /docs` and `GET /openapi.json` — both behind the same
+authentication as everything else, so sign in first.
 
 ---
 
@@ -29,6 +30,11 @@ account is created or the key is rotated, and stored only as
 `sha256(key)` — it can never be read back, only replaced. Rotating takes
 effect immediately.
 
+The `admin` account is created on the controller's first boot and its key
+is logged once, in a banner. Every other key comes from
+`POST /api/admin/users` (or the dashboard's Admin → Users), which is the
+only place it is ever shown.
+
 The shared password keeps working and means admin, which is what lets
 existing scripts, the CLI and saved curl invocations survive the upgrade
 untouched.
@@ -44,7 +50,14 @@ curl -i -c cookies.txt -X POST http://localhost:8085/login \
 curl -s -b cookies.txt http://localhost:8085/api/overview
 ```
 
-`GET /api/whoami` answers `{"username", "is_admin", "projects"}`.
+Admin may instead leave `username` blank and give the dashboard password,
+which is the pre-accounts path and the way back in when the admin key has
+been lost.
+
+`GET /api/whoami` answers `{"username", "is_admin", "projects"}`, where
+`projects` lists the **bare** names you own — the owner is you, so the
+prefix would be noise. Qualify them with your username to address them
+elsewhere.
 
 Unauthenticated `/api/*` requests get **401**; unauthenticated browser
 requests get a **303** to `/login?next=<original-path>`. A key belonging
@@ -101,7 +114,7 @@ referencing it computes. Someone else's answers **403** with a suggestion
 to copy it, rather than 404, because you can already see it in the
 listing.
 
-The four seeded defaults belong to `admin`, as does anything created
+The six seeded methods belong to `admin`, as does anything created
 before accounts existed.
 
 `GET /api/cluster` is readable by everyone and reports only
@@ -153,9 +166,9 @@ package defaults in `autodft/qm/orca/defaults.py`.
 
 | Field                                       | Type   | Default       | Notes                                                                                       |
 | ------------------------------------------- | ------ | ------------- | ------------------------------------------------------------------------------------------- |
-| `smiles`                                    | str    | *required*    | Validated server-side.                                                                      |
-| `project`                                   | str    | `"default"`   | Used to group molecules and to scope exports / archives.                                    |
-| `author`                                    | str    | `"web"`       | Provenance label stored as `project_author` in `request_metadata`. Nothing branches on it.  |
+| `smiles`                                    | str    | *required*    | Validated server-side. Max 512 characters — RDKit's parser overflows the C stack on longer input, and it runs inside the controller process. |
+| `project`                                   | str    | `"default"`   | A **bare** name, qualified with your namespace on the way in (`screening` → `alice/screening`) and created on first use. Groups molecules and scopes exports / archives. |
+| `author`                                    | str    | `"web"`       | Provenance label stored as `project_author` in `request_metadata`. Nothing branches on it. **Ignored for non-admins**, who are recorded under their own username; admin may set it freely. |
 | `priority`                                  | int    | `10`          | Higher = served first, and sets the queue allowance: `priority * queue_slots_per_priority` (default 10) waiting SLURM jobs. Ties broken by submission order. |
 | `request_t1`                                | bool   | `false`       | Build a T1 state and run the full chain on it.                                              |
 | `request_ox`                                | bool   | `false`       | Build a +1 (oxidised) state.                                                                |
@@ -195,14 +208,17 @@ package defaults in `autodft/qm/orca/defaults.py`.
 
 ```bash
 curl -X POST http://localhost:8085/api/submit \
+     -H "X-AutoDFT-API-Key: $AUTODFT_API_KEY" \
      -H 'Content-Type: application/json' \
      -d '{"smiles":"CCO","project":"alcohols"}'
+# queued as <your username>/alcohols
 ```
 
 **Full-coverage example — T1/ox/red, vert-ex off, custom per-state conformer counts, header by id:**
 
 ```bash
 curl -X POST http://localhost:8085/api/submit \
+     -H "X-AutoDFT-API-Key: $AUTODFT_API_KEY" \
      -H 'Content-Type: application/json' \
      -d '{
            "smiles": "c1ccc(O)cc1",
@@ -238,7 +254,8 @@ is a single transaction, where N single submissions are N commits and N
 rounds of lock contention with the controller.
 
 Invalid SMILES do **not** fail the request. Each one is reported
-individually so the caller can log what was refused and keep the rest:
+individually — including any entry over the 512-character bound — so the
+caller can log what was refused and keep the rest:
 
 ```json
 {
@@ -267,6 +284,11 @@ curl -X POST http://reaction.uni-muenster.de:60001/api/submit-batch \
 ---
 
 ## 2. Status & monitoring
+
+Every endpoint in this section counts and lists **only the caller's own
+work** — molecules, tasks, jobs and queued entrypoints in projects they
+own. Admin sees everything. For cluster-wide health without anyone's
+data, see `GET /api/cluster` in §0.
 
 ### `GET /api/overview`
 
@@ -322,51 +344,105 @@ TIMEOUT | CANCELLED | UNKNOWN`).
 
 ## 3. Projects
 
+`{name}` in every route below is a project written `owner:project` —
+`/api/projects/admin:phenols`. A bare `{name}` still works and means
+"mine"; for admin it resolves to the unique project with that bare name,
+or answers **409** listing the candidates when two owners share it.
+
 ### `GET /api/projects`
+
+Names come back **qualified**, which is the form the other routes and the
+CLI expect. The list is derived from the molecules that exist, so a
+project whose entrypoints are all still queued does not appear yet —
+`GET /api/whoami` lists it from the moment it is created.
 
 ```json
 [
-  { "name": "phenols", "molecules": 12,
-    "tasks_total": 192, "tasks_failed": 3, "tasks_successful": 145 }
+  { "name": "admin/phenols", "molecules": 12,
+    "tasks_total": 192, "tasks_failed": 3, "tasks_successful": 145,
+    "archived": false, "protected": false }
 ]
 ```
 
+`archived` is true once every molecule in the project has been through
+`/archive` (its raw files are gone; the rows stay). `protected` marks
+`admin/default`, the one project that may never be wiped or archived.
+
 ### `GET /api/projects/{name}`
 
-Per-project view: progress, success rate, and one row per molecule:
+Per-project view: status, progress, success rate, and one row per
+molecule:
 
 ```json
 {
-  "name": "phenols",
+  "name": "admin/phenols",
+  "status": "running",
+  "archived": false,
+  "protected": false,
+  "in_flight_molecules": 1,
+  "in_flight_tasks": 4,
+  "completed_molecules": 11,
+  "total_molecules": 12,
   "submission_progress": { "total": 12, "started": 12 },
   "success_rate":        { "total_molecules": 12, "successful_molecules": 11 },
   "molecules": [
     { "id": 3, "smiles": "Oc1ccccc1", "states": 4, "tasks": 16,
-      "successful": 16, "failed": 0,
+      "successful": 16, "failed": 0, "in_flight": 0, "done": true,
       "created_at": "2026-06-01T..." }
   ]
 }
 ```
 
+`status` is one of `empty | running | complete | complete_with_failures`
+— "complete" meaning every task has reached a terminal state, not that
+every one succeeded.
+
+### `GET /api/projects/{name}/molecules-detail`
+
+The same molecules, one level deeper: each state (S0 / T1 / ox / red)
+with its confsearch status and one row per conformer carrying the status
+of that conformer's optimization and of every singlepoint hanging off it.
+This is what the dashboard's *Project Overview → Molecules* subpage
+renders.
+
+### `GET /api/projects/{name}/state-analysis`
+
+Triplet energies, redox free energies / E vs SCE in MeCN, and 4-point
+Marcus reorganisation energies, for both the `lowest_energy` and the
+`rmsd_matched` conformer-selection modes. Solvation is detected from the
+header text; without it, redox values are reported as ΔG only.
+
+### `GET /api/projects/{name}/state-analysis/export`
+
+The same payload as a multi-sheet XLSX attachment (Summary, Lowest
+Energy, RMSD Matched, Conformers). Energies in Hartree, potentials in V
+vs SCE.
+
 ### `POST /api/projects/{name}/export` `?format=csv|json|files&all_conformers=true|false`
 
-Non-destructive export. Writes into `<export_data>/<name>/`:
+Non-destructive export. Writes into `<export_data>/<owner>/<project>/`,
+with the **bare** project name as the filename stem:
 
-* `csv`   → `<name>.csv` (summary table of energies)
-* `json`  → `<name>.json`
+* `csv`   → `<project>.csv` (summary table of energies)
+* `json`  → `<project>.json`
 * `files` → `files/` tree with the canonical curated ORCA files
 
 ```json
-{ "format": "csv", "path": "/.../export_data/phenols/phenols.csv" }
+{ "format": "csv", "path": "/.../export_data/admin/phenols/phenols.csv" }
 ```
+
+`404` when the project holds no molecules, `409` when it has been
+archived — its source files are no longer on disk.
 
 ### `POST /api/projects/{name}/archive`
 
 **Destructive.** Writes the CSV, copies every file matching the
-extensions you list (preserving the directory layout), wipes
-`<comp_data>/mol_*/` for the project, and deletes the project's
-database rows. The dashboard's "Export all files" button is the
-intended UI for this.
+extensions you list (preserving the directory layout), then wipes
+`<comp_data>/mol_*/` for the project and flags every molecule
+`archived = true`. The database rows are **kept**, so the project stays
+listed and browsable — what is gone is the raw tree on disk, which is
+why an archived project can no longer be exported. The dashboard's
+"Export all files" button is the intended UI for this.
 
 **Body:**
 
@@ -380,15 +456,18 @@ to keep more.
 **Response:**
 
 ```json
-{ "project": "phenols", "archived": true,
+{ "project": "admin/phenols", "archived": true,
   "molecules": 12, "files_copied": 96, "files_dropped": 184,
-  "csv_path":   "/.../export_data/phenols/phenols.csv",
-  "files_root": "/.../export_data/phenols/raw",
+  "csv_path":   "/.../export_data/admin/phenols/phenols.csv",
+  "files_root": "/.../export_data/admin/phenols/raw",
   "extensions": [".inp", ".out", ".xyz"] }
 ```
 
-Refused with `409` if any task in `created` or `pending` status still
-references the project (wait for them to finish or cancel them first).
+Refused with `409` for the protected `admin/default` project and for one
+that is already archived; `404` when the project holds no molecules.
+Tasks still in flight do **not** block it — archiving a project whose
+jobs are still running deletes the directories they are writing into, so
+check the project's `in_flight_tasks` first.
 
 ---
 
@@ -396,6 +475,12 @@ references the project (wait for them to finish or cancel them first).
 
 Stored ORCA header templates that populate the dashboard's submission
 dropdowns. Six are seeded on first init; the rest are user-created.
+
+Every signed-in account may list, use and create headers; only the
+owner or admin may edit or delete one (see §0). The `defaults` block in
+the listing below is separate again: three package constants, always
+present, addressed by the string ids `default_confsearch` /
+`default_optimization` / `default_singlepoint` and not editable.
 
 ### `GET /api/headers` `?kind=confsearch|optimization|singlepoint&include_deleted=true`
 
@@ -426,15 +511,19 @@ passed. Soft-deleted headers are excluded unless `include_deleted=true`.
 
 `kind` must be one of `confsearch | optimization | singlepoint | null`.
 
+The new header is owned by the caller.
+
 ### `PUT /api/headers/{id}`
 
-Partial update — pass only the fields you want changed.
+Partial update — pass only the fields you want changed. Owner or admin
+only; someone else's header answers **403** with a suggestion to copy it.
 
 ### `DELETE /api/headers/{id}`
 
 Soft-delete. Sets `deleted=true`; the row stays in the table so finished
-tasks keep their FK pointers. Refused with `409` only when an
-**in-flight** task (`created` or `pending`) still references the header.
+tasks keep their FK pointers. Owner or admin only (**403** otherwise).
+Refused with `409` only when an **in-flight** task (`created` or
+`pending`) still references the header, directly or through its state.
 
 ---
 
@@ -516,3 +605,41 @@ answers `{"running": ..., "operation": ..., "file_removal": {...}}`; the
 dashboard shows a banner while one is in flight. A controller killed
 mid-deletion leaves its batch under `.wipe-trash/`, which the next wipe or
 reset sweeps.
+
+---
+
+## 7. Cluster health
+
+### `GET /api/cluster`
+
+Readable by everyone who is signed in, and deliberately thin — it carries
+no one's data:
+
+```json
+{ "breaker_tripped": false, "queued_entrypoints": 143 }
+```
+
+That is enough to tell "my jobs are stuck" from "the pipeline is halted"
+without asking an administrator.
+
+### `GET /api/admin/circuit-breaker`
+
+Admin only. The same flag with the numbers behind it:
+
+```json
+{ "tripped": false, "state": null,
+  "recent_failure_ratio": 0.08, "recent_failed": 8, "recent_judged": 100,
+  "threshold": 0.25, "window": 100 }
+```
+
+`threshold` and `window` echo `pipeline.failure_breaker_ratio` and
+`pipeline.failure_breaker_window`. Job creation and submission stop
+automatically once more than `threshold` of the last `window` judged
+tasks failed, so one systematic error cannot burn the whole campaign's
+retry budget.
+
+### `POST /api/admin/circuit-breaker/reset`
+
+Admin only. Clears the breaker and lets the pipeline resume. Deliberately
+manual: once submission stops, no new tasks are judged, so the failure
+ratio cannot recover on its own. Fix the cause first.
