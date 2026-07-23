@@ -1741,6 +1741,14 @@
             return '<span class="badge badge-' + escHtml(value) + '">' + escHtml(value) + '</span>';
         }
 
+        // A project is stored as "owner/project" but addressed in a URL as
+        // "owner:project": a percent-encoded slash is normalised back to a
+        // separator before routing, so encodeURIComponent alone is not
+        // enough to make the qualified name reach the handler.
+        function projectPath(name) {
+            return encodeURIComponent(String(name).replace('/', ':'));
+        }
+
         function escHtml(str) {
             if (str == null) return '';
             return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -2048,7 +2056,7 @@
             var existing = row.parentNode.querySelector('.admin-confirm');
             if (existing) existing.remove();
 
-            var res = await adminJSON('GET', '/api/admin/projects/' + encodeURIComponent(name) + '/wipe-preview');
+            var res = await adminJSON('GET', '/api/admin/projects/' + projectPath(name) + '/wipe-preview');
             if (!res.ok) { alert('Could not load preview: ' + (res.data.detail || res.status)); return; }
             var p = res.data;
 
@@ -2084,7 +2092,7 @@
                 this.disabled = true;
                 feedback.textContent = 'Wiping...';
                 feedback.className = 'submit-feedback adm-feedback';
-                var out = await adminJSON('POST', '/api/admin/projects/' + encodeURIComponent(name) + '/wipe', {
+                var out = await adminJSON('POST', '/api/admin/projects/' + projectPath(name) + '/wipe', {
                     confirm: typed,
                     delete_exports: box.querySelector('.adm-exports').checked,
                 });
@@ -2817,7 +2825,7 @@
             if (!name) return;
             currentProject = name;
             try {
-                var resp = await fetch('/api/projects/' + encodeURIComponent(name));
+                var resp = await fetch('/api/projects/' + projectPath(name));
                 var data = await resp.json();
 
                 document.getElementById('projectCards').style.display = 'grid';
@@ -2929,7 +2937,7 @@
             fb.className = 'submit-feedback';
             try {
                 var resp = await fetch(
-                    '/api/projects/' + encodeURIComponent(currentProject) +
+                    '/api/projects/' + projectPath(currentProject) +
                     '/export?format=' + format + '&all_conformers=' + (allConf ? 'true' : 'false'),
                     { method: 'POST' }
                 );
@@ -2994,7 +3002,7 @@
             btn.disabled = true;
             try {
                 var resp = await fetch(
-                    '/api/projects/' + encodeURIComponent(currentProject) + '/archive',
+                    '/api/projects/' + projectPath(currentProject) + '/archive',
                     {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -3188,7 +3196,7 @@
             wrap.style.display = 'block';
             tbody.innerHTML = '<tr><td colspan="10" class="empty-state">Loading...</td></tr>';
 
-            var resp = await fetch('/api/projects/' + encodeURIComponent(name) + '/molecules-detail');
+            var resp = await fetch('/api/projects/' + projectPath(name) + '/molecules-detail');
             var data = await resp.json();
             if (!data.molecules || data.molecules.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="10" class="empty-state">No molecules yet for this project.</td></tr>';
@@ -3422,7 +3430,7 @@
             host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Computing analysis…</div>';
 
             try {
-                var resp = await fetch('/api/projects/' + encodeURIComponent(name) + '/state-analysis');
+                var resp = await fetch('/api/projects/' + projectPath(name) + '/state-analysis');
                 var text = await resp.text();
                 var payload;
                 try { payload = JSON.parse(text); }
@@ -3471,7 +3479,7 @@
                     var origLabel = exportBtn.textContent;
                     exportBtn.textContent = 'Preparing…';
                     try {
-                        var resp = await fetch('/api/projects/' + encodeURIComponent(name) + '/state-analysis/export');
+                        var resp = await fetch('/api/projects/' + projectPath(name) + '/state-analysis/export');
                         if (!resp.ok) {
                             var text = await resp.text();
                             throw new Error('HTTP ' + resp.status + ' — ' + text.slice(0, 200));

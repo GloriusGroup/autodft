@@ -22,6 +22,7 @@ from pathlib import Path
 
 __all__ = [
     "InvalidProjectName",
+    "normalise_project_name",
     "project_segments",
     "safe_subdirectory",
     "validate_project_name",
@@ -49,6 +50,19 @@ def _validate_segment(segment: str, name: str) -> str:
     return segment
 
 
+# In a URL a project is written ``owner:project``. It cannot be written
+# with a slash: a percent-encoded one is normalised back to a separator
+# before routing, so ``/api/projects/owner%2Fscreening`` never reaches the
+# handler, and adding ``/api/projects/{owner}/{name}`` would collide with
+# ``/api/projects/{name}/export`` for any project named "export".
+URL_SEPARATOR = ":"
+
+
+def normalise_project_name(name: str) -> str:
+    """Accept the URL form ``owner:project`` for the stored ``owner/project``."""
+    return (name or "").replace(URL_SEPARATOR, "/", 1)
+
+
 def project_segments(name: str) -> list[str]:
     """Split *name* into validated path segments.
 
@@ -58,7 +72,7 @@ def project_segments(name: str) -> list[str]:
     whitelist, so neither half can be ``..`` -- which is what the qualified
     form would otherwise reopen.
     """
-    parts = (name or "").split("/")
+    parts = normalise_project_name(name).split("/")
     if len(parts) > 2:
         raise InvalidProjectName(
             f"Invalid project name {name!r}: at most one '/' is allowed "

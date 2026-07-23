@@ -206,12 +206,47 @@ class TestProjectVisibility:
         assert [m["smiles"] for m in mine.json()] == ["CCO"]
         assert [m["smiles"] for m in theirs.json()] == ["CCN"]
 
+    def test_a_qualified_name_addresses_the_project_in_a_url(self, app_env):
+        """`owner:project`, not `owner/project`.
+
+        A percent-encoded slash is normalised back to a separator before
+        routing, so `/api/projects/owner%2Fscreening` never reaches the
+        handler -- and a `/api/projects/{owner}/{name}` route would collide
+        with `/api/projects/{name}/export` for any project named "export".
+        This test exists because the first version of it asserted a 404 and
+        passed for exactly the wrong reason.
+        """
+        client = app_env["client"]
+        assert client.get(
+            "/api/projects/owner:screening", headers=app_env["owner"],
+        ).status_code == 200
+        # The forms that cannot work must not silently appear to.
+        for unusable in ("/api/projects/owner%2Fscreening",
+                         "/api/projects/owner/screening"):
+            assert client.get(unusable, headers=app_env["owner"]).status_code == 404
+
     def test_reaching_into_another_namespace_is_a_404(self, app_env):
         """404 and not 403: a 403 would confirm the project exists."""
         response = app_env["client"].get(
-            "/api/projects/stranger%2Fscreening", headers=app_env["owner"],
+            "/api/projects/stranger:screening", headers=app_env["owner"],
         )
         assert response.status_code == 404
+
+    def test_admin_can_address_any_namespace(self, app_env):
+        client = app_env["client"]
+        for name in ("owner:screening", "stranger:screening"):
+            assert client.get(
+                "/api/projects/" + name, headers=app_env["admin"],
+            ).status_code == 200
+
+    def test_a_bare_name_admin_typed_is_refused_when_ambiguous(self, app_env):
+        """Both users have 'screening'. Falling back to the admin namespace
+        would silently address the wrong project."""
+        response = app_env["client"].get(
+            "/api/projects/screening", headers=app_env["admin"],
+        )
+        assert response.status_code == 409
+        assert "ambiguous" in response.json()["detail"]
 
 
 class TestMoleculeVisibility:

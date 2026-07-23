@@ -265,8 +265,11 @@ def resolve_project(session: Session, identity: Identity, name: str) -> str:
 
 def _candidate(session: Session, identity: Identity, name: str) -> Optional[str]:
     """The qualified name *name* refers to, without the ownership check."""
+    from autodft.paths import normalise_project_name
+
     if not name:
         return None
+    name = normalise_project_name(name)
     if "/" in name:
         return name
 
