@@ -13,6 +13,8 @@ executed them. Each test here pins one property that a wipe must have:
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 from sqlmodel import Session, select
 
@@ -138,6 +140,7 @@ class TestWipeProject:
     def test_removes_rows_and_files_for_that_project_only(self, session, project):
         result = admin_ops.wipe_project(
             session, "victim", project["comp_root"], project["export_root"],
+            background=False,
         )
 
         assert result["rows"]["molecules"] == 2
@@ -159,7 +162,7 @@ class TestWipeProject:
         scheduler = _StubScheduler()
         result = admin_ops.wipe_project(
             session, "victim", project["comp_root"], project["export_root"],
-            scheduler=scheduler,
+            scheduler=scheduler, background=False,
         )
         assert result["jobs_cancelled"] == 2
         assert sorted(scheduler.cancelled) == sorted(
@@ -178,6 +181,7 @@ class TestWipeProject:
         monkeypatch.setattr(admin_ops, "_remove_tree", _boom)
         result = admin_ops.wipe_project(
             session, "victim", project["comp_root"], project["export_root"],
+            background=False,
         )
 
         assert result["rows"]["molecules"] == 2
@@ -199,7 +203,7 @@ class TestWipeProject:
     def test_exports_can_be_kept(self, session, project):
         admin_ops.wipe_project(
             session, "victim", project["comp_root"], project["export_root"],
-            delete_exports=False,
+            delete_exports=False, background=False,
         )
         assert (project["export_root"] / "victim" / "results.csv").exists()
 
@@ -232,7 +236,7 @@ class TestWipeMolecule:
 class TestResetDatabase:
     def test_empties_every_table_but_keeps_headers(self, session, project):
         result = admin_ops.reset_database(
-            session, project["comp_root"], project["export_root"],
+            session, project["comp_root"], project["export_root"], background=False,
         )
 
         assert result["rows"]["molecules"] == 3
@@ -245,17 +249,120 @@ class TestResetDatabase:
 
     def test_files_can_be_kept(self, session, project):
         admin_ops.reset_database(
-            session, project["comp_root"], project["export_root"], delete_files=False,
+            session, project["comp_root"], project["export_root"],
+            delete_files=False, background=False,
         )
         assert list(project["comp_root"].iterdir()) != []
 
     def test_cancels_everything_running(self, session, project):
         scheduler = _StubScheduler()
         result = admin_ops.reset_database(
-            session, project["comp_root"], project["export_root"], scheduler=scheduler,
+            session, project["comp_root"], project["export_root"],
+            scheduler=scheduler, background=False,
         )
         assert result["jobs_cancelled"] == 3
         assert len(scheduler.cancelled) == 3
+
+
+class TestBackgroundRemoval:
+    """The default path: rows go, directories are staged aside, files are
+    unlinked on a separate thread. ~65 ms per file on the network mount is
+    minutes for a real project, and the request used to wait all of it."""
+
+    @staticmethod
+    def _blocking_remove(gate):
+        """A ``_remove_tree`` that will not finish until *gate* is set."""
+        real = admin_ops._remove_tree
+
+        def _remove(path):
+            gate.wait(timeout=10)
+            return real(path)
+        return _remove
+
+    def test_the_request_returns_before_the_files_are_deleted(
+        self, session, project, monkeypatch,
+    ):
+        gate = threading.Event()
+        monkeypatch.setattr(admin_ops, "_remove_tree", self._blocking_remove(gate))
+
+        result = admin_ops.wipe_project(
+            session, "victim", project["comp_root"], project["export_root"],
+        )
+        # Returned while the deleter is still blocked on the gate.
+        assert result["file_removal"]["state"] == "running"
+        assert result["file_removal"]["background"] is True
+
+        # ...yet the project is already gone from comp_data: the trees were
+        # renamed into the trash, so nothing can collide with their names.
+        for mid in project["victim"]:
+            assert not (project["comp_root"] / f"mol_{mid}").exists()
+        for mid in project["bystander"]:
+            assert (project["comp_root"] / f"mol_{mid}").exists()
+
+        gate.set()
+        admin_ops._removal.join(timeout=10)
+        assert admin_ops.removal_status()["state"] == "finished"
+        assert admin_ops.removal_status()["bytes_freed"] > 0
+        assert list(project["comp_root"].iterdir()) == [
+            project["comp_root"] / f"mol_{project['bystander'][0]}"
+        ]
+
+    def test_a_second_wipe_is_refused_until_the_deleter_finishes(
+        self, session, project, monkeypatch,
+    ):
+        """The operation is not over when the response is sent."""
+        gate = threading.Event()
+        monkeypatch.setattr(admin_ops, "_remove_tree", self._blocking_remove(gate))
+
+        with admin_ops.exclusive("wipe of project 'victim'"):
+            admin_ops.wipe_project(
+                session, "victim", project["comp_root"], project["export_root"],
+            )
+        # The `with` block has exited, but the deleter still holds the lock.
+        assert admin_ops.current_operation() is not None
+        with pytest.raises(admin_ops.WipeInProgress):
+            with admin_ops.exclusive("wipe of project 'bystander'"):
+                pytest.fail("started while files were still being deleted")
+
+        gate.set()
+        admin_ops._removal.join(timeout=10)
+        assert admin_ops.current_operation() is None
+        with admin_ops.exclusive("the next wipe"):
+            pass
+
+    def test_reset_frees_the_directory_names_immediately(self, session, project):
+        """Molecule ids restart at 1 after a reset and the worker shares this
+        process, so mol_1 gets recreated within a tick. If the deleter were
+        still walking the old mol_1 it would be walking the new one."""
+        comp_root = project["comp_root"]
+        result = admin_ops.reset_database(session, comp_root, project["export_root"])
+
+        # comp_data itself was renamed aside and recreated empty -- one
+        # rename for the whole tree, not one per molecule.
+        assert result["file_removal"]["dirs_total"] == 2  # comp_data, export_data
+        assert list(comp_root.iterdir()) == []
+        assert (comp_root.parent / admin_ops._TRASH_DIRNAME).is_dir()
+
+        recreated = comp_root / "mol_1"
+        recreated.mkdir()
+        (recreated / "input.xyz").write_text("fresh")
+
+        admin_ops._removal.join(timeout=10)
+        assert (recreated / "input.xyz").read_text() == "fresh"
+        assert not (comp_root.parent / admin_ops._TRASH_DIRNAME).exists()
+
+    def test_a_dead_process_leaves_trash_that_the_next_wipe_sweeps(
+        self, session, project,
+    ):
+        stranded = project["comp_root"] / admin_ops._TRASH_DIRNAME / "999-1"
+        stranded.mkdir(parents=True)
+        (stranded / "mol_leftover").mkdir()
+
+        admin_ops.wipe_project(
+            session, "victim", project["comp_root"], project["export_root"],
+            background=False,
+        )
+        assert not stranded.exists()
 
 
 class TestConcurrentWipeOverHttp:

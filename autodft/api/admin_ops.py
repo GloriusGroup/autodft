@@ -20,10 +20,17 @@ would otherwise reject the delete.
 
 ``computation_headers`` are never touched: they are shared across projects
 and referenced by rows that may survive.
+
+Deleting the files is the slow half -- ~65 ms per file on this deployment's
+network mount, so minutes for a real project. A project wipe and a database
+reset therefore *stage* the directories (one rename each) and answer the
+request immediately, leaving a background thread to do the unlinking. See
+:class:`_BackgroundRemoval`.
 """
 
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import os
@@ -66,10 +73,20 @@ class WipeInProgress(RuntimeError):
 _EXCLUSIVE = threading.Lock()
 _current_operation: Optional[str] = None
 
+# Who holds the lock is per-thread state: the request thread acquires it and,
+# once the files have been staged, hands ownership to the deleter thread.
+_local = threading.local()
+
 
 @contextmanager
 def exclusive(label: str):
-    """Hold the destructive-operation lock, or raise :class:`WipeInProgress`."""
+    """Hold the destructive-operation lock, or raise :class:`WipeInProgress`.
+
+    The lock is normally released when the block exits. If the operation
+    handed its file deletion to a background thread, that thread owns the
+    lock instead and releases it when the last directory is gone -- so a
+    second wipe is still refused while the first is only half-deleted.
+    """
     global _current_operation
     if not _EXCLUSIVE.acquire(blocking=False):
         raise WipeInProgress(
@@ -77,11 +94,24 @@ def exclusive(label: str):
             f"running. Wait for it to finish before starting {label!r}."
         )
     _current_operation = label
+    _local.holding = True
+    _local.handed_off = False
     try:
         yield
     finally:
-        _current_operation = None
-        _EXCLUSIVE.release()
+        handed_off = _local.handed_off
+        _local.holding = False
+        _local.handed_off = False
+        if not handed_off:
+            _current_operation = None
+            _EXCLUSIVE.release()
+
+
+def _release_exclusive() -> None:
+    """Release the lock on behalf of the thread it was handed to."""
+    global _current_operation
+    _current_operation = None
+    _EXCLUSIVE.release()
 
 
 def current_operation() -> Optional[str]:
@@ -174,6 +204,208 @@ def _remove_tree(path: Path) -> tuple[bool, int]:
     path.rmdir()
     logger.info("Deleted directory tree %s (%s)", path, human_bytes(freed))
     return True, freed
+
+
+# ----------------------------------------------------------------------
+# Staging + background removal
+# ----------------------------------------------------------------------
+
+# Where staged trees wait to be deleted. Dot-prefixed and never matching
+# ``mol_*``, so nothing that scans the data directories picks it up.
+_TRASH_DIRNAME = ".wipe-trash"
+
+_batch_counter = itertools.count(1)
+
+
+def _batch_name() -> str:
+    """A trash sub-directory name unique to this operation."""
+    return f"{os.getpid()}-{next(_batch_counter)}"
+
+
+def _stage(paths: list[Path], batch: str) -> list[Path]:
+    """Rename each path into a trash directory beside it; return the new paths.
+
+    A rename is one metadata operation, so this returns in milliseconds where
+    the deletion takes minutes. It also frees the *name* immediately, which
+    matters more than the speed: molecule ids restart at 1 after a reset, and
+    the worker runs in the same process as the API, so within a second of the
+    reset returning it would otherwise be creating ``mol_1`` inside the very
+    directory the deleter is still walking.
+
+    A path that cannot be renamed is returned unstaged and deleted in place.
+    """
+    staged: list[Path] = []
+    for path in paths:
+        if not path.exists():
+            continue
+        try:
+            trash = path.parent / _TRASH_DIRNAME / batch
+            trash.mkdir(parents=True, exist_ok=True)
+            destination = trash / path.name
+            path.rename(destination)
+            staged.append(destination)
+        except OSError:
+            logger.exception("Could not stage %s; it will be deleted in place", path)
+            staged.append(path)
+    return staged
+
+
+def _stage_whole(root: Path, batch: str) -> list[Path]:
+    """Stage a whole data directory with one rename, then recreate it empty.
+
+    A reset stages everything, and renaming the children one at a time is
+    ~24 ms each on this mount -- a minute of it for the full library, all of
+    it inside the request. Moving the root itself costs one operation no
+    matter how much is under it.
+    """
+    if not root.is_dir():
+        return []
+    mode = root.stat().st_mode
+    staged = _stage([root], batch)
+    root.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(root, mode)
+    except OSError:
+        logger.warning("Recreated %s but could not restore its mode", root)
+    return staged
+
+
+def _stale_trash(*roots: Path, skip: str = "") -> list[Path]:
+    """Batches left behind by an operation that died before finishing.
+
+    Only one destructive operation runs at a time and the deleter holds the
+    lock until it is done, so anything still here belongs to a dead process.
+    Both possible locations are swept: a project wipe stages into
+    ``comp_data/.wipe-trash``, a reset one level up. *skip* excludes the
+    caller's own batch.
+    """
+    out: list[Path] = []
+    seen: set[Path] = set()
+    for root in roots:
+        for trash in (root / _TRASH_DIRNAME, root.parent / _TRASH_DIRNAME):
+            if trash in seen or not trash.is_dir():
+                continue
+            seen.add(trash)
+            out += sorted(b for b in trash.iterdir() if b.name != skip)
+    return out
+
+
+class _BackgroundRemoval:
+    """The slow half of a wipe: unlinking trees that are already staged.
+
+    Runs on its own thread so the HTTP request returns as soon as the rows
+    are committed and the directories are out of the way. It owns the
+    exclusive lock for its lifetime, so a second wipe started while it is
+    working is still refused with 409 rather than racing it.
+    """
+
+    def __init__(self, label: str, targets: list[Path]) -> None:
+        self.label = label
+        self.targets = list(targets)
+        self.dirs_removed = 0
+        self.bytes_freed = 0
+        self.orphaned: list[str] = []
+        self.background = False
+        self.owns_lock = False
+        self.finished = False
+        self._thread = threading.Thread(
+            target=self.run, name="autodft-wipe", daemon=True,
+        )
+
+    def run(self) -> None:
+        try:
+            for target in self.targets:
+                try:
+                    removed, size = _remove_tree(target)
+                    self.dirs_removed += int(removed)
+                    self.bytes_freed += size
+                except OSError:
+                    logger.exception("Could not remove %s; it is now orphaned", target)
+                    self.orphaned.append(str(target))
+            self._prune_trash()
+        finally:
+            self.finished = True
+            logger.warning(
+                "%s: deleted %d/%d staged tree(s), %s freed, %d orphaned",
+                self.label, self.dirs_removed, len(self.targets),
+                human_bytes(self.bytes_freed), len(self.orphaned),
+            )
+            if self.owns_lock:
+                self.owns_lock = False
+                _release_exclusive()
+
+    def _prune_trash(self) -> None:
+        """Remove the batch and trash directories once they are empty."""
+        batches = {t.parent for t in self.targets if t.parent.parent.name == _TRASH_DIRNAME}
+        for directory in sorted(batches) + sorted({b.parent for b in batches}):
+            try:
+                if directory.is_dir() and not any(directory.iterdir()):
+                    directory.rmdir()
+            except OSError:
+                pass
+
+    def status(self) -> dict:
+        """Progress, for the response body and the wipe-status endpoint."""
+        pending = len(self.targets) - self.dirs_removed - len(self.orphaned)
+        if not self.background:
+            message = f"Freed {human_bytes(self.bytes_freed)}."
+        elif self.finished:
+            message = (
+                f"Files deleted in the background; {human_bytes(self.bytes_freed)} freed."
+            )
+        else:
+            message = (
+                f"Files are already out of the way; {pending} directory tree(s) "
+                f"are being deleted in the background."
+            )
+        return {
+            "background": self.background,
+            "state": "finished" if self.finished else "running",
+            "label": self.label,
+            "dirs_total": len(self.targets),
+            "dirs_removed": self.dirs_removed,
+            "dirs_pending": max(0, pending),
+            "bytes_freed": self.bytes_freed,
+            "freed_human": human_bytes(self.bytes_freed),
+            "orphaned_dirs": list(self.orphaned),
+            "message": message,
+        }
+
+    def join(self, timeout: Optional[float] = None) -> None:
+        """Wait for the deleter thread. For tests and shutdown."""
+        if self._thread.is_alive():
+            self._thread.join(timeout)
+
+
+_removal: Optional[_BackgroundRemoval] = None
+
+
+def _remove_in_background(
+    label: str, targets: list[Path], *, background: bool,
+) -> _BackgroundRemoval:
+    """Delete *targets*, on a separate thread unless told otherwise."""
+    global _removal, _current_operation
+
+    removal = _BackgroundRemoval(label, targets)
+    _removal = removal
+
+    if background and targets:
+        removal.background = True
+        if getattr(_local, "holding", False):
+            # Hand the lock over: the operation is not finished until the
+            # last file is gone, and nothing else may start before then.
+            removal.owns_lock = True
+            _local.handed_off = True
+            _current_operation = f"{label} (deleting files)"
+        removal._thread.start()
+    else:
+        removal.run()
+    return removal
+
+
+def removal_status() -> Optional[dict]:
+    """Status of the most recent file removal, or None if there has been none."""
+    return _removal.status() if _removal is not None else None
 
 
 def human_bytes(n: int) -> str:
@@ -344,6 +576,7 @@ def wipe_project(
     *,
     delete_exports: bool = True,
     scheduler=None,
+    background: bool = True,
 ) -> dict:
     """Delete a project's DB rows, raw comp_data, and exported data.
 
@@ -359,8 +592,10 @@ def wipe_project(
     value reports, and which nothing depends on.
 
     The file deletion is the slow half -- measured on this network mount,
-    ~65 ms per file, so a real project is minutes -- and it now runs with no
-    transaction open.
+    ~65 ms per file, so a real project is minutes. It runs with no
+    transaction open and, unless *background* is false, on its own thread:
+    the directories are renamed out of the way first, so by the time this
+    returns the project is gone as far as anything else can tell.
 
     Raises:
         ValueError: if the project is protected or has nothing to delete.
@@ -392,42 +627,35 @@ def wipe_project(
     # Everything below runs with no transaction open. The project has already
     # left the database, so a failure here leaves orphaned directories that
     # the log names -- recoverable -- rather than an inconsistent database.
-    removed_dirs = 0
-    freed = 0
-    failed_dirs: list[str] = []
-    for mid in molecule_ids:
-        target = comp_root / f"mol_{mid}"
-        try:
-            removed, size = _remove_tree(target)
-            freed += size
-            removed_dirs += int(removed)
-        except OSError:
-            logger.exception("Could not remove %s; it is now orphaned", target)
-            failed_dirs.append(str(target))
+    batch = _batch_name()
+    stale = _stale_trash(comp_root, export_root)
+    staged = _stage([comp_root / f"mol_{mid}" for mid in molecule_ids], batch)
+    comp_dirs_staged = len(staged)
 
-    export_removed = False
+    export_staged = False
     if export_dir is not None:
-        try:
-            export_removed, size = _remove_tree(export_dir)
-            freed += size
-        except OSError:
-            logger.exception("Could not remove %s; it is now orphaned", export_dir)
-            failed_dirs.append(str(export_dir))
+        staged_export = _stage([export_dir], batch)
+        export_staged = bool(staged_export)
+        staged += staged_export
+
+    label = f"wipe of project {name!r}"
+    removal = _remove_in_background(label, stale + staged, background=background)
 
     logger.warning(
-        "WIPED project %r: %s rows, %d comp_data dirs, %d job(s) cancelled, %s freed",
-        name, counts, removed_dirs, cancelled, human_bytes(freed),
+        "WIPED project %r: %s rows, %d comp_data dirs, %d job(s) cancelled",
+        name, counts, comp_dirs_staged, cancelled,
     )
     return {
         "project": name,
         "wiped": True,
         "rows": counts,
-        "comp_data_dirs_removed": removed_dirs,
-        "export_removed": export_removed,
+        "comp_data_dirs_removed": comp_dirs_staged,
+        "export_removed": export_staged,
         "jobs_cancelled": cancelled,
-        "orphaned_dirs": failed_dirs,
-        "bytes_freed": freed,
-        "freed_human": human_bytes(freed),
+        "orphaned_dirs": removal.orphaned,
+        "bytes_freed": removal.bytes_freed,
+        "freed_human": human_bytes(removal.bytes_freed),
+        "file_removal": removal.status(),
     }
 
 
@@ -550,12 +778,19 @@ def reset_database(
     delete_files: bool = True,
     keep_headers: bool = True,
     scheduler=None,
+    background: bool = True,
 ) -> dict:
     """Empty every pipeline table and optionally every data directory.
 
     Headers are kept by default: they are the user's saved methods, not
     results, and losing them silently would be a nasty surprise. When they
     are dropped the standard set is reseeded so submissions still work.
+
+    As with :func:`wipe_project`, the directories are renamed out of the way
+    and deleted on a background thread unless *background* is false. Staging
+    is what makes that safe here: molecule ids restart at 1 after a reset, so
+    a worker resuming while the old tree was still being walked would create
+    ``mol_1`` straight into it.
     """
     counts = {
         "jobs": len(session.exec(select(ComputationJob.id)).all()),
@@ -592,11 +827,12 @@ def reset_database(
 
     session.commit()
 
-    freed = 0
+    targets: list[Path] = []
     if delete_files:
         # After the commit, so a failure here leaves orphaned directories
         # rather than an emptied filesystem with every row intact -- which
         # made the pipeline mark every job "Job path missing" en masse.
+        batch = _batch_name()
         data_root = comp_root.parent if comp_root.parent == export_root.parent else None
         for root in (comp_root, export_root):
             if not root.exists():
@@ -607,30 +843,26 @@ def reset_database(
             if data_root is not None and root == data_root:
                 logger.error("Refusing to empty %s: it is the data root", root)
                 continue
-            for child in root.iterdir():
-                if child.is_dir():
-                    _, size = _remove_tree(child)
-                    freed += size
-                else:
-                    try:
-                        freed += child.stat().st_size
-                    except OSError:
-                        pass
-                    child.unlink()
+            targets += _stage_whole(root, batch)
             logger.warning("Emptied data directory %s", root)
+        # Swept after staging: a batch inside comp_data went with the root.
+        targets += _stale_trash(comp_root, export_root, skip=batch)
+
+    removal = _remove_in_background("database reset", targets, background=background)
 
     if not keep_headers:
         from autodft.db import _seed_default_headers, get_engine
         _seed_default_headers(get_engine())
 
-    logger.warning("DATABASE RESET: %s, headers_dropped=%d, %d job(s) cancelled, %s freed",
-                   counts, headers_dropped, cancelled, human_bytes(freed))
+    logger.warning("DATABASE RESET: %s, headers_dropped=%d, %d job(s) cancelled",
+                   counts, headers_dropped, cancelled)
     return {
         "reset": True,
         "rows": counts,
         "headers_dropped": headers_dropped,
         "files_deleted": delete_files,
         "jobs_cancelled": cancelled,
-        "bytes_freed": freed,
-        "freed_human": human_bytes(freed),
+        "bytes_freed": removal.bytes_freed,
+        "freed_human": human_bytes(removal.bytes_freed),
+        "file_removal": removal.status(),
     }

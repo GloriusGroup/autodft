@@ -1177,6 +1177,24 @@ def _admin_scheduler(settings):
         return None
 
 
+@router.get("/api/admin/wipe-status")
+def api_wipe_status():
+    """Whether a destructive operation is still deleting files.
+
+    A project wipe and a database reset answer as soon as the rows are gone
+    and the directories are renamed out of the way; the unlinking continues
+    on a background thread, and until it finishes another wipe is refused.
+    """
+    from autodft.api import admin_ops
+
+    operation = admin_ops.current_operation()
+    return {
+        "running": operation is not None,
+        "operation": operation,
+        "file_removal": admin_ops.removal_status(),
+    }
+
+
 @router.get("/api/admin/projects/{name}/wipe-preview")
 def api_project_wipe_preview(name: str):
     """What a wipe of this project would delete. Read-only."""

@@ -406,23 +406,44 @@ a `POST` that acts and requires `confirm` to echo an exact string.
 | `POST /api/admin/molecules/{id}/wipe` | the molecule's SMILES | that molecule's rows and `comp_data/mol_{id}` |
 | `GET /api/admin/reset-preview` | — | nothing |
 | `POST /api/admin/reset-database` | `RESET THE DATABASE` | every pipeline table; data directories unless `delete_files: false`; headers only if `keep_headers: false` |
+| `GET /api/admin/wipe-status` | — | nothing; reports the deletion still in flight |
 
 `default` is protected and cannot be wiped. Saved headers are shared
 across projects and are never touched by a project or molecule wipe.
 
-Three properties worth knowing:
+Four properties worth knowing:
 
 * **One at a time.** A destructive operation started while another is
   running is refused with **409**, not queued. Two deleters walking the
   same tree used to abort each other partway through.
 * **Rows first, files second.** The database rows are deleted and
-  committed before anything is unlinked, so the response comes back only
-  after the (slow) file deletion but a failure mid-rmtree leaves orphaned
-  directories — named in the log and in the response's `orphaned_dirs` —
-  rather than an emptied disk with rows still pointing at it.
+  committed before anything is unlinked, so a failure mid-rmtree leaves
+  orphaned directories — named in the log and in `orphaned_dirs` — rather
+  than an emptied disk with rows still pointing at it.
+* **The files go in the background.** Unlinking is ~65 ms per file on this
+  deployment's network mount, so a real project is minutes. A project wipe
+  and a database reset therefore *stage* — rename into a `.wipe-trash/`
+  directory — and return immediately, leaving a background thread to
+  unlink. A wipe stages one directory per molecule (~24 ms each); a reset
+  stages `comp_data` and `export_data` whole, three syscalls no matter how
+  much is under them. Measured on a 300-file tree: **0.14 s to stage
+  against 9.8 s to delete**, and only the staging is inside the request.
+  The response's `file_removal` object reports progress, and
+  `GET /api/admin/wipe-status` follows it to completion.
 * **SLURM is stopped first.** Jobs the scheduler still has queued or
   running are `scancel`ed before their directories disappear; the count
   comes back as `jobs_cancelled`.
 
-A project wipe takes minutes on a network filesystem — roughly 65 ms per
-file on this deployment. That is the file deletion, not the database.
+Staging is not just about latency. Molecule ids restart at 1 after a
+reset and the worker runs in the same process as the API, so within a tick
+of the reset returning it is creating `mol_1` again — into the very
+directory a deleter would still have been walking. Renaming frees the name
+before the response is sent, so the new tree and the doomed one can never
+be the same tree.
+
+Because the operation is not finished when the response arrives, another
+wipe stays refused with 409 until the last file is gone. `wipe-status`
+answers `{"running": ..., "operation": ..., "file_removal": {...}}`; the
+dashboard shows a banner while one is in flight. A controller killed
+mid-deletion leaves its batch under `.wipe-trash/`, which the next wipe or
+reset sweeps.

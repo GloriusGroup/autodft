@@ -1264,6 +1264,16 @@
             </div>
         </div>
 
+        <div class="submit-section" id="adminRemovalSection" style="display:none;">
+            <h2 style="margin-bottom:12px;">File deletion in progress</h2>
+            <div class="subtitle" style="margin-bottom:14px;">
+                The rows are already gone and the directories are out of the
+                way; unlinking them takes minutes on the network filesystem.
+                Another wipe or reset is refused until this finishes.
+            </div>
+            <div id="adminRemovalStatus" class="admin-summary">Loading...</div>
+        </div>
+
         <div class="submit-section" id="adminBreakerSection">
             <h2 style="margin-bottom:12px;">Failure circuit breaker</h2>
             <div class="subtitle" style="margin-bottom:14px;">
@@ -1808,7 +1818,36 @@
             }).join(', ');
         }
 
+        // A project wipe and a database reset return once the rows are gone
+        // and the directories are renamed aside; the unlinking runs on the
+        // controller in the background and takes minutes on the network
+        // mount. Report that, then follow it to completion -- until it
+        // finishes, another wipe is refused with 409.
+        function removalLine(data) {
+            var r = data.file_removal;
+            return r ? r.message : 'Freed ' + data.freed_human + '.';
+        }
+
+        var removalTimer = null;
+
+        async function refreshRemovalBanner() {
+            var section = document.getElementById('adminRemovalSection');
+            var box = document.getElementById('adminRemovalStatus');
+            var out = await adminJSON('GET', '/api/admin/wipe-status');
+            var running = out.ok && out.data.running;
+            section.style.display = running ? '' : 'none';
+            if (removalTimer) { clearTimeout(removalTimer); removalTimer = null; }
+            if (!running) { return; }
+            var r = out.data.file_removal;
+            box.textContent = out.data.operation
+                + (r ? ' — ' + r.dirs_removed + ' of ' + r.dirs_total
+                       + ' tree(s) deleted, ' + r.freed_human + ' freed' : '');
+            removalTimer = setTimeout(refreshRemovalBanner, 5000);
+        }
+
         async function loadAdminPage() {
+            refreshRemovalBanner();
+
             // --- circuit breaker ----------------------------------------
             var breakerBox = document.getElementById('adminBreakerStatus');
             var breakerActions = document.getElementById('adminBreakerActions');
@@ -1929,7 +1968,7 @@
                     return;
                 }
                 feedback.textContent = 'Wiped ' + adminRowsLine(out.data.rows)
-                    + ' and freed ' + out.data.freed_human + '.';
+                    + '. ' + removalLine(out.data);
                 feedback.className = 'submit-feedback success adm-feedback';
                 setTimeout(function () { box.remove(); loadAdminPage(); fetchProjects(); }, 1800);
             });
@@ -2027,7 +2066,7 @@
             }
             document.getElementById('adminResetConfirm').value = '';
             feedback.textContent = 'Database reset. Removed ' + adminRowsLine(out.data.rows)
-                + ', freed ' + out.data.freed_human + '.';
+                + '. ' + removalLine(out.data);
             feedback.className = 'submit-feedback success';
             loadAdminPage();
         });
