@@ -8,13 +8,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Form, Query, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
 from sqlmodel import col, func, select
 
 from autodft.api.auth import COOKIE_NAME, issue_token
+from autodft.api.identity import (
+    Identity,
+    current_identity,
+    require_admin,
+    require_molecule,
+    resolve_project,
+    scope_jobs,
+    scope_molecules,
+    scope_tasks,
+    visible_entrypoints,
+    visible_projects,
+)
 
 from autodft.db import get_session
 from autodft.models import (
@@ -56,25 +68,49 @@ def login_page(request: Request, next: Optional[str] = Query("/"), error: Option
 @public_router.post("/login")
 def login_submit(request: Request,
                  password: str = Form(...),
+                 username: str = Form(""),
                  next: str = Form("/")):
-    """Validate the submitted password and set the session cookie."""
+    """Sign in with a username and API key, or with the admin password.
+
+    Leaving the username blank and giving the dashboard password is the
+    pre-accounts path, kept so an operator locked out of the admin key can
+    still get in.
+    """
     import hmac
 
+    from autodft import accounts
+
     settings = get_active_settings()
-    # Constant-time, matching the header/cookie paths in auth.py.
-    if not hmac.compare_digest(
+    username = (username or "").strip().lower()
+
+    resolved: Optional[str] = None
+    if username:
+        with get_session() as session:
+            user = accounts.resolve_api_key(session, password)
+            if user is not None and user.username == username:
+                resolved = user.username
+    elif hmac.compare_digest(
+        # Constant-time, matching the header/cookie paths in auth.py.
         password.encode("utf-8", "replace"),
         str(settings.security.dashboard_password).encode("utf-8"),
     ):
-        # Re-render the form with an error message. Status stays 200 so
-        # the browser keeps the URL stable.
+        resolved = accounts.ADMIN_USERNAME
+
+    if resolved is None:
+        # One message for every failure: distinguishing "no such user"
+        # from "wrong key" would turn the form into a username oracle.
+        # Status stays 200 so the browser keeps the URL stable.
         return templates.TemplateResponse(
             request=request, name="login.html",
-            context={"next": next, "error": "Incorrect password."},
+            context={"next": next, "error": "Incorrect username or key."},
             status_code=200,
         )
 
-    token = issue_token(password, settings.security.session_lifetime_seconds)
+    token = issue_token(
+        settings.security.dashboard_password,
+        settings.security.session_lifetime_seconds,
+        resolved,
+    )
     # Sanitise the redirect target — only allow same-origin paths so a
     # malicious ?next= can't bounce users off-site.
     target = next if next.startswith("/") and not next.startswith("//") else "/"
@@ -222,35 +258,48 @@ def _reject_bad_project(name: str):
 
 
 @router.get("/api/overview")
-def api_overview():
-    """Pipeline overview statistics."""
+def api_overview(identity: Identity = Depends(current_identity)):
+    """Pipeline overview statistics, counting only the caller's work.
+
+    Global counts here told every user exactly how much everyone else was
+    running -- and, since the numbers are what the dashboard's front page
+    is built from, made the whole page describe someone else's campaign.
+    """
     with get_session() as session:
         molecule_count = session.exec(
-            select(func.count()).select_from(Molecule)
+            scope_molecules(
+                select(func.count()).select_from(Molecule), session, identity,
+            )
         ).one()
 
         task_counts = {}
         for status in TaskStatus:
             count = session.exec(
-                select(func.count())
-                .select_from(ComputationTask)
-                .where(ComputationTask.status == status)
+                scope_tasks(
+                    select(func.count())
+                    .select_from(ComputationTask)
+                    .where(ComputationTask.status == status),
+                    session, identity,
+                )
             ).one()
             task_counts[status.value] = count
 
         job_counts: dict[str, int] = {}
         rows = session.exec(
-            select(ComputationJob.slurm_status, func.count())
-            .group_by(ComputationJob.slurm_status)
+            scope_jobs(
+                select(ComputationJob.slurm_status, func.count())
+                .select_from(ComputationJob),
+                session, identity,
+            ).group_by(ComputationJob.slurm_status)
         ).all()
         for slurm_status, count in rows:
             job_counts[slurm_status or "unknown"] = count
 
-        queue_length = session.exec(
-            select(func.count())
-            .select_from(CalculationEntrypoint)
+        queued = session.exec(
+            select(CalculationEntrypoint)
             .where(col(CalculationEntrypoint.time_started).is_(None))
-        ).one()
+        ).all()
+        queue_length = len(visible_entrypoints(queued, session, identity))
 
     return {
         "molecules": molecule_count,
@@ -265,12 +314,16 @@ def api_molecules(
     project: Optional[str] = Query(None),
     limit: int = Query(20, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    identity: Identity = Depends(current_identity),
 ):
     """List molecules with optional project filter."""
     with get_session() as session:
         stmt = select(Molecule).order_by(col(Molecule.created_at).desc())
         if project:
-            stmt = stmt.where(Molecule.project_name == project)
+            stmt = stmt.where(
+                Molecule.project_name == resolve_project(session, identity, project)
+            )
+        stmt = scope_molecules(stmt, session, identity)
         stmt = stmt.offset(offset).limit(limit)
         molecules = session.exec(stmt).all()
 
@@ -294,10 +347,12 @@ def api_molecules(
 
 
 @router.get("/api/molecules/{molecule_id}")
-def api_molecule_detail(molecule_id: int):
+def api_molecule_detail(
+    molecule_id: int, identity: Identity = Depends(current_identity),
+):
     """Single molecule detail with all states, tasks, and jobs."""
     with get_session() as session:
-        mol = session.get(Molecule, molecule_id)
+        mol = require_molecule(session, identity, molecule_id)
         if mol is None:
             return JSONResponse(status_code=404, content={"detail": "Molecule not found"})
 
@@ -349,12 +404,14 @@ def api_tasks(
     status: Optional[str] = Query(None),
     type: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=500),
+    identity: Identity = Depends(current_identity),
 ):
     """List tasks with optional status and type filters."""
     with get_session() as session:
         stmt = select(ComputationTask).order_by(
             col(ComputationTask.updated_at).desc()
         )
+        stmt = scope_tasks(stmt, session, identity)
         if status:
             stmt = stmt.where(ComputationTask.status == TaskStatus(status))
         if type:
@@ -387,10 +444,12 @@ def api_tasks(
 def api_jobs(
     status: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=500),
+    identity: Identity = Depends(current_identity),
 ):
     """List jobs with optional SLURM status filter."""
     with get_session() as session:
         stmt = select(ComputationJob).order_by(col(ComputationJob.id).desc())
+        stmt = scope_jobs(stmt, session, identity)
         if status:
             stmt = stmt.where(ComputationJob.slurm_status == status)
         stmt = stmt.limit(limit)
@@ -415,7 +474,7 @@ def api_jobs(
 
 
 @router.get("/api/queue")
-def api_queue():
+def api_queue(identity: Identity = Depends(current_identity)):
     """Show the entrypoint queue (unstarted entries)."""
     with get_session() as session:
         stmt = (
@@ -423,7 +482,7 @@ def api_queue():
             .where(col(CalculationEntrypoint.time_started).is_(None))
             .order_by(CalculationEntrypoint.priority.desc(), CalculationEntrypoint.time_created)  # type: ignore[union-attr]
         )
-        entries = session.exec(stmt).all()
+        entries = visible_entrypoints(session.exec(stmt).all(), session, identity)
 
         results = []
         for entry in entries:
@@ -440,12 +499,15 @@ def api_queue():
 
 
 @router.get("/api/projects")
-def api_projects():
+def api_projects(identity: Identity = Depends(current_identity)):
     """List every distinct project name with summary counts."""
     with get_session() as session:
         names = session.exec(
             select(Molecule.project_name).distinct()
         ).all()
+        allowed = visible_projects(session, identity)
+        if allowed is not None:
+            names = [n for n in names if n in set(allowed)]
 
         out = []
         for name in sorted(names):
@@ -486,17 +548,21 @@ def api_projects():
                 "tasks_failed": n_failed,
                 "tasks_successful": n_succ,
                 "archived": n_arch == n_mol and n_mol > 0,
-                "protected": name in PROTECTED_PROJECT_NAMES,
+                "protected": _is_protected(name),
             })
         return out
 
 
 @router.get("/api/projects/{name}")
-def api_project_detail(name: str):
+def api_project_detail(
+    name: str, identity: Identity = Depends(current_identity),
+):
     """Per-project view: molecules, submission progress, and success rate."""
     bad = _reject_bad_project(name)
     if bad is not None:
         return bad
+    with get_session() as session:
+        name = resolve_project(session, identity, name)
     from autodft.extraction.extractor import PipelineExtractor
 
     extractor = PipelineExtractor(name)
@@ -583,7 +649,7 @@ def api_project_detail(name: str):
         "name": name,
         "status": status,
         "archived": archived_project,
-        "protected": name in PROTECTED_PROJECT_NAMES,
+        "protected": _is_protected(name),
         "in_flight_molecules": in_flight_molecules,
         "in_flight_tasks": in_flight_tasks_total,
         "completed_molecules": total_mols - in_flight_molecules,
@@ -595,7 +661,9 @@ def api_project_detail(name: str):
 
 
 @router.get("/api/projects/{name}/molecules-detail")
-def api_project_molecules_detail(name: str):
+def api_project_molecules_detail(
+    name: str, identity: Identity = Depends(current_identity),
+):
     """Per-molecule conformer-level breakdown for one project.
 
     Returns each molecule with an embedded 2-D SVG depiction, the list
@@ -611,6 +679,8 @@ def api_project_molecules_detail(name: str):
     bad = _reject_bad_project(name)
     if bad is not None:
         return bad
+    with get_session() as session:
+        name = resolve_project(session, identity, name)
     from autodft.models.geometry import MoleculeGeometry
 
     # Build the molecule list and gather all the related rows in a few
@@ -709,7 +779,9 @@ def api_project_molecules_detail(name: str):
 
 
 @router.get("/api/projects/{name}/state-analysis")
-def api_project_state_analysis(name: str):
+def api_project_state_analysis(
+    name: str, identity: Identity = Depends(current_identity),
+):
     """Per-molecule state analysis for one project.
 
     Returns triplet energies, redox free energies / E vs SCE in MeCN,
@@ -726,12 +798,16 @@ def api_project_state_analysis(name: str):
     bad = _reject_bad_project(name)
     if bad is not None:
         return bad
+    with get_session() as session:
+        name = resolve_project(session, identity, name)
     from autodft.analysis.state_analysis import analyze_project
     return analyze_project(name)
 
 
 @router.get("/api/projects/{name}/state-analysis/export")
-def api_project_state_analysis_export(name: str):
+def api_project_state_analysis_export(
+    name: str, identity: Identity = Depends(current_identity),
+):
     """Stream the state-analysis as a multi-sheet XLSX.
 
     Sheets: Summary, Lowest Energy, RMSD Matched, Conformers.
@@ -741,6 +817,8 @@ def api_project_state_analysis_export(name: str):
     bad = _reject_bad_project(name)
     if bad is not None:
         return bad
+    with get_session() as session:
+        name = resolve_project(session, identity, name)
     from fastapi.responses import Response
 
     from autodft.analysis.state_analysis import analyze_project, build_xlsx_bytes
@@ -774,6 +852,13 @@ class ArchiveRequest(BaseModel):
 PROTECTED_PROJECT_NAMES = {"default"}
 
 
+def _is_protected(name: str) -> bool:
+    """Bare-name check; see admin_ops.is_protected for why."""
+    from autodft.api.admin_ops import is_protected
+
+    return is_protected(name)
+
+
 def _project_is_archived(session, name: str) -> Optional[bool]:
     """Return True/False if every molecule in the project is archived,
     or None if the project doesn't exist."""
@@ -786,7 +871,9 @@ def _project_is_archived(session, name: str) -> Optional[bool]:
 
 
 @router.post("/api/projects/{name}/archive")
-def api_project_archive(name: str, body: ArchiveRequest):
+def api_project_archive(
+    name: str, body: ArchiveRequest, identity: Identity = Depends(current_identity),
+):
     """Destructive archive of one project.
 
     Writes the CSV summary + the user-selected files into
@@ -804,9 +891,11 @@ def api_project_archive(name: str, body: ArchiveRequest):
     bad = _reject_bad_project(name)
     if bad is not None:
         return bad
+    with get_session() as session:
+        name = resolve_project(session, identity, name)
     from autodft.extraction.extractor import PipelineExtractor
 
-    if name in PROTECTED_PROJECT_NAMES:
+    if _is_protected(name):
         return JSONResponse(
             status_code=409,
             content={"detail": f"Project {name!r} is protected and cannot be archived."},
@@ -847,6 +936,7 @@ def api_project_export(
     name: str,
     format: str = Query("csv"),
     all_conformers: bool = Query(False),
+    identity: Identity = Depends(current_identity),
 ):
     """Trigger an export for one project.
 
@@ -861,6 +951,8 @@ def api_project_export(
     bad = _reject_bad_project(name)
     if bad is not None:
         return bad
+    with get_session() as session:
+        name = resolve_project(session, identity, name)
     from autodft.extraction.extractor import PipelineExtractor
 
     if format not in {"csv", "json", "files"}:
@@ -880,16 +972,21 @@ def api_project_export(
                 content={"detail": f"Project {name!r} is archived — source files are no longer on disk."},
             )
 
-        out_root = settings.export_data_path / name
+        from autodft.paths import project_file_stem, safe_subdirectory
+
+        # safe_subdirectory rather than a bare join: it nests the owner
+        # segment and keeps the containment check on both halves.
+        out_root = safe_subdirectory(settings.export_data_path, name)
         out_root.mkdir(parents=True, exist_ok=True)
+        stem = project_file_stem(name)
 
         extractor = PipelineExtractor(name)
         if format == "csv":
-            target = out_root / f"{name}.csv"
+            target = out_root / f"{stem}.csv"
             extractor.export_summary_csv(target, all_conformers=all_conformers)
             return {"format": format, "path": str(target)}
         if format == "json":
-            target = out_root / f"{name}.json"
+            target = out_root / f"{stem}.json"
             extractor.export_summary_json(target, all_conformers=all_conformers)
             return {"format": format, "path": str(target)}
         # files
@@ -906,17 +1003,22 @@ def api_project_export(
 
 
 @router.get("/api/entrypoints/failed")
-def api_failed_entrypoints():
+def api_failed_entrypoints(identity: Identity = Depends(current_identity)):
     """Entrypoints that hit a processing error and were never expanded
     into molecules/tasks (e.g. unparseable SMILES). Surface these so the
-    user can fix the input and resubmit."""
+    user can fix the input and resubmit.
+
+    Filtered to the caller: a failed entrypoint carries the SMILES that was
+    submitted, so an unfiltered list handed every user everyone else's
+    structures.
+    """
     with get_session() as session:
         stmt = (
             select(CalculationEntrypoint)
             .where(col(CalculationEntrypoint.processing_error).is_not(None))
             .order_by(col(CalculationEntrypoint.time_started).desc())
         )
-        entries = session.exec(stmt).all()
+        entries = visible_entrypoints(session.exec(stmt).all(), session, identity)
         return [
             {
                 "id": e.id,
@@ -1000,9 +1102,42 @@ def api_headers(
     return {"defaults": defaults, "custom": db_headers}
 
 
+def _caller_id(session, identity: Identity):
+    """The caller's user row id, or None when accounts are not set up."""
+    from autodft import accounts
+
+    user = accounts.get_user_by_username(session, identity.username)
+    return None if user is None else user.id
+
+
+def _may_change_header(session, identity: Identity, header) -> bool:
+    """Whether *identity* may edit or remove *header*.
+
+    Everyone uses every header; only its owner or admin changes one.
+    """
+    if identity.is_admin:
+        return True
+    owner_id = getattr(header, "owner_id", None)
+    return owner_id is not None and owner_id == _caller_id(session, identity)
+
+
+_HEADER_FORBIDDEN = {
+    "detail": "This header belongs to another user. Create your own copy "
+              "instead, or ask an administrator to change it."
+}
+
+
 @router.post("/api/headers")
-def api_create_header(body: HeaderCreate):
-    """Create a new custom computation header."""
+def api_create_header(
+    body: HeaderCreate, identity: Identity = Depends(current_identity),
+):
+    """Create a new custom computation header, owned by the caller.
+
+    Anyone may create one, and anyone may *use* anyone's -- a method
+    library is only useful shared. Only the owner (or admin) may later
+    change or remove it, because editing a header silently changes what
+    the next submission referencing it computes.
+    """
     if body.kind and body.kind not in {"confsearch", "optimization", "singlepoint"}:
         return JSONResponse(
             status_code=400,
@@ -1014,6 +1149,7 @@ def api_create_header(body: HeaderCreate):
             description=body.description,
             kind=body.kind,
             validated=body.validated,
+            owner_id=_caller_id(session, identity),
         )
         session.add(header)
         session.commit()
@@ -1028,8 +1164,11 @@ def api_create_header(body: HeaderCreate):
 
 
 @router.put("/api/headers/{header_id}")
-def api_update_header(header_id: int, body: HeaderUpdate):
-    """Update fields on an existing header."""
+def api_update_header(
+    header_id: int, body: HeaderUpdate,
+    identity: Identity = Depends(current_identity),
+):
+    """Update fields on an existing header. Owner or admin only."""
     if body.kind is not None and body.kind not in {"", "confsearch", "optimization", "singlepoint"}:
         return JSONResponse(
             status_code=400,
@@ -1039,6 +1178,8 @@ def api_update_header(header_id: int, body: HeaderUpdate):
         header = session.get(ComputationHeader, header_id)
         if header is None:
             return JSONResponse(status_code=404, content={"detail": "Header not found"})
+        if not _may_change_header(session, identity, header):
+            return JSONResponse(status_code=403, content=_HEADER_FORBIDDEN)
         if body.header_text is not None:
             header.header_text = body.header_text
         if body.description is not None:
@@ -1060,8 +1201,10 @@ def api_update_header(header_id: int, body: HeaderUpdate):
 
 
 @router.delete("/api/headers/{header_id}")
-def api_delete_header(header_id: int):
-    """Soft-delete a custom header.
+def api_delete_header(
+    header_id: int, identity: Identity = Depends(current_identity),
+):
+    """Soft-delete a custom header. Owner or admin only.
 
     Refused only when an *in-flight* task (status ``created`` or
     ``pending``) still references it directly or through its state.
@@ -1076,6 +1219,8 @@ def api_delete_header(header_id: int):
         header = session.get(ComputationHeader, header_id)
         if header is None:
             return JSONResponse(status_code=404, content={"detail": "Header not found"})
+        if not _may_change_header(session, identity, header):
+            return JSONResponse(status_code=403, content=_HEADER_FORBIDDEN)
 
         # 1. Direct references on ComputationTask
         direct_inflight = session.exec(
@@ -1177,8 +1322,8 @@ def _admin_scheduler(settings):
         return None
 
 
-@router.get("/api/admin/wipe-status")
-def api_wipe_status():
+@router.get("/api/wipe-status")
+def api_wipe_status(identity: Identity = Depends(current_identity)):
     """Whether a destructive operation is still deleting files.
 
     A project wipe and a database reset answer as soon as the rows are gone
@@ -1188,6 +1333,11 @@ def api_wipe_status():
     from autodft.api import admin_ops
 
     operation = admin_ops.current_operation()
+    if not identity.is_admin:
+        # The label names the project being wiped, which may be someone
+        # else's. A user only needs to know that they have to wait.
+        return {"running": operation is not None, "operation": None,
+                "file_removal": None}
     return {
         "running": operation is not None,
         "operation": operation,
@@ -1195,12 +1345,16 @@ def api_wipe_status():
     }
 
 
-@router.get("/api/admin/projects/{name}/wipe-preview")
-def api_project_wipe_preview(name: str):
+@router.get("/api/projects/{name}/wipe-preview")
+def api_project_wipe_preview(
+    name: str, identity: Identity = Depends(current_identity),
+):
     """What a wipe of this project would delete. Read-only."""
     bad = _reject_bad_project(name)
     if bad is not None:
         return bad
+    with get_session() as session:
+        name = resolve_project(session, identity, name)
     from autodft.api import admin_ops
 
     settings = get_active_settings()
@@ -1210,15 +1364,24 @@ def api_project_wipe_preview(name: str):
         )
 
 
-@router.post("/api/admin/projects/{name}/wipe")
-def api_project_wipe(name: str, body: WipeRequest):
+@router.post("/api/projects/{name}/wipe")
+def api_project_wipe(
+    name: str, body: WipeRequest,
+    identity: Identity = Depends(current_identity),
+):
     """Permanently delete a project: DB rows, raw comp_data, exported data.
 
     Requires ``confirm`` to equal the project name exactly. Irreversible.
+
+    Scoped, not admin-only: a user may wipe their own projects. The name
+    is resolved through :func:`resolve_project`, so someone else's answers
+    404 exactly as it does for a read.
     """
     bad = _reject_bad_project(name)
     if bad is not None:
         return bad
+    with get_session() as session:
+        name = resolve_project(session, identity, name)
     from autodft.api import admin_ops
 
     if body.confirm != name:
@@ -1245,13 +1408,16 @@ def api_project_wipe(name: str, body: WipeRequest):
         )
 
 
-@router.get("/api/admin/molecules/{molecule_id}/wipe-preview")
-def api_molecule_wipe_preview(molecule_id: int):
+@router.get("/api/molecules/{molecule_id}/wipe-preview")
+def api_molecule_wipe_preview(
+    molecule_id: int, identity: Identity = Depends(current_identity),
+):
     """What wiping this single calculation would delete. Read-only."""
     from autodft.api import admin_ops
 
     settings = get_active_settings()
     with get_session() as session:
+        require_molecule(session, identity, molecule_id)
         preview = admin_ops.preview_molecule_wipe(
             session, molecule_id, settings.comp_data_path,
         )
@@ -1260,11 +1426,15 @@ def api_molecule_wipe_preview(molecule_id: int):
     return preview
 
 
-@router.post("/api/admin/molecules/{molecule_id}/wipe")
-def api_molecule_wipe(molecule_id: int, body: WipeRequest):
+@router.post("/api/molecules/{molecule_id}/wipe")
+def api_molecule_wipe(
+    molecule_id: int, body: WipeRequest,
+    identity: Identity = Depends(current_identity),
+):
     """Delete one molecule with its states, tasks, jobs and raw files.
 
-    Requires ``confirm`` to equal the molecule's SMILES exactly.
+    Requires ``confirm`` to equal the molecule's SMILES exactly. A user
+    may wipe their own molecules; someone else's answers 404.
     """
     from autodft.api import admin_ops
 
@@ -1272,11 +1442,7 @@ def api_molecule_wipe(molecule_id: int, body: WipeRequest):
     try:
         with admin_ops.exclusive(f"wipe of molecule {molecule_id}"):
             with get_session() as session:
-                mol = session.get(Molecule, molecule_id)
-                if mol is None:
-                    return JSONResponse(
-                        status_code=404, content={"detail": f"Molecule {molecule_id} not found"},
-                    )
+                mol = require_molecule(session, identity, molecule_id)
                 if body.confirm != mol.smiles:
                     return _confirmation_error(mol.smiles, body.confirm)
                 return admin_ops.wipe_molecule(
@@ -1293,6 +1459,230 @@ def api_molecule_wipe(molecule_id: int, body: WipeRequest):
             status_code=500,
             content={"detail": f"Wipe failed: {type(exc).__name__}: {exc}"},
         )
+
+
+@router.get("/api/whoami")
+def api_whoami(identity: Identity = Depends(current_identity)):
+    """The caller, and what they own.
+
+    The dashboard uses this to decide what to render: a user has no admin
+    section, no other people's projects, and a locked author field.
+    """
+    from autodft import accounts
+
+    with get_session() as session:
+        user = accounts.get_user_by_username(session, identity.username)
+        # What the caller *owns*, which is not the same as what they can
+        # see: admin sees everything, and reporting that as ownership made
+        # its own projects vanish from this list.
+        owned = [] if user is None else accounts.projects_owned_by(session, user)
+        names = sorted(p.name for p in owned)
+    return {
+        "username": identity.username,
+        "is_admin": identity.is_admin,
+        # Bare names: the owner is the caller, so the prefix is noise here.
+        "projects": names,
+    }
+
+
+@router.get("/api/cluster")
+def api_cluster_status():
+    """Read-only pipeline health, for everyone who is signed in.
+
+    Without this a user cannot tell "my jobs are stuck" from "the pipeline
+    is halted" without asking an administrator. It exposes no one else's
+    data: a queue depth and a breaker flag.
+    """
+    from autodft.engine import circuit_breaker
+
+    settings = get_active_settings()
+    state = circuit_breaker.read_state(settings.data_path)
+    with get_session() as session:
+        waiting = session.exec(
+            select(func.count())
+            .select_from(CalculationEntrypoint)
+            .where(col(CalculationEntrypoint.time_started).is_(None))
+        ).one()
+    return {
+        "breaker_tripped": state is not None,
+        "queued_entrypoints": waiting,
+    }
+
+
+# ---------------------------------------------------------------------------
+# User administration
+# ---------------------------------------------------------------------------
+
+
+class CreateUserRequest(BaseModel):
+    username: str = Field(max_length=32)
+    display_name: str = Field(default="", max_length=128)
+    role: str = "user"
+
+
+class ReassignRequest(BaseModel):
+    owner: str = Field(max_length=32)
+
+
+def _user_summary(session, user, counts: Optional[dict] = None) -> dict:
+    """One account's row for the admin listing.
+
+    *counts* is an optional ``{project_name: molecules}`` map so the
+    listing can group once instead of running a COUNT per user.
+    """
+    from autodft import accounts
+
+    projects = accounts.projects_owned_by(session, user)
+    if counts is None:
+        molecules = session.exec(
+            select(func.count())
+            .select_from(Molecule)
+            .where(col(Molecule.project_name).in_([p.qualified_name for p in projects] or [""]))
+        ).one()
+    else:
+        molecules = sum(counts.get(p.qualified_name, 0) for p in projects)
+    return {
+        "username": user.username,
+        "display_name": user.display_name,
+        "role": user.role.value,
+        "active": user.active,
+        "api_key_prefix": user.api_key_prefix,
+        "projects": [p.name for p in projects],
+        "molecules": molecules,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+        "last_seen_at": user.last_seen_at.isoformat() if user.last_seen_at else None,
+    }
+
+
+@router.get("/api/admin/users")
+def api_users(identity: Identity = Depends(current_identity)):
+    """Every account, with what it owns."""
+    require_admin(identity)
+    from autodft.models import User
+
+    with get_session() as session:
+        users = session.exec(select(User).order_by(col(User.username))).all()
+        counts = dict(session.exec(
+            select(Molecule.project_name, func.count())
+            .group_by(Molecule.project_name)
+        ).all())
+        return [_user_summary(session, u, counts) for u in users]
+
+
+@router.post("/api/admin/users")
+def api_create_user(
+    body: CreateUserRequest, identity: Identity = Depends(current_identity),
+):
+    """Create an account and mint its API key.
+
+    The key is in the response and nowhere else: only its hash is stored,
+    so it can afterwards be rotated but never read back.
+    """
+    require_admin(identity)
+    from autodft import accounts
+    from autodft.models import UserRole
+
+    try:
+        role = UserRole(body.role)
+    except ValueError:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": f"Unknown role {body.role!r}. Use 'admin' or 'user'."},
+        )
+
+    with get_session() as session:
+        try:
+            user, key = accounts.create_user(
+                session, body.username, display_name=body.display_name, role=role,
+            )
+        except (accounts.AccountError, ValueError) as exc:
+            return JSONResponse(status_code=400, content={"detail": str(exc)})
+        summary = _user_summary(session, user)
+
+    summary["api_key"] = key
+    summary["api_key_warning"] = (
+        "This key is shown once. Copy it now -- it cannot be recovered, "
+        "only rotated."
+    )
+    return summary
+
+
+@router.post("/api/admin/users/{username}/rotate-key")
+def api_rotate_key(username: str, identity: Identity = Depends(current_identity)):
+    """Issue a new key, invalidating the old one immediately."""
+    require_admin(identity)
+    from autodft import accounts
+
+    with get_session() as session:
+        user = accounts.get_user_by_username(session, username)
+        if user is None:
+            return JSONResponse(
+                status_code=404, content={"detail": f"No user named {username!r}."},
+            )
+        key = accounts.rotate_api_key(session, user)
+        summary = _user_summary(session, user)
+    summary["api_key"] = key
+    return summary
+
+
+@router.post("/api/admin/users/{username}")
+def api_update_user(
+    username: str,
+    active: Optional[bool] = Query(None),
+    identity: Identity = Depends(current_identity),
+):
+    """Deactivate or reactivate an account.
+
+    There is no delete: an account whose projects still hold hundreds of
+    gigabytes should not disappear in one click. Wipe or reassign the
+    projects first, deliberately, then deactivate.
+    """
+    require_admin(identity)
+    from autodft import accounts
+
+    with get_session() as session:
+        user = accounts.get_user_by_username(session, username)
+        if user is None:
+            return JSONResponse(
+                status_code=404, content={"detail": f"No user named {username!r}."},
+            )
+        if user.username == accounts.ADMIN_USERNAME and active is False:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "The admin account cannot be deactivated."},
+            )
+        if active is not None:
+            user.active = active
+            session.add(user)
+            session.commit()
+            session.refresh(user)
+        return _user_summary(session, user)
+
+
+@router.post("/api/admin/projects/{name}/reassign")
+def api_reassign_project(
+    name: str, body: ReassignRequest,
+    identity: Identity = Depends(current_identity),
+):
+    """Move a project to another owner, rewriting every reference to it."""
+    require_admin(identity)
+    bad = _reject_bad_project(name)
+    if bad is not None:
+        return bad
+    from autodft import accounts
+
+    with get_session() as session:
+        name = resolve_project(session, identity, name)
+        new_owner = accounts.get_user_by_username(session, body.owner)
+        if new_owner is None:
+            return JSONResponse(
+                status_code=404, content={"detail": f"No user named {body.owner!r}."},
+            )
+        try:
+            project = accounts.reassign_project(session, name, new_owner)
+        except accounts.AccountError as exc:
+            return JSONResponse(status_code=409, content={"detail": str(exc)})
+        return {"project": project.qualified_name, "owner": new_owner.username}
 
 
 @router.get("/api/admin/circuit-breaker")
@@ -1318,12 +1708,13 @@ def api_circuit_breaker_status():
 
 
 @router.post("/api/admin/circuit-breaker/reset")
-def api_circuit_breaker_reset():
+def api_circuit_breaker_reset(identity: Identity = Depends(current_identity)):
     """Clear the breaker so the pipeline resumes creating and submitting jobs.
 
     Deliberately manual: once submission stops no new tasks are judged, so
     the failure ratio cannot recover on its own. Fix the cause first.
     """
+    require_admin(identity)
     from autodft.engine import circuit_breaker
 
     settings = get_active_settings()
@@ -1344,13 +1735,16 @@ def api_reset_preview():
 
 
 @router.post("/api/admin/reset-database")
-def api_reset_database(body: ResetRequest):
+def api_reset_database(
+    body: ResetRequest, identity: Identity = Depends(current_identity),
+):
     """Empty every pipeline table, and by default every data directory.
 
     Requires ``confirm`` to equal ``RESET THE DATABASE`` exactly. Saved
     headers are kept unless ``keep_headers`` is false, in which case the
     standard set is reseeded.
     """
+    require_admin(identity)
     from autodft.api import admin_ops
 
     if body.confirm != admin_ops.RESET_CONFIRMATION:
@@ -1416,7 +1810,9 @@ def _reject_reason(body: SubmitRequest, smiles: str) -> Optional[tuple[str, dict
 
 
 @router.post("/api/submit")
-def api_submit(body: SubmitRequest):
+def api_submit(
+    body: SubmitRequest, identity: Identity = Depends(current_identity),
+):
     """Submit a new molecule to the calculation queue.
 
     Accepting a submission is a single INSERT into ``calculation_entrypoints``
@@ -1432,7 +1828,8 @@ def api_submit(body: SubmitRequest):
         )
 
     with get_session() as session:
-        entry = _new_entrypoint(session, body, body.smiles)
+        project_name, author = _submission_owner(session, identity, body)
+        entry = _new_entrypoint(session, body, body.smiles, project_name, author)
         session.add(entry)
         session.commit()
         session.refresh(entry)
@@ -1456,7 +1853,9 @@ class SubmitBatchRequest(SubmitRequest):
 
 
 @router.post("/api/submit-batch")
-def api_submit_batch(body: SubmitBatchRequest):
+def api_submit_batch(
+    body: SubmitBatchRequest, identity: Identity = Depends(current_identity),
+):
     """Queue many molecules under one set of options, in one transaction.
 
     The single-molecule endpoint is fine for a handful, but a library-sized
@@ -1477,6 +1876,7 @@ def api_submit_batch(body: SubmitBatchRequest):
     rejected: list[dict] = []
 
     with get_session() as session:
+        project_name, author = _submission_owner(session, identity, body)
         for smiles in body.smiles_list:
             if len(smiles) > 512:
                 # Matches the bound on SubmitRequest.smiles: RDKit's parser
@@ -1488,7 +1888,7 @@ def api_submit_batch(body: SubmitBatchRequest):
             if rejection is not None:
                 rejected.append({"smiles": smiles, "detail": rejection[0]})
                 continue
-            entry = _new_entrypoint(session, body, smiles)
+            entry = _new_entrypoint(session, body, smiles, project_name, author)
             session.add(entry)
             accepted.append((smiles, entry))
 
@@ -1503,7 +1903,36 @@ def api_submit_batch(body: SubmitBatchRequest):
         }
 
 
-def _new_entrypoint(session, body: SubmitRequest, smiles: str) -> CalculationEntrypoint:
+def _submission_owner(session, identity: Identity, body: SubmitRequest) -> tuple[str, str]:
+    """The qualified project and the author to record for this submission.
+
+    The author is the caller's username and, for a non-admin, is not
+    negotiable: a provenance label anyone may set is not provenance. Admin
+    keeps the free-text field, which is what labels work submitted on
+    someone else's behalf.
+
+    The project name in the body is *bare* and is qualified with the
+    caller's namespace, so existing submit scripts keep working unchanged
+    and a name someone else already uses is simply the caller's own
+    project of that name.
+    """
+    from autodft import accounts
+
+    user = accounts.get_user_by_username(session, identity.username)
+    if user is None:
+        # No account row: the shared-password admin on a database that has
+        # not been bootstrapped. Leave the submission exactly as it was.
+        return body.project, body.author
+
+    project = accounts.get_or_create_project(session, user, body.project)
+    author = body.author if identity.is_admin else user.username
+    return project.qualified_name, author
+
+
+def _new_entrypoint(
+    session, body: SubmitRequest, smiles: str,
+    project_name: Optional[str] = None, author: Optional[str] = None,
+) -> CalculationEntrypoint:
     """Build (but do not add) the entrypoint row for one SMILES."""
     from autodft.qm.orca.defaults import (
         DEFAULT_HEADER_CONFSEARCH,
@@ -1520,8 +1949,8 @@ def _new_entrypoint(session, body: SubmitRequest, smiles: str) -> CalculationEnt
     n_red = legacy if legacy is not None else body.max_conformers_red
 
     request_metadata = {
-        "project_name": body.project,
-        "project_author": body.author,
+        "project_name": project_name if project_name is not None else body.project,
+        "project_author": author if author is not None else body.author,
         "request_S1": False,
         "request_T1": body.request_t1,
         "request_ox": body.request_ox,

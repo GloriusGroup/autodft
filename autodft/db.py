@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from contextlib import contextmanager
 from typing import Generator
 
@@ -9,6 +10,8 @@ from sqlalchemy import event
 from sqlmodel import Session, SQLModel, create_engine
 
 from autodft.config import Settings
+
+logger = logging.getLogger(__name__)
 
 _engine = None
 
@@ -75,6 +78,10 @@ def init_db(settings: Settings | None = None) -> None:
     # Seed standard headers if the table is empty.
     _seed_default_headers(engine)
 
+    # Accounts. Creates the admin user on first boot and brings any
+    # pre-accounts project names into admin's namespace.
+    _bootstrap_accounts(engine, settings)
+
 
 def _seed_default_headers(engine) -> None:
     """If ``computation_headers`` is empty, populate it with SEED_HEADERS."""
@@ -98,6 +105,37 @@ def _seed_default_headers(engine) -> None:
         session.commit()
 
 
+def _bootstrap_accounts(engine, settings) -> None:
+    """Create the admin account and migrate pre-accounts project names.
+
+    Runs on every boot but does work only on the first: once every project
+    name is qualified and the admin row exists, both steps are no-ops.
+
+    The admin API key exists exactly once, in the log line below. It cannot
+    be read back out of the database -- only rotated -- so the banner is
+    deliberately loud.
+    """
+    from autodft import accounts
+
+    with Session(engine) as session:
+        admin, key = accounts.ensure_admin(session)
+        if key is not None:
+            logger.warning(
+                "\n%s\n  AutoDFT admin account created.\n"
+                "  username : %s\n  api key  : %s\n"
+                "  This key is shown once and cannot be recovered. Store it\n"
+                "  now; if you lose it, rotate it from the admin page.\n%s",
+                "=" * 68, admin.username, key, "=" * 68,
+            )
+
+        accounts.adopt_ownerless_headers(session, admin)
+        plan = accounts.migrate_projects_to_admin(session, admin)
+        if plan["projects"]:
+            accounts.migrate_export_directories(
+                settings.export_data_path, admin.username, plan["projects"],
+            )
+
+
 def _migrate_sqlite_schema(engine) -> None:
     """Apply ad-hoc ALTER TABLE statements for columns added post-release."""
     if not str(engine.url).startswith("sqlite"):
@@ -112,6 +150,7 @@ def _migrate_sqlite_schema(engine) -> None:
         ("calculation_entrypoints", "processing_error", "TEXT"),
         ("molecules",                "archived",        "BOOLEAN NOT NULL DEFAULT 0"),
         ("molecules",                "priority",        "INTEGER NOT NULL DEFAULT 10"),
+        ("computation_headers",      "owner_id",        "INTEGER"),
     ]
     # Indexes on the columns the pipeline loop actually filters by. The
     # model-level index=True fields cover foreign keys and lookups but none
@@ -127,6 +166,7 @@ def _migrate_sqlite_schema(engine) -> None:
         ("ix_molecule_geometries_origin_task_id", "molecule_geometries(origin_task_id)"),
         ("ix_molecules_project_name",             "molecules(project_name)"),
         ("ix_molecules_priority",                 "molecules(priority)"),
+        ("ix_computation_headers_owner_id",       "computation_headers(owner_id)"),
         ("ix_calculation_entrypoints_queue",
          "calculation_entrypoints(time_started, priority, time_created)"),
     ]

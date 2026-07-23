@@ -1056,6 +1056,10 @@
             <a class="nav-item" data-route="headers"  href="#/headers"> <span class="nav-icon">&#9881;</span> Headers</a>
             <a class="nav-item" data-route="admin"    href="#/admin">   <span class="nav-icon">&#9888;</span> Admin</a>
             <div class="sidebar-footer">
+                <div id="identityLine" style="margin-bottom:8px;">
+                    Signed in as <strong id="identityName">…</strong>
+                    <a href="/logout" style="color:var(--text-muted); margin-left:6px;">Sign out</a>
+                </div>
                 <div class="status-indicator">
                     <div class="status-dot" id="statusDot"></div>
                     <span id="statusText">Connected</span>
@@ -1094,6 +1098,11 @@
                         <div class="form-group" style="flex: 1; min-width: 140px;">
                             <label for="project">Project</label>
                             <input type="text" id="project" name="project" placeholder="default" value="default">
+                        </div>
+                        <div class="form-group" style="flex: 0; min-width: 130px;" id="authorGroup">
+                            <label for="author">Author</label>
+                            <input type="text" id="author" name="author" value="web"
+                                   title="Recorded as the provenance of every molecule you submit">
                         </div>
                         <div class="form-group" style="flex: 0; min-width: 90px;">
                             <label for="priority">Priority</label>
@@ -1256,11 +1265,35 @@
         <div class="page-header">
             <div>
                 <h1>Admin</h1>
-                <div class="subtitle">
+                <div class="subtitle" id="adminPageSubtitle">
                     Permanently remove calculations and their files. Every action
                     here shows what it will delete first and requires the exact
                     name typed back. None of it can be undone.
                 </div>
+            </div>
+        </div>
+
+        <div class="submit-section" id="adminUsersSection">
+            <h2 style="margin-bottom:12px;">Users</h2>
+            <div class="subtitle" style="margin-bottom:14px;">
+                Each user gets one API key. They submit with it, sign in with
+                it, and see only their own projects. A key is shown once, at
+                creation or rotation, and is stored only as a hash &mdash; it
+                can never be read back, only replaced.
+            </div>
+            <div class="form-row">
+                <input type="text" id="newUserName" placeholder="username" style="max-width:180px;"
+                       autocapitalize="none" spellcheck="false">
+                <input type="text" id="newUserDisplay" placeholder="display name (optional)" style="max-width:220px;">
+                <select id="newUserRole" style="max-width:120px;">
+                    <option value="user">user</option>
+                    <option value="admin">admin</option>
+                </select>
+                <button type="button" class="btn" id="adminCreateUser">Create user</button>
+            </div>
+            <div id="adminUserFeedback" class="submit-feedback"></div>
+            <div class="admin-list" id="adminUserList" style="margin-top:14px;">
+                <div class="empty-state">Loading...</div>
             </div>
         </div>
 
@@ -1315,7 +1348,7 @@
             <div id="adminMoleculeResult" style="margin-top:14px;"></div>
         </div>
 
-        <div class="submit-section admin-danger">
+        <div class="submit-section admin-danger" id="adminResetSection">
             <h2 style="margin-bottom:12px;">Reset the entire database</h2>
             <div class="subtitle" style="margin-bottom:14px;">
                 Empties every table and every data directory. Saved headers are
@@ -1708,6 +1741,14 @@
             return '<span class="badge badge-' + escHtml(value) + '">' + escHtml(value) + '</span>';
         }
 
+        // A project is stored as "owner/project" but addressed in a URL as
+        // "owner:project": a percent-encoded slash is normalised back to a
+        // separator before routing, so encodeURIComponent alone is not
+        // enough to make the qualified name reach the handler.
+        function projectPath(name) {
+            return encodeURIComponent(String(name).replace('/', ':'));
+        }
+
         function escHtml(str) {
             if (str == null) return '';
             return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -1833,7 +1874,7 @@
         async function refreshRemovalBanner() {
             var section = document.getElementById('adminRemovalSection');
             var box = document.getElementById('adminRemovalStatus');
-            var out = await adminJSON('GET', '/api/admin/wipe-status');
+            var out = await adminJSON('GET', '/api/wipe-status');
             var running = out.ok && out.data.running;
             section.style.display = running ? '' : 'none';
             if (removalTimer) { clearTimeout(removalTimer); removalTimer = null; }
@@ -1845,8 +1886,108 @@
             removalTimer = setTimeout(refreshRemovalBanner, 5000);
         }
 
+        // A key exists in exactly one place after this returns: the
+        // screen. Make that impossible to miss rather than logging it to a
+        // toast that disappears in two seconds.
+        function showNewKey(box, data) {
+            box.innerHTML = '<div class="admin-summary" style="margin-top:10px;">'
+                + '<strong>API key for ' + escHtml(data.username) + '</strong><br>'
+                + '<code style="user-select:all; font-size:0.95rem;">'
+                + escHtml(data.api_key) + '</code><br>'
+                + '<span style="color:var(--text-muted);">Copy it now. It is stored '
+                + 'only as a hash and cannot be shown again &mdash; if it is lost, '
+                + 'rotate it.</span></div>';
+        }
+
+        async function loadUsers() {
+            var list = document.getElementById('adminUserList');
+            if (!list) { return; }
+            var out = await adminJSON('GET', '/api/admin/users');
+            if (!out.ok) {
+                list.innerHTML = '<div class="empty-state">Could not load users.</div>';
+                return;
+            }
+            if (!out.data.length) {
+                list.innerHTML = '<div class="empty-state">No users yet.</div>';
+                return;
+            }
+            list.innerHTML = out.data.map(function (u) {
+                return '<div class="admin-row" data-user="' + escHtml(u.username) + '">'
+                    + '<div><strong>' + escHtml(u.username) + '</strong>'
+                    + (u.role === 'admin' ? ' <span style="color:var(--accent);">admin</span>' : '')
+                    + (u.active ? '' : ' <span style="color:var(--red);">inactive</span>')
+                    + '<br><span style="color:var(--text-muted);">'
+                    + escHtml(u.api_key_prefix) + '&hellip; &middot; '
+                    + u.projects.length + ' project(s) &middot; '
+                    + u.molecules + ' molecule(s)</span></div>'
+                    + '<div><button type="button" class="btn adm-rotate">Rotate key</button> '
+                    + '<button type="button" class="btn adm-toggle">'
+                    + (u.active ? 'Deactivate' : 'Reactivate') + '</button></div>'
+                    + '<div class="adm-userkey"></div></div>';
+            }).join('');
+
+            list.querySelectorAll('.adm-rotate').forEach(function (btn) {
+                btn.addEventListener('click', async function () {
+                    var row = btn.closest('.admin-row');
+                    var name = row.getAttribute('data-user');
+                    if (!confirm('Rotate the key for ' + name + '? Their current key '
+                                 + 'stops working immediately.')) { return; }
+                    var out = await adminJSON('POST', '/api/admin/users/'
+                        + encodeURIComponent(name) + '/rotate-key');
+                    if (out.ok) { showNewKey(row.querySelector('.adm-userkey'), out.data); }
+                });
+            });
+            list.querySelectorAll('.adm-toggle').forEach(function (btn) {
+                btn.addEventListener('click', async function () {
+                    var row = btn.closest('.admin-row');
+                    var name = row.getAttribute('data-user');
+                    var activate = btn.textContent.trim() === 'Reactivate';
+                    await adminJSON('POST', '/api/admin/users/'
+                        + encodeURIComponent(name) + '?active=' + activate);
+                    loadUsers();
+                });
+            });
+        }
+
+        (function () {
+            var btn = document.getElementById('adminCreateUser');
+            if (!btn) { return; }
+            btn.addEventListener('click', async function () {
+                var feedback = document.getElementById('adminUserFeedback');
+                var name = document.getElementById('newUserName').value.trim();
+                if (!name) {
+                    feedback.textContent = 'Enter a username.';
+                    feedback.className = 'submit-feedback error';
+                    return;
+                }
+                var out = await adminJSON('POST', '/api/admin/users', {
+                    username: name,
+                    display_name: document.getElementById('newUserDisplay').value.trim(),
+                    role: document.getElementById('newUserRole').value,
+                });
+                if (!out.ok) {
+                    feedback.textContent = out.data.detail || ('HTTP ' + out.status);
+                    feedback.className = 'submit-feedback error';
+                    return;
+                }
+                feedback.className = 'submit-feedback success';
+                feedback.textContent = 'Created ' + out.data.username + '.';
+                showNewKey(feedback, out.data);
+                document.getElementById('newUserName').value = '';
+                document.getElementById('newUserDisplay').value = '';
+                loadUsers();
+            });
+        })();
+
         async function loadAdminPage() {
             refreshRemovalBanner();
+
+            // The admin-only panels are removed from the DOM for a user, so
+            // do not fetch what they cannot see: the server answers 403 and
+            // the console fills with errors that look like a broken page.
+            if (!ME.is_admin) { return; }
+
+            loadUsers();
 
             // --- circuit breaker ----------------------------------------
             var breakerBox = document.getElementById('adminBreakerStatus');
@@ -1921,7 +2062,7 @@
             var existing = row.parentNode.querySelector('.admin-confirm');
             if (existing) existing.remove();
 
-            var res = await adminJSON('GET', '/api/admin/projects/' + encodeURIComponent(name) + '/wipe-preview');
+            var res = await adminJSON('GET', '/api/projects/' + projectPath(name) + '/wipe-preview');
             if (!res.ok) { alert('Could not load preview: ' + (res.data.detail || res.status)); return; }
             var p = res.data;
 
@@ -1957,7 +2098,7 @@
                 this.disabled = true;
                 feedback.textContent = 'Wiping...';
                 feedback.className = 'submit-feedback adm-feedback';
-                var out = await adminJSON('POST', '/api/admin/projects/' + encodeURIComponent(name) + '/wipe', {
+                var out = await adminJSON('POST', '/api/projects/' + projectPath(name) + '/wipe', {
                     confirm: typed,
                     delete_exports: box.querySelector('.adm-exports').checked,
                 });
@@ -1996,7 +2137,7 @@
                 target.innerHTML = '<div class="submit-feedback error">Enter a molecule ID.</div>';
                 return;
             }
-            var res = await adminJSON('GET', '/api/admin/molecules/' + id + '/wipe-preview');
+            var res = await adminJSON('GET', '/api/molecules/' + id + '/wipe-preview');
             if (!res.ok) {
                 target.innerHTML = '<div class="submit-feedback error">'
                     + adminEscape(res.data.detail || ('HTTP ' + res.status)) + '</div>';
@@ -2027,7 +2168,7 @@
                     return;
                 }
                 this.disabled = true;
-                var out = await adminJSON('POST', '/api/admin/molecules/' + p.molecule_id + '/wipe',
+                var out = await adminJSON('POST', '/api/molecules/' + p.molecule_id + '/wipe',
                                           { confirm: typed });
                 if (!out.ok) {
                     feedback.textContent = out.data.detail || ('HTTP ' + out.status);
@@ -2449,6 +2590,7 @@
             var hSp  = pickHeader('headerSinglepoint');
             var commonBody = {
                 project: document.getElementById('project').value.trim() || 'default',
+                author: document.getElementById('author').value.trim() || 'web',
                 priority: parseInt(document.getElementById('priority').value, 10) || 10,
                 skip_confsearch: document.getElementById('skipConfsearch').checked,
                 request_t1:  document.getElementById('requestT1').checked,
@@ -2689,7 +2831,7 @@
             if (!name) return;
             currentProject = name;
             try {
-                var resp = await fetch('/api/projects/' + encodeURIComponent(name));
+                var resp = await fetch('/api/projects/' + projectPath(name));
                 var data = await resp.json();
 
                 document.getElementById('projectCards').style.display = 'grid';
@@ -2801,7 +2943,7 @@
             fb.className = 'submit-feedback';
             try {
                 var resp = await fetch(
-                    '/api/projects/' + encodeURIComponent(currentProject) +
+                    '/api/projects/' + projectPath(currentProject) +
                     '/export?format=' + format + '&all_conformers=' + (allConf ? 'true' : 'false'),
                     { method: 'POST' }
                 );
@@ -2866,7 +3008,7 @@
             btn.disabled = true;
             try {
                 var resp = await fetch(
-                    '/api/projects/' + encodeURIComponent(currentProject) + '/archive',
+                    '/api/projects/' + projectPath(currentProject) + '/archive',
                     {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -3060,7 +3202,7 @@
             wrap.style.display = 'block';
             tbody.innerHTML = '<tr><td colspan="10" class="empty-state">Loading...</td></tr>';
 
-            var resp = await fetch('/api/projects/' + encodeURIComponent(name) + '/molecules-detail');
+            var resp = await fetch('/api/projects/' + projectPath(name) + '/molecules-detail');
             var data = await resp.json();
             if (!data.molecules || data.molecules.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="10" class="empty-state">No molecules yet for this project.</td></tr>';
@@ -3294,7 +3436,7 @@
             host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Computing analysis…</div>';
 
             try {
-                var resp = await fetch('/api/projects/' + encodeURIComponent(name) + '/state-analysis');
+                var resp = await fetch('/api/projects/' + projectPath(name) + '/state-analysis');
                 var text = await resp.text();
                 var payload;
                 try { payload = JSON.parse(text); }
@@ -3343,7 +3485,7 @@
                     var origLabel = exportBtn.textContent;
                     exportBtn.textContent = 'Preparing…';
                     try {
-                        var resp = await fetch('/api/projects/' + encodeURIComponent(name) + '/state-analysis/export');
+                        var resp = await fetch('/api/projects/' + projectPath(name) + '/state-analysis/export');
                         if (!resp.ok) {
                             var text = await resp.text();
                             throw new Error('HTTP ' + resp.status + ' — ' + text.slice(0, 200));
@@ -3413,7 +3555,51 @@
             syncIcon(document.documentElement.getAttribute('data-theme') || 'dark');
         })();
 
+        // Who is signed in. Everything user-facing keys off this: the
+        // admin section is not rendered at all for a normal user, and the
+        // author field is theirs and not editable -- a provenance label
+        // anyone may set is not provenance. The server enforces both
+        // regardless; this only stops the UI offering what it would refuse.
+        var ME = { username: '', is_admin: false, projects: [] };
+
+        async function loadIdentity() {
+            var out = await adminJSON('GET', '/api/whoami');
+            if (!out.ok) { return; }
+            ME = out.data;
+            var name = document.getElementById('identityName');
+            if (name) { name.textContent = ME.username + (ME.is_admin ? ' (admin)' : ''); }
+
+            var author = document.getElementById('author');
+            if (author) {
+                author.value = ME.username;
+                if (!ME.is_admin) {
+                    author.readOnly = true;
+                    author.style.opacity = '0.6';
+                    author.title = 'Submissions are recorded under your username.';
+                }
+            }
+            // The Admin page stays reachable: a user may wipe their own
+            // projects and calculations there. Only the sections that act
+            // on everyone's data are removed -- the server refuses them
+            // regardless, this stops the page offering them.
+            if (!ME.is_admin) {
+                ['adminUsersSection', 'adminResetSection', 'adminBreakerSection']
+                    .forEach(function (id) {
+                        var el = document.getElementById(id);
+                        if (el) { el.remove(); }
+                    });
+                var heading = document.getElementById('adminPageSubtitle');
+                if (heading) {
+                    heading.textContent = 'Permanently remove your own calculations '
+                        + 'and their files. Every action shows what it will delete '
+                        + 'first and requires the exact name typed back. None of it '
+                        + 'can be undone.';
+                }
+            }
+        }
+
         // Initial load
+        loadIdentity().then(function () { activateRoute(currentRoute()); });
         fetchHeaders();
         refreshAll();
         activateRoute(currentRoute());

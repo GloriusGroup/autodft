@@ -10,39 +10,103 @@ schema at `GET /docs` and `GET /openapi.json`.
 
 ---
 
-## 0. Authentication
+## 0. Accounts and authentication
 
-Every endpoint — including the HTML dashboard and `/docs` — requires
-the password set via `[security].dashboard_password` in the controller's
-TOML config (default `"password"`).
+There is one **admin** account and any number of **users**. Admin reaches
+everything. A user reaches only their own projects — listing, reading,
+exporting, submitting — and cannot reach `/api/admin/*` at all.
 
-* **Browser** — visiting any protected URL redirects to `/login`
-  (HTML form). On success the server sets an HMAC-signed `autodft_auth`
-  cookie. `GET /logout` clears it.
-* **Scripts** — send the password via the `X-AutoDFT-Password` header
-  on every request. No cookie needed.
+### Credentials
+
+| Credential | Sent as | Resolves to |
+|---|---|---|
+| API key | `X-AutoDFT-API-Key: adft_…` or `Authorization: Bearer adft_…` | the key's owner |
+| Shared password | `X-AutoDFT-Password: …` | admin |
+| Session cookie | `autodft_auth`, set by `/login` | whoever signed in |
+
+A key is `adft_` plus 32 random characters. It is shown **once**, when the
+account is created or the key is rotated, and stored only as
+`sha256(key)` — it can never be read back, only replaced. Rotating takes
+effect immediately.
+
+The shared password keeps working and means admin, which is what lets
+existing scripts, the CLI and saved curl invocations survive the upgrade
+untouched.
 
 ```bash
-# Header path
+# A user, with their key
 curl -s http://localhost:8085/api/overview \
-     -H "X-AutoDFT-Password: password"
+     -H "X-AutoDFT-API-Key: adft_7Kq2XnR4..."
 
-# Browser path
+# Browser: username + API key
 curl -i -c cookies.txt -X POST http://localhost:8085/login \
-     -d 'password=password&next=/'                          # 303 + Set-Cookie
+     -d 'username=mhoffmann&password=adft_7Kq2XnR4...&next=/'
 curl -s -b cookies.txt http://localhost:8085/api/overview
 ```
 
-Unauthenticated requests to `/api/*` return:
+`GET /api/whoami` answers `{"username", "is_admin", "projects"}`.
 
-```json
-HTTP 401
-{ "detail": "Authentication required. Send the password via the "
-            "X-AutoDFT-Password header or sign in at /login first." }
-```
+Unauthenticated `/api/*` requests get **401**; unauthenticated browser
+requests get a **303** to `/login?next=<original-path>`. A key belonging
+to a deactivated account stops working immediately, as does a session
+cookie issued to it.
 
-Unauthenticated browser requests get an HTTP 303 redirect to
-`/login?next=<original-path>`.
+### Project namespaces
+
+Every project belongs to someone and is stored as `owner/project`, so two
+people can each have a `screening`. Three forms appear:
+
+| Where | Form | Note |
+|---|---|---|
+| stored | `mhoffmann/screening` | in `molecules.project_name` |
+| in a URL | `mhoffmann:screening` | `/api/projects/mhoffmann:screening` |
+| in a submit body | `screening` | qualified with the caller's namespace |
+
+The URL form uses `:` rather than `/` because `/api/projects/{name}`
+matches a single path segment, a percent-encoded slash is normalised back
+to a separator before routing, and a `/api/projects/{owner}/{name}` route
+would collide with `/api/projects/{name}/export` for any project called
+"export".
+
+Submitting is unchanged: send the bare name and it lands in your own
+namespace. Submitting to a name someone else owns creates *your* project
+of that name rather than joining theirs.
+
+The `author` field is your username and is not editable. Admin may still
+set it freely, which is what labels work submitted on someone's behalf.
+
+Reads outside your namespace answer **404**, not 403 — a 403 would
+confirm the project exists.
+
+### Managing accounts (admin only)
+
+| Endpoint | Does |
+|---|---|
+| `GET /api/admin/users` | every account, with projects and molecule counts |
+| `POST /api/admin/users` | create one; the response carries the key, once |
+| `POST /api/admin/users/{username}/rotate-key` | new key, old one dead immediately |
+| `POST /api/admin/users/{username}?active=false` | deactivate |
+| `POST /api/admin/projects/{name}/reassign` | move a project to another owner |
+
+There is no delete-user. An account whose projects still hold hundreds of
+gigabytes should not disappear in one click: wipe or reassign the
+projects first, then deactivate.
+
+### Saved headers
+
+Every signed-in account may list, use and create headers — a method
+library is only useful shared. Editing or deleting one is the **owner's**
+or admin's: a header change silently alters what the next submission
+referencing it computes. Someone else's answers **403** with a suggestion
+to copy it, rather than 404, because you can already see it in the
+listing.
+
+The four seeded defaults belong to `admin`, as does anything created
+before accounts existed.
+
+`GET /api/cluster` is readable by everyone and reports only
+`breaker_tripped` and `queued_entrypoints`, so a user can tell "my jobs
+are stuck" from "the pipeline is halted" without asking an administrator.
 
 ---
 
@@ -398,18 +462,23 @@ Every one of these is irreversible and comes in two halves: a
 `GET …/wipe-preview` (or `/api/admin/reset-preview`) that only counts, and
 a `POST` that acts and requires `confirm` to echo an exact string.
 
-| Endpoint | Confirm with | Deletes |
-|---|---|---|
-| `GET /api/admin/projects/{name}/wipe-preview` | — | nothing |
-| `POST /api/admin/projects/{name}/wipe` | the project name | its rows, `comp_data/mol_*`, and (unless `delete_exports: false`) `export_data/{name}` |
-| `GET /api/admin/molecules/{id}/wipe-preview` | — | nothing |
-| `POST /api/admin/molecules/{id}/wipe` | the molecule's SMILES | that molecule's rows and `comp_data/mol_{id}` |
-| `GET /api/admin/reset-preview` | — | nothing |
-| `POST /api/admin/reset-database` | `RESET THE DATABASE` | every pipeline table; data directories unless `delete_files: false`; headers only if `keep_headers: false` |
-| `GET /api/admin/wipe-status` | — | nothing; reports the deletion still in flight |
+| Endpoint | Who | Confirm with | Deletes |
+|---|---|---|---|
+| `GET /api/projects/{name}/wipe-preview` | owner or admin | — | nothing |
+| `POST /api/projects/{name}/wipe` | owner or admin | the **qualified** project name | its rows, `comp_data/mol_*`, and (unless `delete_exports: false`) the export directory |
+| `GET /api/molecules/{id}/wipe-preview` | owner or admin | — | nothing |
+| `POST /api/molecules/{id}/wipe` | owner or admin | the molecule's SMILES | that molecule's rows and `comp_data/mol_{id}` |
+| `GET /api/admin/reset-preview` | admin | — | nothing |
+| `POST /api/admin/reset-database` | admin | `RESET THE DATABASE` | every pipeline table; data directories unless `delete_files: false`; headers only if `keep_headers: false` |
+| `GET /api/wipe-status` | anyone | — | nothing; reports the deletion still in flight |
 
-`default` is protected and cannot be wiped. Saved headers are shared
-across projects and are never touched by a project or molecule wipe.
+A user may wipe their own projects and molecules; someone else's answers
+**404**, the same as a read, since a 403 would confirm it exists. Only the
+shared `admin/default` is protected — your own `alice/default` is an
+ordinary project. `wipe-status` tells a non-admin only *that* something is
+running: the label names the project, which may not be theirs.
+
+Saved headers are never touched by a project or molecule wipe.
 
 Four properties worth knowing:
 
@@ -429,7 +498,7 @@ Four properties worth knowing:
   much is under them. Measured on a 300-file tree: **0.14 s to stage
   against 9.8 s to delete**, and only the staging is inside the request.
   The response's `file_removal` object reports progress, and
-  `GET /api/admin/wipe-status` follows it to completion.
+  `GET /api/wipe-status` follows it to completion.
 * **SLURM is stopped first.** Jobs the scheduler still has queued or
   running are `scancel`ed before their directories disappear; the count
   comes back as `jobs_cancelled`.

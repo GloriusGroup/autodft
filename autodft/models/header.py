@@ -22,6 +22,13 @@ class ComputationHeader(SQLModel, table=True):
     # the manager view so existing tasks keep their historical pointer).
     kind: Optional[str] = Field(default=None, index=True)
     validated: bool = Field(default=False)
+    # Who may change this header. Everyone may *use* every header -- a
+    # method library is only useful shared -- but editing one silently
+    # changes what the owner's next submission computes, so edits and
+    # deletes are the owner's or admin's. NULL means the seeded defaults
+    # and anything predating accounts; the migration assigns those to
+    # admin.
+    owner_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
     # Soft-delete flag. Deleted headers are hidden from listings and
     # dropdowns but stay in the table so historical tasks/states keep
     # their FK references intact.

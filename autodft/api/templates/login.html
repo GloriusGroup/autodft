@@ -57,7 +57,7 @@
             color: var(--text-muted);
             margin-bottom: 6px;
         }
-        input[type="password"] {
+        input[type="password"], input[type="text"] {
             width: 100%;
             background: var(--bg-input);
             border: 1px solid var(--border);
@@ -68,7 +68,7 @@
             outline: none;
             transition: border-color 0.2s;
         }
-        input[type="password"]:focus {
+        input[type="password"]:focus, input[type="text"]:focus {
             border-color: var(--accent);
         }
         button {
@@ -119,16 +119,22 @@
 
         <form method="post" action="/login">
             <input type="hidden" name="next" value="{{ next or '/' }}">
-            <label for="password">Password</label>
-            <input type="password" id="password" name="password" autocomplete="current-password" autofocus required>
+            <label for="username">Username</label>
+            <input type="text" id="username" name="username" autocomplete="username"
+                   autocapitalize="none" spellcheck="false" autofocus>
+            <label for="password">API key</label>
+            <input type="password" id="password" name="password"
+                   autocomplete="current-password" required>
             <button type="submit">Sign in</button>
         </form>
 
         <div class="hint">
-            Set the password in <code>config/reaction.toml</code> under
-            <code>[security]&nbsp;dashboard_password</code> (or via the
-            <code>AUTODFT_PASSWORD</code> env var). Scripts can authenticate
-            with the <code>X-AutoDFT-Password</code> header instead.
+            Your API key is the same credential your scripts send in the
+            <code>X-AutoDFT-API-Key</code> header. Ask an administrator if
+            you do not have one, or if yours needs rotating.
+            <br><br>
+            Administrators may leave the username blank and sign in with the
+            shared dashboard password instead.
         </div>
     </div>
 </body>

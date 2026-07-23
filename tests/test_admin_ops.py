@@ -366,16 +366,70 @@ class TestBackgroundRemoval:
 
 
 class TestConcurrentWipeOverHttp:
-    def test_the_route_answers_409_instead_of_piling_up(self):
+    def test_the_route_answers_409_instead_of_piling_up(
+        self, admin_identity, tmp_path,
+    ):
         """What the user hits: start one wipe, try a second while it runs."""
         import json
 
+        from autodft.api import routes
         from autodft.api.routes import WipeRequest, api_project_wipe
+        from autodft.config import Settings
+        from autodft.db import init_db, reset_engine
+
+        # The handler resolves the project's owner before it claims the
+        # lock, so it needs a real database rather than the default
+        # settings' /data.
+        settings = Settings()
+        settings.storage.data_path = str(tmp_path)
+        reset_engine()
+        init_db(settings)
+        routes.set_active_settings(settings)
 
         with admin_ops.exclusive("wipe of project 'victim'"):
             response = api_project_wipe(
                 "other", WipeRequest(confirm="other", delete_exports=True),
+                admin_identity,
             )
 
         assert response.status_code == 409
         assert "still running" in json.loads(response.body)["detail"]
+        reset_engine()
+
+
+class TestProtectedProjects:
+    """`default` stays unwipeable after it becomes `admin/default`.
+
+    The check was a literal set membership test, so namespacing silently
+    unprotected it -- the one project that must never be wiped became
+    wipeable by the migration that renamed it.
+    """
+
+    @pytest.mark.parametrize("name", [
+        "default",          # a database that predates the migration
+        "admin/default",    # what the migration renames it to
+        "admin:default",    # the URL spelling of the same thing
+    ])
+    def test_the_shared_default_is_protected_in_every_spelling(self, name):
+        assert admin_ops.is_protected(name) is True
+
+    @pytest.mark.parametrize("name", [
+        "phenols", "admin/phenols", "admin/defaults", "default_2",
+    ])
+    def test_other_projects_are_not(self, name):
+        assert admin_ops.is_protected(name) is False
+
+    @pytest.mark.parametrize("name", ["nhoelter/default", "alice/default"])
+    def test_a_users_own_default_is_wipeable(self, name):
+        """`project` defaults to "default" on every submission, so each
+        user acquires one. Protecting the bare segment would have left
+        every user with a project nobody could ever remove."""
+        assert admin_ops.is_protected(name) is False
+
+    def test_the_wipe_refuses_the_qualified_form(self, session, project, tmp_path):
+        session.add(Molecule(smiles="CCO", project_name="admin/default"))
+        session.commit()
+        with pytest.raises(ValueError, match="protected"):
+            admin_ops.wipe_project(
+                session, "admin/default", project["comp_root"], project["export_root"],
+            )
