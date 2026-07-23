@@ -1981,6 +1981,12 @@
 
         async function loadAdminPage() {
             refreshRemovalBanner();
+
+            // The admin-only panels are removed from the DOM for a user, so
+            // do not fetch what they cannot see: the server answers 403 and
+            // the console fills with errors that look like a broken page.
+            if (!ME.is_admin) { return; }
+
             loadUsers();
 
             // --- circuit breaker ----------------------------------------

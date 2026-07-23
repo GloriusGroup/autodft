@@ -1524,15 +1524,23 @@ class ReassignRequest(BaseModel):
     owner: str = Field(max_length=32)
 
 
-def _user_summary(session, user) -> dict:
+def _user_summary(session, user, counts: Optional[dict] = None) -> dict:
+    """One account's row for the admin listing.
+
+    *counts* is an optional ``{project_name: molecules}`` map so the
+    listing can group once instead of running a COUNT per user.
+    """
     from autodft import accounts
 
     projects = accounts.projects_owned_by(session, user)
-    molecules = session.exec(
-        select(func.count())
-        .select_from(Molecule)
-        .where(col(Molecule.project_name).in_([p.qualified_name for p in projects] or [""]))
-    ).one()
+    if counts is None:
+        molecules = session.exec(
+            select(func.count())
+            .select_from(Molecule)
+            .where(col(Molecule.project_name).in_([p.qualified_name for p in projects] or [""]))
+        ).one()
+    else:
+        molecules = sum(counts.get(p.qualified_name, 0) for p in projects)
     return {
         "username": user.username,
         "display_name": user.display_name,
@@ -1554,7 +1562,11 @@ def api_users(identity: Identity = Depends(current_identity)):
 
     with get_session() as session:
         users = session.exec(select(User).order_by(col(User.username))).all()
-        return [_user_summary(session, u) for u in users]
+        counts = dict(session.exec(
+            select(Molecule.project_name, func.count())
+            .group_by(Molecule.project_name)
+        ).all())
+        return [_user_summary(session, u, counts) for u in users]
 
 
 @router.post("/api/admin/users")
