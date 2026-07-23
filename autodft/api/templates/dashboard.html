@@ -1355,6 +1355,14 @@
                 kept unless you untick the box below.
             </div>
             <div id="adminResetSummary" class="admin-summary">Loading...</div>
+            <!-- Disk usage is measured only when asked for. Walking the
+                 data directory is minutes of stat calls over the network
+                 mount, so doing it on every render of this page hung the
+                 dashboard for everyone. -->
+            <div class="form-row" style="margin-top:14px;">
+                <button type="button" class="btn" id="adminUsageBtn">View disk usage</button>
+                <span id="adminUsageOut" class="admin-meta">not measured</span>
+            </div>
             <label class="admin-check">
                 <input type="checkbox" id="adminResetFiles" checked>
                 Also delete all raw and exported files on disk
@@ -1859,6 +1867,14 @@
             }).join(', ');
         }
 
+        // A wipe preview measures files under a time budget, because on the
+        // network mount an unbounded walk is minutes long and this dialog
+        // has to open now. When the budget ran out the figure is a floor,
+        // and saying so beats under-reporting what is about to be deleted.
+        function atLeast(files) {
+            return files.measured_completely === false ? 'at least ' : '';
+        }
+
         // A project wipe and a database reset return once the rows are gone
         // and the directories are renamed aside; the unlinking runs on the
         // controller in the background and takes minutes on the network
@@ -2043,6 +2059,8 @@
             }
 
             // --- reset summary ------------------------------------------
+            // Rows and project names only: this is a handful of COUNTs and
+            // returns in milliseconds. Disk usage is the button below.
             var summary = document.getElementById('adminResetSummary');
             var r = await adminJSON('GET', '/api/admin/reset-preview');
             if (!r.ok) {
@@ -2051,11 +2069,65 @@
                 var d = r.data;
                 summary.textContent =
                     'projects : ' + (d.projects.join(', ') || '(none)') + '\n'
-                    + 'rows     : ' + adminRowsLine(d.rows) + '\n'
-                    + 'raw data : ' + d.files.comp_data_human + '\n'
-                    + 'exports  : ' + d.files.export_human + '\n'
-                    + 'total    : ' + d.files.total_human;
+                    + 'rows     : ' + adminRowsLine(d.rows);
             }
+
+            // Show a measurement taken earlier in this session, but never
+            // start one: arriving on this page must stay cheap.
+            var cached = await adminJSON('GET', '/api/admin/disk-usage');
+            if (cached.ok && cached.data.usage) { adminRenderUsage(cached.data.usage); }
+        }
+
+        // --- disk usage, on demand ---------------------------------------
+        // The walk runs on a thread in the controller; this polls it. A
+        // click while one is already running just re-attaches to it.
+        var adminUsageTimer = null;
+
+        function adminRenderUsage(u) {
+            var out = document.getElementById('adminUsageOut');
+            var btn = document.getElementById('adminUsageBtn');
+            if (!u) { out.textContent = 'not measured'; return; }
+
+            if (u.state === 'running') {
+                var progress = u.dirs_total
+                    ? ' — ' + u.dirs_done + ' / ' + u.dirs_total + ' directories'
+                    : '';
+                out.textContent = 'measuring' + progress
+                    + ' (' + u.elapsed_seconds + 's, ' + u.total_human + ' so far)';
+                btn.disabled = true;
+                if (!adminUsageTimer) { adminUsageTimer = setInterval(adminPollUsage, 2000); }
+                return;
+            }
+
+            btn.disabled = false;
+            if (adminUsageTimer) { clearInterval(adminUsageTimer); adminUsageTimer = null; }
+
+            if (u.state === 'failed') {
+                out.textContent = 'measurement failed: ' + (u.error || 'unknown error');
+                return;
+            }
+            out.textContent =
+                'raw data ' + u.comp_data_human + ' + exports ' + u.export_human
+                + ' = ' + u.total_human + '  (' + u.files + ' files, '
+                + u.elapsed_seconds + 's'
+                + (u.measured_at ? ', at ' + new Date(u.measured_at).toLocaleTimeString() : '')
+                + ')';
+        }
+
+        async function adminPollUsage() {
+            var res = await adminJSON('GET', '/api/admin/disk-usage');
+            if (res.ok) { adminRenderUsage(res.data.usage); }
+        }
+
+        async function adminStartUsage() {
+            document.getElementById('adminUsageOut').textContent = 'starting...';
+            var res = await adminJSON('POST', '/api/admin/disk-usage');
+            if (!res.ok) {
+                document.getElementById('adminUsageOut').textContent =
+                    'Could not start: ' + (res.data.detail || res.status);
+                return;
+            }
+            adminRenderUsage(res.data.usage);
         }
 
         async function adminPrepareProjectWipe(name, row) {
@@ -2072,9 +2144,10 @@
                 '<div class="admin-summary">'
                 + 'This permanently deletes from <strong>' + adminEscape(name) + '</strong>:\n'
                 + '  ' + adminRowsLine(p.rows) + '\n'
-                + '  raw data   ' + p.files.comp_data_human + ' in ' + p.files.comp_data_dirs + ' directories\n'
+                + '  raw data   ' + atLeast(p.files) + p.files.comp_data_human
+                + ' in ' + p.files.comp_data_dirs + ' directories\n'
                 + '  exports    ' + p.files.export_human + '\n'
-                + '  total      ' + p.files.total_human
+                + '  total      ' + atLeast(p.files) + p.files.total_human
                 + '</div>'
                 + '<label class="admin-check"><input type="checkbox" class="adm-exports" checked> '
                 + 'Also delete exported data</label>'
@@ -2115,6 +2188,8 @@
             });
         }
 
+        document.getElementById('adminUsageBtn').addEventListener('click', adminStartUsage);
+
         document.getElementById('adminBreakerReset').addEventListener('click', async function () {
             var feedback = document.getElementById('adminBreakerFeedback');
             this.disabled = true;
@@ -2150,7 +2225,7 @@
                 + 'molecule #' + p.molecule_id + '  ' + adminEscape(p.smiles) + '\n'
                 + 'project  : ' + adminEscape(p.project) + '\n'
                 + 'rows     : ' + adminRowsLine(p.rows) + '\n'
-                + 'raw data : ' + p.files.human
+                + 'raw data : ' + atLeast(p.files) + p.files.human
                 + '</div>'
                 + '<div class="form-row" style="margin-top:10px;">'
                 + '<input type="text" id="adminMolConfirm" placeholder="Type the SMILES to confirm" style="max-width:320px;">'

@@ -37,10 +37,12 @@ import os
 import shutil
 import threading
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
+from time import monotonic
 from typing import Optional
 
-from sqlmodel import Session, col, delete, select, update
+from sqlmodel import Session, col, delete, func, select, update
 
 from autodft.models.enums import TRANSIENT_SLURM_STATES
 from autodft.paths import safe_subdirectory
@@ -175,18 +177,71 @@ def _cancel_scheduled_jobs(session: Session, job_ids: list[int], scheduler) -> i
 # ----------------------------------------------------------------------
 
 
+# How long a *preview* may spend measuring files. A confirmation dialog
+# wants a size to show before something irreversible, but this deployment
+# stats at ~5 ms per file over the network mount -- 32 GB of comp_data took
+# 5m14s to walk -- and the request holds a pooled database connection for
+# every second of it. Measure what fits in the budget and say so: "at least
+# 3.2 GB" answers what the dialog is actually asking. The exact figure is
+# the on-demand walk in :class:`_DiskUsage`.
+PREVIEW_MEASURE_SECONDS = 2.0
+
+
+def _scan(path: Path, deadline: Optional[float]) -> tuple[int, int, bool]:
+    """``(bytes, files, complete)`` under *path*; stops at *deadline*.
+
+    ``os.scandir`` rather than ``Path.rglob``: rglob stats every entry to
+    match the pattern, ``is_file()`` stats it again and ``stat()`` a third
+    time, so it cost three round-trips per file on a mount where one is
+    already milliseconds. scandir carries the type and the size along.
+
+    *deadline* is a ``monotonic()`` value, or None for "walk it all".
+    ``complete`` is False only when the deadline cut the walk short --
+    unreadable entries are skipped either way.
+    """
+    try:
+        if path.is_file():
+            return path.stat().st_size, 1, True
+        if not path.is_dir():
+            return 0, 0, True
+    except OSError:
+        return 0, 0, True
+
+    total = files = 0
+    stack = [path]
+    while stack:
+        if deadline is not None and monotonic() >= deadline:
+            return total, files, False
+        try:
+            with os.scandir(stack.pop()) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(Path(entry.path))
+                        elif entry.is_file(follow_symlinks=False):
+                            total += entry.stat(follow_symlinks=False).st_size
+                            files += 1
+                    except OSError:  # vanished mid-walk, broken symlink
+                        continue
+        except OSError:  # unreadable, or a race with another deleter
+            continue
+    return total, files, True
+
+
 def _dir_size(path: Path) -> int:
     """Total size in bytes of everything under *path*, 0 if absent."""
-    if not path.exists():
-        return 0
+    return _scan(path, None)[0]
+
+
+def _measure(paths: list[Path], deadline: Optional[float]) -> tuple[int, bool]:
+    """``(bytes, complete)`` across *paths*, sharing one deadline."""
     total = 0
-    for entry in path.rglob("*"):
-        try:
-            if entry.is_file():
-                total += entry.stat().st_size
-        except OSError:  # broken symlink, race with another deleter
-            continue
-    return total
+    complete = True
+    for path in paths:
+        size, _, done = _scan(path, deadline)
+        total += size
+        complete = complete and done
+    return total, complete
 
 
 def _remove_tree(path: Path) -> tuple[bool, int]:
@@ -412,6 +467,9 @@ def _remove_in_background(
     removal = _BackgroundRemoval(label, targets)
     _removal = removal
 
+    # Whatever was measured describes a tree that is about to shrink.
+    _reset_disk_usage()
+
     if background and targets:
         removal.background = True
         if getattr(_local, "holding", False):
@@ -429,6 +487,139 @@ def _remove_in_background(
 def removal_status() -> Optional[dict]:
     """Status of the most recent file removal, or None if there has been none."""
     return _removal.status() if _removal is not None else None
+
+
+# ----------------------------------------------------------------------
+# On-demand disk usage
+# ----------------------------------------------------------------------
+
+
+class _DiskUsage:
+    """Measure the whole data directory, on request and off the request.
+
+    This used to run inside the reset preview, which the admin page fetched
+    on every render. That walk takes five minutes on this deployment's
+    network mount; it ran inside a ``get_session()`` block, so it held one
+    of the connection pool's fifteen slots for the whole time; and a sync
+    handler is not cancelled when the operator navigates away, so each
+    reload started another one. Fifteen reloads exhausted the pool and
+    every request in the process -- dashboard, submissions, API-key auth --
+    blocked behind it.
+
+    So: asked for explicitly, run on its own thread, touching no database,
+    and the answer is kept until someone asks for a fresh one. Progress is
+    reported per top-level directory, because "212 / 639" is a thing an
+    operator can wait for and a spinner is not.
+    """
+
+    def __init__(self, comp_root: Path, export_root: Path) -> None:
+        self.comp_root = comp_root
+        self.export_root = export_root
+        self.comp_bytes = 0
+        self.export_bytes = 0
+        self.files = 0
+        self.dirs_total = 0
+        self.dirs_done = 0
+        self.finished = False
+        self.error: Optional[str] = None
+        self.started = monotonic()
+        self.measured_at: Optional[datetime] = None
+        self._thread = threading.Thread(
+            target=self.run, name="autodft-disk-usage", daemon=True,
+        )
+
+    def _walk(self, root: Path, field: str) -> None:
+        """Total the bytes under *root* into ``self.<field>``.
+
+        Accumulated per child rather than returned at the end, so the
+        running total in :meth:`status` climbs while the walk is going.
+        Four minutes of "0 B so far" reads like a hang.
+        """
+        try:
+            children = sorted(root.iterdir()) if root.is_dir() else []
+        except OSError:
+            return
+        # Counted here rather than up front so the total is right even when
+        # the first root is huge and the second is empty.
+        self.dirs_total += len(children)
+        for child in children:
+            size, files, _ = _scan(child, None)
+            setattr(self, field, getattr(self, field) + size)
+            self.files += files
+            self.dirs_done += 1
+
+    def run(self) -> None:
+        try:
+            self._walk(self.comp_root, "comp_bytes")
+            self._walk(self.export_root, "export_bytes")
+            self.measured_at = datetime.now(timezone.utc)
+        except Exception as exc:  # noqa: BLE001 - reported, never raised at a thread
+            logger.exception("Disk usage measurement failed")
+            self.error = f"{type(exc).__name__}: {exc}"
+        finally:
+            self.finished = True
+            logger.info(
+                "Disk usage: %s in %d file(s), measured in %.1fs",
+                human_bytes(self.comp_bytes + self.export_bytes),
+                self.files, monotonic() - self.started,
+            )
+
+    def status(self) -> dict:
+        total = self.comp_bytes + self.export_bytes
+        return {
+            "state": ("failed" if self.error else
+                      "ready" if self.finished else "running"),
+            "error": self.error,
+            "dirs_total": self.dirs_total,
+            "dirs_done": self.dirs_done,
+            "files": self.files,
+            "comp_data_bytes": self.comp_bytes,
+            "comp_data_human": human_bytes(self.comp_bytes),
+            "export_bytes": self.export_bytes,
+            "export_human": human_bytes(self.export_bytes),
+            "total_bytes": total,
+            "total_human": human_bytes(total),
+            "elapsed_seconds": round(monotonic() - self.started, 1),
+            "measured_at": self.measured_at.isoformat() if self.measured_at else None,
+        }
+
+    def join(self, timeout: Optional[float] = None) -> None:
+        """Wait for the measuring thread. For tests and shutdown."""
+        if self._thread.is_alive():
+            self._thread.join(timeout)
+
+
+_disk_usage: Optional[_DiskUsage] = None
+
+
+def start_disk_usage(comp_root: Path, export_root: Path) -> dict:
+    """Begin measuring, or report the walk already under way.
+
+    Deliberately *not* guarded by :func:`exclusive`: this only reads, so it
+    must not block a wipe or be blocked by one. A second request while a
+    walk is running joins that walk rather than starting a competing stat
+    storm on the same mount.
+    """
+    global _disk_usage
+
+    if _disk_usage is not None and not _disk_usage.finished:
+        return _disk_usage.status()
+
+    usage = _DiskUsage(comp_root, export_root)
+    _disk_usage = usage
+    usage._thread.start()
+    return usage.status()
+
+
+def disk_usage_status() -> Optional[dict]:
+    """The last measurement, or None if nobody has asked for one."""
+    return _disk_usage.status() if _disk_usage is not None else None
+
+
+def _reset_disk_usage() -> None:
+    """Drop the cached measurement. For tests, and after a database reset."""
+    global _disk_usage
+    _disk_usage = None
 
 
 def human_bytes(n: int) -> str:
@@ -560,11 +751,15 @@ def preview_project_wipe(
     entrypoint_ids = _queued_entrypoint_ids(session, name)
 
     comp_dirs = [comp_root / f"mol_{mid}" for mid in molecule_ids]
-    comp_bytes = sum(_dir_size(d) for d in comp_dirs)
     # Never build this by concatenation: `name` comes straight from the URL
     # and `..` would resolve to the data root.
     export_dir = safe_subdirectory(export_root, name)
-    export_bytes = _dir_size(export_dir)
+
+    # One budget for both, so a large project bounds the request rather
+    # than the request bounding on the project. See PREVIEW_MEASURE_SECONDS.
+    deadline = monotonic() + PREVIEW_MEASURE_SECONDS
+    comp_bytes, comp_done = _measure(comp_dirs, deadline)
+    export_bytes, export_done = _measure([export_dir], deadline)
 
     return {
         "project": name,
@@ -586,6 +781,10 @@ def preview_project_wipe(
             "export_bytes": export_bytes,
             "export_human": human_bytes(export_bytes),
             "total_human": human_bytes(comp_bytes + export_bytes),
+            # False when the time budget cut the walk short: every figure
+            # above is then a lower bound, and the dialog must say so
+            # rather than under-report what is about to be deleted.
+            "measured_completely": comp_done and export_done,
         },
         "confirmation_required": name,
     }
@@ -694,7 +893,7 @@ def preview_molecule_wipe(session: Session, molecule_id: int, comp_root: Path) -
         return None
     state_ids, task_ids, geometry_ids, job_ids = _descendants(session, [molecule_id])
     comp_dir = comp_root / f"mol_{molecule_id}"
-    size = _dir_size(comp_dir)
+    size, _, complete = _scan(comp_dir, monotonic() + PREVIEW_MEASURE_SECONDS)
     return {
         "molecule_id": molecule_id,
         "smiles": mol.smiles,
@@ -710,6 +909,7 @@ def preview_molecule_wipe(session: Session, molecule_id: int, comp_root: Path) -
             "exists": comp_dir.exists(),
             "bytes": size,
             "human": human_bytes(size),
+            "measured_completely": complete,
         },
         # The SMILES is what the user sees in the table, so that's what
         # they're asked to type back.
@@ -741,6 +941,7 @@ def wipe_molecule(
     session.commit()
 
     removed, freed = _remove_tree(comp_root / f"mol_{molecule_id}")
+    _reset_disk_usage()  # the cached total no longer describes the tree
     logger.warning(
         "WIPED molecule %d (%s) from project %r, %d job(s) cancelled",
         molecule_id, smiles, project, cancelled,
@@ -763,13 +964,21 @@ def wipe_molecule(
 # ----------------------------------------------------------------------
 
 
-def preview_database_reset(session: Session, comp_root: Path, export_root: Path) -> dict:
-    """Count everything in the database and on disk."""
-    def _count(model) -> int:
-        return len(session.exec(select(model.id)).all())
+def preview_database_reset(session: Session) -> dict:
+    """Count everything in the database. Reads no files.
 
-    comp_bytes = _dir_size(comp_root)
-    export_bytes = _dir_size(export_root)
+    Sizing the data directory used to happen here, which made rendering the
+    admin page a five-minute walk of the whole network mount while holding
+    a database connection. It is now :func:`start_disk_usage`, asked for by
+    the operator when they want the number. The reset itself never needed
+    it: it stages directories with a rename and deletes them in the
+    background, so what is on disk does not change what it does.
+    """
+    def _count(model) -> int:
+        # COUNT(*) in SQLite, not len() over every id fetched into Python.
+        # Six tables, ~23k rows, 2.3 s per render of the admin page.
+        return session.exec(select(func.count()).select_from(model)).one()
+
     projects = session.exec(select(Molecule.project_name).distinct()).all()
 
     return {
@@ -781,13 +990,6 @@ def preview_database_reset(session: Session, comp_root: Path, export_root: Path)
             "geometries": _count(MoleculeGeometry),
             "jobs": _count(ComputationJob),
             "entrypoints": _count(CalculationEntrypoint),
-        },
-        "files": {
-            "comp_data_bytes": comp_bytes,
-            "comp_data_human": human_bytes(comp_bytes),
-            "export_bytes": export_bytes,
-            "export_human": human_bytes(export_bytes),
-            "total_human": human_bytes(comp_bytes + export_bytes),
         },
         "confirmation_required": RESET_CONFIRMATION,
     }

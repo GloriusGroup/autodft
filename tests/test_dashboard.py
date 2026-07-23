@@ -87,3 +87,36 @@ def test_the_login_page_asks_for_a_username(client):
     assert response.status_code == 200
     assert 'name="username"' in response.text
     assert "API key" in response.text
+
+
+def test_the_admin_page_never_measures_the_disk_to_render(client):
+    """The admin page's own fetches must not walk the data directory.
+
+    ``/api/admin/reset-preview`` is fetched on every render. When it sized
+    comp_data, that was minutes of stat calls across the network mount --
+    per render, holding a pooled database connection, and not cancelled
+    when the operator navigated away. Disk usage is now a button.
+    """
+    c, headers = client
+    response = c.get("/api/admin/reset-preview", headers=headers)
+    assert response.status_code == 200
+    assert "files" not in response.json()
+
+    # And nothing has been measured until somebody asks.
+    assert c.get("/api/admin/disk-usage", headers=headers).json()["usage"] is None
+
+
+def test_disk_usage_is_measured_on_request(client):
+    from autodft.api import admin_ops
+
+    c, headers = client
+    started = c.post("/api/admin/disk-usage", headers=headers)
+    assert started.status_code == 200
+    assert started.json()["usage"]["state"] in {"running", "ready"}
+
+    admin_ops._disk_usage.join(timeout=10)
+    usage = c.get("/api/admin/disk-usage", headers=headers).json()["usage"]
+    assert usage["state"] == "ready"
+    assert usage["total_bytes"] >= 0
+    assert usage["measured_at"] is not None
+    admin_ops._reset_disk_usage()

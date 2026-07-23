@@ -36,7 +36,24 @@ def get_engine(settings: Settings | None = None):
             db_file.parent.mkdir(parents=True, exist_ok=True)
 
         connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
-        _engine = create_engine(url, echo=False, connect_args=connect_args)
+        pool_args: dict = {}
+        # File-backed only: an in-memory SQLite database gets a
+        # SingletonThreadPool / StaticPool, which has no overflow to size.
+        if url.startswith("sqlite:///") and ":memory:" not in url:
+            # SQLAlchemy's default for a file-backed SQLite database is
+            # QueuePool(size=5, max_overflow=10) -- fifteen connections for
+            # the whole process. The dashboard runs in a thread of the
+            # controller on a threadpool that is 40 wide, so a handful of
+            # slow handlers could hold every slot while the pipeline thread
+            # wanted one too; the 41st caller then waited 30 s and got a
+            # QueuePool timeout. Under WAL an extra reader is a file handle
+            # and a page cache, so the ceiling is raised to cover the
+            # threadpool outright. The real fix is that no handler holds a
+            # connection across filesystem work any more (see admin_ops),
+            # but that fix should not be the only thing standing between a
+            # slow request and a dead dashboard.
+            pool_args = {"pool_size": 20, "max_overflow": 30, "pool_recycle": 3600}
+        _engine = create_engine(url, echo=False, connect_args=connect_args, **pool_args)
 
         # Enable SQLite foreign-key enforcement
         if url.startswith("sqlite"):

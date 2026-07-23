@@ -37,6 +37,7 @@ ADMIN_ONLY = {
     "/api/admin/circuit-breaker/reset",
     "/api/admin/reset-preview",
     "/api/admin/reset-database",
+    "/api/admin/disk-usage",
     "/api/admin/users",
     "/api/admin/users/{username}",
     "/api/admin/users/{username}/rotate-key",

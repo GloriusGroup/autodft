@@ -1717,15 +1717,44 @@ def api_circuit_breaker_reset(identity: Identity = Depends(current_identity)):
 
 
 @router.get("/api/admin/reset-preview")
-def api_reset_preview():
-    """Everything currently in the database and on disk. Read-only."""
+def api_reset_preview(identity: Identity = Depends(current_identity)):
+    """Everything currently in the database. Read-only, and reads no files.
+
+    Disk usage is *not* here: see ``/api/admin/disk-usage``. This endpoint
+    is fetched every time the admin page renders, and measuring 32 GB
+    across the network mount took five minutes per render.
+    """
+    require_admin(identity)
+    from autodft.api import admin_ops
+
+    with get_session() as session:
+        return admin_ops.preview_database_reset(session)
+
+
+@router.get("/api/admin/disk-usage")
+def api_disk_usage(identity: Identity = Depends(current_identity)):
+    """The last measurement, without starting one. ``null`` if never asked."""
+    require_admin(identity)
+    from autodft.api import admin_ops
+
+    return {"usage": admin_ops.disk_usage_status()}
+
+
+@router.post("/api/admin/disk-usage")
+def api_disk_usage_measure(identity: Identity = Depends(current_identity)):
+    """Start measuring the data directory, and report progress.
+
+    Answers immediately: the walk runs on its own thread and the caller
+    polls the GET above. A request arriving while a walk is under way joins
+    it rather than starting a second stat storm on the same mount.
+    """
+    require_admin(identity)
     from autodft.api import admin_ops
 
     settings = get_active_settings()
-    with get_session() as session:
-        return admin_ops.preview_database_reset(
-            session, settings.comp_data_path, settings.export_data_path,
-        )
+    return {"usage": admin_ops.start_disk_usage(
+        settings.comp_data_path, settings.export_data_path,
+    )}
 
 
 @router.post("/api/admin/reset-database")

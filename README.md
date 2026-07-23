@@ -521,8 +521,10 @@ is either scoped to the caller's own projects or deliberately shared
 | GET    | `/api/wipe-status`                  | progress of a deletion still running in the background        |
 | GET    | `/api/admin/circuit-breaker`        | breaker state with the failure ratio behind it (admin)        |
 | POST   | `/api/admin/circuit-breaker/reset`  | clear the breaker and resume submissions (admin)              |
-| GET    | `/api/admin/reset-preview`          | everything a database reset would delete — counts only        |
+| GET    | `/api/admin/reset-preview`          | everything a database reset would delete — row counts, no files |
 | POST   | `/api/admin/reset-database`         | **destructive**: every pipeline table and data directory       |
+| GET    | `/api/admin/disk-usage`             | the last disk measurement, or `null` — never starts one (admin) |
+| POST   | `/api/admin/disk-usage`             | measure the data directory on a background thread (admin)     |
 | GET    | `/api/admin/users`                  | list accounts                                                 |
 | POST   | `/api/admin/users`                  | create an account; the response carries its API key, once     |
 | POST   | `/api/admin/users/{name}`           | deactivate / reactivate (`?active=false`)                     |

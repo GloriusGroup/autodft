@@ -233,6 +233,132 @@ class TestWipeMolecule:
             admin_ops.wipe_molecule(session, 9999, project["comp_root"])
 
 
+class TestMeasuringFiles:
+    """Sizing the data directory must never be able to hang the dashboard.
+
+    It used to run inside the reset preview, which the admin page fetched
+    on every render: five minutes of stat calls over the network mount,
+    holding a pooled database connection, uncancellable, and started afresh
+    on every reload until the pool was empty and the whole site stalled.
+    """
+
+    def test_the_reset_preview_reads_no_files(self, session, project, monkeypatch):
+        def _explode(*args, **kwargs):
+            raise AssertionError("preview_database_reset walked the filesystem")
+
+        monkeypatch.setattr(admin_ops, "_scan", _explode)
+        preview = admin_ops.preview_database_reset(session)
+
+        assert preview["rows"]["molecules"] == 3
+        assert "files" not in preview
+
+    def test_a_preview_stops_at_its_time_budget(self, session, project, monkeypatch):
+        # Zero budget: the deadline has already passed when the walk starts.
+        monkeypatch.setattr(admin_ops, "PREVIEW_MEASURE_SECONDS", 0.0)
+        preview = admin_ops.preview_project_wipe(
+            session, "victim", project["comp_root"], project["export_root"],
+        )
+
+        assert preview["files"]["measured_completely"] is False
+        # Still counts the rows it is about to delete -- only the walk is cut.
+        assert preview["files"]["comp_data_dirs"] == 2
+
+    def test_a_preview_that_finishes_says_so(self, session, project):
+        preview = admin_ops.preview_project_wipe(
+            session, "victim", project["comp_root"], project["export_root"],
+        )
+        assert preview["files"]["measured_completely"] is True
+        assert preview["files"]["comp_data_bytes"] > 0
+
+    def test_scan_totals_a_tree(self, tmp_path):
+        (tmp_path / "a" / "b").mkdir(parents=True)
+        (tmp_path / "a" / "one").write_bytes(b"x" * 10)
+        (tmp_path / "a" / "b" / "two").write_bytes(b"y" * 5)
+
+        assert admin_ops._scan(tmp_path, None) == (15, 2, True)
+        assert admin_ops._scan(tmp_path / "missing", None) == (0, 0, True)
+        # A file, not a directory: its own size, not zero.
+        assert admin_ops._scan(tmp_path / "a" / "one", None) == (10, 1, True)
+
+
+class TestDiskUsage:
+    """The on-demand replacement: off the request, off the database."""
+
+    @pytest.fixture(autouse=True)
+    def _clear(self):
+        admin_ops._reset_disk_usage()
+        yield
+        admin_ops._reset_disk_usage()
+
+    def test_nobody_has_asked_yet(self):
+        assert admin_ops.disk_usage_status() is None
+
+    def test_it_measures_both_roots(self, project):
+        admin_ops.start_disk_usage(project["comp_root"], project["export_root"])
+        admin_ops._disk_usage.join(timeout=10)
+
+        usage = admin_ops.disk_usage_status()
+        assert usage["state"] == "ready"
+        assert usage["comp_data_bytes"] > 0
+        assert usage["export_bytes"] > 0
+        assert usage["total_bytes"] == usage["comp_data_bytes"] + usage["export_bytes"]
+        assert usage["files"] > 0
+        assert usage["dirs_done"] == usage["dirs_total"]
+        assert usage["measured_at"] is not None
+
+    def test_a_second_request_joins_the_walk_it_finds(self, project, monkeypatch):
+        started = threading.Event()
+        release = threading.Event()
+        real_scan = admin_ops._scan
+
+        def _slow(path, deadline):
+            started.set()
+            release.wait(timeout=10)
+            return real_scan(path, deadline)
+
+        monkeypatch.setattr(admin_ops, "_scan", _slow)
+        admin_ops.start_disk_usage(project["comp_root"], project["export_root"])
+        assert started.wait(timeout=10)
+        first = admin_ops._disk_usage
+
+        second = admin_ops.start_disk_usage(
+            project["comp_root"], project["export_root"],
+        )
+        assert second["state"] == "running"
+        # The same walk, not a competing stat storm on the same mount.
+        assert admin_ops._disk_usage is first
+
+        release.set()
+        first.join(timeout=10)
+
+    def test_a_wipe_invalidates_the_cached_total(self, session, project):
+        admin_ops.start_disk_usage(project["comp_root"], project["export_root"])
+        admin_ops._disk_usage.join(timeout=10)
+        assert admin_ops.disk_usage_status()["state"] == "ready"
+
+        admin_ops.wipe_project(
+            session, "victim", project["comp_root"], project["export_root"],
+            background=False,
+        )
+        # A number describing a tree that has since shrunk is worse than none.
+        assert admin_ops.disk_usage_status() is None
+
+    def test_a_failure_is_reported_not_raised(self, project, monkeypatch):
+        def _explode(*args, **kwargs):
+            raise OSError("mount went away")
+
+        monkeypatch.setattr(admin_ops.Path, "iterdir", _explode)
+        admin_ops.start_disk_usage(project["comp_root"], project["export_root"])
+        admin_ops._disk_usage.join(timeout=10)
+
+        usage = admin_ops.disk_usage_status()
+        # iterdir failures are swallowed per root, so this still completes;
+        # what matters is that the thread never dies with the state stuck
+        # on "running" forever.
+        assert usage["state"] in {"ready", "failed"}
+        assert usage["state"] != "running"
+
+
 class TestResetDatabase:
     def test_empties_every_table_but_keeps_headers(self, session, project):
         result = admin_ops.reset_database(

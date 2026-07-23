@@ -562,6 +562,8 @@ a `POST` that acts and requires `confirm` to echo an exact string.
 | `GET /api/admin/reset-preview` | admin | — | nothing |
 | `POST /api/admin/reset-database` | admin | `RESET THE DATABASE` | every pipeline table; data directories unless `delete_files: false`; headers only if `keep_headers: false` |
 | `GET /api/wipe-status` | anyone | — | nothing; reports the deletion still in flight |
+| `GET /api/admin/disk-usage` | admin | — | nothing; the last measurement, or `null` |
+| `POST /api/admin/disk-usage` | admin | — | nothing; starts a measurement |
 
 A user may wipe their own projects and molecules; someone else's answers
 **404**, the same as a read, since a 403 would confirm it exists. Only the
@@ -593,6 +595,36 @@ Four properties worth knowing:
 * **SLURM is stopped first.** Jobs the scheduler still has queued or
   running are `scancel`ed before their directories disappear; the count
   comes back as `jobs_cancelled`.
+
+### Sizes, and why they are not free
+
+Measuring a directory means one `stat` per file, and on this deployment's
+network mount that is milliseconds each: 32 GB of `comp_data` in 58,473
+files took **5m14s** to walk. So no request measures without a bound.
+
+* A **wipe preview** measures under a 2-second budget and reports
+  `files.measured_completely`. When that is `false` every byte figure in
+  the response is a *lower* bound and the dialog says "at least" — better
+  than under-reporting what is about to be deleted.
+* `GET /api/admin/reset-preview` **reads no files at all**. It returns
+  `projects`, `rows` and `confirmation_required`; the `files` object it
+  used to carry is gone. The reset does not need it either — it stages
+  directories with a rename, so what is on disk does not change what it
+  does.
+* The exact figure is `POST /api/admin/disk-usage`, which starts a walk on
+  its own thread and answers immediately. Poll `GET /api/admin/disk-usage`
+  for `{"state": "running"|"ready"|"failed", "dirs_done", "dirs_total",
+  "files", "comp_data_bytes", "export_bytes", "total_bytes",
+  "elapsed_seconds", "measured_at"}`. A POST arriving while a walk is
+  running joins it rather than starting a second one. The result is cached
+  until a wipe or reset invalidates it.
+
+This is not a micro-optimisation. `reset-preview` was fetched on every
+render of the admin page, ran inside a `get_session()` block, and a
+synchronous handler is not cancelled when the browser navigates away — so
+each reload pinned one of the connection pool's slots for five minutes.
+A handful of reloads exhausted the pool and every request in the process,
+including submissions and API-key authentication, blocked behind it.
 
 Staging is not just about latency. Molecule ids restart at 1 after a
 reset and the worker runs in the same process as the API, so within a tick
