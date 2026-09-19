@@ -35,24 +35,42 @@ def _read_header_file(path: Optional[Path]) -> Optional[str]:
     return path.read_text(encoding="utf-8")
 
 
-def _check_t1_reference(smiles: str, request_t1: bool) -> None:
-    """Refuse a T1 request on an open-shell reference.
+def _check_reference_state(
+    smiles: str, request_t1: bool, request_ox: bool = False,
+    request_red: bool = False,
+) -> None:
+    """Refuse extra states the reference cannot support.
 
-    The S0 -> T1 spin change is only defined from a closed-shell singlet.
-    Mirrors the guard in POST /api/submit so both entry paths behave the same.
+    A diradical is only calculated as a triplet; the S0 -> T1 spin change is
+    only defined from a closed-shell singlet. Mirrors the guards in
+    POST /api/submit so both entry paths behave the same.
     """
-    if not request_t1:
-        return
     from autodft.engine.entrypoint_processor import validate_smiles
 
     check = validate_smiles(smiles)
-    if check["valid"] and check["multiplicity"] != 1:
+    if not check["valid"]:
+        return
+
+    if check["diradical"]:
+        extra = [flag for flag, on in (
+            ("--request-t1", request_t1),
+            ("--request-ox", request_ox),
+            ("--request-red", request_red),
+        ) if on]
+        if extra:
+            console.print(
+                f"[red]Diradicals are only calculated in the triplet state[/red] "
+                f"— {smiles}. Drop {', '.join(extra)}."
+            )
+            raise typer.Exit(code=1)
+    elif request_t1 and check["multiplicity"] != 1:
         console.print(
             f"[red]T1 requires a closed-shell reference[/red] — {smiles} has "
             f"multiplicity {check['multiplicity']}. Drop --request-t1; "
             f"ox / red still work for open-shell references."
         )
         raise typer.Exit(code=1)
+
     if check.get("warning"):
         console.print(f"[yellow]{check['warning']}[/yellow]")
 
@@ -149,7 +167,7 @@ def submit(
     max_conformers_red: int = typer.Option(1, "--max-conformers-red", help="Max conformers kept for red"),
 ) -> None:
     """Submit a single molecule by SMILES string."""
-    _check_t1_reference(smiles, request_t1)
+    _check_reference_state(smiles, request_t1, request_ox, request_red)
     qualified, author = _qualified_project(project, user)
 
     request_metadata = _build_request_metadata(
@@ -282,7 +300,7 @@ def submit_batch(
     # Check every row before writing any of them, so a batch either goes in
     # whole or not at all.
     for smi in smiles_list:
-        _check_t1_reference(smi, request_t1)
+        _check_reference_state(smi, request_t1, request_ox, request_red)
 
     submitted = 0
     with get_session() as session:

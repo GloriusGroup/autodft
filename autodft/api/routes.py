@@ -1589,10 +1589,11 @@ def api_cluster_status():
     is halted" without asking an administrator. It exposes no one else's
     data: a queue depth and a breaker flag.
     """
-    from autodft.engine import circuit_breaker
+    from autodft.engine import circuit_breaker, submission_hold
 
     settings = get_active_settings()
     state = circuit_breaker.read_state(settings.data_path)
+    held = submission_hold.read_state(settings.data_path)
     with get_session() as session:
         waiting = session.exec(
             select(func.count())
@@ -1601,6 +1602,7 @@ def api_cluster_status():
         ).one()
     return {
         "breaker_tripped": state is not None,
+        "submissions_held": held is not None,
         "queued_entrypoints": waiting,
     }
 
@@ -1818,6 +1820,44 @@ def api_circuit_breaker_reset(identity: Identity = Depends(current_identity)):
     return {"reset": was_tripped, "tripped": False}
 
 
+class SubmissionHoldRequest(BaseModel):
+    reason: str = Field(default="", max_length=500)
+
+
+@router.get("/api/admin/submission-hold")
+def api_submission_hold_status(identity: Identity = Depends(current_identity)):
+    """Whether an admin has paused sbatch submission."""
+    require_admin(identity)
+    from autodft.engine import submission_hold
+
+    state = submission_hold.read_state(get_active_settings().data_path)
+    return {"held": state is not None, "state": state}
+
+
+@router.post("/api/admin/submission-hold")
+def api_submission_hold_set(
+    body: SubmissionHoldRequest, identity: Identity = Depends(current_identity),
+):
+    """Stop submitting jobs; results are still processed and followups prepared."""
+    require_admin(identity)
+    from autodft.engine import submission_hold
+
+    state = submission_hold.hold(
+        get_active_settings().data_path, identity.username, body.reason.strip(),
+    )
+    return {"held": True, "state": state}
+
+
+@router.post("/api/admin/submission-hold/release")
+def api_submission_hold_release(identity: Identity = Depends(current_identity)):
+    """Resume submission on the next tick."""
+    require_admin(identity)
+    from autodft.engine import submission_hold
+
+    was_held = submission_hold.release(get_active_settings().data_path)
+    return {"released": was_held, "held": False}
+
+
 @router.get("/api/admin/reset-preview")
 def api_reset_preview(identity: Identity = Depends(current_identity)):
     """Everything currently in the database. Read-only, and reads no files.
@@ -1932,6 +1972,22 @@ def _reject_reason(body: SubmitRequest, smiles: str) -> Optional[tuple[str, dict
     check = validate_smiles(smiles)
     if not check["valid"]:
         return (check["error"] or "Invalid SMILES.", check)
+
+    # A diradical is only ever calculated as a triplet -- see the matching
+    # rule in the entrypoint processor. Refuse here so the caller gets a 400
+    # instead of a molecule that fails later in the worker.
+    if check["diradical"]:
+        extra = [name for name, on in (
+            ("request_t1", body.request_t1),
+            ("request_ox", body.request_ox),
+            ("request_red", body.request_red),
+        ) if on]
+        if extra:
+            return (
+                f"{smiles!r} is a diradical and is only calculated in the "
+                f"triplet state. Resubmit without {', '.join(extra)}.",
+                check,
+            )
 
     # The S0 -> T1 spin change is only defined from a closed-shell reference.
     # Refuse here rather than letting the controller build a state that is

@@ -35,6 +35,8 @@ PUBLIC = {"/login", "/logout"}
 ADMIN_ONLY = {
     "/api/admin/circuit-breaker",
     "/api/admin/circuit-breaker/reset",
+    "/api/admin/submission-hold",
+    "/api/admin/submission-hold/release",
     "/api/admin/reset-preview",
     "/api/admin/reset-database",
     "/api/admin/disk-usage",
@@ -367,6 +369,8 @@ class TestDestructiveRoutes:
     @pytest.mark.parametrize("path,method", [
         ("/api/admin/reset-database", "post"),
         ("/api/admin/circuit-breaker/reset", "post"),
+        ("/api/admin/submission-hold", "post"),
+        ("/api/admin/submission-hold/release", "post"),
         ("/api/admin/users", "post"),
     ])
     def test_a_user_cannot_reach_the_admin_ones(self, app_env, path, method):

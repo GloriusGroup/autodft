@@ -725,6 +725,14 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
     the next tick with the queue state it left behind.
     """
 
+    from autodft.engine import submission_hold
+
+    held = submission_hold.read_state(settings.data_path)
+    if held is not None:
+        logger.info("Submission hold active (%s) -- not submitting jobs",
+                    held.get("reason") or "no reason given")
+        return
+
     # squeue counts our own waiting (PD) jobs only, so running work never
     # counts against the cap -- the limit controls how deep the backlog is
     # allowed to get, not how much may run.

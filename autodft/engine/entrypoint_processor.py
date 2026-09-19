@@ -88,6 +88,20 @@ def _process_entrypoint_body(
     # Validate before creating anything: process_next_entrypoint rolls the
     # session back on failure, so raising midway would discard the S0 / ox /
     # red states already created for this molecule.
+    # A diradical is computed as a triplet and nothing else. The reference is
+    # already the two-electron-excited state, so S0 -> T1 has no meaning, and
+    # ox/red off a triplet has no unambiguous multiplicity (removing one
+    # electron could give a doublet or a quartet). Checked before the T1 rule
+    # below so a diradical gets the diradical message.
+    extra_states = [k for k in ("request_T1", "request_ox", "request_red")
+                    if metadata.get(k, False)]
+    if multiplicity == 3 and extra_states:
+        raise ValueError(
+            f"{', '.join(extra_states)} requested for a diradical, which is "
+            f"only calculated in the triplet state. Nothing was submitted for "
+            f"this molecule; resubmit with the triplet reference alone."
+        )
+
     if metadata.get("request_T1", False) and multiplicity != 1:
         # The spin-change chain (S0 <-> T1 and the vert_spin_change
         # singlepoints hanging off it) is only defined from a closed-shell
@@ -175,6 +189,48 @@ def _process_entrypoint_body(
 # Electronic-structure helpers (ported from electronic_utils.py)
 # ======================================================================
 
+def count_radical_centers(mol) -> int:
+    """Number of atoms carrying at least one unpaired electron.
+
+    Counts centres, not electrons. ChemDraw writes a radical atom as `[C]`,
+    which RDKit reads as one unpaired electron per *missing valence*, so
+    summing electrons turns a monoradical drawn with two explicit bonds into
+    a triplet and a diradical into a quartet. One radical dot per bracketed
+    atom is what the drawing means.
+    """
+    return sum(1 for atom in mol.GetAtoms() if atom.GetNumRadicalElectrons())
+
+
+def mol_from_smiles(smiles: str):
+    """Parse SMILES, pinning each radical centre to one unpaired electron.
+
+    The other half of the rule in ``count_radical_centers``: the valences
+    RDKit filled with surplus radical electrons are the ones the drawing
+    fills with hydrogen. Skip this and the geometry is an H short of the
+    multiplicity we assign it, and gxtb refuses the job. Multiplicity,
+    validation and the geometry must all parse through here to agree.
+
+    Returns ``None`` if RDKit cannot parse the SMILES.
+    """
+    from rdkit import Chem
+
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return None
+
+    rw = Chem.RWMol(mol)
+    for atom in rw.GetAtoms():
+        surplus = atom.GetNumRadicalElectrons() - 1
+        if surplus > 0:
+            atom.SetNumRadicalElectrons(1)
+            atom.SetNumExplicitHs(atom.GetNumExplicitHs() + surplus)
+            atom.SetNoImplicit(True)
+
+    mol = rw.GetMol()
+    Chem.SanitizeMol(mol)
+    return mol
+
+
 def get_charge_and_multiplicity(smiles: str) -> Tuple[int, int]:
     """Determine charge and spin multiplicity from a SMILES string.
 
@@ -184,15 +240,13 @@ def get_charge_and_multiplicity(smiles: str) -> Tuple[int, int]:
     try:
         from rdkit import Chem
 
-        mol = Chem.MolFromSmiles(smiles)
+        mol = mol_from_smiles(smiles)
         if mol is None:
             logger.warning("RDKit could not parse SMILES '%s'; defaulting to 0/1", smiles)
             return 0, 1
 
         charge = Chem.GetFormalCharge(mol)
-        num_radical = sum(atom.GetNumRadicalElectrons() for atom in mol.GetAtoms())
-        multiplicity = num_radical + 1
-        return charge, multiplicity
+        return charge, count_radical_centers(mol) + 1
 
     except ImportError:
         logger.warning("RDKit not available; defaulting charge=0, multiplicity=1")
@@ -295,7 +349,8 @@ def validate_smiles(smiles: str) -> dict:
 
         {"valid": bool, "canonical": str|None, "atoms": int|None,
          "heavy_atoms": int|None, "charge": int|None,
-         "multiplicity": int|None, "error": str|None}
+         "multiplicity": int|None, "radical_centers": int|None,
+         "diradical": bool, "error": str|None}
 
     The check is intentionally strict: empty input, anything RDKit
     refuses to parse, and any structure that wouldn't produce a usable
@@ -309,6 +364,10 @@ def validate_smiles(smiles: str) -> dict:
         "heavy_atoms": None,
         "charge": None,
         "multiplicity": None,
+        "radical_centers": None,
+        # A diradical is submitted as a triplet and nothing else; the caller
+        # uses this to lock the requested-state choices.
+        "diradical": False,
         "error": None,
         # Non-fatal note about a structure that parses but is probably not
         # what the user meant (see the multiplicity check below).
@@ -331,7 +390,7 @@ def validate_smiles(smiles: str) -> dict:
     # Silence RDKit's stderr chatter; we surface its complaint via the
     # parser return value instead.
     RDLogger.DisableLog("rdApp.*")
-    mol = Chem.MolFromSmiles(smiles)
+    mol = mol_from_smiles(smiles)
     if mol is None:
         base["error"] = f"RDKit could not parse {smiles!r}."
         return base
@@ -340,7 +399,8 @@ def validate_smiles(smiles: str) -> dict:
     mol_h = Chem.AddHs(mol)
     n_atoms = mol_h.GetNumAtoms()
     charge = Chem.GetFormalCharge(mol)
-    multiplicity = sum(a.GetNumRadicalElectrons() for a in mol.GetAtoms()) + 1
+    centers = count_radical_centers(mol)
+    multiplicity = centers + 1
 
     if heavy < 1:
         base["error"] = "Molecule has no atoms."
@@ -358,33 +418,40 @@ def validate_smiles(smiles: str) -> dict:
     base["heavy_atoms"] = heavy
     base["charge"] = charge
     base["multiplicity"] = multiplicity
+    base["radical_centers"] = centers
+    base["diradical"] = centers == 2
 
-    # Supported reference states are closed-shell singlets and radicals
-    # (doublets), neutral or charged. A higher multiplicity is almost always
-    # a drawing artefact rather than an intended high-spin species: ChemDraw
-    # exports a radical carbon as `[C]`, which RDKit reads as *every* missing
-    # valence being an unpaired electron (`[C]` alone -> multiplicity 5).
-    # Warn rather than reject — the SMILES is chemically parseable, and the
-    # caller may genuinely want a high-spin state.
-    if multiplicity > 2:
-        worst = max(a.GetNumRadicalElectrons() for a in mol.GetAtoms())
+    # Supported reference states are closed-shell singlets, radicals
+    # (doublets) and diradical triplets, neutral or charged. Three or more
+    # radical centres is almost always a drawing artefact rather than an
+    # intended high-spin species. Warn rather than reject — the SMILES is
+    # chemically parseable, and the caller may genuinely want a quartet.
+    if centers > 2:
         base["warning"] = (
-            f"Multiplicity {multiplicity} — this structure carries "
-            f"{multiplicity - 1} unpaired electrons ({worst} on a single atom). "
-            f"Supported reference states are singlets and doublets. If this came "
-            f"from ChemDraw, a bracketed atom such as [C] means every missing "
-            f"valence is read as a radical electron; write [CH2] / [CH] to pin "
-            f"the hydrogens explicitly."
+            f"Multiplicity {multiplicity} — this structure carries {centers} "
+            f"radical centres. Supported reference states are singlets, "
+            f"doublets and diradical triplets. Write [CH2] / [CH] to pin the "
+            f"hydrogens explicitly on any atom that isn't meant to be a radical."
+        )
+    elif centers == 2:
+        base["warning"] = (
+            "Diradical — submitted as a triplet (multiplicity 3). T1, ox and "
+            "red are not available for a diradical reference."
         )
     return base
 
 
 def _canonicalize_smiles(smiles: str) -> str:
-    """Return canonical SMILES via RDKit, or the original string."""
+    """Return canonical SMILES via RDKit, or the original string.
+
+    Normalised, so the stored string names the species that was computed:
+    a radical centre comes back as `[CH]`, not the `[C]` that reads as a
+    carbene one hydrogen short.
+    """
     try:
         from rdkit import Chem
 
-        mol = Chem.MolFromSmiles(smiles)
+        mol = mol_from_smiles(smiles)
         if mol is not None:
             return Chem.MolToSmiles(mol, canonical=True, isomericSmiles=True)
     except ImportError:
@@ -638,7 +705,7 @@ def _generate_initial_xyz(smiles: str) -> str:
         from rdkit import Chem
         from rdkit.Chem import AllChem
 
-        mol = Chem.MolFromSmiles(smiles)
+        mol = mol_from_smiles(smiles)
         if mol is None:
             raise ValueError(f"RDKit could not parse SMILES: {smiles!r}")
         mol = Chem.AddHs(mol)
@@ -669,9 +736,10 @@ def _generate_initial_xyz(smiles: str) -> str:
         rdkit_err = exc
         logger.warning("RDKit failed (%s); trying OpenBabel", exc)
 
-    # Try OpenBabel — Python bindings first, then CLI
+    # Try OpenBabel — Python bindings first, then CLI. It gets the
+    # normalised SMILES: OpenBabel reads `[C]` as a bare carbene too.
     try:
-        xyz = _generate_xyz_via_openbabel(smiles)
+        xyz = _generate_xyz_via_openbabel(_normalized_smiles(smiles))
         min_d = _min_pairwise_distance(xyz)
         if min_d < _MIN_VALID_ATOM_DISTANCE:
             raise RuntimeError(
@@ -690,6 +758,21 @@ def _generate_initial_xyz(smiles: str) -> str:
         f"({rdkit_err!r}), OpenBabel error ({obabel_err!r}). Install "
         f"either package on the controller before resubmitting."
     )
+
+
+def _normalized_smiles(smiles: str) -> str:
+    """``smiles`` with the radical hydrogens written out.
+
+    Returned unchanged if RDKit can't parse it or isn't installed — the
+    OpenBabel path is the fallback for exactly that case.
+    """
+    try:
+        from rdkit import Chem
+
+        mol = mol_from_smiles(smiles)
+    except ImportError:
+        return smiles
+    return smiles if mol is None else Chem.MolToSmiles(mol)
 
 
 def _generate_xyz_via_openbabel(smiles: str) -> str:

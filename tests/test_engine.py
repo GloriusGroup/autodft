@@ -117,13 +117,83 @@ class TestValidateSmiles:
         # GOAT cannot run on a monomer.
         assert validate_smiles("[Fe+2]")["valid"] is False
 
-    def test_warns_on_chemdraw_style_radicals(self):
-        """`[C]` reads as every missing valence being an unpaired electron."""
+    def test_chemdraw_style_radical_is_a_doublet(self):
+        """One radical dot per bracketed atom, not one per missing valence."""
         result = validate_smiles("FS(F)(F)(F)(F)C[C]c1ccccc1")
         assert result["valid"] is True
+        assert result["radical_centers"] == 1
+        assert result["multiplicity"] == 2
+        assert result["diradical"] is False
+        assert result["warning"] is None
+
+    def test_diradical_is_a_triplet(self):
+        """Two radical centres -> multiplicity 3, flagged for the triplet lock."""
+        result = validate_smiles(
+            "CO[C](SC1N(C(C)=O)C2=CC=CC=C2[C]1)C3=CC4=CC=CC=C4C=C3"
+        )
+        assert result["valid"] is True
+        assert result["radical_centers"] == 2
         assert result["multiplicity"] == 3
-        assert result["warning"] is not None
-        assert "unpaired" in result["warning"]
+        assert result["diradical"] is True
+
+    def test_warns_above_two_radical_centers(self):
+        result = validate_smiles("[CH2]C[CH]C[CH2]")
+        assert result["valid"] is True
+        assert result["radical_centers"] == 3
+        assert result["diradical"] is False
+        assert "radical centres" in result["warning"]
+
+
+class TestInitialGeometry:
+    """The embedded geometry must match the multiplicity we assign it.
+
+    gxtb refuses a job whose electron count and unpaired-electron count
+    disagree in parity. That is how the first diradicals died: RDKit reads
+    ``[C]`` as one unpaired electron per missing valence and adds no
+    hydrogens, so the geometry came out an H short of the triplet we asked
+    for ("Total number of electrons (129) and number unpaired electrons (2)
+    is not compatible").
+    """
+
+    _Z = {"H": 1, "C": 6, "N": 7, "O": 8, "F": 9, "S": 16}
+
+    def _atoms(self, xyz: str) -> list[str]:
+        return [ln.split()[0] for ln in xyz.splitlines()[2:] if ln.split()]
+
+    @pytest.mark.parametrize(
+        "smiles",
+        [
+            "c1ccc(O)cc1",                                  # closed shell
+            "FS(F)(F)(F)(F)C[C]c1ccccc1",                   # [C] monoradical
+            "C[N]([O])C",                                   # nitroxide
+            "CO[C](SC1N(C(C)=O)C2=CC=CC=C2[C]1)C3=CC4=CC=CC=C4C=C3",  # diradical
+        ],
+    )
+    def test_geometry_parity_matches_multiplicity(self, smiles):
+        from autodft.engine.entrypoint_processor import _generate_initial_xyz
+
+        xyz = _generate_initial_xyz(smiles)
+        charge, multiplicity = get_charge_and_multiplicity(smiles)
+        electrons = sum(self._Z[s] for s in self._atoms(xyz)) - charge
+        assert electrons % 2 == (multiplicity - 1) % 2
+
+    def test_stored_smiles_names_the_species_computed(self):
+        """The canonical SMILES must re-derive the same charge/multiplicity."""
+        from autodft.engine.entrypoint_processor import _canonicalize_smiles
+
+        smiles = "CO[C](SC1N(C(C)=O)C2=CC=CC=C2[C]1)C3=CC4=CC=CC=C4C=C3"
+        canonical = _canonicalize_smiles(smiles)
+        assert "[CH]" in canonical
+        assert get_charge_and_multiplicity(canonical) == get_charge_and_multiplicity(smiles)
+
+    def test_diradical_keeps_the_radical_hydrogen(self):
+        """`[C]` with two bonds means one dot and one H, not two dots."""
+        from autodft.engine.entrypoint_processor import _generate_initial_xyz
+
+        xyz = _generate_initial_xyz(
+            "CO[C](SC1N(C(C)=O)C2=CC=CC=C2[C]1)C3=CC4=CC=CC=C4C=C3"
+        )
+        assert self._atoms(xyz).count("H") == 19
 
 
 # ======================================================================
@@ -224,6 +294,38 @@ class TestStateCreation:
             assert refreshed.processing_error is not None
             assert "closed-shell" in refreshed.processing_error
             assert session.exec(select(MoleculeState)).all() == []
+
+    def test_diradical_refuses_extra_states(self, engine, tmp_path, monkeypatch):
+        """A diradical is computed as a triplet and nothing else."""
+        from autodft.engine import entrypoint_processor as ep
+
+        settings = _settings(tmp_path)
+        with Session(engine) as session:
+            entry = _queue(
+                session,
+                "CO[C](SC1N(C(C)=O)C2=CC=CC=C2[C]1)C3=CC4=CC=CC=C4C=C3",
+                request_ox=True,
+            )
+            monkeypatch.setattr(ep, "_generate_initial_xyz", lambda s: "C 0 0 0\nH 1 0 0\n")
+            ep.process_next_entrypoint(session, settings)
+            session.commit()
+
+            refreshed = session.get(type(entry), entry.id)
+            assert "diradical" in refreshed.processing_error
+            assert session.exec(select(MoleculeState)).all() == []
+
+    def test_diradical_alone_becomes_a_triplet_s0(self, engine, tmp_path, monkeypatch):
+        from autodft.engine import entrypoint_processor as ep
+
+        settings = _settings(tmp_path)
+        with Session(engine) as session:
+            _queue(session, "CO[C](SC1N(C(C)=O)C2=CC=CC=C2[C]1)C3=CC4=CC=CC=C4C=C3")
+            monkeypatch.setattr(ep, "_generate_initial_xyz", lambda s: "C 0 0 0\nH 1 0 0\n")
+            ep.process_next_entrypoint(session, settings)
+            session.commit()
+
+            states = session.exec(select(MoleculeState)).all()
+            assert [(s.description, s.charge, s.multiplicity) for s in states] == [("S0", 0, 3)]
 
     def test_state_metadata_defaults_are_not_all_false(self, engine, tmp_path, monkeypatch):
         """An omitted key must not become False and kill the chain."""
@@ -468,6 +570,29 @@ class TestSubmitPendingJobs:
         assert job.slurm_jobid == 4242
         assert job.slurm_status == SlurmStatus.PENDING
         assert job.success is None
+
+    def test_a_submission_hold_leaves_the_job_unsubmitted(
+        self, session, task_with_job, tmp_path,
+    ):
+        from autodft.engine import submission_hold
+
+        _, job = task_with_job
+        job.job_path = str(tmp_path)
+        (tmp_path / "submit.cmd").write_text("#!/bin/bash\n")
+        session.add(job)
+        session.commit()
+        settings = _settings(tmp_path)
+
+        submission_hold.hold(settings.data_path, "admin", "maintenance")
+        submit_pending_jobs(session, _StubScheduler(), settings)
+        session.refresh(job)
+        assert job.slurm_jobid is None
+        assert job.success is None
+
+        assert submission_hold.release(settings.data_path)
+        submit_pending_jobs(session, _StubScheduler(), settings)
+        session.refresh(job)
+        assert job.slurm_jobid == 4242
 
 
 class TestPriorityThrottle:

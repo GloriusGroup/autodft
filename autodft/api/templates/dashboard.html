@@ -1132,6 +1132,9 @@
                             <input type="checkbox" id="requestVertEx" name="request_vert_ex" checked>
                             <label for="requestVertEx">Vertical excitations</label>
                         </div>
+                        <div id="diradicalNote" class="smiles-hint valid" style="display:none;">
+                            Diradical detected — calculated in the triplet state only.
+                        </div>
                     </div>
 
                     <!-- Row 2b: Per-state conformer count (only requested states show) -->
@@ -1321,6 +1324,22 @@
                 </button>
             </div>
             <div id="adminBreakerFeedback" class="submit-feedback"></div>
+        </div>
+
+        <div class="submit-section" id="adminHoldSection">
+            <h2 style="margin-bottom:12px;">Hold job submission</h2>
+            <div class="subtitle" style="margin-bottom:14px;">
+                Temporarily stops sending jobs to SLURM. Finished jobs are still
+                processed and follow-up jobs still prepared; they wait until
+                the hold is released. Jobs already in the queue are untouched.
+            </div>
+            <div id="adminHoldStatus" class="admin-summary">Loading...</div>
+            <div class="form-row">
+                <input type="text" id="adminHoldReason" maxlength="500"
+                       placeholder="Reason (optional)" style="flex:1;">
+                <button type="button" class="btn btn-danger" id="adminHoldToggle">Hold submissions</button>
+            </div>
+            <div id="adminHoldFeedback" class="submit-feedback"></div>
         </div>
 
         <div class="submit-section">
@@ -2027,6 +2046,28 @@
                     d.tripped ? '3px solid var(--red)' : '';
             }
 
+            // --- submission hold ----------------------------------------
+            var holdBox = document.getElementById('adminHoldStatus');
+            var holdBtn = document.getElementById('adminHoldToggle');
+            var h = await adminJSON('GET', '/api/admin/submission-hold');
+            if (!h.ok) {
+                holdBox.textContent = 'Could not read hold status.';
+            } else {
+                var s = h.data.state || {};
+                holdBox.textContent = h.data.held
+                    ? 'HELD — no new jobs are submitted\n'
+                      + 'since  : ' + (s.held_at || '?') + '\n'
+                      + 'by     : ' + (s.held_by || '?')
+                      + (s.reason ? '\nreason : ' + s.reason : '')
+                    : 'OK — submissions running';
+                holdBtn.dataset.held = h.data.held ? '1' : '';
+                holdBtn.textContent = h.data.held ? 'Release hold and resume submissions' : 'Hold submissions';
+                holdBtn.className = h.data.held ? 'btn' : 'btn btn-danger';
+                document.getElementById('adminHoldReason').style.display = h.data.held ? 'none' : '';
+                document.getElementById('adminHoldSection').style.borderLeft =
+                    h.data.held ? '3px solid var(--red)' : '';
+            }
+
             // --- project list -------------------------------------------
             var list = document.getElementById('adminProjectList');
             list.innerHTML = '<div class="empty-state">Loading...</div>';
@@ -2205,6 +2246,27 @@
             loadAdminPage();
         });
 
+        document.getElementById('adminHoldToggle').addEventListener('click', async function () {
+            var feedback = document.getElementById('adminHoldFeedback');
+            var held = !!this.dataset.held;
+            this.disabled = true;
+            var out = held
+                ? await adminJSON('POST', '/api/admin/submission-hold/release')
+                : await adminJSON('POST', '/api/admin/submission-hold',
+                                  { reason: document.getElementById('adminHoldReason').value });
+            this.disabled = false;
+            if (!out.ok) {
+                feedback.textContent = out.data.detail || ('HTTP ' + out.status);
+                feedback.className = 'submit-feedback error';
+                return;
+            }
+            feedback.textContent = held
+                ? 'Hold released. Submissions resume on the next tick.'
+                : 'Submissions held from the next tick on.';
+            feedback.className = 'submit-feedback success';
+            loadAdminPage();
+        });
+
         document.getElementById('adminMoleculeLookup').addEventListener('click', async function () {
             var target = document.getElementById('adminMoleculeResult');
             var id = parseInt(document.getElementById('adminMoleculeId').value, 10);
@@ -2341,6 +2403,40 @@
                 if (submitBtn) submitBtn.disabled = (state === 'invalid');
             }
 
+            // ── Diradical lock ───────────────────────────────────────
+            // A diradical is only ever calculated as a triplet, so T1 / ox /
+            // red are cleared and disabled while one is in the textarea.
+            // The server enforces this too; this is so the form can't ask
+            // for something that would come back as a per-line rejection.
+            var STATE_BOXES = ['requestT1', 'requestOx', 'requestRed'];
+            var stashedChecks = null;   // user's choices before the lock
+            var lockNote = document.getElementById('diradicalNote');
+
+            function setDiradicalLock(locked) {
+                if (locked === (stashedChecks !== null)) return;  // no change
+                if (locked) {
+                    stashedChecks = {};
+                    STATE_BOXES.forEach(function (id) {
+                        var cb = document.getElementById(id);
+                        stashedChecks[id] = cb.checked;
+                        cb.checked = false;
+                        cb.disabled = true;
+                        // The conformer-count row syncs on 'change', which a
+                        // scripted .checked assignment does not fire.
+                        cb.dispatchEvent(new Event('change'));
+                    });
+                } else {
+                    STATE_BOXES.forEach(function (id) {
+                        var cb = document.getElementById(id);
+                        cb.disabled = false;
+                        cb.checked = stashedChecks[id];
+                        cb.dispatchEvent(new Event('change'));
+                    });
+                    stashedChecks = null;
+                }
+                if (lockNote) lockNote.style.display = locked ? '' : 'none';
+            }
+
             async function validateOne(smi) {
                 if (cache[smi]) return cache[smi];
                 try {
@@ -2372,12 +2468,16 @@
                 }
                 window.lastSmilesResults = results;
 
+                var diradicals = results.filter(function (x) { return x.result.diradical; });
+                setDiradicalLock(diradicals.length > 0);
+
                 if (lines.length === 1) {
                     // Single line: rich detail (atoms, charge, mult, canonical)
                     var r = results[0].result;
                     if (r.valid) {
                         var note = 'OK — ' + r.atoms + ' atoms (' + r.heavy_atoms + ' heavy), '
                                  + 'charge ' + r.charge + ', mult ' + r.multiplicity;
+                        if (r.diradical) note += ' (diradical — triplet only)';
                         if (r.canonical && r.canonical !== lines[0]) note += ', canonical: ' + r.canonical;
                         setState('valid', note);
                     } else {
@@ -2389,7 +2489,9 @@
                 // Multi-line: summary + per-invalid detail
                 var invalid = results.filter(function (x) { return !x.result.valid; });
                 if (invalid.length === 0) {
-                    setState('valid', lines.length + ' SMILES — all valid');
+                    var ok = lines.length + ' SMILES — all valid';
+                    if (diradicals.length) ok += ' (' + diradicals.length + ' diradical — triplet only)';
+                    setState('valid', ok);
                 } else {
                     var details = invalid.slice(0, 3).map(function (x) {
                         return '"' + x.smiles + '" — ' + (x.result.error || 'invalid');
@@ -2404,6 +2506,7 @@
                 var lines = getLines();
                 if (!lines.length) {
                     window.lastSmilesResults = null;
+                    setDiradicalLock(false);
                     setState(null, '');
                     return;
                 }
@@ -2733,8 +2836,10 @@
             if (failed.length === 0) {
                 smilesArea.value = '';
                 window.lastSmilesResults = null;
-                document.getElementById('smilesHint').style.display = 'none';
-                smilesArea.classList.remove('valid', 'invalid');
+                // Via 'input' rather than by hand: the validator owns the hint,
+                // the input's valid/invalid class and the diradical lock, and
+                // clearing the box by assignment fires no event of its own.
+                smilesArea.dispatchEvent(new Event('input'));
             } else {
                 // Keep the failed lines in the textarea so the user can fix and retry.
                 smilesArea.value = failed.map(function (f) { return f.smiles; }).join('\n');
