@@ -335,7 +335,9 @@ Every submission path (CLI, REST, Python) ends up writing the same
   blanket override.
 * `request_spec_uvvis` / `request_spec_ir` — UV/Vis (TDDFT singlepoint on every
   S0 conformer) and IR (from the optimisation's frequencies). Only added to
-  new molecules; see [`docs/API.md`](docs/API.md#post-apisubmit).
+  new molecules; see [`docs/API.md`](docs/API.md#post-apisubmit). See
+  [docs/PHOTOPHYSICS.md](docs/PHOTOPHYSICS.md) for the methods, deployment
+  and rollback.
 * `header_confsearch_id / _optimization_id / _singlepoint_id` — pick a
   stored header by ID. Or pass raw `header_*` text. Defaults from
   `autodft/qm/orca/defaults.py` (= seeded DB rows) apply when neither

@@ -1,0 +1,100 @@
+# Photophysics categories
+
+UV/Vis and IR are opt-in categories you tick per submission. Later plans
+add NMR and ESD; they append their own sections to this file.
+
+## Categories
+
+Tick a category when you submit: the dashboard's checkboxes, the API's
+`request_spec_uvvis` / `request_spec_ir` fields (plus their options), or
+the CLI's `--uvvis` / `--ir` flags (with `--uvvis-nroots` /
+`--uvvis-tda`). Categories only attach to new molecules — resubmitting an
+existing molecule with a category it doesn't already have is refused. A
+category's options (`uvvis_nroots`, `uvvis_tda`) are stored only when
+that category is requested. See [`docs/API.md`](API.md) for the
+field-level reference and the `GET /api/projects/{name}/photophysics`
+response shape.
+
+## UV/Vis
+
+Each optimised S0 conformer gets one `singlepoint_uvvis` task. Its header
+is the state's singlepoint header plus:
+
+```
+%tddft nroots <uvvis_nroots> tda <uvvis_tda> end
+```
+
+Defaults are `nroots 20`, `tda false`; `nroots` must be between 1 and 100.
+
+The method comes from the singlepoint header, so it must be a DFT
+method — a non-DFT header such as DLPNO-CCSD(T) is not a valid UV/Vis
+singlepoint. The singlepoint header also must not already contain
+`%tddft`, `%cis`, the `NMR` keyword, `%eprnmr`, or `%esd`; submitting UV/Vis
+against such a header is refused — pick a plain singlepoint header
+instead.
+
+Only spin-allowed transitions are kept. ORCA also prints spin-forbidden
+rows when the header requests triplets; those are dropped. A job whose
+output has no absorption table fails its `Absorption Spectrum` check and
+is retried like any other failure, up to `max_attempts`.
+
+## IR
+
+IR needs no extra job: it's read straight from the S0 optimisation's
+frequency calculation, so the optimisation header must set `Freq`,
+`NumFreq`, or `AnFreq` — submitting IR against a header without one of
+those is refused.
+
+Frequencies are harmonic and unscaled wherever the API reports them. The
+dashboard applies whatever scale factor you type on the Photophysics
+page; it never changes what's stored.
+
+## Weighting
+
+Conformers are Boltzmann-weighted at 298.15 K:
+
+* on **G** (the singlepoint energy plus the optimisation's G − E(el)
+  correction) when any conformer has a thermal correction,
+* otherwise on the bare singlepoint energy (`weighting: "E_sp"`),
+* otherwise equal weights (`weighting: "equal"`).
+
+A molecule never mixes scales across its conformers. Conformer numbers in
+the photophysics data are the same 1-based numbering as the Molecules
+page.
+
+## Deploy
+
+1. Stop the controller (pipeline and API) on its node. The dashboard
+   template is read on every request, so a merged template would
+   otherwise talk to the old API, which silently drops the new fields.
+2. Back up the database: copy `autodft.db` (and `-wal`/`-shm` if present)
+   while the controller is stopped.
+3. Merge the branch into `main` in `/mnt/share/dft_calculations/autodft`.
+4. Start the controller again; reload the dashboard.
+
+## Roll back
+
+Code from before this feature raises `LookupError` on any query that
+loads a task of a type it does not know, which stops the pipeline for
+every project. Remove those rows before running the old code.
+
+1. Stop the controller; back up the database as above.
+2. On the controller host only (never open `autodft.db` from a second
+   host while anything else has it open), with the repository's Python:
+
+```bash
+.venv/bin/python - <<'EOF'
+import sqlite3
+NEW_TYPES = ("singlepoint_uvvis",)  # later plans add their task types here
+db = sqlite3.connect("/path/to/autodft.db")
+marks = ",".join("?" * len(NEW_TYPES))
+with db:
+    db.execute(f"DELETE FROM computation_jobs WHERE task_id IN "
+               f"(SELECT id FROM computation_tasks WHERE task_type IN ({marks}))", NEW_TYPES)
+    db.execute(f"DELETE FROM computation_tasks WHERE task_type IN ({marks})", NEW_TYPES)
+db.close()
+EOF
+```
+
+3. Check out the previous `main` commit and start the controller. The
+   category flags left in S0 state metadata are ignored by the old code.

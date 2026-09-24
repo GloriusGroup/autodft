@@ -35,9 +35,11 @@ The S1 state gets only ESD tasks, with no vertical ox/red. IR data is shown only
 1. All work happens on branch `feature/photophysics` in a **git worktree** (e.g.
    `/mnt/share/dft_calculations/autodft-wt/photophysics`). The main working tree stays at `85e98b5` until you merge.
    Tests run from the worktree with the main `.venv` python (cwd precedes site-packages); verify with `import autodft; print(autodft.__file__)`.
-2. Every new behaviour is gated on **new keys that only new entrypoints carry** (`request_esd`,
-   `request_esd_ht`, `request_spec_uvvis`, `request_spec_ir`, `request_spec_nmr`). They are added to the
-   `_create_state` `_defaults` snapshot, defaulting to False. Old rows lack them and take unchanged paths.
+2. Every new behaviour is gated on new keys that only new entrypoints carry (`request_esd`,
+   `request_esd_ht`, `request_spec_uvvis`, `request_spec_ir`, `request_spec_nmr`). They are
+   snapshotted onto the S0 state's metadata **only when set** (never added to `_create_state`'s
+   `_defaults`), so an unflagged state's metadata stays byte-identical. Old rows lack them and
+   take unchanged paths.
 3. The `submit.cmd.j2` change is conditional and renders **byte-identical** output when the flags are off (golden test).
 4. Schema changes are additive only: the nullable `computation_tasks.inputs_json` column and new enum
    *values*. DDL check: `task_type VARCHAR(28)` has no CHECK constraint, so new values insert fine.
