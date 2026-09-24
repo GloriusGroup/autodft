@@ -75,6 +75,40 @@ def _check_reference_state(
         console.print(f"[yellow]{check['warning']}[/yellow]")
 
 
+def _category_options_to_flags(uvvis: bool, ir: bool, esd: bool, esd_ht: bool, nmr: bool) -> dict:
+    """CLI options as ``request_metadata`` category keys."""
+    from autodft import categories
+
+    return {
+        categories.UVVIS: uvvis,
+        categories.IR: ir,
+        categories.ESD: esd,
+        categories.ESD_HT: esd_ht,
+        categories.NMR: nmr,
+    }
+
+
+def _check_categories(
+    smiles: str, flags: dict,
+    header_optimization: Optional[str], header_singlepoint: Optional[str],
+) -> None:
+    """Refuse categories this molecule or these headers cannot run.
+
+    Mirrors POST /api/submit. Adding categories to an existing molecule is
+    refused at expansion, where the entrypoint then shows the reason.
+    """
+    from autodft import categories
+    from autodft.engine.entrypoint_processor import validate_smiles
+
+    check = validate_smiles(smiles)
+    if not check["valid"]:
+        return
+    reason = categories.rejection(check, flags, header_optimization, header_singlepoint)
+    if reason:
+        console.print(f"[red]{reason}[/red] — {smiles}")
+        raise typer.Exit(code=1)
+
+
 def _qualified_project(project: str, user: str) -> tuple[str, str]:
     """Resolve ``--project`` against ``--user``'s namespace.
 
@@ -110,6 +144,7 @@ def _build_request_metadata(
     max_conformers_t1: int,
     max_conformers_ox: int,
     max_conformers_red: int,
+    category_flags: Optional[dict] = None,
 ) -> str:
     """Build the request_metadata JSON string."""
     metadata = {
@@ -129,6 +164,11 @@ def _build_request_metadata(
         "max_conformers_ox": max_conformers_ox,
         "max_conformers_red": max_conformers_red,
     }
+
+    from autodft import categories
+
+    metadata.update(categories.snapshot(category_flags or {}))
+
     return json.dumps(metadata)
 
 
@@ -165,10 +205,22 @@ def submit(
     max_conformers_t1: int = typer.Option(1, "--max-conformers-t1", help="Max conformers kept for T1"),
     max_conformers_ox: int = typer.Option(1, "--max-conformers-ox", help="Max conformers kept for ox"),
     max_conformers_red: int = typer.Option(1, "--max-conformers-red", help="Max conformers kept for red"),
+    uvvis: bool = typer.Option(False, "--uvvis", help="UV/Vis absorption (TDDFT) on every S0 conformer"),
+    ir: bool = typer.Option(False, "--ir", help="IR spectrum from the optimisation's frequencies"),
+    esd: bool = typer.Option(False, "--esd", help="Excited-state dynamics (not available yet)"),
+    esd_ht: bool = typer.Option(False, "--esd-ht", help="Herzberg-Teller for ESD rates"),
+    nmr: bool = typer.Option(False, "--nmr", help="NMR shifts (not available yet)"),
 ) -> None:
     """Submit a single molecule by SMILES string."""
     _check_reference_state(smiles, request_t1, request_ox, request_red)
+    flags = _category_options_to_flags(uvvis, ir, esd, esd_ht, nmr)
     qualified, author = _qualified_project(project, user)
+
+    # Use custom headers if provided, otherwise use defaults
+    h_cs = _read_header_file(header_confsearch) if header_confsearch else (None if skip_confsearch else DEFAULT_HEADER_CONFSEARCH)
+    h_opt = _read_header_file(header_opt) if header_opt else DEFAULT_HEADER_OPTIMIZATION
+    h_sp = _read_header_file(header_sp) if header_sp else DEFAULT_HEADER_SINGLEPOINT
+    _check_categories(smiles, flags, h_opt, h_sp)
 
     request_metadata = _build_request_metadata(
         project_name=qualified,
@@ -182,12 +234,8 @@ def submit(
         max_conformers_t1=max_conformers_t1,
         max_conformers_ox=max_conformers_ox,
         max_conformers_red=max_conformers_red,
+        category_flags=flags,
     )
-
-    # Use custom headers if provided, otherwise use defaults
-    h_cs = _read_header_file(header_confsearch) if header_confsearch else (None if skip_confsearch else DEFAULT_HEADER_CONFSEARCH)
-    h_opt = _read_header_file(header_opt) if header_opt else DEFAULT_HEADER_OPTIMIZATION
-    h_sp = _read_header_file(header_sp) if header_sp else DEFAULT_HEADER_SINGLEPOINT
 
     entry = CalculationEntrypoint(
         smiles=smiles,
@@ -242,12 +290,18 @@ def submit_batch(
     max_conformers_t1: int = typer.Option(1, "--max-conformers-t1", help="Max conformers kept for T1"),
     max_conformers_ox: int = typer.Option(1, "--max-conformers-ox", help="Max conformers kept for ox"),
     max_conformers_red: int = typer.Option(1, "--max-conformers-red", help="Max conformers kept for red"),
+    uvvis: bool = typer.Option(False, "--uvvis", help="UV/Vis absorption (TDDFT) on every S0 conformer"),
+    ir: bool = typer.Option(False, "--ir", help="IR spectrum from the optimisation's frequencies"),
+    esd: bool = typer.Option(False, "--esd", help="Excited-state dynamics (not available yet)"),
+    esd_ht: bool = typer.Option(False, "--esd-ht", help="Herzberg-Teller for ESD rates"),
+    nmr: bool = typer.Option(False, "--nmr", help="NMR shifts (not available yet)"),
 ) -> None:
     """Submit molecules from a CSV file."""
     if not file.exists():
         console.print(f"[red]File not found:[/red] {file}")
         raise typer.Exit(code=1)
     qualified, author = _qualified_project(project, user)
+    flags = _category_options_to_flags(uvvis, ir, esd, esd_ht, nmr)
 
     request_metadata = _build_request_metadata(
         project_name=qualified,
@@ -261,6 +315,7 @@ def submit_batch(
         max_conformers_t1=max_conformers_t1,
         max_conformers_ox=max_conformers_ox,
         max_conformers_red=max_conformers_red,
+        category_flags=flags,
     )
 
     h_cs = _read_header_file(header_confsearch) if header_confsearch else (None if skip_confsearch else DEFAULT_HEADER_CONFSEARCH)
@@ -301,6 +356,7 @@ def submit_batch(
     # whole or not at all.
     for smi in smiles_list:
         _check_reference_state(smi, request_t1, request_ox, request_red)
+        _check_categories(smi, flags, h_opt, h_sp)
 
     submitted = 0
     with get_session() as session:
