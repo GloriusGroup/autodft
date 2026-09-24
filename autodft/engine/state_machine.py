@@ -1021,17 +1021,28 @@ def _generate_job_files(
     if state is None:
         return _fail_task(session, task, job, f"State {task.state_id} not found")
 
-    # Category tasks add their own blocks; every other type runs the header
-    # verbatim.
-    from autodft.qm.orca.blocks import HeaderConflict, compose_header
+    extra_inputs: Optional[list[str]] = None
+    if task.task_type.value.startswith("esd_"):
+        # Rate jobs are built from other tasks' results and Hessians.
+        from autodft.engine.photophysics import prepare_rate_job
+        from autodft.qm.orca.esd_inputs import EsdInputError
 
-    try:
-        header_text = compose_header(
-            task.task_type.value, header_text,
-            json.loads(state.metadata_json) if state.metadata_json else {},
-        )
-    except HeaderConflict as exc:
-        return _fail_task(session, task, job, str(exc))
+        try:
+            header_text, extra_inputs = prepare_rate_job(session, task, state, header_text, job_path)
+        except EsdInputError as exc:
+            return _fail_task(session, task, job, f"ESD inputs: {exc}")
+    else:
+        # Category tasks add their own blocks; every other type runs the
+        # header verbatim.
+        from autodft.qm.orca.blocks import HeaderConflict, compose_header
+
+        try:
+            header_text = compose_header(
+                task.task_type.value, header_text,
+                json.loads(state.metadata_json) if state.metadata_json else {},
+            )
+        except HeaderConflict as exc:
+            return _fail_task(session, task, job, str(exc))
 
     # --- Gap 2 fix: Adjust charge/multiplicity for vertical excitations ---
     # A task whose charge/multiplicity can't be resolved must not silently
@@ -1076,6 +1087,7 @@ def _generate_job_files(
         partition=settings.slurm.partition,
         nice=settings.slurm.nice,
         keep_hessian=_keeps_hessian(state, task),
+        extra_inputs=extra_inputs,
     )
 
     # --- Gap 1 fix: Apply failure-specific retry strategies on retries ---
