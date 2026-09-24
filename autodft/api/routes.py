@@ -186,6 +186,13 @@ class SubmitRequest(BaseModel):
     # used as the per-state default if the more specific fields are
     # left at their default of 1.
     max_conformers: Optional[int] = None
+    # Opt-in categories (autodft.categories). Only submissions that set one
+    # ever take its code path.
+    request_esd: bool = False
+    request_esd_ht: bool = False
+    request_spec_uvvis: bool = False
+    request_spec_ir: bool = False
+    request_spec_nmr: bool = False
     # For each slot you can pass either the raw header text OR the integer
     # ID of a stored ComputationHeader. ID takes precedence.
     header_confsearch: Optional[str] = None
@@ -1965,13 +1972,60 @@ def api_validate_smiles(body: ValidateSmilesRequest):
     return validate_smiles(body.smiles)
 
 
-def _reject_reason(body: SubmitRequest, smiles: str) -> Optional[tuple[str, dict]]:
-    """Why *smiles* cannot be queued under *body*'s options, or None."""
+def _category_flags(body: SubmitRequest) -> dict:
+    """The category part of *body*, keyed as in ``request_metadata``."""
+    from autodft import categories
+
+    return {
+        categories.ESD: body.request_esd,
+        categories.ESD_HT: body.request_esd_ht,
+        categories.UVVIS: body.request_spec_uvvis,
+        categories.IR: body.request_spec_ir,
+        categories.NMR: body.request_spec_nmr,
+        "request_optimization": body.request_optimization,
+        "request_singlepoint": body.request_singlepoint,
+    }
+
+
+def _resolved_headers(session, body: SubmitRequest) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """(confsearch, optimization, singlepoint) header text for *body*.
+
+    A stored header's id wins over raw text, which wins over the default.
+    """
+    from autodft.qm.orca.defaults import (
+        DEFAULT_HEADER_CONFSEARCH,
+        DEFAULT_HEADER_OPTIMIZATION,
+        DEFAULT_HEADER_SINGLEPOINT,
+    )
+
+    def _resolve(text_in: Optional[str], id_in: Optional[int], default: Optional[str]) -> Optional[str]:
+        if id_in is not None:
+            row = session.get(ComputationHeader, id_in)
+            if row is not None:
+                return row.header_text
+        if text_in:
+            return text_in
+        return default
+
+    return (
+        _resolve(body.header_confsearch, body.header_confsearch_id,
+                 None if body.skip_confsearch else DEFAULT_HEADER_CONFSEARCH),
+        _resolve(body.header_optimization, body.header_optimization_id,
+                 DEFAULT_HEADER_OPTIMIZATION),
+        _resolve(body.header_singlepoint, body.header_singlepoint_id,
+                 DEFAULT_HEADER_SINGLEPOINT),
+    )
+
+
+def _reject_reason(body: SubmitRequest, smiles: str, headers) -> tuple[Optional[str], dict]:
+    """Why *smiles* cannot be queued under *body*'s options (None if it can),
+    with the validation result."""
+    from autodft import categories
     from autodft.engine.entrypoint_processor import validate_smiles
 
     check = validate_smiles(smiles)
     if not check["valid"]:
-        return (check["error"] or "Invalid SMILES.", check)
+        return check["error"] or "Invalid SMILES.", check
 
     # A diradical is only ever calculated as a triplet -- see the matching
     # rule in the entrypoint processor. Refuse here so the caller gets a 400
@@ -2001,7 +2055,8 @@ def _reject_reason(body: SubmitRequest, smiles: str) -> Optional[tuple[str, dict
             f"references.",
             check,
         )
-    return None
+
+    return categories.rejection(check, _category_flags(body), headers[1], headers[2]), check
 
 
 @router.post("/api/submit")
@@ -2015,22 +2070,30 @@ def api_submit(
     is doing. Whether the work can start now is the controller's problem, not
     the caller's.
     """
-    rejection = _reject_reason(body, body.smiles)
-    if rejection is not None:
-        detail, check = rejection
-        return JSONResponse(
-            status_code=400, content={"detail": detail, "validation": check},
-        )
-
+    from autodft import categories
     from autodft.api import project_jobs
 
     with get_session() as session:
+        headers = _resolved_headers(session, body)
+        detail, check = _reject_reason(body, body.smiles, headers)
+        if detail is not None:
+            return JSONResponse(
+                status_code=400, content={"detail": detail, "validation": check},
+            )
         project_name, author = _submission_owner(session, identity, body)
+        conflict = categories.existing_conflict(
+            session, project_name, check["canonical"],
+            categories.requested(_category_flags(body)),
+        )
+        if conflict:
+            return JSONResponse(
+                status_code=400, content={"detail": conflict, "validation": check},
+            )
         try:
             project_jobs.assert_no_active_job(session, project_name)
         except project_jobs.JobInProgress as exc:
             return JSONResponse(status_code=409, content={"detail": str(exc)})
-        entry = _new_entrypoint(session, body, body.smiles, project_name, author)
+        entry = _new_entrypoint(session, body, body.smiles, project_name, author, headers)
         session.add(entry)
         session.commit()
         session.refresh(entry)
@@ -2081,14 +2144,17 @@ def api_submit_batch(
     accepted: list[tuple[str, CalculationEntrypoint]] = []
     rejected: list[dict] = []
 
+    from autodft import categories
     from autodft.api import project_jobs
 
     with get_session() as session:
+        headers = _resolved_headers(session, body)
         project_name, author = _submission_owner(session, identity, body)
         try:
             project_jobs.assert_no_active_job(session, project_name)
         except project_jobs.JobInProgress as exc:
             return JSONResponse(status_code=409, content={"detail": str(exc)})
+        wanted = categories.requested(_category_flags(body))
         for smiles in body.smiles_list:
             if len(smiles) > 512:
                 # Matches the bound on SubmitRequest.smiles: RDKit's parser
@@ -2096,11 +2162,15 @@ def api_submit_batch(
                 # thread of the controller process.
                 rejected.append({"smiles": smiles[:120], "detail": "SMILES too long (>512)."})
                 continue
-            rejection = _reject_reason(body, smiles)
-            if rejection is not None:
-                rejected.append({"smiles": smiles, "detail": rejection[0]})
+            detail, check = _reject_reason(body, smiles, headers)
+            if detail is None:
+                detail = categories.existing_conflict(
+                    session, project_name, check["canonical"], wanted,
+                )
+            if detail is not None:
+                rejected.append({"smiles": smiles, "detail": detail})
                 continue
-            entry = _new_entrypoint(session, body, smiles, project_name, author)
+            entry = _new_entrypoint(session, body, smiles, project_name, author, headers)
             session.add(entry)
             accepted.append((smiles, entry))
 
@@ -2148,13 +2218,10 @@ def _submission_owner(session, identity: Identity, body: SubmitRequest) -> tuple
 def _new_entrypoint(
     session, body: SubmitRequest, smiles: str,
     project_name: Optional[str] = None, author: Optional[str] = None,
+    headers: Optional[tuple] = None,
 ) -> CalculationEntrypoint:
     """Build (but do not add) the entrypoint row for one SMILES."""
-    from autodft.qm.orca.defaults import (
-        DEFAULT_HEADER_CONFSEARCH,
-        DEFAULT_HEADER_OPTIMIZATION,
-        DEFAULT_HEADER_SINGLEPOINT,
-    )
+    from autodft import categories
 
     # If only the legacy `max_conformers` was supplied, apply it as a
     # blanket override to every state — preserves the old contract.
@@ -2181,32 +2248,16 @@ def _new_entrypoint(
         "max_conformers_ox": n_ox,
         "max_conformers_red": n_red,
     }
+    # Only set categories are written, so an unflagged submission's row is
+    # exactly what it always was.
+    request_metadata.update(categories.snapshot(_category_flags(body)))
 
-    # Resolve header IDs -> raw text (IDs win over raw text). Falls back
-    # to the package defaults when neither is provided.
-    def _resolve(text_in: Optional[str], id_in: Optional[int], default: Optional[str]) -> Optional[str]:
-        if id_in is not None:
-            row = session.get(ComputationHeader, id_in)
-            if row is not None:
-                return row.header_text
-        if text_in:
-            return text_in
-        return default
-
+    h_cs, h_opt, h_sp = headers if headers is not None else _resolved_headers(session, body)
     return CalculationEntrypoint(
         smiles=smiles,
         request_metadata=json.dumps(request_metadata),
         priority=body.priority,
-        header_confsearch=_resolve(
-            body.header_confsearch, body.header_confsearch_id,
-            None if body.skip_confsearch else DEFAULT_HEADER_CONFSEARCH,
-        ),
-        header_optimization=_resolve(
-            body.header_optimization, body.header_optimization_id,
-            DEFAULT_HEADER_OPTIMIZATION,
-        ),
-        header_singlepoint=_resolve(
-            body.header_singlepoint, body.header_singlepoint_id,
-            DEFAULT_HEADER_SINGLEPOINT,
-        ),
+        header_confsearch=h_cs,
+        header_optimization=h_opt,
+        header_singlepoint=h_sp,
     )
