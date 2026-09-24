@@ -193,8 +193,10 @@ def rejection(
 
 def existing_conflict(
     session: Session, project_name: str, canonical_smiles: str, wanted: set[str],
+    requested_options: Optional[dict] = None,
 ) -> Optional[str]:
-    """Refuse categories for a molecule that already exists without them.
+    """Refuse categories for a molecule that already exists without them, or
+    with different options for them.
 
     Categories are only added to new molecules: finished work is never
     extended, so a molecule computed before a category existed stays as it was.
@@ -215,22 +217,43 @@ def existing_conflict(
         return None
 
     have: set[str] = set()
+    stored_metadata: dict = {}
     for state in session.exec(
         select(MoleculeState).where(
             MoleculeState.molecule_id == molecule.id,
             MoleculeState.description == "S0",
         )
     ).all():
-        have |= requested(json.loads(state.metadata_json) if state.metadata_json else {})
+        metadata = json.loads(state.metadata_json) if state.metadata_json else {}
+        have |= requested(metadata)
+        stored_metadata.update(metadata)
 
     missing = sorted(LABELS[key] for key in wanted - have)
-    if not missing:
-        return None
-    return (
-        f"{canonical_smiles} already exists in {project_name} (molecule "
-        f"{molecule.id}) without {', '.join(missing)}. Categories are only added "
-        f"to new molecules; submit it into another project."
-    )
+    if missing:
+        return (
+            f"{canonical_smiles} already exists in {project_name} (molecule "
+            f"{molecule.id}) without {', '.join(missing)}. Categories are only added "
+            f"to new molecules; submit it into another project."
+        )
+
+    if requested_options is not None:
+        stored_options = options(stored_metadata)
+
+        def value(name: str, source: dict, source_metadata: dict):
+            return bool(source_metadata.get(ESD_HT)) if name == ESD_HT else source.get(name)
+
+        for key in sorted(wanted):
+            names = (*OPTIONS.get(key, {}), *((ESD_HT,) if key == ESD else ()))
+            for name in names:
+                old = value(name, stored_options, stored_metadata)
+                new = value(name, requested_options, requested_options)
+                if old != new:
+                    return (
+                        f"{canonical_smiles} already exists in {project_name} (molecule "
+                        f"{molecule.id}) with {name}={old!r}; category options apply to new "
+                        f"molecules only, so submit it into another project."
+                    )
+    return None
 
 
 def _number(value) -> bool:

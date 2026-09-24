@@ -203,39 +203,43 @@ def test_build_xlsx_has_a_sheet_per_category_plus_sticks_and_esd_jobs():
         "unweighted", "weighting", "peak_nm", "peak_eV", "peak_fosc", "shortest_nm",
     ]
     assert _header(wb["UV-Vis sticks"]) == [
-        "mol_id", "conformer", "weight", "root", "energy_eV", "wavelength_nm", "fosc",
+        "mol_id", "state_id", "conformer", "weight", "root", "energy_eV", "wavelength_nm", "fosc",
     ]
     assert _header(wb["IR"]) == [
-        "mol_id", "smiles", "count", "pending", "failed", "unavailable", "unweighted",
+        "mol_id", "smiles", "state_id", "count", "pending", "failed", "unavailable", "unweighted",
         "weighting", "peak_cm", "peak_intensity_km_mol",
     ]
     assert _header(wb["IR sticks"]) == [
-        "mol_id", "conformer", "weight", "frequency_cm", "intensity_km_mol",
+        "mol_id", "state_id", "conformer", "weight", "frequency_cm", "intensity_km_mol",
     ]
     assert _header(wb["NMR"]) == [
-        "mol_id", "smiles", "nucleus", "shift_ppm", "shielding_ppm", "count", "atoms",
+        "mol_id", "smiles", "state_id", "nucleus", "shift_ppm", "shielding_ppm", "count", "atoms",
         "reference", "reference_status", "method_matches", "equivalence",
     ]
     assert _header(wb["ESD"]) == [
-        "mol_id", "smiles", "status", "temperature_K", "HT", "dEST_eV", "dEST_UKS_eV",
+        "mol_id", "smiles", "state_id", "status", "temperature_K", "HT", "dEST_eV", "dEST_UKS_eV",
         "k_ISC", "k_RISC", "k_IC", "k_F", "k_ISC_T1S0", "k_P", "tau_S1_ns", "phi_F",
         "phi_ISC", "phi_IC", "tau_T1_us", "phi_P", "phi_ISC_T1S0", "phi_RISC", "flags",
     ]
     assert _header(wb["ESD jobs"]) == [
-        "mol_id", "rate", "triplet", "sublevel", "rate_s", "dele_cm", "socme_cm",
+        "mol_id", "state_id", "rate", "triplet", "sublevel", "rate_s", "dele_cm", "socme_cm",
         "fc_percent", "ht_percent", "k_squared", "e00_cm",
     ]
 
     sticks = wb["UV-Vis sticks"]
-    assert sticks["B2"].value == 1  # conformer index
+    assert sticks.cell(row=2, column=_col(sticks, "state_id")).value == 10
+    assert sticks.cell(row=2, column=_col(sticks, "conformer")).value == 1
 
     esd = wb["ESD"]
+    assert esd.cell(row=2, column=_col(esd, "state_id")).value == 10
     assert esd.cell(row=2, column=_col(esd, "k_ISC")).value == 1.0e7
 
     nmr = wb["NMR"]
+    assert nmr.cell(row=2, column=_col(nmr, "state_id")).value == 10
     assert nmr.cell(row=2, column=_col(nmr, "shift_ppm")).value == 7.26
 
     jobs = wb["ESD jobs"]
+    assert jobs.cell(row=2, column=_col(jobs, "state_id")).value == 10
     assert jobs.cell(row=2, column=_col(jobs, "rate")).value == "isc"
     assert jobs.cell(row=2, column=_col(jobs, "triplet")).value == 1
 

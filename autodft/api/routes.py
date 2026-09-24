@@ -950,6 +950,8 @@ def api_project_archive(
     * the project doesn't exist (404)
     * the project is already archived (409)
     * the project already has a background job in flight (409)
+    * an NMR molecule's reference is still pending (409) -- the frozen shift
+      would stay null forever
     """
     bad = _reject_bad_project(name)
     if bad is not None:
@@ -974,6 +976,16 @@ def api_project_archive(
             if state is True:
                 return JSONResponse(status_code=409, content={"detail": f"Project {name!r} is already archived."})
             project_jobs.assert_no_active_job(session, name)
+
+        from autodft.analysis import spectroscopy
+
+        # Frozen NMR shifts are final; their reference must be in first.
+        waiting = spectroscopy.pending_nmr_references(name)
+        if waiting:
+            return JSONResponse(status_code=409, content={"detail": (
+                f"Project {name!r} has NMR molecules still waiting for their reference "
+                f"({', '.join(waiting)}); archive it once the references have finished."
+            )})
 
         job = project_jobs.start_job(
             owner_id=identity.user_id,
@@ -2140,9 +2152,10 @@ def api_submit(
                 status_code=400, content={"detail": detail, "validation": check},
             )
         project_name, author = _submission_owner(session, identity, body)
+        flags = _category_flags(body)
         conflict = categories.existing_conflict(
-            session, project_name, check["canonical"],
-            categories.requested(_category_flags(body)),
+            session, project_name, check["canonical"], categories.requested(flags),
+            {**categories.options(flags), categories.ESD_HT: bool(flags.get(categories.ESD_HT))},
         )
         if conflict:
             return JSONResponse(
@@ -2213,7 +2226,9 @@ def api_submit_batch(
             project_jobs.assert_no_active_job(session, project_name)
         except project_jobs.JobInProgress as exc:
             return JSONResponse(status_code=409, content={"detail": str(exc)})
-        wanted = categories.requested(_category_flags(body))
+        flags = _category_flags(body)
+        wanted = categories.requested(flags)
+        requested_options = {**categories.options(flags), categories.ESD_HT: bool(flags.get(categories.ESD_HT))}
         for smiles in body.smiles_list:
             if len(smiles) > 512:
                 # Matches the bound on SubmitRequest.smiles: RDKit's parser
@@ -2224,7 +2239,7 @@ def api_submit_batch(
             detail, check = _reject_reason(body, smiles, headers)
             if detail is None:
                 detail = categories.existing_conflict(
-                    session, project_name, check["canonical"], wanted,
+                    session, project_name, check["canonical"], wanted, requested_options,
                 )
             if detail is not None:
                 rejected.append({"smiles": smiles, "detail": detail})

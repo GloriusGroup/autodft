@@ -76,6 +76,7 @@ def molecule_esd(
     for rate, (initial, final, _) in esd_inputs.RATES.items():
         out["rates"][NAMES[rate]] = _rate(
             session, extractor, rate, tasks.get(rate), inputs, (initial, final), out["flags"], detail,
+            out["herzberg_teller"],
         )
     gap = out.get("delta_est_ev")
     kt = BOLTZMANN_EV * out["temperature_k"]
@@ -85,6 +86,12 @@ def molecule_esd(
         )
     out["status"] = "running" if any(r["status"] in _OPEN for r in out["rates"].values()) else "done"
     out["derived"] = _derived(out["rates"])
+    if out["derived"].get("tau_s1_ns") is not None and out["rates"]["isc"].get("socme_zero"):
+        out["flags"].append("τ(S1) and the S1 yields count k_ISC as 0.")
+    if out["derived"].get("tau_t1_us") is not None:
+        for rate_key, label in (("isc_t1_s0", "T1→S0 ISC"), ("risc", "RISC")):
+            if out["rates"][rate_key].get("socme_zero"):
+                out["flags"].append(f"τ(T1) and the T1 yields count k({label}) as 0.")
     if detail:
         out["flags"].extend(_optimisation_warnings(session, extractor, inputs))
     return out
@@ -137,7 +144,7 @@ def _uks_t1(session, extractor, opt: Optional[ComputationTask]) -> Optional[floa
     return OrcaParser.extract_electronic_energy(content) if content else None
 
 
-def _rate(session, extractor, rate, task, inputs, states, flags, detail) -> dict:
+def _rate(session, extractor, rate, task, inputs, states, flags, detail, herzberg_teller) -> dict:
     name = NAMES[rate]
     if task is None:
         for state in states:
@@ -158,7 +165,8 @@ def _rate(session, extractor, rate, task, inputs, states, flags, detail) -> dict
     if len(jobs) != len(found):
         flags.append(f"{name}: {len(found)} rates for {len(jobs)} jobs; per-job inputs not shown.")
         jobs = [{} for _ in found]
-    values, rows = [], []
+    fc_mode = rate in esd_inputs.FC_RATES and not herzberg_teller
+    values, rows, zero_socme = [], [], 0
     for job, found_rate in zip(jobs, found):
         label = name + (f" T{job['triplet']}" if "triplet" in job else "")
         value = found_rate.rate
@@ -170,12 +178,20 @@ def _rate(session, extractor, rate, task, inputs, states, flags, detail) -> dict
                 f"{label}: sum of K*K {found_rate.k_squared:.1f} > {K_SQUARED_LIMIT:g}; the "
                 f"geometries are far apart and the harmonic rate is unreliable."
             )
+        if fc_mode and job.get("socme_cm") == 0:
+            zero_socme += 1
+            flags.append(
+                f"{label}: SOCME below ORCA's print precision (0.00 cm⁻¹), so the FC rate is "
+                f"0; the channel is symmetry- or El-Sayed-forbidden and needs Herzberg–Teller."
+            )
         values.append(value)
         rows.append({**job, "rate_s": value, "fc_percent": found_rate.fc_percent,
                      "ht_percent": found_rate.ht_percent, "k_squared": found_rate.k_squared,
                      "e00_cm": found_rate.e00_cm})
     total = sum(values) if computed.get("combine") == "sum" else sum(values) / len(values)
     entry: dict = {"status": "successful", "rate_s": total}
+    if fc_mode and jobs and zero_socme == len(jobs):
+        entry["socme_zero"] = True
     e00 = [r.e00_cm for r in found if r.e00_cm is not None]
     if e00:
         entry["e00_ev"] = e00[0] * CM_TO_EV

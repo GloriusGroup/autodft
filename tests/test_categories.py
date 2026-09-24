@@ -104,6 +104,35 @@ class TestExistingConflict:
         self._molecule(session, {})
         assert categories.existing_conflict(session, "nho/other", "c1ccccc1", {categories.UVVIS}) is None
 
+    def test_a_different_esd_temperature_is_refused(self, session):
+        mol = self._molecule(session, {categories.ESD: True, "esd_temperature_k": 298.15})
+        reason = categories.existing_conflict(
+            session, "nho/p", "c1ccccc1", {categories.ESD},
+            categories.options({categories.ESD: True, "esd_temperature_k": 77}),
+        )
+        assert reason is not None
+        assert f"molecule {mol.id}" in reason and "esd_temperature_k=298.15" in reason
+
+    def test_identical_esd_options_are_accepted(self, session):
+        self._molecule(session, {categories.ESD: True, "esd_temperature_k": 298.15})
+        reason = categories.existing_conflict(
+            session, "nho/p", "c1ccccc1", {categories.ESD},
+            categories.options({categories.ESD: True, "esd_temperature_k": 298.15}),
+        )
+        assert reason is None
+
+    def test_a_different_uvvis_nroots_is_refused(self, session):
+        self._molecule(session, {categories.UVVIS: True, "uvvis_nroots": 20})
+        reason = categories.existing_conflict(
+            session, "nho/p", "c1ccccc1", {categories.UVVIS},
+            categories.options({categories.UVVIS: True, "uvvis_nroots": 30}),
+        )
+        assert reason is not None and "uvvis_nroots=20" in reason
+
+    def test_options_are_not_compared_without_requested_options(self, session):
+        self._molecule(session, {categories.ESD: True, "esd_temperature_k": 298.15})
+        assert categories.existing_conflict(session, "nho/p", "c1ccccc1", {categories.ESD}) is None
+
 
 class TestOptions:
     def test_no_category_no_options(self):

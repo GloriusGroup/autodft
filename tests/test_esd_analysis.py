@@ -217,3 +217,50 @@ def test_the_photophysics_payload_has_an_esd_entry(tmp_path):
         assert "uvvis" not in entry and "ir" not in entry and "stage" not in entry
     finally:
         reset_engine()
+
+
+# ----------------------------------------------------------------------
+# I3: an FC channel whose SOCME prints as 0.00 flags the rate and the
+# derived yields that rest on it.
+# ----------------------------------------------------------------------
+
+# t1s0.out with the ISC rate constant that a SOCME of 0.00 cm-1 gives.
+ZERO_RATE_T1S0 = (FIXTURES / "t1s0.out").read_text().replace("1.598812e-01", "0.000000e+00")
+
+
+def _zero_socme(session, esd):
+    """Give the T1->S0 rate a job whose SOCME reads as 0.00 cm-1 (FC print precision)."""
+    task = _rates(session, esd)[TaskType.esd_isc_t1s0]
+    payload = json.loads(task.inputs_json)
+    payload["computed"]["jobs"][0]["socme_cm"] = 0.0
+    task.inputs_json = json.dumps(payload)
+    session.add(task)
+    job = session.exec(select(ComputationJob).where(ComputationJob.task_id == task.id)).one()
+    Path(job.job_path, "output.out").write_text(ZERO_RATE_T1S0)
+    session.commit()
+    return task
+
+
+class TestZeroSocme:
+    def test_fc_zero_socme_flags_the_channel_and_the_derived_group(self, session, done):
+        _zero_socme(session, done)
+        result = _analyse(session, done)
+        assert result["rates"]["isc_t1_s0"]["rate_s"] == 0.0
+        assert result["rates"]["isc_t1_s0"]["socme_zero"] is True
+        assert any("SOCME below ORCA's print precision" in f for f in result["flags"])
+        assert any("τ(T1)" in f and "T1→S0 ISC" in f for f in result["flags"])
+
+    def test_ht_mode_does_not_flag_a_zero_socme_record(self, session, done):
+        s1 = done["states"]["S1"]
+        s1.metadata_json = json.dumps({**json.loads(s1.metadata_json), categories.ESD_HT: True})
+        session.add(s1)
+        session.commit()
+        _zero_socme(session, done)
+        result = _analyse(session, done)
+        assert "socme_zero" not in result["rates"]["isc_t1_s0"]
+        assert not any("SOCME below" in f for f in result["flags"])
+
+    def test_nonzero_socme_is_not_flagged(self, session, done):
+        result = _analyse(session, done)
+        assert "socme_zero" not in result["rates"]["isc_t1_s0"]
+        assert not any("SOCME below" in f for f in result["flags"])

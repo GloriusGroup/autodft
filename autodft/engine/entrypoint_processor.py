@@ -140,6 +140,7 @@ def _process_entrypoint_body(
     conflict = categories.existing_conflict(
         session, metadata.get("project_name", "default"),
         _canonicalize_smiles(smiles), categories.requested(metadata),
+        {**categories.options(metadata), categories.ESD_HT: bool(metadata.get(categories.ESD_HT))},
     )
     if conflict:
         raise ValueError(conflict)

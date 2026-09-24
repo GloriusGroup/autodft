@@ -9,7 +9,9 @@ the caller, so line widths change without re-parsing anything.
 from __future__ import annotations
 
 import json
+import logging
 import math
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -23,6 +25,8 @@ from autodft.models import ComputationTask, Molecule, MoleculeState, TaskStatus,
 from autodft.paths import safe_subdirectory
 from autodft.qm.orca.parser import OrcaParser
 from autodft.qm.orca.spectra_parser import IRMode, parse_absorption, parse_ir
+
+logger = logging.getLogger(__name__)
 
 # Boltzmann constant in Hartree per kelvin.
 K_B_HARTREE = 3.166811563e-6
@@ -189,6 +193,35 @@ def analyze_spectra(
     return payload
 
 
+def pending_nmr_references(project_name: str) -> list[str]:
+    """Reference compounds a flagged NMR molecule of *project_name* still waits on.
+
+    A frozen molecule is never re-analysed, so its reference must be in
+    before it can be archived. Unflagged projects pay one cheap query.
+    """
+    with get_session() as session:
+        flagged = session.exec(
+            select(MoleculeState.id)
+            .join(Molecule, col(Molecule.id) == col(MoleculeState.molecule_id))
+            .where(
+                Molecule.project_name == project_name,
+                MoleculeState.description == "S0",
+                col(MoleculeState.metadata_json).like('%"request_spec_nmr": true%'),
+            )
+        ).first()
+    if flagged is None:
+        return []
+    payload = analyze_spectra(project_name)
+    waiting = {
+        ref["compound"]
+        for entry in payload["molecules"]
+        if not entry.get("archived") and "nmr" in entry
+        for ref in entry["nmr"].get("reference", {}).values()
+        if ref.get("status") == "pending"
+    }
+    return sorted(waiting)
+
+
 def _archived_count(project_name: str) -> int:
     """Archiving changes no task, so the cache also watches this."""
     with get_session() as session:
@@ -253,12 +286,19 @@ def _analyze(project_name: str, molecule_id: Optional[int], detail: Optional[boo
     detail = molecule_id is not None if detail is None else detail
     molecules = []
     nmr_references_seen: dict = {}
+    directory: Optional[Path] = None
+    directory_resolved = False
     with get_session() as session:
         query = select(Molecule).where(Molecule.project_name == project_name)
         if molecule_id is not None:
             query = query.where(Molecule.id == molecule_id)
         for mol in session.exec(query.order_by(col(Molecule.id))).all():
-            stored = _read_frozen(project_name, mol.id) if mol.archived else None
+            stored = None
+            if mol.archived:
+                if not directory_resolved:
+                    directory = _frozen_root(project_name)
+                    directory_resolved = True
+                stored = _read_frozen(directory, mol)
             if stored is not None:
                 molecules.extend({**entry, "archived": True} for entry in stored["detail" if detail else "summary"])
             else:
@@ -276,14 +316,31 @@ def frozen_dir(project_name: str, settings) -> Path:
     return safe_subdirectory(settings.export_data_path, project_name) / "photophysics"
 
 
-def _read_frozen(project_name: str, molecule_id: int) -> Optional[dict]:
+def _frozen_root(project_name: str) -> Optional[Path]:
+    """*project_name*'s frozen directory, or None when there isn't one."""
     try:
         from autodft.api.routes import get_active_settings
 
-        path = frozen_dir(project_name, get_active_settings()) / f"mol_{molecule_id}.json"
+        directory = frozen_dir(project_name, get_active_settings())
     except Exception:
         return None
-    return json.loads(path.read_text()) if path.is_file() else None
+    return directory if directory.is_dir() else None
+
+
+def _read_frozen(directory: Optional[Path], mol: Molecule) -> Optional[dict]:
+    """*mol*'s frozen payload; None when missing, unreadable or another molecule's."""
+    if directory is None:
+        return None
+    path = directory / f"mol_{mol.id}.json"
+    try:
+        stored = json.loads(path.read_text()) if path.is_file() else None
+    except (OSError, ValueError):
+        logger.exception("Unreadable frozen photophysics payload %s", path)
+        return None
+    # A wiped molecule's id can be reused by a new one.
+    if stored is None or any(entry.get("smiles") != mol.smiles for entry in stored.get("summary", [])):
+        return None
+    return stored
 
 
 def freeze(project_name: str, settings) -> int:
@@ -305,7 +362,10 @@ def freeze(project_name: str, settings) -> int:
                 continue
             detail = _molecule_entries(session, extractor, mol, True, nmr_references_seen)
             directory.mkdir(parents=True, exist_ok=True)
-            (directory / f"mol_{mol.id}.json").write_text(json.dumps({"summary": summary, "detail": detail}))
+            path = directory / f"mol_{mol.id}.json"
+            tmp = directory / f"mol_{mol.id}.json.tmp"
+            tmp.write_text(json.dumps({"summary": summary, "detail": detail}))
+            os.replace(tmp, path)
             written += 1
     return written
 
