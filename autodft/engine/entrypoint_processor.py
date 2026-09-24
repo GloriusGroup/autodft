@@ -18,6 +18,7 @@ from sqlmodel import Session, col, select
 
 from autodft import categories
 from autodft.config import Settings
+from autodft.engine import nmr_references
 from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.models.geometry import MoleculeGeometry
 from autodft.models.header import ComputationHeader
@@ -191,6 +192,10 @@ def _process_entrypoint_body(
             session, molecule, smiles, "red", red_mult, red_charge,
             metadata, header_ids, base_path, initial_xyz,
         )
+
+    # NMR shifts need reference shieldings at the same method.
+    if metadata.get(categories.NMR):
+        nmr_references.ensure_references(session, entrypoint, metadata)
 
     # 5. Mark entrypoint as started
     entrypoint.time_started = datetime.now(timezone.utc)
