@@ -240,7 +240,11 @@ def existing_conflict(
         stored_options = options(stored_metadata)
 
         def value(name: str, source: dict, source_metadata: dict):
-            return bool(source_metadata.get(ESD_HT)) if name == ESD_HT else source.get(name)
+            if name == ESD_HT:
+                return bool(source_metadata.get(ESD_HT))
+            found = source.get(name)
+            # Nuclei are a set; their order means nothing.
+            return sorted(found) if isinstance(found, list) else found
 
         for key in sorted(wanted):
             names = (*OPTIONS.get(key, {}), *((ESD_HT,) if key == ESD else ()))

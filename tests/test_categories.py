@@ -129,6 +129,14 @@ class TestExistingConflict:
         )
         assert reason is not None and "uvvis_nroots=20" in reason
 
+    def test_the_same_nuclei_in_another_order_are_accepted(self, session):
+        self._molecule(session, {categories.NMR: True, "nmr_nuclei": ["H", "C", "F"]})
+        reason = categories.existing_conflict(
+            session, "nho/p", "c1ccccc1", {categories.NMR},
+            categories.options({categories.NMR: True, "nmr_nuclei": ["F", "C", "H"]}),
+        )
+        assert reason is None
+
     def test_options_are_not_compared_without_requested_options(self, session):
         self._molecule(session, {categories.ESD: True, "esd_temperature_k": 298.15})
         assert categories.existing_conflict(session, "nho/p", "c1ccccc1", {categories.ESD}) is None
