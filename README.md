@@ -524,7 +524,7 @@ is either scoped to the caller's own projects or deliberately shared
 | GET    | `/api/projects/{name}/state-analysis` | triplet / redox / reorganisation energies                   |
 | GET    | `/api/projects/{name}/state-analysis/export` | the same, as a multi-sheet XLSX                      |
 | GET    | `/api/projects/{name}/photophysics` | UV/Vis, IR, NMR and ESD results per molecule (`?molecule_id=`) |
-| POST   | `/api/projects/{name}/export`       | trigger CSV/JSON/files export (`?format=&all_conformers=`)    |
+| POST   | `/api/projects/{name}/export`       | trigger CSV/JSON/files/photophysics export (`?format=&all_conformers=`)    |
 | POST   | `/api/projects/{name}/archive`      | **destructive**: CSV+filtered files, then wipe `comp_data`     |
 | GET    | `/api/projects/{name}/wipe-preview` | what a project wipe would delete — counts only                |
 | POST   | `/api/projects/{name}/wipe`         | **destructive**: a project's rows, `comp_data`, exports        |

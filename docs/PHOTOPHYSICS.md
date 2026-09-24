@@ -176,6 +176,55 @@ be) is left out of the weights and counted as `pending` (or
 like the Molecules page; the CSV summary export counts only successful
 optimisations, so the two differ when an earlier optimisation failed.
 
+## Exports, archive and cleanup
+
+**Files.** `export files` (`POST /api/projects/{name}/export?format=files`,
+or `autodft admin export-files`) also copies the UV/Vis and SOC
+singlepoints and the six ESD rate jobs (`esd_isc`, `esd_risc`, `esd_ic`,
+`esd_fluor`, `esd_isc_t1s0`, `esd_phosp`): each contributes its input,
+final-state geometry and output, named like every other task
+(`conf<N>_sp_uvvis_input.inp` / `_geometry.xyz` / `_output.out`,
+`conf<N>_sp_soc_*`, `conf<N>_esd_isc_*`, …).
+
+**Workbook.** `photophysics_export.build_xlsx` renders the export payload
+into `<project>_photophysics.xlsx`, one sheet per category, present only
+when it has rows:
+
+* `Summary` — project, molecule count, Boltzmann temperature, generation time.
+* `UV-Vis` / `IR` — one row per molecule: the ensemble counts (`count`,
+  `pending`, `failed`, `unavailable`, `unweighted`), `weighting`, and the
+  weighted peak.
+* `UV-Vis sticks` / `IR sticks` — one row per transition or mode, per
+  conformer.
+* `NMR` — one row per signal (symmetry class) per requested nucleus.
+* `ESD` — one row per molecule: status, the six rates, ΔE_ST (TDDFT and
+  UKS), the derived lifetimes/yields, and flags.
+* `ESD jobs` — one row per ORCA job behind a rate (FC/HT channel,
+  sublevel or triplet).
+
+**JSON.** `<project>_photophysics.json` is `spectroscopy.full_payload` —
+every flagged molecule with full detail, the same shape `?molecule_id=`
+returns for one molecule. Both files are built from the same payload;
+the dashboard's "Photophysics (XLSX)" button downloads the XLSX only.
+
+**Archive.** Before deleting a project's outputs, archiving calls
+`spectroscopy.freeze`, which writes
+`<export_data>/<project>/photophysics/mol_<id>.json` (summary + detail)
+for every flagged molecule not archived yet. The archive summary adds
+`photophysics_frozen` — how many it froze — only when that is more than
+0. From then on, the photophysics view and this export read an archived
+molecule from its frozen file instead of its (deleted) outputs.
+Re-archiving a project that gained molecules since its first archive
+freezes only the ones archived for the first time; an already-archived
+molecule keeps the payload it was frozen with.
+
+**Cleanup.** `cleanup-files` (`autodft admin cleanup-files`) keeps
+`.hess` alongside `.out`/`.xyz`/`.inp` in the optimisation directories of
+ESD states — S0 with `request_esd`, and every state carrying `esd_role`
+(S1, T1) — since the rate jobs read that Hessian back whenever they
+(re)run. `--dry-run` now counts every file it would delete, not only the
+ones it actually removes.
+
 ## Deploy
 
 1. Stop the controller (pipeline and API) on its node. The dashboard

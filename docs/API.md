@@ -559,7 +559,7 @@ ascending shielding (descending shift).
 `conformer_index` is the conformer's 1-based position among the state's
 optimisation tasks by id, the same numbering as the Molecules page.
 
-### `POST /api/projects/{name}/export` `?format=csv|json|files&all_conformers=true|false`
+### `POST /api/projects/{name}/export` `?format=csv|json|files|photophysics&all_conformers=true|false`
 
 Non-destructive export. Writes into `<export_data>/<owner>/<project>/`,
 with the **bare** project name as the filename stem:
@@ -567,13 +567,20 @@ with the **bare** project name as the filename stem:
 * `csv`   → `<project>.csv` (summary table of energies)
 * `json`  → `<project>.json`
 * `files` → `files/` tree with the canonical curated ORCA files
+* `photophysics` → `<project>_photophysics.json` (the full UV/Vis, IR,
+  NMR and ESD detail payload) plus `<project>_photophysics.xlsx`
 
 ```json
 { "format": "csv", "path": "/.../export_data/admin/phenols/phenols.csv" }
 ```
 
 `404` when the project holds no molecules, `409` when it has been
-archived — its source files are no longer on disk.
+archived — its source files are no longer on disk. `photophysics`
+returns **202** with a background job instead (poll
+`GET /api/projects/{name}/jobs`, download via
+`GET /api/jobs/{id}/download`), and is allowed even when the project is
+archived: it is served from the payload archiving froze — see
+[`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md).
 
 ### `POST /api/projects/{name}/archive`
 
@@ -601,8 +608,14 @@ to keep more.
   "molecules": 12, "files_copied": 96, "files_dropped": 184,
   "csv_path":   "/.../export_data/admin/phenols/phenols.csv",
   "files_root": "/.../export_data/admin/phenols/raw",
-  "extensions": [".inp", ".out", ".xyz"] }
+  "extensions": [".inp", ".out", ".xyz"],
+  "photophysics_frozen": 5 }
 ```
+
+`photophysics_frozen` counts the molecules whose UV/Vis, IR, NMR or ESD
+payload was frozen for later serving (see
+[`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md)); it is present only when that
+count is greater than 0.
 
 Refused with `409` for the protected `admin/default` project and for one
 that is already archived; `404` when the project holds no molecules.
