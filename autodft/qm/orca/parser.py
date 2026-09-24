@@ -87,6 +87,25 @@ class OrcaParser(QMEngine):
             from autodft.qm.orca.spectra_parser import parse_shieldings
 
             checks["Shieldings"] = bool(parse_shieldings(content))
+        if task_type == "singlepoint_soc" or task_type.startswith("esd_") \
+                or task_type == "optimization_excited":
+            from autodft.qm.orca import esd_parser
+
+            if task_type == "singlepoint_soc":
+                # An unstable reference shows up as negative roots.
+                roots = [*esd_parser.excitation_energies(content, "SINGLETS").values(),
+                         *esd_parser.excitation_energies(content, "TRIPLETS").values()]
+                checks["Excited States"] = bool(roots) and min(roots) > 0
+                checks["SOC Matrix"] = bool(esd_parser.socme(content))
+            else:
+                # A native B88 functional fails the same way on every retry.
+                checks["LibXC Needed"] = not esd_parser.needs_libxc(content)
+            if task_type.startswith("esd_"):
+                checks["ESD Rate"] = bool(esd_parser.rates(content))
+            if task_type == "optimization_excited":
+                # Below 0.1 eV the followed root has collapsed onto S0.
+                gap = esd_parser.followed_root_energy(content)
+                checks["Excited Root"] = gap is not None and gap >= 0.1 * esd_parser.EV_TO_EH
 
         success = all(checks.values())
 

@@ -146,7 +146,7 @@ def process_finished_jobs(session: Session, qm_engine: QMEngine) -> None:
         # pipeline tick, discarding every other molecule's progress and
         # re-raising on the same job forever.
         try:
-            result = qm_engine.check_output(job_path, task.task_type.value)
+            result = qm_engine.check_output(job_path, _check_type(session, task))
         except Exception as exc:  # noqa: BLE001 - deliberately broad
             logger.exception("Failed to parse output for job %d", job.id)
             job.success = False
@@ -627,6 +627,14 @@ def create_retry_jobs(
             key=lambda j: j.attempt,
             default=None,
         )
+
+        # A functional without third derivatives fails identically every time.
+        if last_failed is not None and "LibXC Needed" in (last_failed.fail_reason or ""):
+            task.status = TaskStatus.failed
+            task.updated_at = datetime.now(timezone.utc)
+            session.add(task)
+            logger.info("Task %d needs a LibXC functional; not retried", task.id)
+            continue
 
         next_attempt = failed_count + 1
         # Per task: retry-strategy application reads files from previous job
@@ -1294,6 +1302,15 @@ def _esd_role(state: MoleculeState) -> Optional[str]:
     """``"S1"`` / ``"T1"`` for an ESD state, else None."""
     metadata = json.loads(state.metadata_json) if state.metadata_json else {}
     return metadata.get("esd_role")
+
+
+def _check_type(session: Session, task: ComputationTask) -> str:
+    """The task type whose output checks apply; an ESD S1 optimisation gets the excited-state ones."""
+    if task.task_type == TaskType.optimization:
+        state = session.get(MoleculeState, task.state_id)
+        if state is not None and _esd_role(state) == "S1":
+            return "optimization_excited"
+    return task.task_type.value
 
 
 def _keeps_hessian(state: MoleculeState, task: ComputationTask) -> bool:
