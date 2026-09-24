@@ -1,0 +1,18 @@
+      5      skipped - delta E larger than 1.00 eV
+
+Largest overlap:                                 ... 0.991121
+Ratio second largest/largest:                    ... 0.000000
+The IROOT now is:                                ... 1
+
+-----------------------
+CIS/TD-DFT TOTAL ENERGY
+-----------------------
+
+    E(SCF)  =   -227.533859231 Eh
+    DE(CIS) =      0.087063157 Eh (Root  1)
+    ----------------------------- ---------
+    E(tot)  =   -227.446796074 Eh
+
+
+                                *** OPTIMIZATION RUN DONE ***
+                             ****ORCA TERMINATED NORMALLY****

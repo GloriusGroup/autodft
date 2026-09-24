@@ -1,0 +1,35 @@
+Calculating Wilson`s B Matrix:			...done
+Converting to internal coordinates:		...done
+Calculating rotation matrix J:			...done
+Calculating displacement vector K:		...done
+The sum of K*K is:				0.739141
+
+Checking for transition data:			...done
+
+          ***Everything is set, now computing the correlation function***
+
+Homogeneous linewidth is:			50.00 cm-1
+Number of points:				131072
+Maximum time:					1592.65 fs
+Spectral resolution:				3.33 cm-1
+Temperature used:				298.15 K
+Z value:					2.034506e-16
+Cutoff for the correlation function:		1.00e-06
+Adiabatic energy difference:			19814.00 cm-1
+0-0 energy difference:				19321.27 cm-1
+Reference transition dipole (x,y,z):		(-2.70985e-04 0.00000e+00),
+                                    		(1.40976e-03 0.00000e+00),
+                                    		(-1.88473e-02 0.00000e+00) 
+Calculating correlation function:		...done
+Last element of the correlation function:	-0.000000,-0.000000
+Computing the Fourier Transform:		...done
+
+The calculated fluorescence rate constant is	4.811336e+03 s-1
+with 100.00% from FC and 0.00% from HT
+
+The fluorescence spectrum was saved in		fluor.spectrum
+
+Total run time: 0 days 0 hours 0 minutes 1 seconds
+
+                      ****ORCA ESD FINISHED WITHOUT ERROR****
+                             ****ORCA TERMINATED NORMALLY****

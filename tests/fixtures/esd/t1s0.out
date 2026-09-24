@@ -1,0 +1,28 @@
+Calculating rotation matrix J:			...done
+Calculating displacement vector K:		...done
+The sum of K*K is:				0.870030
+
+Checking for transition data:			...done
+
+          ***Everything is set, now computing the correlation function***
+
+Homogeneous linewidth is:			50.00 cm-1
+Inhomogeneous linewidth is:			250.00 cm-1
+Number of points:				32768
+Maximum time:					157.86 fs
+Temperature used:				298.15 K
+Z value:					1.653068e-16
+Cutoff for the correlation function:		1.00e-12
+Adiabatic energy difference:			14444.50 cm-1
+0-0 energy difference:				13990.18 cm-1
+Reference SOC (Re and Im):			0.000000e+00, 5.261203e-08
+Calculating correlation function:		...done
+Last element of the correlation function:	0.000000,0.000000
+
+The calculated ISC rate constant is		1.598812e-01 s-1
+with 100.00 from FC and 0.00 from HT
+
+Total run time: 0 days 0 hours 0 minutes 1 seconds
+
+                      ****ORCA ESD FINISHED WITHOUT ERROR****
+                             ****ORCA TERMINATED NORMALLY****
