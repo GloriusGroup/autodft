@@ -724,6 +724,7 @@ _FILE_MAP: dict[str, list[tuple[str, str]]] = {
     ],
     "singlepoint_uvvis": [
         ("input.inp", "sp_uvvis_input.inp"),
+        ("input.xyz", "sp_uvvis_geometry.xyz"),
         ("output.out", "sp_uvvis_output.out"),
     ],
     "singlepoint_nmr": [
@@ -731,12 +732,25 @@ _FILE_MAP: dict[str, list[tuple[str, str]]] = {
         ("input.xyz", "sp_nmr_geometry.xyz"),
         ("output.out", "sp_nmr_output.out"),
     ],
+    "singlepoint_soc": [
+        ("input.inp", "sp_soc_input.inp"),
+        ("input.xyz", "sp_soc_geometry.xyz"),
+        ("output.out", "sp_soc_output.out"),
+    ],
     "confsearch": [
         ("input.inp", "confsearch_input.inp"),
         ("output.out", "confsearch_output.out"),
         ("input.finalensemble.xyz", "confsearch_ensemble.xyz"),
     ],
 }
+
+# ESD rate jobs: the rate input, the final-state geometry and ORCA's output.
+for _rate in ("esd_isc", "esd_risc", "esd_ic", "esd_fluor", "esd_isc_t1s0", "esd_phosp"):
+    _FILE_MAP[_rate] = [
+        ("input.inp", f"{_rate}_input.inp"),
+        ("input.xyz", f"{_rate}_geometry.xyz"),
+        ("output.out", f"{_rate}_output.out"),
+    ]
 
 
 def _copy_task_files(
