@@ -13,6 +13,7 @@ import time
 from autodft.config import Settings
 from autodft.db import get_session
 from autodft.engine.entrypoint_processor import process_next_entrypoint
+from autodft.engine.photophysics import advance_photophysics
 from autodft.engine.scheduler import Scheduler
 from autodft.engine.state_machine import (
     create_retry_jobs,
@@ -113,6 +114,9 @@ class PipelineWorker:
 
             self._run_step(session, "4: start follow-up tasks",
                            lambda: start_followup_tasks(session, self.settings))
+
+            self._run_step(session, "4b: advance photophysics",
+                           lambda: advance_photophysics(session, self.settings))
 
             # Step 5: expand queued entrypoints. Each entrypoint commits
             # separately -- process_next_entrypoint() rolls the session back
