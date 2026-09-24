@@ -78,6 +78,7 @@ def _check_reference_state(
 def _category_options_to_flags(
     uvvis: bool, ir: bool, esd: bool, esd_ht: bool, nmr: bool,
     uvvis_nroots: int = 20, uvvis_tda: bool = False, nmr_nuclei: Optional[list] = None,
+    esd_tn_window_ev: float = 0.2, esd_temperature_k: float = 298.15,
 ) -> dict:
     """CLI options as ``request_metadata`` category keys and settings."""
     from autodft import categories
@@ -91,6 +92,8 @@ def _category_options_to_flags(
         "uvvis_nroots": uvvis_nroots,
         "uvvis_tda": uvvis_tda,
         "nmr_nuclei": nmr_nuclei if nmr_nuclei is not None else ["H", "C", "F"],
+        "esd_tn_window_ev": esd_tn_window_ev,
+        "esd_temperature_k": esd_temperature_k,
     }
 
 
@@ -224,8 +227,13 @@ def submit(
     max_conformers_red: int = typer.Option(1, "--max-conformers-red", help="Max conformers kept for red"),
     uvvis: bool = typer.Option(False, "--uvvis", help="UV/Vis absorption (TDDFT) on every S0 conformer"),
     ir: bool = typer.Option(False, "--ir", help="IR spectrum from the optimisation's frequencies"),
-    esd: bool = typer.Option(False, "--esd", help="Excited-state dynamics (not available yet)"),
-    esd_ht: bool = typer.Option(False, "--esd-ht", help="Herzberg-Teller for ESD rates (not available yet)"),
+    esd: bool = typer.Option(
+        False, "--esd",
+        help="Excited-state dynamics: ISC/RISC/IC/fluorescence/phosphorescence rates from S1 and T1 seeded at the lowest S0",
+    ),
+    esd_ht: bool = typer.Option(
+        False, "--esd-ht", help="Herzberg-Teller for the ESD rates (much more expensive)"
+    ),
     nmr: bool = typer.Option(
         False, "--nmr", help="NMR shifts (1H/13C/19F) vs automatically computed TMS / CFCl3"
     ),
@@ -234,12 +242,15 @@ def submit(
     nmr_nuclei: str = typer.Option(
         "H,C,F", "--nmr-nuclei", help="NMR nuclei to report, comma-separated"
     ),
+    esd_tn_window_ev: float = typer.Option(0.2, "--esd-tn-window", help="Include S1->Tn ISC for Tn up to this many eV above S1"),
+    esd_temperature_k: float = typer.Option(298.15, "--esd-temperature", help="Temperature of the ESD rates (K)"),
 ) -> None:
     """Submit a single molecule by SMILES string."""
     _check_reference_state(smiles, request_t1, request_ox, request_red)
     flags = _category_options_to_flags(
         uvvis, ir, esd, esd_ht, nmr, uvvis_nroots, uvvis_tda,
         nmr_nuclei=[n.strip() for n in nmr_nuclei.split(",") if n.strip()],
+        esd_tn_window_ev=esd_tn_window_ev, esd_temperature_k=esd_temperature_k,
     )
     qualified, author = _qualified_project(project, user)
 
@@ -319,8 +330,13 @@ def submit_batch(
     max_conformers_red: int = typer.Option(1, "--max-conformers-red", help="Max conformers kept for red"),
     uvvis: bool = typer.Option(False, "--uvvis", help="UV/Vis absorption (TDDFT) on every S0 conformer"),
     ir: bool = typer.Option(False, "--ir", help="IR spectrum from the optimisation's frequencies"),
-    esd: bool = typer.Option(False, "--esd", help="Excited-state dynamics (not available yet)"),
-    esd_ht: bool = typer.Option(False, "--esd-ht", help="Herzberg-Teller for ESD rates (not available yet)"),
+    esd: bool = typer.Option(
+        False, "--esd",
+        help="Excited-state dynamics: ISC/RISC/IC/fluorescence/phosphorescence rates from S1 and T1 seeded at the lowest S0",
+    ),
+    esd_ht: bool = typer.Option(
+        False, "--esd-ht", help="Herzberg-Teller for the ESD rates (much more expensive)"
+    ),
     nmr: bool = typer.Option(
         False, "--nmr", help="NMR shifts (1H/13C/19F) vs automatically computed TMS / CFCl3"
     ),
@@ -329,6 +345,8 @@ def submit_batch(
     nmr_nuclei: str = typer.Option(
         "H,C,F", "--nmr-nuclei", help="NMR nuclei to report, comma-separated"
     ),
+    esd_tn_window_ev: float = typer.Option(0.2, "--esd-tn-window", help="Include S1->Tn ISC for Tn up to this many eV above S1"),
+    esd_temperature_k: float = typer.Option(298.15, "--esd-temperature", help="Temperature of the ESD rates (K)"),
 ) -> None:
     """Submit molecules from a CSV file."""
     if not file.exists():
@@ -338,6 +356,7 @@ def submit_batch(
     flags = _category_options_to_flags(
         uvvis, ir, esd, esd_ht, nmr, uvvis_nroots, uvvis_tda,
         nmr_nuclei=[n.strip() for n in nmr_nuclei.split(",") if n.strip()],
+        esd_tn_window_ev=esd_tn_window_ev, esd_temperature_k=esd_temperature_k,
     )
 
     request_metadata = _build_request_metadata(

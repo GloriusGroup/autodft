@@ -50,12 +50,11 @@ class TestSubmit:
         assert r.status_code == 200
         assert not set(_metadata(r.json()["id"])) & set(categories.CATEGORIES)
 
-    def test_unavailable_category_is_a_400(self, api):
+    def test_esd_is_accepted(self, api):
         client, key = api
         r = client.post("/api/submit", headers=key,
                         json={"smiles": "c1ccccc1", "project": "p", "request_esd": True})
-        assert r.status_code == 400
-        assert "not available yet" in r.json()["detail"]
+        assert r.status_code == 200, r.text
 
     def test_ir_follows_the_chosen_optimisation_header(self, api):
         client, key = api

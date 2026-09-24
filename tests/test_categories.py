@@ -30,9 +30,8 @@ class TestRejection:
     def test_nothing_requested_is_fine(self):
         assert categories.rejection({}, {}, OPT_NOFREQ, SP) is None
 
-    def test_unavailable_categories_are_refused(self):
-        reason = categories.rejection({}, {categories.ESD: True}, OPT_FREQ, SP)
-        assert reason == "ESD is not available yet."
+    def test_every_category_is_available(self):
+        assert categories.AVAILABLE == frozenset(categories.CATEGORIES)
 
     def test_ir_needs_freq_in_the_optimisation_header(self):
         assert "Freq" in categories.rejection({}, {categories.IR: True}, OPT_NOFREQ, SP)
@@ -66,9 +65,9 @@ class TestRejection:
         reason = categories.rejection({}, {categories.ESD_HT: True}, OPT_FREQ, SP)
         assert reason == "request_esd_ht only applies together with request_esd."
 
-    def test_esd_ht_with_esd_still_reports_esd_unavailable(self):
+    def test_esd_ht_with_esd_is_accepted(self):
         meta = {categories.ESD: True, categories.ESD_HT: True}
-        assert categories.rejection({}, meta, OPT_FREQ, SP) == "ESD is not available yet."
+        assert categories.rejection({"multiplicity": 1}, meta, "!LibXC(B3LYP) def2-SVP Opt Freq\n", SP) is None
 
 
 class TestExistingConflict:
@@ -181,12 +180,13 @@ class TestExpansion:
         assert by_state["S0"][categories.UVVIS] is True
         assert categories.UVVIS not in by_state["T1"]
 
-    def test_unavailable_category_fails_the_entrypoint(self, engine, tmp_path, monkeypatch):
+    def test_esd_without_freq_fails_the_entrypoint(self, engine, tmp_path, monkeypatch):
+        # _queue's optimisation header is "!B3LYP OPT" -- no Freq, so no Hessians.
         with Session(engine) as session:
             entry = _queue(session, "CCO", request_esd=True)
             _expand(session, _settings(tmp_path), monkeypatch)
             refreshed = session.get(CalculationEntrypoint, entry.id)
-            assert "ESD is not available yet." in refreshed.processing_error
+            assert "Freq" in refreshed.processing_error
             assert session.exec(select(MoleculeState)).all() == []
 
     def test_ir_without_freq_fails_the_entrypoint(self, engine, tmp_path, monkeypatch):

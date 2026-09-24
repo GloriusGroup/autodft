@@ -24,23 +24,35 @@ LABELS = {ESD: "ESD", UVVIS: "UV/Vis", IR: "IR", NMR: "NMR"}
 
 # What the engine can compute today. Anything else is refused at submission
 # rather than accepted and silently never run.
-AVAILABLE = frozenset({UVVIS, IR, NMR})
+AVAILABLE = frozenset(CATEGORIES)
 
 # Categories whose jobs are built on the singlepoint header.
 _ON_SP_HEADER = frozenset({ESD, UVVIS, NMR})
 
 _FREQ_RE = re.compile(r"^\s*!.*\b(?:Freq|NumFreq|AnFreq)\b", re.IGNORECASE | re.MULTILINE)
+_TDDFT_RE = re.compile(r"%(?:tddft|cis)\b", re.IGNORECASE)
+# ORCA 6.1 has no native third derivatives for B88-exchange functionals, which
+# TDDFT gradients need; their LibXC(...) versions work (CAM-B3LYP is fine).
+# A route-line token of its own, so LibXC(B3LYP) and CAM-B3LYP do not match.
+# A refused header is cheaper than a wave of failed S1 optimisations tripping
+# the circuit breaker.
+_NATIVE_B88_RE = re.compile(
+    r"^\s*!(?:.*\s)?(?:B3LYP|BLYP|BP86|B3P86|B2PLYP|B2GP-PLYP|X3LYP)(?![\w(])",
+    re.IGNORECASE | re.MULTILINE,
+)
 _SP_CONFLICTS = (
     (re.compile(r"%tddft\b", re.IGNORECASE), "%tddft"),
     (re.compile(r"%cis\b", re.IGNORECASE), "%cis"),
     (re.compile(r"%eprnmr\b", re.IGNORECASE), "%eprnmr"),
     (re.compile(r"%esd\b", re.IGNORECASE), "%esd"),
     (re.compile(r"^\s*!.*\bNMR\b", re.IGNORECASE | re.MULTILINE), "the NMR keyword"),
+    (re.compile(r"^\s*!.*\bESD\b", re.IGNORECASE | re.MULTILINE), "the ESD keyword"),
 )
 
 # Settings each category takes, with defaults. Stored -- defaults filled in --
 # only when the category is requested.
 OPTIONS: dict[str, dict] = {
+    ESD: {"esd_tn_window_ev": 0.2, "esd_temperature_k": 298.15},
     UVVIS: {"uvvis_nroots": 20, "uvvis_tda": False},
     NMR: {"nmr_nuclei": ["H", "C", "F"]},
 }
@@ -71,6 +83,12 @@ def snapshot(metadata: dict) -> dict:
     return {**flags, **options(metadata)}
 
 
+def esd_settings(metadata: dict) -> dict:
+    """The HT switch and ESD options, for the S1 and T1 states whose jobs read them."""
+    settings = {name: metadata.get(name, default) for name, default in OPTIONS[ESD].items()}
+    return {ESD_HT: bool(metadata.get(ESD_HT)), **settings}
+
+
 def on_s0(description: str, metadata: dict, key: str) -> bool:
     """Whether a state asks for the S0-only category *key*."""
     return description == "S0" and bool(metadata.get(key))
@@ -98,15 +116,45 @@ def rejection(
     if unavailable:
         return f"{', '.join(unavailable)} is not available yet."
 
-    if NMR in wanted and check.get("multiplicity") != 1:
+    closed_shell = sorted(LABELS[key] for key in wanted & {ESD, NMR})
+    if closed_shell and check.get("multiplicity") != 1:
         return (
-            f"NMR needs a closed-shell singlet reference; this molecule has "
-            f"multiplicity {check.get('multiplicity')}."
+            f"{', '.join(closed_shell)} needs a closed-shell singlet reference; "
+            f"this molecule has multiplicity {check.get('multiplicity')}."
         )
 
     if not metadata.get("request_optimization", True):
         labels = ", ".join(sorted(LABELS[key] for key in wanted))
         return f"{labels} needs the optimisation stage."
+
+    if ESD in wanted:
+        if not metadata.get("request_singlepoint", True):
+            return (
+                "ESD needs the energy singlepoint stage; its energies pick the "
+                "lowest conformer and set the rates."
+            )
+        if not _FREQ_RE.search(header_optimization or ""):
+            return (
+                "ESD needs Freq in the optimisation header; the rates are built "
+                "from the S0, S1 and T1 Hessians."
+            )
+        if _TDDFT_RE.search(header_optimization or ""):
+            return (
+                "ESD adds its own %tddft block to the optimisation header for the "
+                "S1 optimisation; pick an optimisation header without one."
+            )
+        if _NATIVE_B88_RE.search(header_optimization or ""):
+            return (
+                "ESD's S1 optimisation needs TDDFT gradients, which ORCA 6.1 cannot "
+                "compute with a native B88 functional (B3LYP, BLYP, BP86, ...); use "
+                "its LibXC version in the optimisation header, e.g. !LibXC(B3LYP)."
+            )
+        window = metadata.get("esd_tn_window_ev", OPTIONS[ESD]["esd_tn_window_ev"])
+        if not _number(window) or not 0 <= window <= 1:
+            return "The ESD triplet window must be between 0 and 1 eV (esd_tn_window_ev)."
+        temperature = metadata.get("esd_temperature_k", OPTIONS[ESD]["esd_temperature_k"])
+        if not _number(temperature) or not 0 < temperature <= 1000:
+            return "The ESD temperature must be above 0 and at most 1000 K (esd_temperature_k)."
 
     if UVVIS in wanted:
         nroots = metadata.get("uvvis_nroots", OPTIONS[UVVIS]["uvvis_nroots"])
@@ -180,3 +228,7 @@ def existing_conflict(
         f"{molecule.id}) without {', '.join(missing)}. Categories are only added "
         f"to new molecules; submit it into another project."
     )
+
+
+def _number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
