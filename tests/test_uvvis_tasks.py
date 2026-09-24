@@ -53,6 +53,14 @@ class TestBlocks:
         with pytest.raises(blocks.HeaderConflict):
             blocks.compose_header("singlepoint_uvvis", "!B3LYP\n%TDDFT nroots 5 end\n")
 
+    def test_a_cis_block_is_a_conflict_too(self):
+        with pytest.raises(blocks.HeaderConflict, match="this job adds its own"):
+            blocks.compose_header("singlepoint_uvvis", "!B3LYP\n%CIS nroots 5 end\n")
+
+    def test_defaults_come_from_the_category(self):
+        default = categories.OPTIONS[categories.UVVIS]["uvvis_nroots"]
+        assert f"  nroots {default}\n" in blocks.compose_header("singlepoint_uvvis", SP)
+
 
 def _s0_with_opt(session, metadata: dict, description: str = "S0"):
     header = ComputationHeader(header_text=SP)

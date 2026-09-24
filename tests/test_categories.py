@@ -50,6 +50,7 @@ class TestRejection:
 
     @pytest.mark.parametrize("header,label", [
         ("!B3LYP\n%tddft nroots 25 end\n", "%tddft"),
+        ("!B3LYP\n%cis nroots 5 end\n", "%cis"),
         ("!TPSS pcSseg-2 NMR\n", "the NMR keyword"),
         ("!B3LYP\n%eprnmr Nuclei = all H {shift} end\n", "%eprnmr"),
     ])
@@ -203,3 +204,10 @@ class TestExpansion:
             _expand(session, _settings(tmp_path), monkeypatch)
             assert "already exists" in session.get(CalculationEntrypoint, entry.id).processing_error
             assert len(session.exec(select(MoleculeState)).all()) == 1
+
+
+class TestOnS0:
+    def test_only_an_s0_state_that_asks(self):
+        assert categories.on_s0("S0", {categories.UVVIS: True}, categories.UVVIS)
+        assert not categories.on_s0("T1", {categories.UVVIS: True}, categories.UVVIS)
+        assert not categories.on_s0("S0", {}, categories.UVVIS)

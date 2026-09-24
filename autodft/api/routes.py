@@ -194,7 +194,7 @@ class SubmitRequest(BaseModel):
     request_spec_ir: bool = False
     request_spec_nmr: bool = False
     # Settings of the categories above; recorded only when the category is.
-    uvvis_nroots: int = Field(default=20, ge=1, le=100)
+    uvvis_nroots: int = 20
     uvvis_tda: bool = False
     # For each slot you can pass either the raw header text OR the integer
     # ID of a stored ComputationHeader. ID takes precedence.

@@ -54,3 +54,14 @@ def test_uvvis_options_alone_are_dropped():
         uvvis=False, ir=False, esd=False, esd_ht=False, nmr=False, uvvis_nroots=25,
     )
     assert "uvvis_nroots" not in _meta(flags)
+
+
+def test_no_category_skips_the_smiles_check(monkeypatch):
+    from autodft.engine import entrypoint_processor
+
+    def boom(smiles):
+        raise AssertionError("validate_smiles ran for an unflagged submission")
+
+    monkeypatch.setattr(entrypoint_processor, "validate_smiles", boom)
+    flags = cli._category_options_to_flags(False, False, False, False, False)
+    cli._check_categories("CCO", flags, "!B3LYP Opt\n", "!B3LYP\n")

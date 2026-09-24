@@ -9,8 +9,7 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-# Default TDDFT roots for UV/Vis; enough to cover the near-UV for most organics.
-UVVIS_NROOTS = 20
+from autodft import categories
 
 
 class HeaderConflict(ValueError):
@@ -34,11 +33,11 @@ def tddft_block(**settings) -> str:
 
 
 def with_tddft(header: str, **settings) -> str:
-    """*header* plus a ``%tddft`` block; refuses a header that has one."""
-    if has_block(header, "tddft"):
+    """*header* plus a ``%tddft`` block; refuses a header that has one (or a %cis)."""
+    if has_block(header, "tddft") or has_block(header, "cis"):
         raise HeaderConflict(
-            "The singlepoint header already has a %tddft block; the UV/Vis job "
-            "adds its own."
+            "The header already has a %tddft (or %cis) block; this job adds "
+            "its own."
         )
     return append_block(header, tddft_block(**settings))
 
@@ -51,10 +50,11 @@ def compose_header(task_type: str, header: str, options: Optional[dict] = None) 
     """
     options = options or {}
     if task_type == "singlepoint_uvvis":
+        defaults = categories.OPTIONS[categories.UVVIS]
         return with_tddft(
             header,
-            nroots=options.get("uvvis_nroots", UVVIS_NROOTS),
-            tda=bool(options.get("uvvis_tda", False)),
+            nroots=options.get("uvvis_nroots", defaults["uvvis_nroots"]),
+            tda=bool(options.get("uvvis_tda", defaults["uvvis_tda"])),
         )
     return header
 

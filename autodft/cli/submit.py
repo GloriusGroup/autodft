@@ -103,6 +103,10 @@ def _check_categories(
     refused at expansion, where the entrypoint then shows the reason.
     """
     from autodft import categories
+
+    if not categories.requested(flags) and not flags.get(categories.ESD_HT):
+        return
+
     from autodft.engine.entrypoint_processor import validate_smiles
 
     check = validate_smiles(smiles)
@@ -213,7 +217,7 @@ def submit(
     uvvis: bool = typer.Option(False, "--uvvis", help="UV/Vis absorption (TDDFT) on every S0 conformer"),
     ir: bool = typer.Option(False, "--ir", help="IR spectrum from the optimisation's frequencies"),
     esd: bool = typer.Option(False, "--esd", help="Excited-state dynamics (not available yet)"),
-    esd_ht: bool = typer.Option(False, "--esd-ht", help="Herzberg-Teller for ESD rates"),
+    esd_ht: bool = typer.Option(False, "--esd-ht", help="Herzberg-Teller for ESD rates (not available yet)"),
     nmr: bool = typer.Option(False, "--nmr", help="NMR shifts (not available yet)"),
     uvvis_nroots: int = typer.Option(20, "--uvvis-nroots", help="UV/Vis excited states (1-100)"),
     uvvis_tda: bool = typer.Option(False, "--uvvis-tda", help="Tamm-Dancoff approximation for UV/Vis"),
@@ -300,7 +304,7 @@ def submit_batch(
     uvvis: bool = typer.Option(False, "--uvvis", help="UV/Vis absorption (TDDFT) on every S0 conformer"),
     ir: bool = typer.Option(False, "--ir", help="IR spectrum from the optimisation's frequencies"),
     esd: bool = typer.Option(False, "--esd", help="Excited-state dynamics (not available yet)"),
-    esd_ht: bool = typer.Option(False, "--esd-ht", help="Herzberg-Teller for ESD rates"),
+    esd_ht: bool = typer.Option(False, "--esd-ht", help="Herzberg-Teller for ESD rates (not available yet)"),
     nmr: bool = typer.Option(False, "--nmr", help="NMR shifts (not available yet)"),
     uvvis_nroots: int = typer.Option(20, "--uvvis-nroots", help="UV/Vis excited states (1-100)"),
     uvvis_tda: bool = typer.Option(False, "--uvvis-tda", help="Tamm-Dancoff approximation for UV/Vis"),

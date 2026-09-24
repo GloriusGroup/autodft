@@ -32,6 +32,7 @@ _ON_SP_HEADER = frozenset({ESD, UVVIS, NMR})
 _FREQ_RE = re.compile(r"^\s*!.*\b(?:Freq|NumFreq|AnFreq)\b", re.IGNORECASE | re.MULTILINE)
 _SP_CONFLICTS = (
     (re.compile(r"%tddft\b", re.IGNORECASE), "%tddft"),
+    (re.compile(r"%cis\b", re.IGNORECASE), "%cis"),
     (re.compile(r"%eprnmr\b", re.IGNORECASE), "%eprnmr"),
     (re.compile(r"%esd\b", re.IGNORECASE), "%esd"),
     (re.compile(r"^\s*!.*\bNMR\b", re.IGNORECASE | re.MULTILINE), "the NMR keyword"),
@@ -66,6 +67,11 @@ def snapshot(metadata: dict) -> dict:
     return {**flags, **options(metadata)}
 
 
+def on_s0(description: str, metadata: dict, key: str) -> bool:
+    """Whether a state asks for the S0-only category *key*."""
+    return description == "S0" and bool(metadata.get(key))
+
+
 def rejection(
     check: dict,
     metadata: dict,
@@ -74,8 +80,8 @@ def rejection(
 ) -> Optional[str]:
     """Why the requested categories cannot run for this molecule, or None.
 
-    *check* is ``validate_smiles`` output; the closed-shell rules of later
-    categories read it.
+    *check* carries the reference's ``multiplicity``; the closed-shell rules of
+    later categories read only that.
     """
     if metadata.get(ESD_HT) and not metadata.get(ESD):
         return "request_esd_ht only applies together with request_esd."

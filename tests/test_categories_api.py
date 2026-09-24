@@ -114,12 +114,21 @@ class TestUvvisOptions:
         assert r.status_code == 200
         assert "uvvis_nroots" not in _metadata(r.json()["id"])
 
-    def test_out_of_range_nroots_is_a_422(self, api):
+    def test_out_of_range_nroots_is_a_400(self, api):
         client, key = api
         r = client.post("/api/submit", headers=key, json={
             "smiles": "c1ccccc1", "project": "p", "request_spec_uvvis": True, "uvvis_nroots": 0,
         })
-        assert r.status_code == 422
+        assert r.status_code == 400 and "uvvis_nroots" in r.json()["detail"]
+
+    def test_a_stale_option_never_blocks_an_unflagged_submission(self, api):
+        # The dashboard keeps the field's last value after UV/Vis is unticked.
+        client, key = api
+        r = client.post("/api/submit", headers=key, json={
+            "smiles": "c1ccccc1", "project": "p", "request_spec_uvvis": False, "uvvis_nroots": 150,
+        })
+        assert r.status_code == 200, r.text
+        assert "uvvis_nroots" not in _metadata(r.json()["id"])
 
 
 class TestPhotophysicsEndpoint:
