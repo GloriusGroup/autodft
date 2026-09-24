@@ -139,5 +139,17 @@ def test_each_category_has_a_settings_panel_shown_only_when_ticked(client):
     panels = re.findall(r'<div class="cat-detail" data-requires="(\w+)" style="display:none;">', html)
     assert panels == ["requestUvvis", "requestIr"]
     for needle in ('id="uvvisNroots"', 'id="uvvisTda"', 'id="irHeaderNote"',
-                   'id="uvvisHeaderNote"', "uvvis_nroots:", "uvvis_tda:"):
+                   'id="uvvisHeaderNote"', "commonBody.uvvis_nroots", "commonBody.uvvis_tda"):
         assert needle in html, needle
+
+
+def test_uvvis_options_are_sent_only_when_ticked():
+    html = (TEMPLATE / "dashboard.html").read_text()
+    assert "uvvis_nroots:       intOrDefault" not in html
+    assert "if (commonBody.request_spec_uvvis) {" in html
+
+
+def test_spectra_load_per_molecule():
+    html = (TEMPLATE / "dashboard.html").read_text()
+    assert "'/photophysics?molecule_id=' + molId" in html
+    assert "function ppToggle(molId)" in html

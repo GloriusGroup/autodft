@@ -1028,6 +1028,9 @@
         .pp-plot { margin-top: 10px; }
         .pp-plot-title { font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 4px; }
         .pp-waiting { font-size: 0.85rem; color: var(--text-muted); font-style: italic; margin-top: 10px; }
+        .pp-summary { font-size: 0.85rem; color: var(--text-secondary); margin-top: 8px; }
+        .pp-summary b { color: var(--text-primary); font-weight: 600; }
+        .pp-body { margin-top: 6px; }
         .cat-detail { border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; background: var(--bg-secondary); min-width: 260px; max-width: 440px; }
         .cat-detail-title { font-weight: 600; font-size: 0.85rem; margin-bottom: 6px; color: var(--text-primary); }
         .cat-detail-body { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
@@ -1142,7 +1145,7 @@
                             <input type="checkbox" id="requestVertEx" name="request_vert_ex" checked>
                             <label for="requestVertEx">Vertical excitations</label>
                         </div>
-                        <div class="checkbox-group" title="UV/Vis absorption: a TDDFT singlepoint (20 roots) on every optimised S0 conformer, Boltzmann-weighted. Uses the singlepoint header's method.">
+                        <div class="checkbox-group" title="UV/Vis absorption: a TDDFT singlepoint on every optimised S0 conformer, Boltzmann-weighted. Uses the singlepoint header's method; the number of excited states is set below.">
                             <input type="checkbox" id="requestUvvis" name="request_spec_uvvis">
                             <label for="requestUvvis">UV/Vis</label>
                         </div>
@@ -1798,7 +1801,7 @@
         <div class="page-header">
             <div>
                 <h1>Project Overview · Photophysics</h1>
-                <div class="subtitle">UV/Vis and IR spectra, Boltzmann-weighted over each molecule's S0 conformers (298.15 K).</div>
+                <div class="subtitle">UV/Vis and IR spectra, Boltzmann-weighted over each molecule's S0 conformers (298.15 K). Open a card to plot its spectra.</div>
             </div>
             <div class="form-group" style="min-width: 240px;">
                 <label for="projectSelectPP">Project</label>
@@ -2918,8 +2921,6 @@
                 request_singlepoint_vertical_excitations: document.getElementById('requestVertEx').checked,
                 request_spec_uvvis: document.getElementById('requestUvvis').checked,
                 request_spec_ir:    document.getElementById('requestIr').checked,
-                uvvis_nroots:       intOrDefault('uvvisNroots', 20),
-                uvvis_tda:          document.getElementById('uvvisTda').checked,
                 max_conformers_S0:  intOrDefault('maxConfS0',  1),
                 max_conformers_T1:  intOrDefault('maxConfT1',  1),
                 max_conformers_ox:  intOrDefault('maxConfOx',  1),
@@ -2931,6 +2932,12 @@
                 header_optimization_id: hOpt.id,
                 header_singlepoint_id:  hSp.id,
             };
+            // Options travel only with their category; a stale value from an
+            // unticked panel must not reach the API.
+            if (commonBody.request_spec_uvvis) {
+                commonBody.uvvis_nroots = intOrDefault('uvvisNroots', 20);
+                commonBody.uvvis_tda = document.getElementById('uvvisTda').checked;
+            }
 
             // ── One request for the whole textarea. ───────────────────
             // Submitting line by line was one HTTP round trip and one SQLite
@@ -3914,13 +3921,15 @@
         // The API ships sticks and Boltzmann weights; broadening happens
         // here so the line widths can change without a round trip.
 
-        var ppState = { project: null, payload: null };
+        var ppState = { project: null, payload: null, details: {} };
         var HC_EV_NM = 1239.84193;
 
         function ppUvCurve(ensemble, fwhmEv) {
             var sigma = fwhmEv / (2 * Math.sqrt(2 * Math.LN2));
+            var lo = 180;
+            if (ensemble.shortest_nm) lo = Math.max(100, Math.min(180, Math.floor(ensemble.shortest_nm) - 10));
             var points = [];
-            for (var nm = 180; nm <= 700; nm += 1) {
+            for (var nm = lo; nm <= 700; nm += 1) {
                 var e = HC_EV_NM / nm, y = 0;
                 ensemble.conformers.forEach(function (c) {
                     c.transitions.forEach(function (t) {
@@ -3985,12 +3994,60 @@
                    escHtml(xLabel) + '</text></svg>';
         }
 
-        function ppNote(ensemble) {
-            var n = ensemble.conformers.length;
-            var note = n + ' conformer' + (n === 1 ? '' : 's');
-            if (ensemble.missing) note += ', ' + ensemble.missing + ' still missing';
-            return note;
+        var PP_WEIGHTING = { G: 'weighted on G', E_sp: 'weighted on E (no G)', equal: 'equal weights (no energies)' };
+
+        function ppCounts(ens) {
+            var bits = [ens.count + ' conformer' + (ens.count === 1 ? '' : 's')];
+            if (ens.pending) bits.push(ens.pending + ' pending');
+            if (ens.failed) bits.push(ens.failed + ' failed');
+            if (ens.unavailable) bits.push(ens.unavailable + ' without output');
+            if (ens.count) bits.push(PP_WEIGHTING[ens.weighting] || ens.weighting);
+            return bits.join(', ');
         }
+
+        function ppSummary(m) {
+            var rows = [];
+            if (m.uvvis) {
+                var uv = m.uvvis.peak
+                    ? 'strongest transition <b>' + escHtml(m.uvvis.peak.wavelength_nm) + ' nm</b> (f = ' +
+                      escHtml(m.uvvis.peak.fosc.toFixed(3)) + ')'
+                    : 'no spectrum yet';
+                if (m.uvvis.shortest_nm && m.uvvis.shortest_nm > 200) {
+                    uv += ' · roots reach only ' + escHtml(Math.round(m.uvvis.shortest_nm)) + ' nm';
+                }
+                rows.push('<div class="pp-summary">UV/Vis · ' + uv + ' · ' + escHtml(ppCounts(m.uvvis)) + '</div>');
+            }
+            if (m.ir) {
+                var ir = m.ir.peak
+                    ? 'strongest band <b>' + escHtml(Math.round(m.ir.peak.frequency_cm)) + ' cm⁻¹</b> (unscaled)'
+                    : 'no spectrum yet';
+                rows.push('<div class="pp-summary">IR · ' + ir + ' · ' + escHtml(ppCounts(m.ir)) + '</div>');
+            }
+            if (m.archived) rows.push('<div class="pp-waiting">Archived: raw outputs removed.</div>');
+            return rows.join('');
+        }
+
+        function ppPlots(m, detail) {
+            var uvFwhm  = parseFloat(document.getElementById('ppUvFwhm').value)  || 0.3;
+            var irFwhm  = parseFloat(document.getElementById('ppIrFwhm').value)  || 15;
+            var irScale = parseFloat(document.getElementById('ppIrScale').value) || 1;
+            var parts = [];
+            if (detail.uvvis && detail.uvvis.conformers.length) {
+                var uv = ppUvCurve(detail.uvvis, uvFwhm);
+                parts.push('<div class="pp-plot"><div class="pp-plot-title">UV/Vis · λ<sub>max</sub> ≈ ' +
+                           escHtml(ppPeak(uv)[0]) + ' nm (broadened)</div>' +
+                           ppSvg(uv, 'Wavelength (nm)', false) + '</div>');
+            }
+            if (detail.ir && detail.ir.conformers.length) {
+                var ir = ppIrCurve(detail.ir, irFwhm, irScale);
+                parts.push('<div class="pp-plot"><div class="pp-plot-title">IR · strongest band ≈ ' +
+                           escHtml(ppPeak(ir)[0]) + ' cm⁻¹ (scaled, broadened)</div>' +
+                           ppSvg(ir, 'Wavenumber (cm⁻¹)', true) + '</div>');
+            }
+            return parts.join('') || '<div class="pp-waiting">Nothing to plot yet.</div>';
+        }
+
+        function ppKey(m) { return m.id + ':' + m.state_id; }
 
         function renderPhotophysics(payload) {
             var host = document.getElementById('ppCards');
@@ -3999,38 +4056,56 @@
                                  'No molecule in this project was submitted with UV/Vis or IR.</div>';
                 return;
             }
-            var uvFwhm  = parseFloat(document.getElementById('ppUvFwhm').value)  || 0.3;
-            var irFwhm  = parseFloat(document.getElementById('ppIrFwhm').value)  || 15;
-            var irScale = parseFloat(document.getElementById('ppIrScale').value) || 1;
+            var perMolecule = {};
+            payload.molecules.forEach(function (m) { perMolecule[m.id] = (perMolecule[m.id] || 0) + 1; });
             host.innerHTML = payload.molecules.map(function (m) {
-                var parts = [];
-                if (m.uvvis) {
-                    if (m.uvvis.conformers.length) {
-                        var uv = ppUvCurve(m.uvvis, uvFwhm);
-                        parts.push('<div class="pp-plot"><div class="pp-plot-title">UV/Vis · λ<sub>max</sub> ≈ ' +
-                                   ppPeak(uv)[0] + ' nm · ' + escHtml(ppNote(m.uvvis)) + '</div>' +
-                                   ppSvg(uv, 'Wavelength (nm)', false) + '</div>');
-                    } else {
-                        parts.push('<div class="pp-waiting">UV/Vis — waiting for ' + m.uvvis.missing +
-                                   ' conformer(s).</div>');
-                    }
-                }
-                if (m.ir) {
-                    if (m.ir.conformers.length) {
-                        var ir = ppIrCurve(m.ir, irFwhm, irScale);
-                        parts.push('<div class="pp-plot"><div class="pp-plot-title">IR · strongest band ≈ ' +
-                                   ppPeak(ir)[0] + ' cm⁻¹ · ' + escHtml(ppNote(m.ir)) + '</div>' +
-                                   ppSvg(ir, 'Wavenumber (cm⁻¹)', true) + '</div>');
-                    } else {
-                        parts.push('<div class="pp-waiting">IR — waiting for ' + m.ir.missing +
-                                   ' conformer(s).</div>');
-                    }
-                }
-                return '<div class="sa-card"><div class="sa-card-head">' +
+                var key = ppKey(m);
+                var detail = ppState.details[key];
+                var label = perMolecule[m.id] > 1 ? ' <span class="sa-smiles">(state ' + escHtml(m.state_id) + ')</span>' : '';
+                return '<div class="sa-card" data-pp="' + escHtml(key) + '"><div class="sa-card-head">' +
                        '<span class="sa-mol-id">#' + escHtml(m.id) + '</span>' +
-                       '<span class="sa-smiles">' + escHtml(m.smiles) + '</span></div>' +
-                       parts.join('') + '</div>';
+                       '<span class="sa-smiles">' + escHtml(m.smiles) + '</span>' + label +
+                       '<button type="button" class="btn-mini pp-open" data-mol="' + escHtml(m.id) + '">' +
+                       (detail ? 'Hide spectra' : 'Show spectra') + '</button></div>' +
+                       ppSummary(m) +
+                       '<div class="pp-body">' + (detail ? detail.html : '') + '</div></div>';
             }).join('');
+            Array.prototype.forEach.call(host.querySelectorAll('.pp-open'), function (btn) {
+                btn.addEventListener('click', function () { ppToggle(parseInt(btn.getAttribute('data-mol'), 10)); });
+            });
+        }
+
+        async function ppToggle(molId) {
+            var mols = ppState.payload.molecules.filter(function (m) { return m.id === molId; });
+            var open = mols.some(function (m) { return ppState.details[ppKey(m)]; });
+            if (open) {
+                mols.forEach(function (m) { delete ppState.details[ppKey(m)]; });
+                renderPhotophysics(ppState.payload);
+                return;
+            }
+            try {
+                var resp = await fetch('/api/projects/' + projectPath(ppState.project) +
+                                       '/photophysics?molecule_id=' + molId);
+                var payload = await safeJson(resp);
+                if (!resp.ok || !payload.molecules) throw new Error(payload.detail || payload._err || ('HTTP ' + resp.status));
+                payload.molecules.forEach(function (d) {
+                    ppState.details[ppKey(d)] = { data: d, html: ppPlots(d, d) };
+                });
+            } catch (err) {
+                mols.forEach(function (m) {
+                    ppState.details[ppKey(m)] = { data: null,
+                        html: '<div class="pp-waiting">Could not load spectra: ' + escHtml(err.message) + '</div>' };
+                });
+            }
+            renderPhotophysics(ppState.payload);
+        }
+
+        function ppRedrawOpen() {
+            Object.keys(ppState.details).forEach(function (key) {
+                var d = ppState.details[key];
+                if (d.data) d.html = ppPlots(d.data, d.data);
+            });
+            if (ppState.payload) renderPhotophysics(ppState.payload);
         }
 
         async function loadPhotophysicsPage() {
@@ -4056,6 +4131,7 @@
                                      '</div>';
                     return;
                 }
+                if (ppState.project !== name) ppState.details = {};
                 ppState.project = name;
                 ppState.payload = payload;
                 renderPhotophysics(payload);
@@ -4069,7 +4145,7 @@
             var el = document.getElementById(id);
             if (el) {
                 el.addEventListener('input', function () {
-                    if (ppState.payload) renderPhotophysics(ppState.payload);
+                    ppRedrawOpen();
                 });
             }
         });
