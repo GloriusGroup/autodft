@@ -97,10 +97,9 @@ roles, and the computed DELE/SOCME/channel list live in `inputs_json` for proven
 - The project name `system_references` is reserved and refused for every caller.
 
 **Engine** (`engine/state_machine.py`, `engine/pipeline.py`, new `engine/photophysics.py`)
-- `_followup_optimization`:
+- Category follow-ups live in `_followup_categories`, called right after `_followup_optimization` (which stays byte-identical to main):
   - S0 → `singlepoint_uvvis` / `singlepoint_nmr` when flagged.
-  - S1 (ESD) → `singlepoint_excited` only.
-  - T1 (ESD) → additionally `singlepoint_soc`.
+  - ESD S1 and T1 (states whose metadata has `esd_role`) → `singlepoint_soc`; the ESD S1 state's metadata sets `request_singlepoint: false` and no vertical excitations, so `_followup_optimization` adds nothing for it.
   - `_followups_were_expected` counts the new categories.
 - A new tick step between 4 and 5, `advance_photophysics`, which is idempotent, skips paused/archived projects, and only queries flagged molecules:
   1. **Seeding barrier:** once all S0 opt and SP tasks are terminal, pick S0* by G (parse SP `FINAL SINGLE POINT ENERGY` + opt `G-E(el)`), then create S1 opt, T1 opt and the S0* SOC job.
@@ -164,7 +163,7 @@ roles, and the computed DELE/SOCME/channel list live in `inputs_json` for proven
 **Pipeline**
 15. Join dead-ends: a failed prerequisite means the rate task is never created, and the molecule still looks "done" → analysis must say *which* prerequisite failed.
 16. The `_create_state` metadata snapshot copies only `_defaults` keys → new flags would silently vanish if not added there.
-17. The S1 branch in `_followup_optimization` would create a plain SP (ground state at the S1 geometry) plus vertical ox/red by default → must be gated for ESD S1.
+17. The S1 branch of `_followup_optimization` would create a plain SP (ground state at the S1 geometry) plus vertical ox/red → the ESD S1 state's metadata turns both off; its SOC singlepoint comes from `_followup_categories`.
 18. Header injection conflicts (duplicate `%tddft`, `NMR`, `Freq` in the SP header → an accidental numerical TDDFT Hessian, as in legacy mol_440). There's also the legacy newline bug (`end%maxcore`) → always inject on new lines.
 19. Retry side effects: `IncreaseResources` on 1-core ESD jobs (32 cores / 4 days); `RecoverSinglepointSCF` relaxes TightSCF → NormalSCF on attempt 3 for NMR (small shielding precision loss).
 20. The global circuit breaker counts every task type → a wave of S1 timeouts could halt everyone's submissions.
@@ -201,3 +200,11 @@ roles, and the computed DELE/SOCME/channel list live in `inputs_json` for proven
   - benzaldehyde (El-Sayed-allowed ISC, kISC ≈ 10¹⁰–10¹¹ s⁻¹) with small B3LYP/def2-SVP headers, all four categories ticked;
   - `autodft run --scheduler local` if ORCA runs in this container, otherwise you run it on a node;
   - every job type must run, every parser must return values, and rates must be finite and in the right order of magnitude.
+
+## Rulings made during execution
+
+- Category options are validated only by `categories.rejection`, and only for requested categories — never by pydantic bounds (a stale value must never refuse an unflagged submission).
+- ESD dispatches on (task type, state metadata `esd_role`) at three points: header composition, stage config, output checks.
+- The photophysics API is a summary per molecule plus `?molecule_id=` detail; counts distinguish pending / failed / unavailable / unweighted.
+- Parse-once persistence comes with Plan 4's archive JSON; until then analyses are cached per project.
+- The Plan 4 end-to-end run includes a radical with UV/Vis (UKS absorption parsing).

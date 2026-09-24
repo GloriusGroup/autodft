@@ -11,6 +11,7 @@ import pytest
 from sqlmodel import select
 
 from autodft import categories
+from autodft.analysis import spectroscopy
 from autodft.analysis.spectroscopy import analyze_spectra, boltzmann_weights, ranking_energies
 from autodft.config import Settings
 from autodft.db import get_session, init_db, reset_engine
@@ -194,3 +195,64 @@ def test_each_output_is_read_once(project, monkeypatch):
 
 def test_an_unknown_molecule_gives_no_entries(project):
     assert analyze_spectra("nho/p", molecule_id=10**6, use_cache=False)["molecules"] == []
+
+
+def _singlepoint_of(session, index):
+    opts = session.exec(select(ComputationTask).where(
+        ComputationTask.task_type == TaskType.optimization,
+        ComputationTask.status == TaskStatus.successful).order_by(ComputationTask.id)).all()
+    return session.exec(select(ComputationTask).where(
+        ComputationTask.depends_on_task_id == opts[index - 1].id,
+        ComputationTask.task_type == TaskType.singlepoint)).one()
+
+
+def test_a_conformer_waiting_for_its_energy_is_pending(project):
+    with get_session() as session:
+        sp = _singlepoint_of(session, 2)
+        sp.status = TaskStatus.pending
+        session.add(sp)
+        session.commit()
+    ir = _molecule(project)["ir"]
+    assert (ir["count"], ir["pending"], ir["unweighted"], ir["weighting"]) == (1, 1, 0, "G")
+    detail = _molecule(project, molecule_id=project["molecule"])["ir"]
+    assert [(c["conformer_index"], c["weight"]) for c in detail["conformers"]] == [(1, 1.0)]
+
+
+def test_a_conformer_without_an_energy_is_unweighted(project):
+    (project["tmp_path"] / "jobs" / "sp2" / "output.out").unlink()
+    ir = _molecule(project)["ir"]
+    assert (ir["count"], ir["pending"], ir["unweighted"]) == (1, 0, 1)
+
+
+def test_the_summary_cache_notices_archiving(project):
+    spectroscopy._CACHE.clear()
+    assert analyze_spectra("nho/p")["molecules"][0]["archived"] is False
+    with get_session() as session:
+        for mol in session.exec(select(Molecule)).all():
+            mol.archived = True
+            session.add(mol)
+        session.commit()
+    assert analyze_spectra("nho/p")["molecules"][0]["archived"] is True
+    spectroscopy._CACHE.clear()
+
+
+def test_a_state_without_conformers_says_why(project):
+    with get_session() as session:
+        mol = Molecule(smiles="CC#N", project_name="nho/p")
+        session.add(mol)
+        session.commit()
+        state = MoleculeState(molecule_id=mol.id, description="S0", multiplicity=1, charge=0,
+                              metadata_json=json.dumps({categories.IR: True}))
+        session.add(state)
+        session.commit()
+        search = ComputationTask(task_type=TaskType.confsearch, status=TaskStatus.pending,
+                                 state_id=state.id, header_id=1)
+        session.add(search)
+        session.commit()
+        entry = [m for m in analyze_spectra("nho/p", use_cache=False)["molecules"] if m["id"] == mol.id][0]
+        assert entry["stage"] == "searching" and entry["ir"]["count"] == 0
+        search.status = TaskStatus.failed
+        session.add(search)
+        session.commit()
+    entry = [m for m in analyze_spectra("nho/p", use_cache=False)["molecules"] if m["smiles"] == "CC#N"][0]
+    assert entry["stage"] == "none"

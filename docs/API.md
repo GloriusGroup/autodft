@@ -436,19 +436,26 @@ Without `molecule_id`, one summary per molecule (this view is cached):
     {"project": "nho/p", "temperature_k": 298.15, "molecules": [
       {"id": 7, "smiles": "c1ccccc1", "state_id": 21, "archived": false,
        "uvvis": {"count": 1, "pending": 0, "failed": 0, "unavailable": 0,
-                 "weighting": "G", "shortest_nm": 156.5,
+                 "unweighted": 0, "weighting": "G", "shortest_nm": 156.5,
                  "peak": {"wavelength_nm": 229.6, "energy_ev": 5.4, "fosc": 0.24}},
        "ir": {"count": 1, "pending": 0, "failed": 0, "unavailable": 0,
-              "weighting": "G",
+              "unweighted": 0, "weighting": "G",
               "peak": {"frequency_cm": 410.2, "intensity_km_mol": 12.3}}}]}
 
-`count` is conformers with a spectrum; `pending`, `failed`, `unavailable`
-account for the rest (job still running, job failed, or output missing/
-unparsable). `weighting` names the energy scale behind the Boltzmann
-weights: `"G"` when a conformer has a thermal correction, else `"E_sp"`,
-else `"equal"`. `peak` is the transition/mode with the largest weight ×
-fosc (or × intensity), or `null` when `count` is 0; UV/Vis also reports
+`count` is conformers with a spectrum and the energy the weights use;
+`pending`, `failed`, `unavailable`, `unweighted` account for the rest
+(job still running or its energy singlepoint still running, job failed,
+output missing/unparsable, or the spectrum is in but not the energy the
+weights use and none is coming). `weighting` names the energy scale
+behind the Boltzmann weights: `"G"` when a conformer has a thermal
+correction, else `"E_sp"`, else `"equal"`. `peak` is the transition/mode
+with the largest weight × fosc (or × intensity), or `null` when `count`
+is 0; it is present for UV/Vis and IR only. UV/Vis also reports
 `shortest_nm`, the shortest wavelength across every counted transition.
+
+A molecule entry with no conformer left to show (every optimisation
+failed, or none has run yet) adds `stage`: `"searching"` while work is
+still open for that state, else `"none"`.
 
 With `?molecule_id=`, that molecule's entries add `conformers` (read on
 request, not cached) and drop nothing:

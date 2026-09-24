@@ -153,3 +153,10 @@ def test_spectra_load_per_molecule():
     html = (TEMPLATE / "dashboard.html").read_text()
     assert "'/photophysics?molecule_id=' + molId" in html
     assert "function ppToggle(molId)" in html
+
+
+def test_photophysics_empty_states_and_energy_counts():
+    html = (TEMPLATE / "dashboard.html").read_text()
+    assert "ens.unweighted + ' without energy'" in html
+    assert "if (m.stage) {" in html
+    assert "if (ppState.project !== name) ppState.details = {};" not in html

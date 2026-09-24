@@ -4001,12 +4001,18 @@
             if (ens.pending) bits.push(ens.pending + ' pending');
             if (ens.failed) bits.push(ens.failed + ' failed');
             if (ens.unavailable) bits.push(ens.unavailable + ' without output');
+            if (ens.unweighted) bits.push(ens.unweighted + ' without energy');
             if (ens.count) bits.push(PP_WEIGHTING[ens.weighting] || ens.weighting);
             return bits.join(', ');
         }
 
         function ppSummary(m) {
             var rows = [];
+            if (m.stage) {
+                rows.push('<div class="pp-summary">' + (m.stage === 'searching'
+                    ? 'Conformers are still being computed.'
+                    : 'No conformer finished its optimisation.') + '</div>');
+            }
             if (m.uvvis) {
                 var uv = m.uvvis.peak
                     ? 'strongest transition <b>' + escHtml(m.uvvis.peak.wavelength_nm) + ' nm</b> (f = ' +
@@ -4131,7 +4137,7 @@
                                      '</div>';
                     return;
                 }
-                if (ppState.project !== name) ppState.details = {};
+                ppState.details = {};
                 ppState.project = name;
                 ppState.payload = payload;
                 renderPhotophysics(payload);

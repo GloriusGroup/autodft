@@ -62,6 +62,12 @@ A molecule never mixes scales across its conformers. Conformer numbers in
 the photophysics data are the same 1-based numbering as the Molecules
 page.
 
+A conformer whose data is in but whose energy is not yet (or never will
+be) is left out of the weights and counted as `pending` (or
+`unweighted`). Photophysics conformer numbers count every optimisation,
+like the Molecules page; the CSV summary export counts only successful
+optimisations, so the two differ when an earlier optimisation failed.
+
 ## Deploy
 
 1. Stop the controller (pipeline and API) on its node. The dashboard
@@ -75,8 +81,9 @@ page.
 ## Roll back
 
 Code from before this feature raises `LookupError` on any query that
-loads a task of a type it does not know, which stops the pipeline for
-every project. Remove those rows before running the old code.
+loads a row whose task type or project-job kind it does not know, which
+stops the pipeline for every project. Remove those rows before running
+the old code; later plans list any other rows they add here.
 
 1. Stop the controller; back up the database as above.
 2. On the controller host only (never open `autodft.db` from a second
@@ -86,12 +93,16 @@ every project. Remove those rows before running the old code.
 .venv/bin/python - <<'EOF'
 import sqlite3
 NEW_TYPES = ("singlepoint_uvvis",)  # later plans add their task types here
+NEW_JOB_KINDS = ()  # project-job kinds later plans add
 db = sqlite3.connect("/path/to/autodft.db")
 marks = ",".join("?" * len(NEW_TYPES))
 with db:
     db.execute(f"DELETE FROM computation_jobs WHERE task_id IN "
                f"(SELECT id FROM computation_tasks WHERE task_type IN ({marks}))", NEW_TYPES)
     db.execute(f"DELETE FROM computation_tasks WHERE task_type IN ({marks})", NEW_TYPES)
+    if NEW_JOB_KINDS:
+        kinds = ",".join("?" * len(NEW_JOB_KINDS))
+        db.execute(f"DELETE FROM project_jobs WHERE kind IN ({kinds})", NEW_JOB_KINDS)
 db.close()
 EOF
 ```

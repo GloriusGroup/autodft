@@ -13,7 +13,7 @@ import math
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from sqlmodel import Session, col, select
+from sqlmodel import Session, col, func, select
 
 from autodft import categories
 from autodft.db import get_session
@@ -47,7 +47,7 @@ def boltzmann_weights(
     return [r / total for r in raw]
 
 
-def ranking_energies(results: list[ConformerResult]) -> list[Optional[float]]:
+def ranking_energies(results: list) -> list[Optional[float]]:
     """One energy scale for a conformer pool: G if any conformer has it, else
     the bare singlepoint -- never a mix (see
     PipelineExtractor._pick_reported_conformer)."""
@@ -68,7 +68,7 @@ class Conformer:
     e_singlepoint: Optional[float] = None
     e_combined: Optional[float] = None
     ir_modes: Optional[list[IRMode]] = None
-    readable: bool = False
+    energy_pending: bool = False  # its energy singlepoint is still to come
 
 
 def conformer_pool(
@@ -94,12 +94,15 @@ def conformer_pool(
         content = extractor.successful_output(session, opt.id)
         if content is None:
             continue
-        conformer.readable = True
         if ir:
             conformer.ir_modes = parse_ir(content)
         correction = OrcaParser.extract_free_energy_correction(content)
-        sp = _follow_up(session, opt, TaskType.singlepoint, successful=True)
-        sp_content = extractor.successful_output(session, sp.id) if sp is not None else None
+        sp = _follow_up(session, opt, TaskType.singlepoint)
+        conformer.energy_pending = sp.status in _OPEN if sp is not None else opt.has_followups
+        sp_content = (
+            extractor.successful_output(session, sp.id)
+            if sp is not None and sp.status == TaskStatus.successful else None
+        )
         if sp_content is not None:
             conformer.e_singlepoint = OrcaParser.extract_electronic_energy(sp_content)
         if conformer.e_singlepoint is not None and correction is not None:
@@ -118,26 +121,41 @@ def weighting(conformers: list) -> str:
 
 def ensemble(
     items: list[tuple[Conformer, str, Optional[dict]]], detail: bool,
-    peak: Callable[[list[tuple[Conformer, dict, float]]], Optional[dict]],
+    peak: Optional[Callable[[list[tuple[Conformer, dict, float]]], Optional[dict]]] = None,
 ) -> dict:
-    """Weight the conformers whose data is in; count the rest by why it is not."""
-    have = [(c, data) for c, status, data in items if status == "ok"]
+    """Weight the conformers whose data and energy are in; count the rest by why they are not."""
+    ready = [(c, data) for c, status, data in items if status == "ok"]
+    basis = weighting([c for c, _ in ready])
+    have = [(c, data) for c, data in ready if _has_energy(c, basis)]
+    waiting = [c for c, _ in ready if not _has_energy(c, basis)]
     weights = boltzmann_weights(ranking_energies([c for c, _ in have]))
     weighted = [(c, data, w) for (c, data), w in zip(have, weights)]
     out = {
         "count": len(have),
-        "pending": sum(status == "pending" for _, status, _ in items),
+        "pending": sum(status == "pending" for _, status, _ in items)
+                   + sum(c.energy_pending for c in waiting),
         "failed": sum(status == "failed" for _, status, _ in items),
         "unavailable": sum(status == "unavailable" for _, status, _ in items),
-        "weighting": weighting([c for c, _ in have]),
-        "peak": peak(weighted),
+        "unweighted": sum(not c.energy_pending for c in waiting),
+        "weighting": basis,
     }
+    if peak is not None:
+        out["peak"] = peak(weighted)
     if detail:
         out["conformers"] = [
             {"conformer_index": c.conformer_index, "opt_task_id": c.opt.id, "weight": w, **data}
             for c, data, w in weighted
         ]
     return out
+
+
+def _has_energy(conformer: Conformer, basis: str) -> bool:
+    """Whether *conformer* has the energy the weights rest on."""
+    if basis == "G":
+        return conformer.e_combined is not None
+    if basis == "E_sp":
+        return conformer.e_singlepoint is not None
+    return True
 
 
 _CACHE: dict[str, tuple[tuple, dict]] = {}
@@ -154,13 +172,24 @@ def analyze_spectra(
 
     if molecule_id is not None or not use_cache:
         return _analyze(project_name, molecule_id)
-    signature = _cache_signature(project_name)
+    signature = (_cache_signature(project_name), _archived_count(project_name))
     cached = _CACHE.get(project_name)
     if cached is not None and cached[0] == signature:
         return cached[1]
     payload = _analyze(project_name, None)
     _CACHE[project_name] = (signature, payload)
     return payload
+
+
+def _archived_count(project_name: str) -> int:
+    """Archiving changes no task, so the cache also watches this."""
+    with get_session() as session:
+        return session.exec(
+            select(func.count()).select_from(Molecule).where(
+                Molecule.project_name == project_name,
+                Molecule.archived == True,  # noqa: E712
+            )
+        ).one()
 
 
 def _analyze(project_name: str, molecule_id: Optional[int]) -> dict:
@@ -189,6 +218,8 @@ def _analyze(project_name: str, molecule_id: Optional[int]) -> dict:
                 ]
                 entry: dict = {"id": mol.id, "smiles": mol.smiles, "state_id": state.id,
                                "archived": mol.archived}
+                if not pool:
+                    entry["stage"] = _stage(session, state)
                 if categories.UVVIS in wanted:
                     items = [(c, *_uvvis(session, extractor, c)) for c in pool]
                     entry["uvvis"] = ensemble(items, detail, _uvvis_peak)
@@ -199,6 +230,16 @@ def _analyze(project_name: str, molecule_id: Optional[int]) -> dict:
                     entry["ir"] = ensemble([(c, *_ir(c)) for c in pool], detail, _ir_peak)
                 molecules.append(entry)
     return {"project": project_name, "temperature_k": ROOM_TEMPERATURE, "molecules": molecules}
+
+
+def _stage(session: Session, state: MoleculeState) -> str:
+    """Why *state* has no conformer yet: ``searching`` while work is open, else ``none``."""
+    tasks = session.exec(select(ComputationTask).where(ComputationTask.state_id == state.id)).all()
+    busy = any(
+        t.status in _OPEN or (t.status == TaskStatus.successful and t.has_followups)
+        for t in tasks
+    )
+    return "searching" if busy else "none"
 
 
 def _follow_up(
