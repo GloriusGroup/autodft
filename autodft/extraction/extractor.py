@@ -669,6 +669,9 @@ class PipelineExtractor:
 
         deleted = 0
         with get_session() as session:
+            # Rate jobs copy these Hessians whenever they are (re)generated.
+            esd_opts = self._esd_optimisations(session)
+
             jobs = session.exec(
                 select(ComputationJob).where(ComputationJob.success == True)  # noqa: E712
             ).all()
@@ -679,16 +682,40 @@ class PipelineExtractor:
                 job_dir = Path(job.job_path)
                 if not job_dir.is_dir():
                     continue
+                keep = extensions | {".hess"} if job.task_id in esd_opts else extensions
                 for f in job_dir.iterdir():
-                    if f.is_file() and f.suffix not in extensions:
+                    if f.is_file() and f.suffix not in keep:
                         if dry_run:
                             logger.info("Would delete: %s", f)
                         else:
                             f.unlink()
-                            deleted += 1
+                        deleted += 1
 
         logger.info("Cleanup: deleted %d files (dry_run=%s)", deleted, dry_run)
         return deleted
+
+    @staticmethod
+    def _esd_optimisations(session: Session) -> set[int]:
+        """Optimisation tasks of ESD states: S0 with ``request_esd`` and every ``esd_role`` state."""
+        candidates = session.exec(
+            select(MoleculeState.id, MoleculeState.metadata_json).where(
+                col(MoleculeState.metadata_json).contains("request_esd")
+                | col(MoleculeState.metadata_json).contains("esd_role")
+            )
+        ).all()
+        states = []
+        for state_id, raw in candidates:
+            metadata = json.loads(raw) if raw else {}
+            if metadata.get("esd_role") or metadata.get("request_esd") is True:
+                states.append(state_id)
+        if not states:
+            return set()
+        return set(session.exec(
+            select(ComputationTask.id).where(
+                ComputationTask.task_type == TaskType.optimization,
+                col(ComputationTask.state_id).in_(states),
+            )
+        ).all())
 
 
 # ======================================================================

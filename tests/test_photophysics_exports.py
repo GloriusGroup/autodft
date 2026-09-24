@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
-from autodft.extraction.extractor import _FILE_MAP, _copy_task_files
+from autodft.config import Settings
+from autodft.db import get_session, init_db, reset_engine
+from autodft.extraction.extractor import _FILE_MAP, PipelineExtractor, _copy_task_files
+from autodft.models import ComputationJob, ComputationTask, Molecule, MoleculeState, TaskStatus, TaskType
 
 
 def test_legacy_file_maps_are_unchanged():
@@ -39,3 +44,59 @@ def test_new_job_types_export_input_geometry_and_output(tmp_path, task_type, pre
     assert sorted(p.name for p in (tmp_path / "out").iterdir()) == sorted(
         f"conf1_{prefix}_{suffix}" for suffix in ("input.inp", "geometry.xyz", "output.out")
     )
+
+
+def _job_dir(session, tmp_path, name, metadata, task_type=TaskType.optimization, description="S0"):
+    mol = Molecule(smiles=f"C{name}", project_name="nho/p")
+    session.add(mol)
+    session.commit()
+    state = MoleculeState(molecule_id=mol.id, description=description, multiplicity=1, charge=0,
+                          metadata_json=json.dumps(metadata))
+    session.add(state)
+    session.commit()
+    task = ComputationTask(task_type=task_type, status=TaskStatus.successful,
+                           state_id=state.id, header_id=1, has_followups=False)
+    session.add(task)
+    session.commit()
+    path = tmp_path / "jobs" / name
+    path.mkdir(parents=True)
+    for file in ("output.out", "input.hess", "input.gbw"):
+        (path / file).write_text(file)
+    session.add(ComputationJob(task_id=task.id, attempt=1, job_path=str(path), success=True))
+    session.commit()
+    return path
+
+
+@pytest.fixture()
+def db(tmp_path):
+    settings = Settings()
+    settings.storage.data_path = str(tmp_path)
+    reset_engine()
+    init_db(settings)
+    yield tmp_path
+    reset_engine()
+
+
+def test_cleanup_keeps_the_hessians_esd_needs(db):
+    with get_session() as session:
+        kept = [
+            _job_dir(session, db, "esd_s0", {"request_esd": True}),
+            _job_dir(session, db, "esd_s1", {"esd_role": "S1"}, description="S1"),
+            _job_dir(session, db, "esd_t1", {"esd_role": "T1"}, description="T1"),
+        ]
+        plain = _job_dir(session, db, "plain", {"request_singlepoint": True})
+        esd_false = _job_dir(session, db, "esd_off", {"request_esd": False})
+        esd_sp = _job_dir(session, db, "esd_sp", {"request_esd": True}, task_type=TaskType.singlepoint_soc)
+    deleted = PipelineExtractor("__all__").cleanup_large_files()
+    for path in kept:
+        assert sorted(p.name for p in path.iterdir()) == ["input.hess", "output.out"]
+    for path in (plain, esd_false, esd_sp):
+        assert sorted(p.name for p in path.iterdir()) == ["output.out"]
+    assert deleted == 3 + 2 * 3
+
+
+def test_a_dry_run_counts_the_same_files(db):
+    with get_session() as session:
+        _job_dir(session, db, "esd_s1", {"esd_role": "S1"}, description="S1")
+        _job_dir(session, db, "plain", {})
+    assert PipelineExtractor("__all__").cleanup_large_files(dry_run=True) == 1 + 2
