@@ -1245,10 +1245,11 @@ mkdir -p tests/fixtures/orca
 sed -n '2463,2506p' /mnt/share/dft_calculations/data/mol_440/state_1429_S0/tasks/7401_singlepoint/job_8063/output.out > tests/fixtures/orca/uvvis_absorption.out
 printf '\n                             ****ORCA TERMINATED NORMALLY****\n' >> tests/fixtures/orca/uvvis_absorption.out
 sed -n '4468,4511p' /mnt/share/dft_calculations/data/mol_186/state_461_S0/tasks/2907_optimization/job_3167/output.out > tests/fixtures/orca/opt_ir.out
-grep -c -- '-> ' tests/fixtures/orca/uvvis_absorption.out; grep -c '^ *[0-9]*:' tests/fixtures/orca/opt_ir.out
+sed -n '1567,1593p' /tmp/claude-2002/-mnt-share-dft-calculations-autodft/4ed35d89-8e4f-452e-9516-0ca34b9e0e52/scratchpad/orca_esd/soc_s0.out > tests/fixtures/orca/uvvis_absorption_triplets.out
+grep -c -- '-> ' tests/fixtures/orca/uvvis_absorption.out; grep -c '^ *[0-9]*:' tests/fixtures/orca/opt_ir.out; grep -c -- '-3A ' tests/fixtures/orca/uvvis_absorption_triplets.out
 ```
 
-Expected: `30` then `27`. The absorption fixture holds the 25-row electric-dipole table followed by the first 5 rows of the velocity-gauge table (same row format — the parser must stop at the first table's end); the IR fixture holds the whole 27-mode `IR SPECTRUM` table ("The total number of vibrations considered is 27").
+Expected: `30`, `27`, `10`. The absorption fixture holds the 25-row electric-dipole table followed by the first 5 rows of the velocity-gauge table (same row format — the parser must stop at the first table's end); the IR fixture holds the whole 27-mode `IR SPECTRUM` table ("The total number of vibrations considered is 27"); the triplets fixture is a real ORCA 6.1.1 run with `triplets true` (glyoxal, B3LYP/def2-SVP), whose plain absorption table interleaves 10 spin-forbidden `0-1A -> n-3A` rows (fosc 0) with the 10 singlet rows.
 
 - [ ] **Step 2: Write the failing tests** — `tests/test_spectra_parser.py`
 
@@ -1275,6 +1276,13 @@ class TestAbsorption:
         assert rows[0].energy_ev == pytest.approx(2.527633)
         assert rows[0].wavelength_nm == pytest.approx(490.5)
         assert rows[2].fosc == pytest.approx(0.240844161)
+
+    def test_keeps_only_spin_allowed_rows(self):
+        # With `triplets true` ORCA 6 interleaves n-3A rows into the plain table.
+        rows = parse_absorption((FIXTURES / "uvvis_absorption_triplets.out").read_text())
+        assert [t.root for t in rows] == list(range(1, 11))
+        assert rows[0].energy_ev == pytest.approx(2.547606)
+        assert rows[4].fosc == pytest.approx(0.235998787)
 
     def test_skips_the_soc_corrected_table(self):
         content = (
@@ -1343,7 +1351,9 @@ Expected: collection error (`spectra_parser` missing).
 
 Only the plain electric-dipole absorption table is read. With DOSOC, ORCA also
 prints SOC-corrected and velocity-gauge tables in the same row format; the
-parser keys on the exact title and stops at the first table's end.
+parser keys on the exact title and stops at the first table's end. With
+``triplets true`` the plain table also lists spin-forbidden rows
+(``0-1A -> 1-3A``, fosc 0); only spin-allowed rows are kept.
 """
 
 from __future__ import annotations
@@ -1355,8 +1365,9 @@ EV_TO_CM = 8065.543937
 
 _ABS_TITLE = "ABSORPTION SPECTRUM VIA TRANSITION ELECTRIC DIPOLE MOMENTS"
 # ORCA 6: "  0-1A  ->  3-1A    6.022348   48573.5   205.9   0.240844161 ..."
+# Groups: initial multiplicity, final root, final multiplicity, eV, cm-1, nm, fosc.
 _ABS_ROW_6 = re.compile(
-    r"^\s*\d+-\w+\s+->\s+(\d+)-\w+\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+([-\d.eE+]+)"
+    r"^\s*\d+-(\d+)\w*\s+->\s+(\d+)-(\d+)\w*\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+([-\d.eE+]+)"
 )
 # ORCA 5: "   3   48573.5    205.9   0.240844161 ..."
 _ABS_ROW_5 = re.compile(r"^\s*(\d+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+([-\d.eE+]+)\s")
@@ -1388,18 +1399,22 @@ def parse_absorption(content: str) -> list[Transition]:
         return []
 
     rows: list[Transition] = []
+    seen_row = False
     for line in lines[start + 1:]:
         match6 = _ABS_ROW_6.match(line)
         if match6:
-            root, ev, cm, nm, fosc = match6.groups()
-            rows.append(Transition(int(root), float(ev), float(cm), float(nm), float(fosc)))
+            seen_row = True
+            mult_from, root, mult_to, ev, cm, nm, fosc = match6.groups()
+            if mult_to == mult_from:
+                rows.append(Transition(int(root), float(ev), float(cm), float(nm), float(fosc)))
             continue
         match5 = _ABS_ROW_5.match(line)
         if match5:
+            seen_row = True
             root, cm, nm, fosc = match5.groups()
             rows.append(Transition(int(root), float(cm) / EV_TO_CM, float(cm), float(nm), float(fosc)))
             continue
-        if rows and not line.strip():
+        if seen_row and not line.strip():
             break
     return rows
 
