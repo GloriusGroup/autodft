@@ -196,6 +196,7 @@ class SubmitRequest(BaseModel):
     # Settings of the categories above; recorded only when the category is.
     uvvis_nroots: int = 20
     uvvis_tda: bool = False
+    nmr_nuclei: list[str] = Field(default_factory=lambda: ["H", "C", "F"])
     # For each slot you can pass either the raw header text OR the integer
     # ID of a stored ComputationHeader. ID takes precedence.
     header_confsearch: Optional[str] = None
@@ -2009,6 +2010,7 @@ def _category_flags(body: SubmitRequest) -> dict:
         categories.NMR: body.request_spec_nmr,
         "uvvis_nroots": body.uvvis_nroots,
         "uvvis_tda": body.uvvis_tda,
+        "nmr_nuclei": body.nmr_nuclei,
         "request_optimization": body.request_optimization,
         "request_singlepoint": body.request_singlepoint,
     }

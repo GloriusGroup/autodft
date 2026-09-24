@@ -24,7 +24,7 @@ LABELS = {ESD: "ESD", UVVIS: "UV/Vis", IR: "IR", NMR: "NMR"}
 
 # What the engine can compute today. Anything else is refused at submission
 # rather than accepted and silently never run.
-AVAILABLE = frozenset({UVVIS, IR})
+AVAILABLE = frozenset({UVVIS, IR, NMR})
 
 # Categories whose jobs are built on the singlepoint header.
 _ON_SP_HEADER = frozenset({ESD, UVVIS, NMR})
@@ -42,8 +42,10 @@ _SP_CONFLICTS = (
 # only when the category is requested.
 OPTIONS: dict[str, dict] = {
     UVVIS: {"uvvis_nroots": 20, "uvvis_tda": False},
+    NMR: {"nmr_nuclei": ["H", "C", "F"]},
 }
 UVVIS_NROOTS_MAX = 100
+NMR_NUCLEI = ("H", "C", "F")
 
 
 def requested(metadata: dict) -> set[str]:
@@ -56,7 +58,9 @@ def options(metadata: dict) -> dict:
     out: dict = {}
     for key in sorted(requested(metadata)):
         for name, default in OPTIONS.get(key, {}).items():
-            out[name] = metadata.get(name, default)
+            value = metadata.get(name, default)
+            # Lists are copied so no caller can mutate a shared default.
+            out[name] = list(value) if isinstance(value, list) else value
     return out
 
 
@@ -94,6 +98,12 @@ def rejection(
     if unavailable:
         return f"{', '.join(unavailable)} is not available yet."
 
+    if NMR in wanted and check.get("multiplicity") != 1:
+        return (
+            f"NMR needs a closed-shell singlet reference; this molecule has "
+            f"multiplicity {check.get('multiplicity')}."
+        )
+
     if not metadata.get("request_optimization", True):
         labels = ", ".join(sorted(LABELS[key] for key in wanted))
         return f"{labels} needs the optimisation stage."
@@ -103,6 +113,15 @@ def rejection(
         if (isinstance(nroots, bool) or not isinstance(nroots, int)
                 or not 1 <= nroots <= UVVIS_NROOTS_MAX):
             return f"UV/Vis needs between 1 and {UVVIS_NROOTS_MAX} excited states (uvvis_nroots)."
+
+    if NMR in wanted:
+        nuclei = metadata.get("nmr_nuclei", OPTIONS[NMR]["nmr_nuclei"])
+        if (not isinstance(nuclei, list) or not nuclei
+                or any(n not in NMR_NUCLEI for n in nuclei)):
+            return (
+                f"NMR nuclei must be a non-empty subset of "
+                f"{', '.join(NMR_NUCLEI)} (nmr_nuclei)."
+            )
 
     if IR in wanted and not _FREQ_RE.search(header_optimization or ""):
         return (

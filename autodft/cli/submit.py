@@ -77,7 +77,7 @@ def _check_reference_state(
 
 def _category_options_to_flags(
     uvvis: bool, ir: bool, esd: bool, esd_ht: bool, nmr: bool,
-    uvvis_nroots: int = 20, uvvis_tda: bool = False,
+    uvvis_nroots: int = 20, uvvis_tda: bool = False, nmr_nuclei: Optional[list] = None,
 ) -> dict:
     """CLI options as ``request_metadata`` category keys and settings."""
     from autodft import categories
@@ -90,6 +90,7 @@ def _category_options_to_flags(
         categories.NMR: nmr,
         "uvvis_nroots": uvvis_nroots,
         "uvvis_tda": uvvis_tda,
+        "nmr_nuclei": nmr_nuclei if nmr_nuclei is not None else ["H", "C", "F"],
     }
 
 
@@ -218,13 +219,21 @@ def submit(
     ir: bool = typer.Option(False, "--ir", help="IR spectrum from the optimisation's frequencies"),
     esd: bool = typer.Option(False, "--esd", help="Excited-state dynamics (not available yet)"),
     esd_ht: bool = typer.Option(False, "--esd-ht", help="Herzberg-Teller for ESD rates (not available yet)"),
-    nmr: bool = typer.Option(False, "--nmr", help="NMR shifts (not available yet)"),
+    nmr: bool = typer.Option(
+        False, "--nmr", help="NMR shifts (1H/13C/19F) vs automatically computed TMS / CFCl3"
+    ),
     uvvis_nroots: int = typer.Option(20, "--uvvis-nroots", help="UV/Vis excited states (1-100)"),
     uvvis_tda: bool = typer.Option(False, "--uvvis-tda", help="Tamm-Dancoff approximation for UV/Vis"),
+    nmr_nuclei: str = typer.Option(
+        "H,C,F", "--nmr-nuclei", help="NMR nuclei to report, comma-separated"
+    ),
 ) -> None:
     """Submit a single molecule by SMILES string."""
     _check_reference_state(smiles, request_t1, request_ox, request_red)
-    flags = _category_options_to_flags(uvvis, ir, esd, esd_ht, nmr, uvvis_nroots, uvvis_tda)
+    flags = _category_options_to_flags(
+        uvvis, ir, esd, esd_ht, nmr, uvvis_nroots, uvvis_tda,
+        nmr_nuclei=[n.strip() for n in nmr_nuclei.split(",") if n.strip()],
+    )
     qualified, author = _qualified_project(project, user)
 
     # Use custom headers if provided, otherwise use defaults
@@ -305,16 +314,24 @@ def submit_batch(
     ir: bool = typer.Option(False, "--ir", help="IR spectrum from the optimisation's frequencies"),
     esd: bool = typer.Option(False, "--esd", help="Excited-state dynamics (not available yet)"),
     esd_ht: bool = typer.Option(False, "--esd-ht", help="Herzberg-Teller for ESD rates (not available yet)"),
-    nmr: bool = typer.Option(False, "--nmr", help="NMR shifts (not available yet)"),
+    nmr: bool = typer.Option(
+        False, "--nmr", help="NMR shifts (1H/13C/19F) vs automatically computed TMS / CFCl3"
+    ),
     uvvis_nroots: int = typer.Option(20, "--uvvis-nroots", help="UV/Vis excited states (1-100)"),
     uvvis_tda: bool = typer.Option(False, "--uvvis-tda", help="Tamm-Dancoff approximation for UV/Vis"),
+    nmr_nuclei: str = typer.Option(
+        "H,C,F", "--nmr-nuclei", help="NMR nuclei to report, comma-separated"
+    ),
 ) -> None:
     """Submit molecules from a CSV file."""
     if not file.exists():
         console.print(f"[red]File not found:[/red] {file}")
         raise typer.Exit(code=1)
     qualified, author = _qualified_project(project, user)
-    flags = _category_options_to_flags(uvvis, ir, esd, esd_ht, nmr, uvvis_nroots, uvvis_tda)
+    flags = _category_options_to_flags(
+        uvvis, ir, esd, esd_ht, nmr, uvvis_nroots, uvvis_tda,
+        nmr_nuclei=[n.strip() for n in nmr_nuclei.split(",") if n.strip()],
+    )
 
     request_metadata = _build_request_metadata(
         project_name=qualified,
