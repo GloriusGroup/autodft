@@ -29,7 +29,7 @@ from autodft.qm.orca.parser import OrcaParser
 SP = "!B3LYP def2-TZVP TightSCF\n%maxcore 500\n%pal nprocs 2 end\n"
 
 # Task types whose header compose_header changes.
-COMPOSED = {TaskType.singlepoint_uvvis, TaskType.singlepoint_nmr}
+COMPOSED = {TaskType.singlepoint_uvvis, TaskType.singlepoint_nmr, TaskType.singlepoint_soc}
 
 
 class TestBlocks:

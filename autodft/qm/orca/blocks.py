@@ -11,6 +11,11 @@ from typing import Optional
 
 from autodft import categories
 
+# ESD TDDFT jobs: ten singlets and triplets reach past the S1 -> Tn window.
+ESD_NROOTS = 10
+# The S1 optimisation follows root 1; a few roots above keep the tracking stable.
+S1_NROOTS = 5
+
 
 class HeaderConflict(ValueError):
     """The header already sets what a calculation needs to add."""
@@ -80,6 +85,12 @@ def compose_header(task_type: str, header: str, options: Optional[dict] = None) 
         )
     if task_type == "singlepoint_nmr":
         return with_keyword(header, "NMR")
+    if task_type == "singlepoint_soc":
+        return with_tddft(
+            header, nroots=ESD_NROOTS, iroot=1, triplets=True, dosoc=True, tda=False,
+        )
+    if task_type == "optimization" and options.get("esd_role") == "S1":
+        return with_tddft(header, nroots=S1_NROOTS, iroot=1, followiroot=True, tda=False)
     return header
 
 

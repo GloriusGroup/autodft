@@ -535,6 +535,9 @@ def _category_followups(description: str, metadata: dict) -> list[TaskType]:
         followups.append(TaskType.singlepoint_uvvis)
     if categories.on_s0(description, metadata, categories.NMR):
         followups.append(TaskType.singlepoint_nmr)
+    # ESD states run a TDDFT/SOC singlepoint at their optimised geometry.
+    if metadata.get("esd_role"):
+        followups.append(TaskType.singlepoint_soc)
     return followups
 
 
