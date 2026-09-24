@@ -29,6 +29,15 @@ from autodft.models.enums import TaskType, TaskStatus
 
 logger = logging.getLogger(__name__)
 
+# ESD states start from the lowest S0 conformer once every S0 conformer is
+# done (autodft.engine.photophysics), so expansion creates them without a task.
+ESD_S1_METADATA = {
+    "esd_role": "S1",
+    "request_singlepoint": False,
+    "request_singlepoint_vertical_excitations": False,
+}
+ESD_T1_METADATA = {"esd_role": "T1"}
+
 
 # ======================================================================
 # Public API
@@ -170,6 +179,20 @@ def _process_entrypoint_body(
         session, molecule, smiles, "S0", multiplicity, charge,
         metadata, header_ids, base_path, initial_xyz,
     )
+
+    # A requested T1 below then finds this deferred T1 and adds nothing.
+    if metadata.get(categories.ESD):
+        esd = categories.esd_settings(metadata)
+        _create_state(
+            session, molecule, smiles, "S1", 1, charge,
+            metadata, header_ids, base_path, initial_xyz,
+            defer=True, extra_metadata={**ESD_S1_METADATA, **esd},
+        )
+        _create_state(
+            session, molecule, smiles, "T1", multiplicity + 2, charge,
+            metadata, header_ids, base_path, initial_xyz,
+            defer=True, extra_metadata={**ESD_T1_METADATA, **esd},
+        )
 
     if metadata.get("request_T1", False):
         _create_state(
@@ -514,6 +537,8 @@ def _create_state(
     header_ids: dict,
     base_path: Path,
     initial_xyz: str,
+    defer: bool = False,
+    extra_metadata: Optional[dict] = None,
 ) -> None:
     """Create a ``MoleculeState``, its initial geometry, and a confsearch task.
 
@@ -566,6 +591,9 @@ def _create_state(
     if description == "S0":
         state_metadata.update(categories.snapshot(metadata))
 
+    if extra_metadata:
+        state_metadata.update(extra_metadata)
+
     state = MoleculeState(
         molecule_id=molecule.id,
         description=description,
@@ -593,6 +621,10 @@ def _create_state(
     )
     session.add(geom)
     session.flush()
+
+    if defer:
+        logger.info("State '%s' id=%d waits for its seed geometry", description, state.id)
+        return
 
     do_confsearch = metadata.get("request_confsearch", True) and cs_hid is not None
 
