@@ -185,6 +185,23 @@ def test_a_pending_nmr_job_is_counted(db):
     assert (summary["count"], summary["pending"], summary["signals"]) == (0, 1, {})
 
 
+def test_a_conformer_whose_shieldings_do_not_match_is_unavailable(db):
+    with get_session() as session:
+        state = _glyoxal(session, db)
+        geom = MoleculeGeometry(state_id=state.id, xyz_data=(FIXTURES / "glyoxal_s0.xyz").read_text())
+        session.add(geom)
+        session.commit()
+        opt = _task(session, state, TaskType.optimization, geometry=geom.id)
+        _job(session, opt, db, "g2_opt", "G-E(el)                           ...      0.03000000 Eh")
+        sp = _task(session, state, TaskType.singlepoint, parent=opt.id)
+        _job(session, sp, db, "g2_sp", "FINAL SINGLE POINT ENERGY      -227.600000000")
+        shield = _task(session, state, TaskType.singlepoint_nmr, parent=opt.id)
+        _job(session, shield, db, "g2_nmr", TMS, B3LYP_NMR)
+    summary = analyze_spectra("nho/p", use_cache=False)["molecules"][0]["nmr"]
+    assert (summary["count"], summary["unavailable"]) == (1, 1)
+    assert [c["weight"] for c in _detail()["conformers"]] == [pytest.approx(1.0)]
+
+
 def test_the_cache_notices_a_reference_finishing(db):
     with get_session() as session:
         _glyoxal(session, db)

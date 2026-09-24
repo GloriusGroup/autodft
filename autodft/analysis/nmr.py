@@ -216,8 +216,14 @@ def _status(session, extractor, conformer: Conformer, results: dict) -> str:
         return "pending"
     if task.status == TaskStatus.failed:
         return "failed"
+    from autodft.analysis.state_analysis import parse_xyz
+
     shieldings, keywords = _nmr_result(session, extractor, task.id)
     if not shieldings:
+        return "unavailable"
+    # Shieldings for other atoms than the optimised geometry's are unusable.
+    elements, _ = parse_xyz(_geometry(session, conformer.opt.id))
+    if [s.element for s in shieldings] != elements:
         return "unavailable"
     results[conformer.opt.id] = (shieldings, keywords)
     return "ok"
