@@ -120,3 +120,24 @@ def test_disk_usage_is_measured_on_request(client):
     assert usage["total_bytes"] >= 0
     assert usage["measured_at"] is not None
     admin_ops._reset_disk_usage()
+
+
+def test_the_dashboard_offers_the_spectra_categories(client):
+    c, headers = client
+    html = c.get("/", headers=headers).text
+    for needle in ('id="requestUvvis"', 'id="requestIr"',
+                   'data-page="projects.photophysics"', 'id="projectSelectPP"',
+                   "request_spec_uvvis", "request_spec_ir"):
+        assert needle in html, needle
+
+
+def test_each_category_has_a_settings_panel_shown_only_when_ticked(client):
+    import re
+
+    c, headers = client
+    html = c.get("/", headers=headers).text
+    panels = re.findall(r'<div class="cat-detail" data-requires="(\w+)" style="display:none;">', html)
+    assert panels == ["requestUvvis", "requestIr"]
+    for needle in ('id="uvvisNroots"', 'id="uvvisTda"', 'id="irHeaderNote"',
+                   'id="uvvisHeaderNote"', "uvvis_nroots:", "uvvis_tda:"):
+        assert needle in html, needle

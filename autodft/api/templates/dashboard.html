@@ -1025,6 +1025,15 @@
             font-size: 0.78rem;
             color: var(--text-primary);
         }
+        .pp-plot { margin-top: 10px; }
+        .pp-plot-title { font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 4px; }
+        .pp-waiting { font-size: 0.85rem; color: var(--text-muted); font-style: italic; margin-top: 10px; }
+        .cat-detail { border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; background: var(--bg-secondary); min-width: 260px; max-width: 440px; }
+        .cat-detail-title { font-weight: 600; font-size: 0.85rem; margin-bottom: 6px; color: var(--text-primary); }
+        .cat-detail-body { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
+        .cat-detail-note { font-size: 0.78rem; color: var(--text-muted); margin-top: 6px; }
+        .cat-detail-note:empty { display: none; }
+        .cat-detail-note.warn { color: var(--yellow); }
     </style>
 </head>
 <body>
@@ -1053,6 +1062,7 @@
             <a class="nav-item nav-sub" data-route="projects.summary"        href="#/projects/summary">Summary</a>
             <a class="nav-item nav-sub" data-route="projects.molecules"      href="#/projects/molecules">Molecules</a>
             <a class="nav-item nav-sub" data-route="projects.state-analysis" href="#/projects/state-analysis">State Analysis</a>
+            <a class="nav-item nav-sub" data-route="projects.photophysics"   href="#/projects/photophysics">Photophysics</a>
             <a class="nav-item" data-route="headers"  href="#/headers"> <span class="nav-icon">&#9881;</span> Headers</a>
             <a class="nav-item" data-route="admin"    href="#/admin">   <span class="nav-icon">&#9888;</span> Admin</a>
             <div class="sidebar-footer">
@@ -1132,6 +1142,14 @@
                             <input type="checkbox" id="requestVertEx" name="request_vert_ex" checked>
                             <label for="requestVertEx">Vertical excitations</label>
                         </div>
+                        <div class="checkbox-group" title="UV/Vis absorption: a TDDFT singlepoint (20 roots) on every optimised S0 conformer, Boltzmann-weighted. Uses the singlepoint header's method.">
+                            <input type="checkbox" id="requestUvvis" name="request_spec_uvvis">
+                            <label for="requestUvvis">UV/Vis</label>
+                        </div>
+                        <div class="checkbox-group" title="IR spectrum read from the optimisation's frequency calculation (needs Freq in the optimisation header). No extra jobs.">
+                            <input type="checkbox" id="requestIr" name="request_spec_ir">
+                            <label for="requestIr">IR</label>
+                        </div>
                         <div id="diradicalNote" class="smiles-hint valid" style="display:none;">
                             Diradical detected — calculated in the triplet state only.
                         </div>
@@ -1154,6 +1172,30 @@
                         <div class="form-group conf-input" data-state="red" data-requires="requestRed" style="min-width: 110px; display:none;">
                             <label for="maxConfRed">Conformers — Red</label>
                             <input type="number" id="maxConfRed" min="1" max="50" value="1" style="width: 100px;">
+                        </div>
+                    </div>
+
+                    <!-- Row 2c: settings of the ticked categories (only ticked ones show) -->
+                    <div class="form-row" id="categoryDetailsRow" style="gap: 12px;">
+                        <div class="cat-detail" data-requires="requestUvvis" style="display:none;">
+                            <div class="cat-detail-title">UV/Vis</div>
+                            <div class="cat-detail-body">
+                                <div class="form-group" style="min-width: 150px;">
+                                    <label for="uvvisNroots">Excited states (nroots)</label>
+                                    <input type="number" id="uvvisNroots" min="1" max="100" value="20" style="width: 100px;">
+                                </div>
+                                <div class="checkbox-group" title="Tamm-Dancoff approximation: cheaper and more robust; full TDDFT (off) gives better oscillator strengths.">
+                                    <input type="checkbox" id="uvvisTda">
+                                    <label for="uvvisTda">TDA</label>
+                                </div>
+                            </div>
+                            <div class="cat-detail-note">A TDDFT singlepoint on every optimised S0 conformer, with the singlepoint header's method; the spectrum is Boltzmann-weighted.</div>
+                            <div class="cat-detail-note" id="uvvisHeaderNote"></div>
+                        </div>
+                        <div class="cat-detail" data-requires="requestIr" style="display:none;">
+                            <div class="cat-detail-title">IR</div>
+                            <div class="cat-detail-note">No extra calculation: the spectrum is read from the S0 optimisation's frequency run and Boltzmann-weighted over conformers.</div>
+                            <div class="cat-detail-note" id="irHeaderNote"></div>
                         </div>
                     </div>
 
@@ -1687,10 +1729,11 @@
                             <th>Vert-Ox</th>
                             <th>Vert-Red</th>
                             <th>Vert-Spin</th>
+                            <th>UV/Vis</th>
                         </tr>
                     </thead>
                     <tbody id="moleculesTableBody">
-                        <tr><td colspan="10" class="empty-state">Loading...</td></tr>
+                        <tr><td colspan="11" class="empty-state">Loading...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -1747,6 +1790,44 @@
         <div id="saCards" class="sa-cards" style="display: none;"></div>
         </section>
         <!-- /PAGE: Project Overview > State Analysis -->
+
+        <!-- ============================================================ -->
+        <!-- PAGE: Project Overview > Photophysics                         -->
+        <!-- ============================================================ -->
+        <section class="page" data-page="projects.photophysics">
+        <div class="page-header">
+            <div>
+                <h1>Project Overview · Photophysics</h1>
+                <div class="subtitle">UV/Vis and IR spectra, Boltzmann-weighted over each molecule's S0 conformers (298.15 K).</div>
+            </div>
+            <div class="form-group" style="min-width: 240px;">
+                <label for="projectSelectPP">Project</label>
+                <select id="projectSelectPP"><option value="">Loading...</option></select>
+            </div>
+        </div>
+
+        <div class="sa-toolbar">
+            <label for="ppUvFwhm" style="font-size: 0.82rem; color: var(--text-secondary); display: flex; align-items: center; gap: 8px;">
+                UV/Vis FWHM (eV)
+                <input type="number" id="ppUvFwhm" value="0.30" min="0.05" max="2" step="0.05" style="width: 80px;">
+            </label>
+            <label for="ppIrFwhm" style="font-size: 0.82rem; color: var(--text-secondary); display: flex; align-items: center; gap: 8px;">
+                IR FWHM (cm⁻¹)
+                <input type="number" id="ppIrFwhm" value="15" min="1" max="200" step="1" style="width: 80px;">
+            </label>
+            <label for="ppIrScale" style="font-size: 0.82rem; color: var(--text-secondary); display: flex; align-items: center; gap: 8px;"
+                   title="Harmonic frequencies are usually scaled; the factor depends on the functional and basis.">
+                IR scale factor
+                <input type="number" id="ppIrScale" value="1.000" min="0.8" max="1.1" step="0.001" style="width: 90px;">
+            </label>
+        </div>
+
+        <div id="ppEmptyState" class="empty-state" style="padding: 60px 16px;">
+            Select a project to see its spectra.
+        </div>
+        <div id="ppCards" class="sa-cards" style="display: none;"></div>
+        </section>
+        <!-- /PAGE: Project Overview > Photophysics -->
 
     </div>  <!-- /container -->
     </div>  <!-- /app -->
@@ -1819,6 +1900,7 @@
         var ROUTES = [
             'submit', 'status',
             'projects.summary', 'projects.molecules', 'projects.state-analysis',
+            'projects.photophysics',
             'headers', 'admin',
         ];
 
@@ -1850,6 +1932,7 @@
             if (route === 'projects.summary')        fetchProjects();
             if (route === 'projects.molecules')      fetchProjects().then(loadMoleculesPage);
             if (route === 'projects.state-analysis') fetchProjects().then(loadStateAnalysisPage);
+            if (route === 'projects.photophysics')   fetchProjects().then(loadPhotophysicsPage);
             if (route === 'status')                  fetchFailed();
             if (route === 'admin')                   loadAdminPage();
         }
@@ -2373,6 +2456,63 @@
             refresh();
         })();
 
+        // ── Show/hide the settings of ticked categories ─────────────────
+        // Same rule as the conformer inputs: a .cat-detail panel is visible
+        // iff its category is ticked. The header notes warn about a choice
+        // the server would refuse, before the user submits.
+
+        (function () {
+            var panels = document.querySelectorAll('.cat-detail[data-requires]');
+            var FREQ_RE = /^\s*!.*\b(Freq|NumFreq|AnFreq)\b/im;
+            var SP_CONFLICT_RE = /%tddft\b|%eprnmr\b|%esd\b|^\s*!.*\bNMR\b/im;
+
+            // Text of the header chosen in a slot; headerCache is filled by
+            // fetchHeaders, which calls refreshCategoryDetails when done.
+            function chosenHeaderText(selectId, kind) {
+                if (typeof headerCache === 'undefined' || !headerCache) return '';
+                var v = document.getElementById(selectId).value;
+                if (v.indexOf('id:') === 0) {
+                    var id = parseInt(v.slice(3), 10);
+                    var row = headerCache.custom.filter(function (c) { return c.id === id; })[0];
+                    return row ? row.text : '';
+                }
+                if (v) return v;
+                var def = headerCache.defaults.filter(function (d) { return d.kind === kind; })[0];
+                return def ? def.text : '';
+            }
+
+            function setNote(id, ok, okText, badText) {
+                var el = document.getElementById(id);
+                if (!el) return;
+                el.textContent = ok ? okText : badText;
+                el.classList.toggle('warn', !ok);
+            }
+
+            function refresh() {
+                panels.forEach(function (el) {
+                    var cb = document.getElementById(el.dataset.requires);
+                    el.style.display = (cb && cb.checked) ? '' : 'none';
+                });
+                setNote('irHeaderNote',
+                        FREQ_RE.test(chosenHeaderText('headerOptimization', 'optimization')),
+                        'The chosen optimisation header runs Freq.',
+                        'The chosen optimisation header has no Freq keyword — IR will be refused.');
+                setNote('uvvisHeaderNote',
+                        !SP_CONFLICT_RE.test(chosenHeaderText('headerSinglepoint', 'singlepoint')),
+                        '',
+                        'The chosen singlepoint header already has a %tddft / NMR / %eprnmr / %esd block — UV/Vis will be refused.');
+            }
+
+            var watched = {};
+            panels.forEach(function (el) { watched[el.dataset.requires] = true; });
+            Object.keys(watched).concat(['headerOptimization', 'headerSinglepoint']).forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el) el.addEventListener('change', refresh);
+            });
+            window.refreshCategoryDetails = refresh;
+            refresh();
+        })();
+
         // ── Live SMILES validation (multi-line) ─────────────────────────
         // Debounces input by 300 ms, splits the textarea by newlines,
         // validates each unique non-empty line via /api/validate-smiles
@@ -2574,6 +2714,7 @@
                 populateHeaderSelect(document.getElementById('headerConfsearch'),    'confsearch',    headerCache.defaults, headerCache.custom);
                 populateHeaderSelect(document.getElementById('headerOptimization'),  'optimization',  headerCache.defaults, headerCache.custom);
                 populateHeaderSelect(document.getElementById('headerSinglepoint'),   'singlepoint',   headerCache.defaults, headerCache.custom);
+                if (window.refreshCategoryDetails) window.refreshCategoryDetails();
                 renderHeadersList();
             } catch (err) {
                 console.warn('Failed to load headers:', err);
@@ -2775,6 +2916,10 @@
                 request_ox:  document.getElementById('requestOx').checked,
                 request_red: document.getElementById('requestRed').checked,
                 request_singlepoint_vertical_excitations: document.getElementById('requestVertEx').checked,
+                request_spec_uvvis: document.getElementById('requestUvvis').checked,
+                request_spec_ir:    document.getElementById('requestIr').checked,
+                uvvis_nroots:       intOrDefault('uvvisNroots', 20),
+                uvvis_tda:          document.getElementById('uvvisTda').checked,
                 max_conformers_S0:  intOrDefault('maxConfS0',  1),
                 max_conformers_T1:  intOrDefault('maxConfT1',  1),
                 max_conformers_ox:  intOrDefault('maxConfOx',  1),
@@ -2961,14 +3106,16 @@
                 var sel       = document.getElementById('projectSelect');
                 var selMols   = document.getElementById('projectSelectMols');
                 var selSA     = document.getElementById('projectSelectSA');
+                var selPP     = document.getElementById('projectSelectPP');
                 var prev      = sel.value || (selMols && selMols.value)
-                                || (selSA && selSA.value) || '';
+                                || (selSA && selSA.value) || (selPP && selPP.value) || '';
 
                 if (!projectCache || projectCache.length === 0) {
                     var empty = '<option value="">(no projects yet)</option>';
                     sel.innerHTML = empty;
                     if (selMols) selMols.innerHTML = empty;
                     if (selSA)   selSA.innerHTML   = empty;
+                    if (selPP)   selPP.innerHTML   = empty;
                     document.getElementById('projectCards').style.display = 'none';
                     document.getElementById('projectExportSection').style.display = 'none';
                     document.getElementById('projectMoleculesSection').style.display = 'none';
@@ -2980,6 +3127,10 @@
                     if (document.getElementById('saEmptyState')) {
                         document.getElementById('saEmptyState').style.display = 'block';
                         document.getElementById('saCards').style.display = 'none';
+                    }
+                    if (document.getElementById('ppEmptyState')) {
+                        document.getElementById('ppEmptyState').style.display = 'block';
+                        document.getElementById('ppCards').style.display = 'none';
                     }
                     return;
                 }
@@ -2995,11 +3146,13 @@
                 sel.innerHTML = html;
                 if (selMols) selMols.innerHTML = html;
                 if (selSA)   selSA.innerHTML   = html;
+                if (selPP)   selPP.innerHTML   = html;
 
                 if (prev && projectCache.some(function (p) { return p.name === prev; })) {
                     sel.value = prev;
                     if (selMols) selMols.value = prev;
                     if (selSA)   selSA.value   = prev;
+                    if (selPP)   selPP.value   = prev;
                 }
                 loadProjectDetail(sel.value);
             } catch (err) {
@@ -3286,7 +3439,7 @@
 
         (function () {
             function syncSelects(value) {
-                ['projectSelect', 'projectSelectMols', 'projectSelectSA'].forEach(function (id) {
+                ['projectSelect', 'projectSelectMols', 'projectSelectSA', 'projectSelectPP'].forEach(function (id) {
                     var el = document.getElementById(id);
                     if (el && el.value !== value) el.value = value;
                 });
@@ -3309,6 +3462,14 @@
                     currentProject = this.value;
                     syncSelects(this.value);
                     loadStateAnalysisPage();
+                });
+            }
+            var altPP = document.getElementById('projectSelectPP');
+            if (altPP) {
+                altPP.addEventListener('change', function () {
+                    currentProject = this.value;
+                    syncSelects(this.value);
+                    loadPhotophysicsPage();
                 });
             }
             document.getElementById('exportCsvBtn').addEventListener('click', function () { exportProject('csv'); });
@@ -3432,12 +3593,12 @@
             }
             empty.style.display = 'none';
             wrap.style.display = 'block';
-            tbody.innerHTML = '<tr><td colspan="10" class="empty-state">Loading...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="11" class="empty-state">Loading...</td></tr>';
 
             var resp = await fetch('/api/projects/' + projectPath(name) + '/molecules-detail');
             var data = await resp.json();
             if (!data.molecules || data.molecules.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="10" class="empty-state">No molecules yet for this project.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="11" class="empty-state">No molecules yet for this project.</td></tr>';
                 return;
             }
 
@@ -3462,7 +3623,7 @@
                         cells.push('<td rowspan="1" class="mol-state">' + escHtml(st.description) + '</td>');
                         cells.push('<td class="mol-conf"><em style="color:var(--text-muted);">—</em></td>');
                         // Show the confsearch status in the Opt column so the user sees something even before any opt task exists.
-                        cells.push('<td colspan="5" style="color:var(--text-muted); font-style:italic;">confsearch ' + (st.confsearch || 'not yet') + '</td>');
+                        cells.push('<td colspan="6" style="color:var(--text-muted); font-style:italic;">confsearch ' + (st.confsearch || 'not yet') + '</td>');
                         rows.push('<tr class="' + (rows.length === 0 || cells.length > 5 ? 'mol-first' : '') + '">' + cells.join('') + '</tr>');
                         return;
                     }
@@ -3483,6 +3644,7 @@
                         cells.push('<td>' + statusCell(c.singlepoint_vert_ox) + '</td>');
                         cells.push('<td>' + statusCell(c.singlepoint_vert_red) + '</td>');
                         cells.push('<td>' + statusCell(c.singlepoint_vert_spin_change) + '</td>');
+                        cells.push('<td>' + statusCell(c.singlepoint_uvvis) + '</td>');
                         var firstRowClass = (!molRendered ? '' : '') + (cells.some(function (c) { return c.indexOf('rowspan') !== -1 && c.indexOf('mol-id') !== -1; }) ? ' mol-first' : '');
                         rows.push('<tr class="' + (firstRowClass.trim()) + '">' + cells.join('') + '</tr>');
                     });
@@ -3747,6 +3909,170 @@
                 });
             }
         })();
+
+        // ── Project Overview > Photophysics subpage ─────────────────────
+        // The API ships sticks and Boltzmann weights; broadening happens
+        // here so the line widths can change without a round trip.
+
+        var ppState = { project: null, payload: null };
+        var HC_EV_NM = 1239.84193;
+
+        function ppUvCurve(ensemble, fwhmEv) {
+            var sigma = fwhmEv / (2 * Math.sqrt(2 * Math.LN2));
+            var points = [];
+            for (var nm = 180; nm <= 700; nm += 1) {
+                var e = HC_EV_NM / nm, y = 0;
+                ensemble.conformers.forEach(function (c) {
+                    c.transitions.forEach(function (t) {
+                        var d = (e - t.energy_ev) / sigma;
+                        y += c.weight * t.fosc * Math.exp(-0.5 * d * d);
+                    });
+                });
+                points.push([nm, y]);
+            }
+            return points;
+        }
+
+        function ppIrCurve(ensemble, fwhmCm, scale) {
+            var gamma = fwhmCm / 2, points = [];
+            for (var nu = 400; nu <= 4000; nu += 2) {
+                var y = 0;
+                ensemble.conformers.forEach(function (c) {
+                    c.modes.forEach(function (m) {
+                        if (m.frequency_cm <= 0) return;
+                        var d = nu - m.frequency_cm * scale;
+                        y += c.weight * m.intensity_km_mol * gamma * gamma / (d * d + gamma * gamma);
+                    });
+                });
+                points.push([nu, y]);
+            }
+            return points;
+        }
+
+        function ppPeak(points) {
+            var best = points[0];
+            points.forEach(function (p) { if (p[1] > best[1]) best = p; });
+            return best;
+        }
+
+        function ppSvg(points, xLabel, reverseX) {
+            var W = 560, H = 220, L = 12, R = 12, T = 10, B = 34;
+            var xmin = points[0][0], xmax = points[points.length - 1][0];
+            var ymax = ppPeak(points)[1] || 1;
+            function px(x) {
+                var f = (x - xmin) / ((xmax - xmin) || 1);
+                return L + (reverseX ? 1 - f : f) * (W - L - R);
+            }
+            function py(y) { return T + (1 - y / ymax) * (H - T - B); }
+            var line = points.map(function (p) {
+                return px(p[0]).toFixed(1) + ',' + py(p[1]).toFixed(1);
+            }).join(' ');
+            var ticks = [];
+            for (var i = 0; i <= 4; i++) {
+                var x = xmin + i * (xmax - xmin) / 4;
+                ticks.push('<text x="' + px(x).toFixed(1) + '" y="' + (H - 18) +
+                           '" text-anchor="middle" font-size="10" fill="var(--text-muted)">' +
+                           Math.round(x) + '</text>');
+            }
+            return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" role="img" aria-label="' +
+                   escHtml(xLabel) + '">' +
+                   '<line x1="' + L + '" y1="' + (H - B) + '" x2="' + (W - R) + '" y2="' + (H - B) +
+                   '" stroke="var(--border)"/>' +
+                   '<polyline fill="none" stroke="var(--accent)" stroke-width="1.5" points="' + line + '"/>' +
+                   ticks.join('') +
+                   '<text x="' + (W / 2) + '" y="' + (H - 3) +
+                   '" text-anchor="middle" font-size="11" fill="var(--text-secondary)">' +
+                   escHtml(xLabel) + '</text></svg>';
+        }
+
+        function ppNote(ensemble) {
+            var n = ensemble.conformers.length;
+            var note = n + ' conformer' + (n === 1 ? '' : 's');
+            if (ensemble.missing) note += ', ' + ensemble.missing + ' still missing';
+            return note;
+        }
+
+        function renderPhotophysics(payload) {
+            var host = document.getElementById('ppCards');
+            if (!payload.molecules.length) {
+                host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">' +
+                                 'No molecule in this project was submitted with UV/Vis or IR.</div>';
+                return;
+            }
+            var uvFwhm  = parseFloat(document.getElementById('ppUvFwhm').value)  || 0.3;
+            var irFwhm  = parseFloat(document.getElementById('ppIrFwhm').value)  || 15;
+            var irScale = parseFloat(document.getElementById('ppIrScale').value) || 1;
+            host.innerHTML = payload.molecules.map(function (m) {
+                var parts = [];
+                if (m.uvvis) {
+                    if (m.uvvis.conformers.length) {
+                        var uv = ppUvCurve(m.uvvis, uvFwhm);
+                        parts.push('<div class="pp-plot"><div class="pp-plot-title">UV/Vis · λ<sub>max</sub> ≈ ' +
+                                   ppPeak(uv)[0] + ' nm · ' + escHtml(ppNote(m.uvvis)) + '</div>' +
+                                   ppSvg(uv, 'Wavelength (nm)', false) + '</div>');
+                    } else {
+                        parts.push('<div class="pp-waiting">UV/Vis — waiting for ' + m.uvvis.missing +
+                                   ' conformer(s).</div>');
+                    }
+                }
+                if (m.ir) {
+                    if (m.ir.conformers.length) {
+                        var ir = ppIrCurve(m.ir, irFwhm, irScale);
+                        parts.push('<div class="pp-plot"><div class="pp-plot-title">IR · strongest band ≈ ' +
+                                   ppPeak(ir)[0] + ' cm⁻¹ · ' + escHtml(ppNote(m.ir)) + '</div>' +
+                                   ppSvg(ir, 'Wavenumber (cm⁻¹)', true) + '</div>');
+                    } else {
+                        parts.push('<div class="pp-waiting">IR — waiting for ' + m.ir.missing +
+                                   ' conformer(s).</div>');
+                    }
+                }
+                return '<div class="sa-card"><div class="sa-card-head">' +
+                       '<span class="sa-mol-id">#' + escHtml(m.id) + '</span>' +
+                       '<span class="sa-smiles">' + escHtml(m.smiles) + '</span></div>' +
+                       parts.join('') + '</div>';
+            }).join('');
+        }
+
+        async function loadPhotophysicsPage() {
+            var sel  = document.getElementById('projectSelectPP');
+            var name = sel ? sel.value : currentProject;
+            var empty = document.getElementById('ppEmptyState');
+            var host  = document.getElementById('ppCards');
+            if (!name) {
+                empty.style.display = 'block';
+                host.style.display = 'none';
+                return;
+            }
+            empty.style.display = 'none';
+            host.style.display = 'block';
+            host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Reading spectra…</div>';
+            try {
+                var resp = await fetch('/api/projects/' + projectPath(name) + '/photophysics');
+                // safeJson returns the parsed body, or {_err} when it is not JSON.
+                var payload = await safeJson(resp);
+                if (!resp.ok || !payload.molecules) {
+                    host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Error: ' +
+                                     escHtml(payload.detail || payload._err || ('HTTP ' + resp.status)) +
+                                     '</div>';
+                    return;
+                }
+                ppState.project = name;
+                ppState.payload = payload;
+                renderPhotophysics(payload);
+            } catch (err) {
+                host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Network error: ' +
+                                 escHtml(err.message) + '</div>';
+            }
+        }
+
+        ['ppUvFwhm', 'ppIrFwhm', 'ppIrScale'].forEach(function (id) {
+            var el = document.getElementById(id);
+            if (el) {
+                el.addEventListener('input', function () {
+                    if (ppState.payload) renderPhotophysics(ppState.payload);
+                });
+            }
+        });
 
         // ── Refresh orchestration ────────────────────────────────────────
 
