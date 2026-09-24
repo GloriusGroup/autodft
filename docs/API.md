@@ -427,11 +427,12 @@ vs SCE.
 
 ### `GET /api/projects/{name}/photophysics` `?molecule_id=`
 
-UV/Vis and IR for every molecule submitted with those categories. Categories
-are only added to new molecules: resubmitting an existing molecule with a
-category it does not have answers 400.
+UV/Vis, IR and NMR for every molecule submitted with those categories.
+Categories are only added to new molecules: resubmitting an existing
+molecule with a category it does not have answers 400.
 
-Without `molecule_id`, one summary per molecule (this view is cached):
+Without `molecule_id`, one summary per molecule (this view is cached, and
+refreshed when this project or the NMR reference project changes):
 
     {"project": "nho/p", "temperature_k": 298.15, "molecules": [
       {"id": 7, "smiles": "c1ccccc1", "state_id": 21, "archived": false,
@@ -453,6 +454,28 @@ with the largest weight × fosc (or × intensity), or `null` when `count`
 is 0; it is present for UV/Vis and IR only. UV/Vis also reports
 `shortest_nm`, the shortest wavelength across every counted transition.
 
+An NMR molecule's entry adds `nmr`, with the same counts and no `peak`:
+
+    "nmr": {"count": 1, "pending": 0, "failed": 0, "unavailable": 0,
+            "unweighted": 0, "weighting": "G", "equivalence": "topological",
+            "signals": {"H": 1, "C": 1},
+            "reference": {"H": {"compound": "C[Si](C)(C)C", "status": "ok",
+                                "molecule_id": 12, "sigma_ppm": 31.354,
+                                "method_matches": true}, "C": {...}}}
+
+`signals` is the number of distinct signals per requested nucleus
+(`nmr_nuclei`) present in the molecule. `equivalence` is `"topological"`
+when atoms are grouped by the symmetry classes of the bonds perceived from
+the first counted conformer's geometry, else `"none"` (one signal per
+atom). `reference` names, per reported nucleus, the reference compound
+(TMS for H and C, CFCl₃ for F) at the molecule's optimisation and
+singlepoint headers in `admin/system_references`: `status` is `"ok"`,
+`"pending"`, `"failed"` or `"missing"` (none at this method); `sigma_ppm`
+is its mean isotropic shielding for that element; `method_matches` says
+whether its NMR input's `!` keywords equal the molecule's (SCF convergence
+and `PALn` ignored), `null` if either input is missing. `signals` and
+`reference` stay empty until a conformer is counted.
+
 A molecule entry with no conformer left to show (every optimisation
 failed, or none has run yet) adds `stage`: `"searching"` while work is
 still open for that state, else `"none"`.
@@ -463,6 +486,18 @@ request, not cached) and drop nothing:
     "uvvis": {..., "conformers": [{"conformer_index": 1, "opt_task_id": 90,
               "weight": 1.0, "transitions": [{"root": 1, "energy_ev": 5.4,
               "wavelength_nm": 229.6, "fosc": 0.24}]}]}
+
+    "nmr": {..., "conformers": [{"conformer_index": 1, "opt_task_id": 90,
+            "weight": 1.0}],
+            "nuclei": {"H": [{"atoms": [4, 5], "count": 2,
+                              "shielding_ppm": 22.614, "shift_ppm": 8.74}],
+                       "C": [...]}}
+
+Each NMR signal is one symmetry class: `atoms` are 0-based ORCA atom
+indices, `shielding_ppm` is the Boltzmann-weighted isotropic shielding
+averaged over them, and `shift_ppm` = `sigma_ppm` − `shielding_ppm`, or
+`null` unless the reference's `status` is `"ok"`. Signals are sorted by
+ascending shielding (descending shift).
 
 `conformer_index` is the conformer's 1-based position among the state's
 optimisation tasks by id, the same numbering as the Molecules page.

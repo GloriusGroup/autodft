@@ -1,6 +1,6 @@
-"""UV/Vis and IR spectra, Boltzmann-weighted over each molecule's S0 conformers.
+"""UV/Vis, IR and NMR, Boltzmann-weighted over each molecule's S0 conformers.
 
-Only molecules submitted with the UV/Vis or IR category are analysed. The
+Only molecules submitted with the UV/Vis, IR or NMR category are analysed. The
 project view carries one summary per molecule; a single molecule's view adds
 the sticks (transitions / modes) with their weights. Broadening is left to
 the caller, so line widths change without re-parsing anything.
@@ -164,7 +164,7 @@ _CACHE: dict[str, tuple[tuple, dict]] = {}
 def analyze_spectra(
     project_name: str, molecule_id: Optional[int] = None, use_cache: bool = True,
 ) -> dict:
-    """Summaries for every flagged molecule of *project_name*, or the sticks of one.
+    """UV/Vis, IR and NMR summaries for every flagged molecule, or the details of one.
 
     Only the project view is cached; a molecule's sticks are read on request.
     """
@@ -172,7 +172,13 @@ def analyze_spectra(
 
     if molecule_id is not None or not use_cache:
         return _analyze(project_name, molecule_id)
-    signature = (_cache_signature(project_name), _archived_count(project_name))
+    from autodft.engine.nmr_references import REFERENCE_QUALIFIED
+
+    # NMR shifts also depend on the reference project finishing its jobs.
+    signature = (
+        _cache_signature(project_name), _archived_count(project_name),
+        _cache_signature(REFERENCE_QUALIFIED),
+    )
     cached = _CACHE.get(project_name)
     if cached is not None and cached[0] == signature:
         return cached[1]
@@ -209,7 +215,7 @@ def _analyze(project_name: str, molecule_id: Optional[int]) -> dict:
             ).all()
             for state in states:
                 metadata = json.loads(state.metadata_json) if state.metadata_json else {}
-                wanted = categories.requested(metadata) & {categories.UVVIS, categories.IR}
+                wanted = categories.requested(metadata) & {categories.UVVIS, categories.IR, categories.NMR}
                 if not wanted:
                     continue
                 pool = [
@@ -228,6 +234,10 @@ def _analyze(project_name: str, molecule_id: Optional[int]) -> dict:
                     entry["uvvis"]["shortest_nm"] = min(wavelengths) if wavelengths else None
                 if categories.IR in wanted:
                     entry["ir"] = ensemble([(c, *_ir(c)) for c in pool], detail, _ir_peak)
+                if categories.NMR in wanted:
+                    from autodft.analysis.nmr import molecule_nmr
+
+                    entry["nmr"] = molecule_nmr(session, extractor, state, pool, detail)
                 molecules.append(entry)
     return {"project": project_name, "temperature_k": ROOM_TEMPERATURE, "molecules": molecules}
 

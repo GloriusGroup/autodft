@@ -245,8 +245,12 @@ class PipelineExtractor:
 
     def successful_output(self, session: Session, task_id: int) -> Optional[str]:
         """``output.out`` of the task's latest successful job, or None."""
-        job_path = self._get_successful_job_path(session, task_id)
+        job_path = self.successful_job_path(session, task_id)
         return self._load_output(job_path) if job_path is not None else None
+
+    def successful_job_path(self, session: Session, task_id: int) -> Optional[Path]:
+        """Directory of the task's latest successful job, or None."""
+        return self._get_successful_job_path(session, task_id)
 
     def _extract_conformer_energies(
         self,
