@@ -25,6 +25,9 @@ class ComputationTask(SQLModel, table=True):
     depends_on_task_id: Optional[int] = Field(default=None, foreign_key="computation_tasks.id")
     has_followups: bool = Field(default=True)
     task_path: Optional[str] = None
+    # ESD tasks read other tasks' results: role -> task id, and the values
+    # computed from them at job generation (see autodft.qm.orca.esd_inputs).
+    inputs_json: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
