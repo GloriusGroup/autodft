@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Optional
 
 from sqlmodel import Session, col, func, select
@@ -19,6 +20,7 @@ from autodft import categories
 from autodft.db import get_session
 from autodft.extraction.extractor import PipelineExtractor
 from autodft.models import ComputationTask, Molecule, MoleculeState, TaskStatus, TaskType
+from autodft.paths import safe_subdirectory
 from autodft.qm.orca.parser import OrcaParser
 from autodft.qm.orca.spectra_parser import IRMode, parse_absorption, parse_ir
 
@@ -198,56 +200,114 @@ def _archived_count(project_name: str) -> int:
         ).one()
 
 
-def _analyze(project_name: str, molecule_id: Optional[int]) -> dict:
+def _molecule_entries(
+    session: Session, extractor: PipelineExtractor, mol: Molecule, detail: bool,
+    nmr_references_seen: dict,
+) -> list[dict]:
+    """One entry per flagged S0 state of *mol*."""
+    entries = []
+    states = session.exec(
+        select(MoleculeState).where(
+            MoleculeState.molecule_id == mol.id,
+            MoleculeState.description == "S0",
+        )
+    ).all()
+    for state in states:
+        metadata = json.loads(state.metadata_json) if state.metadata_json else {}
+        wanted = categories.requested(metadata) & {
+            categories.UVVIS, categories.IR, categories.NMR, categories.ESD,
+        }
+        if not wanted:
+            continue
+        needs_pool = bool(wanted & {categories.UVVIS, categories.IR, categories.NMR})
+        pool = [
+            c for c in conformer_pool(session, extractor, state, ir=categories.IR in wanted)
+            if c.opt.status != TaskStatus.failed
+        ] if needs_pool else []
+        entry: dict = {"id": mol.id, "smiles": mol.smiles, "state_id": state.id,
+                       "archived": mol.archived}
+        if needs_pool and not pool:
+            entry["stage"] = _stage(session, state)
+        if categories.UVVIS in wanted:
+            items = [(c, *_uvvis(session, extractor, c)) for c in pool]
+            entry["uvvis"] = ensemble(items, detail, _uvvis_peak)
+            wavelengths = [t["wavelength_nm"] for _, status, data in items
+                           if status == "ok" for t in data["transitions"]]
+            entry["uvvis"]["shortest_nm"] = min(wavelengths) if wavelengths else None
+        if categories.IR in wanted:
+            entry["ir"] = ensemble([(c, *_ir(c)) for c in pool], detail, _ir_peak)
+        if categories.NMR in wanted:
+            from autodft.analysis.nmr import molecule_nmr
+
+            entry["nmr"] = molecule_nmr(session, extractor, state, pool, detail, nmr_references_seen)
+        if categories.ESD in wanted:
+            from autodft.analysis.esd import molecule_esd
+
+            entry["esd"] = molecule_esd(session, extractor, state, detail)
+        entries.append(entry)
+    return entries
+
+
+def _analyze(project_name: str, molecule_id: Optional[int], detail: Optional[bool] = None) -> dict:
     extractor = PipelineExtractor(project_name)
-    detail = molecule_id is not None
+    detail = molecule_id is not None if detail is None else detail
     molecules = []
     nmr_references_seen: dict = {}
     with get_session() as session:
         query = select(Molecule).where(Molecule.project_name == project_name)
-        if detail:
+        if molecule_id is not None:
             query = query.where(Molecule.id == molecule_id)
         for mol in session.exec(query.order_by(col(Molecule.id))).all():
-            states = session.exec(
-                select(MoleculeState).where(
-                    MoleculeState.molecule_id == mol.id,
-                    MoleculeState.description == "S0",
-                )
-            ).all()
-            for state in states:
-                metadata = json.loads(state.metadata_json) if state.metadata_json else {}
-                wanted = categories.requested(metadata) & {
-                    categories.UVVIS, categories.IR, categories.NMR, categories.ESD,
-                }
-                if not wanted:
-                    continue
-                needs_pool = bool(wanted & {categories.UVVIS, categories.IR, categories.NMR})
-                pool = [
-                    c for c in conformer_pool(session, extractor, state, ir=categories.IR in wanted)
-                    if c.opt.status != TaskStatus.failed
-                ] if needs_pool else []
-                entry: dict = {"id": mol.id, "smiles": mol.smiles, "state_id": state.id,
-                               "archived": mol.archived}
-                if needs_pool and not pool:
-                    entry["stage"] = _stage(session, state)
-                if categories.UVVIS in wanted:
-                    items = [(c, *_uvvis(session, extractor, c)) for c in pool]
-                    entry["uvvis"] = ensemble(items, detail, _uvvis_peak)
-                    wavelengths = [t["wavelength_nm"] for _, status, data in items
-                                   if status == "ok" for t in data["transitions"]]
-                    entry["uvvis"]["shortest_nm"] = min(wavelengths) if wavelengths else None
-                if categories.IR in wanted:
-                    entry["ir"] = ensemble([(c, *_ir(c)) for c in pool], detail, _ir_peak)
-                if categories.NMR in wanted:
-                    from autodft.analysis.nmr import molecule_nmr
-
-                    entry["nmr"] = molecule_nmr(session, extractor, state, pool, detail, nmr_references_seen)
-                if categories.ESD in wanted:
-                    from autodft.analysis.esd import molecule_esd
-
-                    entry["esd"] = molecule_esd(session, extractor, state, detail)
-                molecules.append(entry)
+            stored = _read_frozen(project_name, mol.id) if mol.archived else None
+            if stored is not None:
+                molecules.extend({**entry, "archived": True} for entry in stored["detail" if detail else "summary"])
+            else:
+                molecules.extend(_molecule_entries(session, extractor, mol, detail, nmr_references_seen))
     return {"project": project_name, "temperature_k": ROOM_TEMPERATURE, "molecules": molecules}
+
+
+def full_payload(project_name: str) -> dict:
+    """Every flagged molecule with its detail, as the photophysics export writes it."""
+    return _analyze(project_name, None, detail=True)
+
+
+def frozen_dir(project_name: str, settings) -> Path:
+    """Where archiving keeps each molecule's photophysics payload."""
+    return safe_subdirectory(settings.export_data_path, project_name) / "photophysics"
+
+
+def _read_frozen(project_name: str, molecule_id: int) -> Optional[dict]:
+    try:
+        from autodft.api.routes import get_active_settings
+
+        path = frozen_dir(project_name, get_active_settings()) / f"mol_{molecule_id}.json"
+    except Exception:
+        return None
+    return json.loads(path.read_text()) if path.is_file() else None
+
+
+def freeze(project_name: str, settings) -> int:
+    """Store the payload of every flagged molecule not archived yet; returns how many."""
+    directory = frozen_dir(project_name, settings)
+    extractor = PipelineExtractor(project_name)
+    nmr_references_seen: dict = {}
+    written = 0
+    with get_session() as session:
+        molecules = session.exec(
+            select(Molecule).where(
+                Molecule.project_name == project_name,
+                Molecule.archived == False,  # noqa: E712
+            ).order_by(col(Molecule.id))
+        ).all()
+        for mol in molecules:
+            summary = _molecule_entries(session, extractor, mol, False, nmr_references_seen)
+            if not summary:
+                continue
+            detail = _molecule_entries(session, extractor, mol, True, nmr_references_seen)
+            directory.mkdir(parents=True, exist_ok=True)
+            (directory / f"mol_{mol.id}.json").write_text(json.dumps({"summary": summary, "detail": detail}))
+            written += 1
+    return written
 
 
 def _stage(session: Session, state: MoleculeState) -> str:

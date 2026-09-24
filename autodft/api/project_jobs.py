@@ -323,6 +323,12 @@ def _execute(
         # Do not rmtree under a job still writing files. The pause has already
         # stopped new jobs for this project; wait for what is left to finish.
         _wait_for_quiescence(qualified_name)
+
+        from autodft.analysis import spectroscopy
+
+        # The archive deletes the outputs the photophysics results are read from.
+        frozen = spectroscopy.freeze(qualified_name, settings)
+
         summary = extractor.archive_project(
             export_root=settings.export_data_path,
             comp_root=settings.comp_data_path,
@@ -330,6 +336,8 @@ def _execute(
             all_conformers=all_conformers,
         )
         summary["downloadable"] = False
+        if frozen:
+            summary["photophysics_frozen"] = frozen
         return summary
 
     raise ValueError(f"Unknown project-job kind {kind!r}")
