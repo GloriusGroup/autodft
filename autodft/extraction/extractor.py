@@ -237,6 +237,17 @@ class PipelineExtractor:
             return min(bare, key=lambda r: r.e_singlepoint)
         return results[0]
 
+    def extract_state_results(
+        self, session: Session, mol: Molecule, state: MoleculeState,
+    ) -> list[ConformerResult]:
+        """Every conformer of one state, in conformer order."""
+        return self._extract_state_results(session, mol, state, all_conformers=True)
+
+    def successful_output(self, session: Session, task_id: int) -> Optional[str]:
+        """``output.out`` of the task's latest successful job, or None."""
+        job_path = self._get_successful_job_path(session, task_id)
+        return self._load_output(job_path) if job_path is not None else None
+
     def _extract_conformer_energies(
         self,
         session: Session,
