@@ -59,6 +59,7 @@ SCOPED = {
     "/api/projects/{name}/molecules-detail",
     "/api/projects/{name}/state-analysis",
     "/api/projects/{name}/state-analysis/export",
+    "/api/projects/{name}/photophysics",
     "/api/projects/{name}/archive",
     "/api/projects/{name}/export",
     "/api/projects/{name}/jobs",

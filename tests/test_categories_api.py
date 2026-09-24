@@ -113,3 +113,42 @@ class TestUvvisOptions:
             "smiles": "c1ccccc1", "project": "p", "request_spec_uvvis": True, "uvvis_nroots": 0,
         })
         assert r.status_code == 422
+
+
+class TestPhotophysicsEndpoint:
+    def test_owner_reads_it(self, api):
+        client, key = api
+        r = client.get("/api/projects/nho:p/photophysics", headers=key)
+        assert r.status_code == 200
+        assert r.json()["project"] == "nho/p"
+        assert r.json()["molecules"] == []  # the fixture molecule has no categories
+
+    def test_someone_else_gets_404(self, api, tmp_path):
+        client, _ = api
+        with get_session() as session:
+            _, other_key = accounts.create_user(session, "other")
+        r = client.get("/api/projects/nho:p/photophysics",
+                       headers={"X-AutoDFT-API-Key": other_key})
+        assert r.status_code == 404
+
+    def test_molecules_detail_reports_the_uvvis_slot(self, api):
+        from autodft.models import ComputationHeader, ComputationTask, MoleculeState, TaskStatus, TaskType
+
+        client, key = api
+        with get_session() as session:
+            mol = session.exec(select(Molecule).where(Molecule.project_name == "nho/p")).first()
+            state = MoleculeState(molecule_id=mol.id, description="S0", multiplicity=1, charge=0)
+            session.add(state)
+            session.commit()
+            header_id = session.exec(select(ComputationHeader.id)).first()
+            opt = ComputationTask(task_type=TaskType.optimization, status=TaskStatus.successful,
+                                  state_id=state.id, header_id=header_id)
+            session.add(opt)
+            session.commit()
+            session.add(ComputationTask(task_type=TaskType.singlepoint_uvvis,
+                                        status=TaskStatus.pending, state_id=state.id,
+                                        header_id=header_id, depends_on_task_id=opt.id))
+            session.commit()
+        r = client.get("/api/projects/nho:p/molecules-detail", headers=key)
+        conformer = r.json()["molecules"][0]["states"][0]["conformers"][0]
+        assert conformer["singlepoint_uvvis"] == "pending"

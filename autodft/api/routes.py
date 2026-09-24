@@ -758,6 +758,7 @@ def api_project_molecules_detail(
                     "singlepoint_vert_ox":           _status_of(deps.get(TaskType.singlepoint_vert_ox)),
                     "singlepoint_vert_red":          _status_of(deps.get(TaskType.singlepoint_vert_red)),
                     "singlepoint_vert_spin_change":  _status_of(deps.get(TaskType.singlepoint_vert_spin_change)),
+                    "singlepoint_uvvis":             _status_of(deps.get(TaskType.singlepoint_uvvis)),
                 })
             # Confsearch status for the state — useful when no opt tasks exist yet.
             cs = next((t for t in tasks_by_state.get(st.id, [])
@@ -850,6 +851,25 @@ def api_project_state_analysis_export(
             status_code=500,
             content={"detail": f"XLSX export failed to start: {type(exc).__name__}: {exc}"},
         )
+
+
+@router.get("/api/projects/{name}/photophysics")
+def api_project_photophysics(
+    name: str, identity: Identity = Depends(current_identity),
+):
+    """UV/Vis and IR spectra for every molecule submitted with those categories.
+
+    Per molecule: each S0 conformer's transitions / IR modes with its
+    Boltzmann weight (298.15 K, on G). Sticks only; the dashboard broadens.
+    """
+    bad = _reject_bad_project(name)
+    if bad is not None:
+        return bad
+    with get_session() as session:
+        name = resolve_project(session, identity, name)
+    from autodft.analysis.spectroscopy import analyze_spectra
+
+    return analyze_spectra(name)
 
 
 def _status_of(task: Optional[ComputationTask]) -> Optional[str]:

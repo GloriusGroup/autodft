@@ -333,6 +333,9 @@ Every submission path (CLI, REST, Python) ends up writing the same
 * `max_conformers_S0 / _T1 / _ox / _red` — per-state conformer cap
   (default **1 per state**). Legacy `max_conformers` still works as a
   blanket override.
+* `request_spec_uvvis` / `request_spec_ir` — UV/Vis (TDDFT singlepoint on every
+  S0 conformer) and IR (from the optimisation's frequencies). Only added to
+  new molecules; see [`docs/API.md`](docs/API.md#post-apisubmit).
 * `header_confsearch_id / _optimization_id / _singlepoint_id` — pick a
   stored header by ID. Or pass raw `header_*` text. Defaults from
   `autodft/qm/orca/defaults.py` (= seeded DB rows) apply when neither
@@ -512,6 +515,7 @@ is either scoped to the caller's own projects or deliberately shared
 | GET    | `/api/projects/{name}/molecules-detail` | per-conformer status for every molecule                   |
 | GET    | `/api/projects/{name}/state-analysis` | triplet / redox / reorganisation energies                   |
 | GET    | `/api/projects/{name}/state-analysis/export` | the same, as a multi-sheet XLSX                      |
+| GET    | `/api/projects/{name}/photophysics` | UV/Vis + IR spectra per molecule, Boltzmann-weighted          |
 | POST   | `/api/projects/{name}/export`       | trigger CSV/JSON/files export (`?format=&all_conformers=`)    |
 | POST   | `/api/projects/{name}/archive`      | **destructive**: CSV+filtered files, then wipe `comp_data`     |
 | GET    | `/api/projects/{name}/wipe-preview` | what a project wipe would delete — counts only                |

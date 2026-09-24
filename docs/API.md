@@ -190,6 +190,11 @@ package defaults in `autodft/qm/orca/defaults.py`.
 | `header_confsearch_id`                      | int?   | `null`        | ID of a stored `ComputationHeader`. Wins over the raw text version.                         |
 | `header_optimization_id`                    | int?   | `null`        | Same.                                                                                       |
 | `header_singlepoint_id`                     | int?   | `null`        | Same.                                                                                       |
+| `request_spec_uvvis`                        | bool   | `false`       | UV/Vis: a TDDFT singlepoint (`%tddft nroots <uvvis_nroots> tda <uvvis_tda>`, appended to the singlepoint header) on every optimised S0 conformer. The singlepoint header must not already contain `%tddft`, `NMR`, `%eprnmr` or `%esd`. |
+| `uvvis_nroots`                              | int    | `20`          | UV/Vis excited states (1–100). Stored only when UV/Vis is requested.                        |
+| `uvvis_tda`                                 | bool   | `false`       | Tamm–Dancoff approximation for the UV/Vis TDDFT. Stored only when UV/Vis is requested.      |
+| `request_spec_ir`                           | bool   | `false`       | IR: read from the S0 optimisation's frequency calculation — no extra job. Needs `Freq` in the optimisation header. |
+| `request_esd`, `request_esd_ht`, `request_spec_nmr` | bool   | `false`       | Not available yet; refused with 400.                                                        |
 
 `request_S1` is **not** exposed: the S1 state is not yet supported.
 
@@ -419,6 +424,24 @@ header text; without it, redox values are reported as ΔG only.
 The same payload as a multi-sheet XLSX attachment (Summary, Lowest
 Energy, RMSD Matched, Conformers). Energies in Hartree, potentials in V
 vs SCE.
+
+### `GET /api/projects/{name}/photophysics`
+
+UV/Vis and IR for every molecule submitted with those categories. Categories
+are only added to new molecules: resubmitting an existing molecule with a
+category it does not have answers 400.
+
+    {"project": "nho/p", "temperature_k": 298.15, "molecules": [
+      {"id": 7, "smiles": "c1ccccc1", "state_id": 21,
+       "uvvis": {"missing": 0, "conformers": [{"conformer_index": 1, "opt_task_id": 90,
+                 "weight": 1.0, "transitions": [{"root": 1, "energy_ev": 5.4,
+                 "wavelength_nm": 229.6, "fosc": 0.0}]}]},
+       "ir": {"missing": 0, "conformers": [{"conformer_index": 1, "opt_task_id": 90,
+              "weight": 1.0, "modes": [{"frequency_cm": 410.2, "intensity_km_mol": 0.0}]}]}}]}
+
+Weights are Boltzmann populations over the conformers that have data
+(`missing` counts the rest), on G when any conformer has a thermal
+correction, else on the bare singlepoint energy.
 
 ### `POST /api/projects/{name}/export` `?format=csv|json|files&all_conformers=true|false`
 
