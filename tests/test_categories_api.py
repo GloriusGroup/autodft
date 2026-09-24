@@ -75,6 +75,13 @@ class TestSubmit:
         assert r.status_code == 400
         assert "already exists" in r.json()["detail"]
 
+    def test_esd_ht_alone_is_a_400(self, api):
+        client, key = api
+        r = client.post("/api/submit", headers=key,
+                        json={"smiles": "c1ccccc1", "project": "p", "request_esd_ht": True})
+        assert r.status_code == 400
+        assert "request_esd" in r.json()["detail"]
+
 
 class TestBatch:
     def test_rejections_are_per_smiles(self, api):

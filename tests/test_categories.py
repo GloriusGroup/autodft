@@ -61,6 +61,14 @@ class TestRejection:
         header = "!B3LYP\n%tddft nroots 25 end\n"
         assert categories.rejection({}, {categories.IR: True}, OPT_FREQ, header) is None
 
+    def test_esd_ht_alone_is_refused(self):
+        reason = categories.rejection({}, {categories.ESD_HT: True}, OPT_FREQ, SP)
+        assert reason == "request_esd_ht only applies together with request_esd."
+
+    def test_esd_ht_with_esd_still_reports_esd_unavailable(self):
+        meta = {categories.ESD: True, categories.ESD_HT: True}
+        assert categories.rejection({}, meta, OPT_FREQ, SP) == "ESD is not available yet."
+
 
 class TestExistingConflict:
     def _molecule(self, session, metadata=None):

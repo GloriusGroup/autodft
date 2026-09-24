@@ -77,6 +77,9 @@ def rejection(
     *check* is ``validate_smiles`` output; the closed-shell rules of later
     categories read it.
     """
+    if metadata.get(ESD_HT) and not metadata.get(ESD):
+        return "request_esd_ht only applies together with request_esd."
+
     wanted = requested(metadata)
     if not wanted:
         return None
