@@ -95,3 +95,72 @@ class TestExistingConflict:
     def test_another_project_is_not_a_conflict(self, session):
         self._molecule(session, {})
         assert categories.existing_conflict(session, "nho/other", "c1ccccc1", {categories.UVVIS}) is None
+
+
+from sqlmodel import Session, select
+
+from autodft.models.entrypoint import CalculationEntrypoint
+from tests.test_engine import _queue, _settings
+
+_LEGACY_S0_KEYS = {
+    "request_optimization",
+    "request_singlepoint",
+    "request_singlepoint_vertical_excitations",
+    "request_singlepoint_nbo",
+    "max_conformers_S0",
+}
+
+
+def _expand(session, settings, monkeypatch):
+    from autodft.engine import entrypoint_processor as ep
+
+    monkeypatch.setattr(ep, "_generate_initial_xyz", lambda s: "C 0 0 0\nH 1 0 0\n")
+    ep.process_next_entrypoint(session, settings)
+    session.commit()
+
+
+class TestExpansion:
+    def test_unflagged_state_metadata_is_unchanged(self, engine, tmp_path, monkeypatch):
+        with Session(engine) as session:
+            _queue(session, "CCO", request_T1=True)
+            _expand(session, _settings(tmp_path), monkeypatch)
+            for state in session.exec(select(MoleculeState)).all():
+                keys = set(json.loads(state.metadata_json))
+                assert not keys & set(categories.CATEGORIES)
+                if state.description == "S0":
+                    assert keys == _LEGACY_S0_KEYS
+
+    def test_flags_land_on_s0_only(self, engine, tmp_path, monkeypatch):
+        with Session(engine) as session:
+            _queue(session, "CCO", request_T1=True, request_spec_uvvis=True)
+            _expand(session, _settings(tmp_path), monkeypatch)
+            by_state = {
+                s.description: json.loads(s.metadata_json)
+                for s in session.exec(select(MoleculeState)).all()
+            }
+        assert by_state["S0"][categories.UVVIS] is True
+        assert categories.UVVIS not in by_state["T1"]
+
+    def test_unavailable_category_fails_the_entrypoint(self, engine, tmp_path, monkeypatch):
+        with Session(engine) as session:
+            entry = _queue(session, "CCO", request_esd=True)
+            _expand(session, _settings(tmp_path), monkeypatch)
+            refreshed = session.get(CalculationEntrypoint, entry.id)
+            assert "ESD is not available yet." in refreshed.processing_error
+            assert session.exec(select(MoleculeState)).all() == []
+
+    def test_ir_without_freq_fails_the_entrypoint(self, engine, tmp_path, monkeypatch):
+        # _queue's optimisation header is "!B3LYP OPT" -- no Freq.
+        with Session(engine) as session:
+            entry = _queue(session, "CCO", request_spec_ir=True)
+            _expand(session, _settings(tmp_path), monkeypatch)
+            assert "Freq" in session.get(CalculationEntrypoint, entry.id).processing_error
+
+    def test_categories_are_not_added_to_an_existing_molecule(self, engine, tmp_path, monkeypatch):
+        with Session(engine) as session:
+            _queue(session, "CCO")
+            _expand(session, _settings(tmp_path), monkeypatch)
+            entry = _queue(session, "CCO", request_spec_uvvis=True)
+            _expand(session, _settings(tmp_path), monkeypatch)
+            assert "already exists" in session.get(CalculationEntrypoint, entry.id).processing_error
+            assert len(session.exec(select(MoleculeState)).all()) == 1

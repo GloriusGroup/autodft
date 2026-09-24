@@ -16,6 +16,7 @@ from typing import Optional, Tuple
 
 from sqlmodel import Session, col, select
 
+from autodft import categories
 from autodft.config import Settings
 from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.models.geometry import MoleculeGeometry
@@ -117,6 +118,21 @@ def _process_entrypoint_body(
             f"closed-shell singlet. Nothing was submitted for this molecule; "
             f"resubmit without request_T1 to get S0 / ox / red."
         )
+
+    # Opt-in categories. Validated here as well as at the API, because the
+    # CLI and direct inserts skip the API.
+    reason = categories.rejection(
+        {"multiplicity": multiplicity}, metadata,
+        entrypoint.header_optimization, entrypoint.header_singlepoint,
+    )
+    if reason:
+        raise ValueError(f"{reason} Nothing was submitted for this molecule.")
+    conflict = categories.existing_conflict(
+        session, metadata.get("project_name", "default"),
+        _canonicalize_smiles(smiles), categories.requested(metadata),
+    )
+    if conflict:
+        raise ValueError(conflict)
 
     # The initial geometry is embedded ONCE and shared by every state.
     # _create_state used to call _generate_initial_xyz() itself, so S0, T1,
@@ -539,6 +555,11 @@ def _create_state(
         k: metadata.get(k, default)
         for k, default in _defaults.items()
     }
+
+    # Categories hang off S0 only, and only when requested, so an unflagged
+    # submission's metadata is exactly what it always was.
+    if description == "S0":
+        state_metadata.update(categories.snapshot(metadata))
 
     state = MoleculeState(
         molecule_id=molecule.id,
