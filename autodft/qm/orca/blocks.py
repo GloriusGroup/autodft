@@ -42,6 +42,27 @@ def with_tddft(header: str, **settings) -> str:
     return append_block(header, tddft_block(**settings))
 
 
+def has_keyword(header: str, keyword: str) -> bool:
+    """Whether a ``!`` line of *header* carries *keyword* (case-insensitive)."""
+    pattern = rf"^\s*!.*\b{re.escape(keyword)}\b"
+    return re.search(pattern, header, re.IGNORECASE | re.MULTILINE) is not None
+
+
+def with_keyword(header: str, keyword: str) -> str:
+    """*header* with *keyword* appended to its first ``!`` line."""
+    if has_keyword(header, keyword):
+        raise HeaderConflict(
+            f"The singlepoint header already has the {keyword} keyword; the job adds it itself."
+        )
+    lines = header.splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("!"):
+            ending = "\n" if line.endswith("\n") else ""
+            lines[i] = line.rstrip("\n") + f" {keyword}" + ending
+            return "".join(lines)
+    return f"! {keyword}\n" + header
+
+
 def compose_header(task_type: str, header: str, options: Optional[dict] = None) -> str:
     """The header a job of *task_type* runs with; other types get *header* itself.
 
@@ -56,6 +77,8 @@ def compose_header(task_type: str, header: str, options: Optional[dict] = None) 
             nroots=options.get("uvvis_nroots", defaults["uvvis_nroots"]),
             tda=bool(options.get("uvvis_tda", defaults["uvvis_tda"])),
         )
+    if task_type == "singlepoint_nmr":
+        return with_keyword(header, "NMR")
     return header
 
 

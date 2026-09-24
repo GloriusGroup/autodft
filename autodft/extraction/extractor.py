@@ -722,6 +722,11 @@ _FILE_MAP: dict[str, list[tuple[str, str]]] = {
         ("input.inp", "sp_uvvis_input.inp"),
         ("output.out", "sp_uvvis_output.out"),
     ],
+    "singlepoint_nmr": [
+        ("input.inp", "sp_nmr_input.inp"),
+        ("input.xyz", "sp_nmr_geometry.xyz"),
+        ("output.out", "sp_nmr_output.out"),
+    ],
     "confsearch": [
         ("input.inp", "confsearch_input.inp"),
         ("output.out", "confsearch_output.out"),

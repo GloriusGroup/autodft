@@ -14,6 +14,7 @@ class TaskType(str, Enum):
 
     # Opt-in categories (autodft.categories).
     singlepoint_uvvis = "singlepoint_uvvis"
+    singlepoint_nmr = "singlepoint_nmr"
 
 
 class TaskStatus(str, Enum):

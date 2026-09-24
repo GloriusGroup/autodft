@@ -418,6 +418,7 @@ def _followups_were_expected(
         return bool(
             metadata.get("request_singlepoint", True)
             or categories.on_s0(description, metadata, categories.UVVIS)
+            or categories.on_s0(description, metadata, categories.NMR)
         )
     return False
 
@@ -547,6 +548,11 @@ def _followup_categories(
         _create_singlepoint_task(
             session, state.id, state.singlepoint_header_id, task.output_geometry_id,
             task.id, TaskType.singlepoint_uvvis,
+        )
+    if categories.on_s0(state.description, metadata, categories.NMR):
+        _create_singlepoint_task(
+            session, state.id, state.singlepoint_header_id, task.output_geometry_id,
+            task.id, TaskType.singlepoint_nmr,
         )
 
 

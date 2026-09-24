@@ -28,9 +28,12 @@ from autodft.qm.orca.parser import OrcaParser
 
 SP = "!B3LYP def2-TZVP TightSCF\n%maxcore 500\n%pal nprocs 2 end\n"
 
+# Task types whose header compose_header changes.
+COMPOSED = {TaskType.singlepoint_uvvis, TaskType.singlepoint_nmr}
+
 
 class TestBlocks:
-    @pytest.mark.parametrize("task_type", [t.value for t in TaskType if t != TaskType.singlepoint_uvvis])
+    @pytest.mark.parametrize("task_type", [t.value for t in TaskType if t not in COMPOSED])
     def test_existing_task_types_keep_their_header_verbatim(self, task_type):
         assert blocks.compose_header(task_type, SP) is SP
 
