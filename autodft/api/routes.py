@@ -763,6 +763,10 @@ def api_project_molecules_detail(
                     "singlepoint_vert_spin_change":  _status_of(deps.get(TaskType.singlepoint_vert_spin_change)),
                     "singlepoint_uvvis":             _status_of(deps.get(TaskType.singlepoint_uvvis)),
                     "singlepoint_nmr":                _status_of(deps.get(TaskType.singlepoint_nmr)),
+                    "esd": _combined_status([
+                        d for t, d in deps.items()
+                        if t == TaskType.singlepoint_soc or t.value.startswith("esd_")
+                    ]),
                 })
             # Confsearch status for the state — useful when no opt tasks exist yet.
             cs = next((t for t in tasks_by_state.get(st.id, [])
@@ -880,6 +884,17 @@ def api_project_photophysics(
 
 def _status_of(task: Optional[ComputationTask]) -> Optional[str]:
     return task.status.value if task is not None else None
+
+
+def _combined_status(tasks: list[ComputationTask]) -> Optional[str]:
+    """One status for several tasks: failed, else pending, else created, else successful."""
+    if not tasks:
+        return None
+    statuses = {t.status for t in tasks}
+    for status in (TaskStatus.failed, TaskStatus.pending, TaskStatus.created):
+        if status in statuses:
+            return status.value
+    return TaskStatus.successful.value
 
 
 _STATE_ORDER = {"S0": 0, "S1": 1, "T1": 2, "ox": 3, "red": 4}

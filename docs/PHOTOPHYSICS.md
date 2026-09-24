@@ -1,20 +1,21 @@
 # Photophysics categories
 
-UV/Vis, IR and NMR are opt-in categories you tick per submission. A later
-plan adds ESD; it appends its own section to this file.
+UV/Vis, IR, NMR and ESD are opt-in categories you tick per submission.
 
 ## Categories
 
 Tick a category when you submit: the dashboard's checkboxes, the API's
-`request_spec_uvvis` / `request_spec_ir` / `request_spec_nmr` fields
-(plus their options), or the CLI's `--uvvis` / `--ir` / `--nmr` flags
-(with `--uvvis-nroots` / `--uvvis-tda` / `--nmr-nuclei`). Categories only
-attach to new molecules — resubmitting an existing molecule with a
-category it doesn't already have is refused. A category's options
-(`uvvis_nroots`, `uvvis_tda`, `nmr_nuclei`) are stored only when that
-category is requested. See [`docs/API.md`](API.md) for the field-level
-reference and the `GET /api/projects/{name}/photophysics` response
-shape.
+`request_spec_uvvis` / `request_spec_ir` / `request_spec_nmr` /
+`request_esd` fields (plus their options), or the CLI's `--uvvis` /
+`--ir` / `--nmr` / `--esd` flags (with `--uvvis-nroots` / `--uvvis-tda` /
+`--nmr-nuclei` / `--esd-ht` / `--esd-tn-window` / `--esd-temperature`).
+Categories only attach to new molecules — resubmitting an existing
+molecule with a category it doesn't already have is refused. A
+category's options (`uvvis_nroots`, `uvvis_tda`, `nmr_nuclei`,
+`request_esd_ht`, `esd_tn_window_ev`, `esd_temperature_k`) are stored
+only when that category is requested. See [`docs/API.md`](API.md) for
+the field-level reference and the `GET /api/projects/{name}/photophysics`
+response shape.
 
 ## UV/Vis
 
@@ -78,6 +79,60 @@ it with `autodft admin requeue-failed --project admin/system_references`
 here). `method_matches` compares both NMR inputs' `!` keywords and `%`
 blocks, ignoring `%pal`, `%maxcore`, `%scf` and SCF-convergence keywords.
 
+## ESD
+
+Excited-state dynamics (ISC, RISC, IC, fluorescence, T1→S0 ISC,
+phosphorescence) via ORCA's `ESD` module. Tick `request_esd` (plus
+`request_esd_ht`, `esd_tn_window_ev`, `esd_temperature_k`); a closed-shell
+singlet only.
+
+**Flow.** Once every S0 confsearch/optimisation/energy-singlepoint task is
+terminal, the best S0 conformer (S0\*, picked by G like the
+CSV/JSON exporters' reported conformer) seeds an S1 optimisation — the
+optimisation header plus `%tddft nroots 5 iroot 1 followiroot true tda
+false` — and a T1 (UKS) optimisation. SOC TDDFT singlepoints (`nroots 10
+iroot 1 triplets true dosoc true tda false`) run on S0\*, S1 and T1. Each
+of the six rate jobs starts as soon as its two states are ready.
+
+**Energies.** ΔE and DELE use the TDDFT-consistent energies (FINAL SINGLE
+POINT ENERGY plus the SOC excitation energy at each geometry); the UKS
+ΔE_ST is reported alongside for comparison only, never used in a rate.
+
+**SOCMEs.** |⟨T|H_SO|S⟩| is summed over the three triplet sublevels for a
+singlet→triplet transition, and that sum divided by √3 for triplet→singlet;
+each rate reads the SOC table computed at its final state's geometry.
+
+**S1→Tn.** Every Tn (n ≥ 2) up to `esd_tn_window_ev` eV above S1 shares the
+T1 Hessian and geometry — the shifted-T1 proxy, no extra Hessian per
+triplet. T1 itself is always included; the reported k_ISC sums every open
+channel.
+
+**FC vs HT.** Franck-Condon rates by default. Herzberg-Teller
+(`request_esd_ht`) adds vibronic coupling for FC-forbidden transitions, far
+more expensive: an ISC-type HT job runs once per triplet sublevel
+(`trootssl -1/0/1`), PHOSP once per SOC root 1–3.
+
+**Cost.** The S1 Hessian is always numerical — ORCA 6.1 has no analytic
+TDDFT Hessian, TDA or not. `[pipeline.excited_optimization]` defaults to 4
+days (`4-00:00:00`); check it against the SLURM partition's `MaxTime`
+before submitting, since `sbatch` refuses a job asking for longer than the
+partition allows.
+
+**LibXC.** Native B88-exchange functionals (B3LYP, BLYP, BP86, B3P86,
+B2PLYP, B2GP-PLYP, X3LYP) can't do TDDFT gradients in ORCA 6.1, so an
+optimisation header using one is refused for ESD at submission — the S1
+optimisation would always fail. Any other functional ORCA can't
+differentiate fails its S1 optimisation with `LibXC Needed` and is not
+retried. A native B88 *singlepoint* header only costs the IC rate (which
+needs the gradient); the other five rates are unaffected. Use
+`!LibXC(B3LYP)` etc. either way.
+
+**Caveats.** Rates are harmonic. A job whose Duschinsky rotation is large
+(sum of K\*K over 7) is flagged as unreliable rather than dropped. A
+negative rate is clamped to 0 and flagged. Soft imaginary modes that the
+optimisation's checks let through are flagged — ORCA's ESD module treats
+them as real. IC rates are order-of-magnitude at best.
+
 ## Weighting
 
 Conformers are Boltzmann-weighted at 298.15 K:
@@ -127,7 +182,8 @@ the old code; later plans list any other rows they add here.
 ```bash
 .venv/bin/python - <<'EOF'
 import sqlite3
-NEW_TYPES = ("singlepoint_uvvis", "singlepoint_nmr")  # later plans add their task types here
+NEW_TYPES = ("singlepoint_uvvis", "singlepoint_nmr", "singlepoint_soc", "esd_isc",
+             "esd_risc", "esd_ic", "esd_fluor", "esd_isc_t1s0", "esd_phosp")
 NEW_JOB_KINDS = ()  # project-job kinds later plans add
 db = sqlite3.connect("/path/to/autodft.db")
 marks = ",".join("?" * len(NEW_TYPES))
@@ -142,6 +198,10 @@ with db:
         "OR request_metadata LIKE '%\"request_esd\": true%')",
         (held,),
     )
+    # Unfinished S1/T1 optimisations of ESD molecules would run as plain
+    # ground-state optimisations under the old code.
+    db.execute("UPDATE computation_tasks SET status = 'failed' WHERE status IN ('created', 'pending') "
+               "AND state_id IN (SELECT id FROM molecule_states WHERE metadata_json LIKE '%\"esd_role\"%')")
     db.execute(f"DELETE FROM computation_jobs WHERE task_id IN "
                f"(SELECT id FROM computation_tasks WHERE task_type IN ({marks}))", NEW_TYPES)
     db.execute(f"DELETE FROM computation_tasks WHERE task_type IN ({marks})", NEW_TYPES)

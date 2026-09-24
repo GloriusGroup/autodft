@@ -196,7 +196,10 @@ package defaults in `autodft/qm/orca/defaults.py`.
 | `request_spec_ir`                           | bool   | `false`       | IR: read from the S0 optimisation's frequency calculation — no extra job. Needs `Freq` in the optimisation header. |
 | `request_spec_nmr`                          | bool   | `false`       | NMR: `NMR` is added to the singlepoint header's `!` line for a singlepoint on every optimised S0 conformer. Shifts are referenced to TMS (¹H, ¹³C) and CFCl₃ (¹⁹F), which the pipeline computes itself — once per optimisation/singlepoint header pair — in the protected `admin/system_references` project. Closed-shell molecules only. |
 | `nmr_nuclei`                                | list   | `["H","C","F"]` | Nuclei to report; stored only with NMR.                                                  |
-| `request_esd`, `request_esd_ht`             | bool   | `false`       | Not available yet; refused with 400.                                                        |
+| `request_esd` | bool | `false` | Excited-state dynamics: S1 and T1 optimised from the lowest S0 conformer, SOC TDDFT, ORCA ESD rates (ISC, RISC, IC, fluorescence, T1→S0 ISC, phosphorescence). Needs a closed-shell singlet, `Freq` in the optimisation header, the energy singlepoint, and a functional whose TDDFT gradients ORCA supports (native B88 functionals such as B3LYP need `LibXC(...)`). |
+| `request_esd_ht` | bool | `false` | Herzberg–Teller for the ESD rates; only with `request_esd`. |
+| `esd_tn_window_ev` | float | `0.2` | S1→Tn ISC is summed over triplets up to this many eV above S1 (0–1). Stored only with ESD. |
+| `esd_temperature_k` | float | `298.15` | Temperature of the rates (0 < T ≤ 1000). Stored only with ESD. |
 
 `request_S1` is **not** exposed: the S1 state is not yet supported.
 
@@ -410,9 +413,11 @@ every one succeeded.
 
 The same molecules, one level deeper: each state (S0 / T1 / ox / red)
 with its confsearch status and one row per conformer carrying the status
-of that conformer's optimization and of every singlepoint hanging off it.
-This is what the dashboard's *Project Overview → Molecules* subpage
-renders.
+of that conformer's optimization and of every singlepoint hanging off it,
+plus `esd`: one combined status (`failed` > `pending` > `created` >
+`successful`, `null` when there are none) over that conformer's
+`singlepoint_soc` and every `esd_*` rate task. This is what the
+dashboard's *Project Overview → Molecules* subpage renders.
 
 ### `GET /api/projects/{name}/state-analysis`
 
