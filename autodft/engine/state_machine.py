@@ -15,6 +15,7 @@ from typing import Optional
 
 from sqlmodel import Session, col, select
 
+from autodft import categories
 from autodft.config import Settings
 from autodft.engine.scheduler import Scheduler
 from autodft.models.enums import (
@@ -411,7 +412,7 @@ def _followups_were_expected(task: ComputationTask, metadata: dict) -> bool:
                 return False
         return True
     if task.task_type == TaskType.optimization:
-        return bool(metadata.get("request_singlepoint", True))
+        return bool(metadata.get("request_singlepoint", True) or metadata.get(categories.UVVIS))
     return False
 
 
@@ -478,6 +479,13 @@ def _followup_optimization(
     if sp_header_id is None:
         logger.error("No singlepoint header for state %d", state.id)
         return
+
+    # UV/Vis rides on every S0 conformer, independent of the energy singlepoint.
+    if state.description == "S0" and metadata.get(categories.UVVIS):
+        _create_singlepoint_task(
+            session, state.id, sp_header_id, output_geom_id,
+            task.id, TaskType.singlepoint_uvvis,
+        )
 
     if not metadata.get("request_singlepoint", True):
         logger.info("Skipping singlepoint follow-up for task %d", task.id)
@@ -976,6 +984,18 @@ def _generate_job_files(
     state = session.get(MoleculeState, task.state_id)
     if state is None:
         return _fail_task(session, task, job, f"State {task.state_id} not found")
+
+    # Category tasks add their own blocks; every other type runs the header
+    # verbatim.
+    from autodft.qm.orca.blocks import HeaderConflict, compose_header
+
+    try:
+        header_text = compose_header(
+            task.task_type.value, header_text,
+            json.loads(state.metadata_json) if state.metadata_json else {},
+        )
+    except HeaderConflict as exc:
+        return _fail_task(session, task, job, str(exc))
 
     # --- Gap 2 fix: Adjust charge/multiplicity for vertical excitations ---
     # A task whose charge/multiplicity can't be resolved must not silently

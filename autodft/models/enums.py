@@ -12,6 +12,9 @@ class TaskType(str, Enum):
     singlepoint_vert_spin_change = "singlepoint_vert_spin_change"
     singlepoint_nbo = "singlepoint_nbo"
 
+    # Opt-in categories (autodft.categories).
+    singlepoint_uvvis = "singlepoint_uvvis"
+
 
 class TaskStatus(str, Enum):
     created = "created"
