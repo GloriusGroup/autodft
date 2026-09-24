@@ -110,6 +110,19 @@ class TestShieldings:
     def test_no_summary_is_empty(self):
         assert parse_shieldings("****ORCA TERMINATED NORMALLY****") == []
 
+    def test_stops_at_the_first_non_row_line_after_the_rows(self):
+        content = (
+            "CHEMICAL SHIELDING SUMMARY (ppm)\n"
+            "---------------------------------\n\n\n"
+            "  Nucleus  Element    Isotropic     Anisotropy\n"
+            "  -------  -------  ------------   ------------\n"
+            "      0       H           10.000          1.000 \n"
+            "Maximum memory used throughout the run: 500 MB\n"
+            "      1       C           20.000          2.000 \n"
+        )
+        rows = parse_shieldings(content)
+        assert [r.element for r in rows] == ["H"]
+
 
 class TestNmrCheck:
     def _write(self, tmp_path, body: str):

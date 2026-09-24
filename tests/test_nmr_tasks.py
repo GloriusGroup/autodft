@@ -6,7 +6,12 @@ import pytest
 
 from autodft import categories
 from autodft.config import Settings
-from autodft.engine.state_machine import _create_job_for_task, _followups_were_expected, start_followup_tasks
+from autodft.engine.state_machine import (
+    _category_followups,
+    _create_job_for_task,
+    _followups_were_expected,
+    start_followup_tasks,
+)
 from autodft.models import ComputationTask, TaskStatus, TaskType
 from autodft.qm.orca import blocks
 from autodft.qm.orca.parser import OrcaParser
@@ -34,6 +39,21 @@ class TestKeyword:
 
     def test_keyword_detection_is_word_bounded(self):
         assert not blocks.has_keyword("!B3LYP NMRX\n", "NMR")
+
+    def test_the_keyword_goes_before_a_comment(self):
+        assert blocks.with_keyword("! B3LYP def2-TZVP  # production\n", "NMR") == (
+            "! B3LYP def2-TZVP NMR # production\n"
+        )
+
+
+class TestCategoryFollowups:
+    def test_uvvis_before_nmr(self):
+        meta = {categories.UVVIS: True, categories.NMR: True}
+        assert _category_followups("S0", meta) == [TaskType.singlepoint_uvvis, TaskType.singlepoint_nmr]
+
+    def test_only_on_s0(self):
+        meta = {categories.UVVIS: True, categories.NMR: True}
+        assert _category_followups("T1", meta) == []
 
 
 class TestFollowup:

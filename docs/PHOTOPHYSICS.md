@@ -66,10 +66,17 @@ keywords of the molecule's and the reference's NMR inputs.
 
 Signals are grouped by topological symmetry from the optimised geometry:
 atoms are equivalent when RDKit's bonding graph places them in the same
-symmetry class, so protons that differ only by stereochemistry (e.g.
-diastereotopic CH2 protons) are averaged into one signal. `equivalence`
-is `"none"`, one signal per atom, when RDKit cannot perceive bonds from
-the geometry. Closed-shell molecules only.
+symmetry class, so protons that differ only by stereochemistry — diastereotopic
+CH₂ protons, the cis/trans protons of a vinyl =CH₂, the two N-methyls of an
+amide — are averaged into one signal. `equivalence` is `"none"`, one signal
+per atom, when RDKit cannot perceive bonds from the geometry. Closed-shell
+molecules only.
+
+A reference whose optimisation or NMR job failed shows as `failed`; requeue
+it with `autodft admin requeue-failed --project admin/system_references`
+(check the command's exact options with `--help` and write them correctly
+here). `method_matches` compares both NMR inputs' `!` keywords and `%`
+blocks, ignoring `%pal`, `%maxcore`, `%scf` and SCF-convergence keywords.
 
 ## Weighting
 
@@ -97,8 +104,11 @@ optimisations, so the two differ when an earlier optimisation failed.
    otherwise talk to the old API, which silently drops the new fields.
 2. Back up the database: copy `autodft.db` (and `-wal`/`-shm` if present)
    while the controller is stopped.
-3. Merge the branch into `main` in `/mnt/share/dft_calculations/autodft`.
-4. Start the controller again; reload the dashboard.
+3. Check that no project is already named `system_references`: on the
+   controller host, `.venv/bin/python -c "import sqlite3; print(sqlite3.connect('/path/to/autodft.db').execute(\"SELECT project_name, COUNT(*) FROM molecules WHERE project_name LIKE '%/system_references' GROUP BY 1\").fetchall())"`
+   must print `[]`; rename such a project first.
+4. Merge the branch into `main` in `/mnt/share/dft_calculations/autodft`.
+5. Start the controller again; reload the dashboard.
 
 ## Roll back
 
@@ -109,7 +119,10 @@ the old code; later plans list any other rows they add here.
 
 1. Stop the controller; back up the database as above.
 2. On the controller host only (never open `autodft.db` from a second
-   host while anything else has it open), with the repository's Python:
+   host while anything else has it open), with the repository's Python.
+   Before the deletes, the script also holds back any queued submission
+   that carries a category flag, since the old code would compute it
+   without one:
 
 ```bash
 .venv/bin/python - <<'EOF'
@@ -119,6 +132,16 @@ NEW_JOB_KINDS = ()  # project-job kinds later plans add
 db = sqlite3.connect("/path/to/autodft.db")
 marks = ",".join("?" * len(NEW_TYPES))
 with db:
+    held = ("Held back by a rollback of the photophysics feature; "
+            "resubmit after redeploying it.")
+    db.execute(
+        "UPDATE calculation_entrypoints SET time_started = CURRENT_TIMESTAMP, processing_error = ? "
+        "WHERE time_started IS NULL AND (request_metadata LIKE '%\"request_spec_uvvis\": true%' "
+        "OR request_metadata LIKE '%\"request_spec_ir\": true%' "
+        "OR request_metadata LIKE '%\"request_spec_nmr\": true%' "
+        "OR request_metadata LIKE '%\"request_esd\": true%')",
+        (held,),
+    )
     db.execute(f"DELETE FROM computation_jobs WHERE task_id IN "
                f"(SELECT id FROM computation_tasks WHERE task_type IN ({marks}))", NEW_TYPES)
     db.execute(f"DELETE FROM computation_tasks WHERE task_type IN ({marks})", NEW_TYPES)

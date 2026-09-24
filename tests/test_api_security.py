@@ -338,3 +338,29 @@ class TestSubmitEchoesWhereItLanded:
         )
         assert result["project"] == "mhoffmann/alcohols"
         assert result["counts"]["queued"] == 2
+
+
+class TestUnbootstrappedSubmissionOwner:
+    """The shared-password admin path (no account row for the caller) is not
+    a way around the reserved reference-project name."""
+
+    def test_it_refuses_the_reference_project_too(self, tmp_path):
+        from fastapi import HTTPException
+
+        from autodft.api.identity import Identity
+        from autodft.api.routes import SubmitRequest, _submission_owner
+        from autodft.config import Settings as _Settings
+        from autodft.db import get_session, init_db, reset_engine
+
+        settings = _Settings()
+        settings.storage.data_path = str(tmp_path)
+        reset_engine()
+        init_db(settings)
+        identity = Identity(username="ghost", is_admin=True, user_id=None)
+        with get_session(settings) as session:
+            with pytest.raises(HTTPException) as exc:
+                _submission_owner(
+                    session, identity, SubmitRequest(smiles="CCO", project="admin/system_references"),
+                )
+        assert exc.value.status_code == 400
+        reset_engine()

@@ -97,7 +97,15 @@ import json
 from sqlmodel import Session, select
 
 from autodft import categories
-from autodft.models import CalculationEntrypoint
+from autodft.engine.state_machine import start_followup_tasks
+from autodft.models import (
+    CalculationEntrypoint,
+    ComputationTask,
+    MoleculeGeometry,
+    MoleculeState,
+    TaskStatus,
+    TaskType,
+)
 from autodft.models.user import Project, UserRole
 from tests.test_engine import _queue, _settings
 
@@ -175,6 +183,28 @@ class TestQueueing:
             sps = sorted(e.header_singlepoint for e in _reference_entries(session))
             assert sps == ["!B3LYP\n", "!PBE0\n"]
 
+    def test_a_more_urgent_requester_raises_the_queued_references_priority(self, engine, tmp_path, monkeypatch):
+        settings = _settings(tmp_path)
+        with Session(engine) as session:
+            _queue(session, "CCO", request_spec_nmr=True, priority=10)
+            _expand_one(session, settings, monkeypatch)  # queues TMS at priority 10
+            second = _queue(session, "CCN", request_spec_nmr=True, priority=20)
+            nmr_references.ensure_references(session, second, json.loads(second.request_metadata))
+            session.commit()
+            (ref,) = _reference_entries(session)
+            assert ref.priority == 20
+
+    def test_a_less_urgent_requester_does_not_lower_it(self, engine, tmp_path, monkeypatch):
+        settings = _settings(tmp_path)
+        with Session(engine) as session:
+            _queue(session, "CCO", request_spec_nmr=True, priority=20)
+            _expand_one(session, settings, monkeypatch)  # queues TMS at priority 20
+            second = _queue(session, "CCN", request_spec_nmr=True, priority=10)
+            nmr_references.ensure_references(session, second, json.loads(second.request_metadata))
+            session.commit()
+            (ref,) = _reference_entries(session)
+            assert ref.priority == 20
+
     def test_unflagged_and_other_categories_queue_nothing(self, engine, tmp_path, monkeypatch):
         with Session(engine) as session:
             _queue(session, "CCO")
@@ -193,3 +223,44 @@ class TestQueueing:
                 select(Project).where(Project.qualified_name == nmr_references.REFERENCE_QUALIFIED)
             ).one()
             assert project.name == nmr_references.REFERENCE_PROJECT
+
+
+class TestEndToEnd:
+    def test_the_reference_is_optimised_then_gets_its_nmr_followup(self, engine, tmp_path, monkeypatch):
+        settings = _settings(tmp_path)
+        with Session(engine) as session:
+            _queue(session, "CCO", request_spec_nmr=True)
+            _expand_one(session, settings, monkeypatch)  # the requester: queues TMS
+            _expand_one(session, settings, monkeypatch)  # the queued TMS entrypoint itself
+
+            tms = session.exec(
+                select(Molecule).where(Molecule.project_name == nmr_references.REFERENCE_QUALIFIED)
+            ).one()
+            state = session.exec(
+                select(MoleculeState).where(
+                    MoleculeState.molecule_id == tms.id, MoleculeState.description == "S0",
+                )
+            ).one()
+            tasks = session.exec(
+                select(ComputationTask).where(ComputationTask.state_id == state.id)
+            ).all()
+            assert [t.task_type for t in tasks] == [TaskType.optimization]
+
+            opt = tasks[0]
+            geom = MoleculeGeometry(state_id=state.id, xyz_data="2\n\nC 0 0 0\nH 1 0 0\n", origin_task_id=opt.id)
+            session.add(geom)
+            session.commit()
+            opt.output_geometry_id = geom.id
+            opt.status = TaskStatus.successful
+            opt.has_followups = True
+            session.add(opt)
+            session.commit()
+
+            start_followup_tasks(session, Settings())
+
+            children = session.exec(
+                select(ComputationTask).where(ComputationTask.depends_on_task_id == opt.id)
+            ).all()
+            assert [c.task_type for c in children] == [TaskType.singlepoint_nmr]
+            session.refresh(opt)
+            assert opt.status == TaskStatus.successful

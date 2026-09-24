@@ -52,10 +52,20 @@ class TestClasses:
         assert nmr.equivalence_classes("") is None
 
 
-def test_method_keywords_ignore_scf_and_parallel_settings():
-    assert nmr.method_keywords("! B3LYP def2-SVP TightSCF NMR PAL8\n%maxcore 500\n") == frozenset(
-        {"b3lyp", "def2-svp", "nmr"}
+def test_the_fingerprint_ignores_resources_and_scf_settings():
+    base = nmr.method_fingerprint("! B3LYP def2-SVP TightSCF NMR\n%cpcm smd true end\n*xyzfile 0 1 input.xyz\n")
+    retried = nmr.method_fingerprint(
+        "! B3LYP def2-SVP NormalSCF NMR PAL8  # attempt 3\n%pal nprocs 32 end\n%maxcore 4000\n"
+        "%scf maxiter 500 end\n%cpcm smd true end\n*xyzfile 0 1 input.xyz\n"
     )
+    assert base == retried
+    assert base[0] == frozenset({"b3lyp", "def2-svp", "nmr"})
+
+
+def test_a_block_edit_changes_the_fingerprint():
+    water = nmr.method_fingerprint('! B3LYP NMR\n%cpcm smd true SMDsolvent "water" end\n*xyz 0 1\n')
+    ch3cn = nmr.method_fingerprint('! B3LYP NMR\n%cpcm smd true SMDsolvent "acetonitrile" end\n*xyz 0 1\n')
+    assert water != ch3cn
 
 
 def _job(session, task, tmp_path, name, output, inp=None):
@@ -172,6 +182,26 @@ def test_a_reference_at_another_method_is_flagged(db):
     assert shifts["reference"]["C"]["method_matches"] is False
 
 
+def test_a_reference_with_another_solvent_is_flagged(db):
+    with get_session() as session:
+        _glyoxal(session, db)
+        _tms(session, db, inp=B3LYP_NMR + "%cpcm smd true end\n")
+    shifts = analyze_spectra("nho/p", use_cache=False)["molecules"][0]["nmr"]
+    assert shifts["reference"]["H"]["method_matches"] is False
+
+
+def test_a_reference_whose_optimisation_failed_is_failed_not_pending(db):
+    with get_session() as session:
+        _glyoxal(session, db)
+        _, state = _state(session, "C[Si](C)(C)C", nmr_references.REFERENCE_QUALIFIED, {categories.NMR: True})
+        opt = _task(session, state, TaskType.optimization)
+        opt.status = TaskStatus.failed
+        session.add(opt)
+        session.commit()
+    shifts = analyze_spectra("nho/p", use_cache=False)["molecules"][0]["nmr"]
+    assert shifts["reference"]["H"]["status"] == "failed"
+
+
 def test_a_pending_nmr_job_is_counted(db):
     with get_session() as session:
         state = _glyoxal(session, db)
@@ -200,6 +230,32 @@ def test_a_conformer_whose_shieldings_do_not_match_is_unavailable(db):
     summary = analyze_spectra("nho/p", use_cache=False)["molecules"][0]["nmr"]
     assert (summary["count"], summary["unavailable"]) == (1, 1)
     assert [c["weight"] for c in _detail()["conformers"]] == [pytest.approx(1.0)]
+
+
+def test_references_are_looked_up_once_per_method(db, monkeypatch):
+    calls = []
+    original = nmr._reference
+
+    def counting(*args, **kwargs):
+        calls.append(args)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(nmr, "_reference", counting)
+    with get_session() as session:
+        _glyoxal(session, db)
+        _, state2 = _state(session, "CC=O", "nho/p", {categories.NMR: True, "nmr_nuclei": ["H", "C", "F"]})
+        geom = MoleculeGeometry(state_id=state2.id, xyz_data=(FIXTURES / "glyoxal_s0.xyz").read_text())
+        session.add(geom)
+        session.commit()
+        opt = _task(session, state2, TaskType.optimization, geometry=geom.id)
+        _job(session, opt, db, "g2_opt", "G-E(el)                           ...      0.03000000 Eh")
+        sp = _task(session, state2, TaskType.singlepoint, parent=opt.id)
+        _job(session, sp, db, "g2_sp", "FINAL SINGLE POINT ENERGY      -227.600000000")
+        shield = _task(session, state2, TaskType.singlepoint_nmr, parent=opt.id)
+        _job(session, shield, db, "g2_nmr", GLYOXAL, B3LYP_NMR)
+        _tms(session, db)
+    analyze_spectra("nho/p", use_cache=False)
+    assert len(calls) <= 2
 
 
 def test_the_cache_notices_a_reference_finishing(db):

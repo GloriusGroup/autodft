@@ -202,6 +202,7 @@ def _analyze(project_name: str, molecule_id: Optional[int]) -> dict:
     extractor = PipelineExtractor(project_name)
     detail = molecule_id is not None
     molecules = []
+    nmr_references_seen: dict = {}
     with get_session() as session:
         query = select(Molecule).where(Molecule.project_name == project_name)
         if detail:
@@ -237,7 +238,7 @@ def _analyze(project_name: str, molecule_id: Optional[int]) -> dict:
                 if categories.NMR in wanted:
                     from autodft.analysis.nmr import molecule_nmr
 
-                    entry["nmr"] = molecule_nmr(session, extractor, state, pool, detail)
+                    entry["nmr"] = molecule_nmr(session, extractor, state, pool, detail, nmr_references_seen)
                 molecules.append(entry)
     return {"project": project_name, "temperature_k": ROOM_TEMPERATURE, "molecules": molecules}
 

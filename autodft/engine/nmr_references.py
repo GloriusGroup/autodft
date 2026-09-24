@@ -71,9 +71,14 @@ def ensure_references(
     nuclei = categories.options(metadata).get("nmr_nuclei", [])
     queued = []
     for smiles in references_for(entrypoint.smiles, nuclei):
-        if _reference_known(
+        known = _reference_known(
             session, smiles, entrypoint.header_optimization, entrypoint.header_singlepoint,
-        ):
+        )
+        if known is not None:
+            # A more urgent requester makes its reference more urgent too.
+            if entrypoint.priority > known.priority:
+                known.priority = entrypoint.priority
+                session.add(known)
             continue
         session.add(_reference_entrypoint(smiles, entrypoint))
         queued.append(smiles)
@@ -83,8 +88,9 @@ def ensure_references(
     return queued
 
 
-def _reference_known(session, smiles, header_optimization, header_singlepoint) -> bool:
-    """Whether *smiles* is computed or queued in the reference project at these headers."""
+def _reference_known(session, smiles, header_optimization, header_singlepoint):
+    """The reference row for *smiles* at these headers: a computed ``Molecule``,
+    else a queued ``CalculationEntrypoint``, else ``None``."""
     from autodft.engine.entrypoint_processor import _canonicalize_smiles
     from autodft.models import ComputationHeader, Molecule, MoleculeState
 
@@ -103,7 +109,7 @@ def _reference_known(session, smiles, header_optimization, header_singlepoint) -
             opt = session.get(ComputationHeader, state.optimization_header_id) if state.optimization_header_id else None
             sp = session.get(ComputationHeader, state.singlepoint_header_id) if state.singlepoint_header_id else None
             if opt and sp and (opt.header_text, sp.header_text) == (header_optimization, header_singlepoint):
-                return True
+                return molecule
 
     for entry in session.exec(
         select(CalculationEntrypoint).where(
@@ -113,8 +119,8 @@ def _reference_known(session, smiles, header_optimization, header_singlepoint) -
     ).all():
         if ((entry.header_optimization, entry.header_singlepoint) == (header_optimization, header_singlepoint)
                 and json.loads(entry.request_metadata or "{}").get("project_name") == REFERENCE_QUALIFIED):
-            return True
-    return False
+            return entry
+    return None
 
 
 def _reference_entrypoint(smiles: str, requester: CalculationEntrypoint) -> CalculationEntrypoint:

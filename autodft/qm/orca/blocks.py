@@ -58,7 +58,8 @@ def with_keyword(header: str, keyword: str) -> str:
     for i, line in enumerate(lines):
         if line.lstrip().startswith("!"):
             ending = "\n" if line.endswith("\n") else ""
-            lines[i] = line.rstrip("\n") + f" {keyword}" + ending
+            body, hash_, comment = line.rstrip("\n").partition("#")
+            lines[i] = body.rstrip() + f" {keyword}" + (f" {hash_}{comment}" if hash_ else "") + ending
             return "".join(lines)
     return f"! {keyword}\n" + header
 

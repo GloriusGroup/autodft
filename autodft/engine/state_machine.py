@@ -415,11 +415,7 @@ def _followups_were_expected(
                 return False
         return True
     if task.task_type == TaskType.optimization:
-        return bool(
-            metadata.get("request_singlepoint", True)
-            or categories.on_s0(description, metadata, categories.UVVIS)
-            or categories.on_s0(description, metadata, categories.NMR)
-        )
+        return bool(metadata.get("request_singlepoint", True) or _category_followups(description, metadata))
     return False
 
 
@@ -532,6 +528,16 @@ def _followup_optimization(
         _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, task.id, TaskType.singlepoint_vert_ox)
 
 
+def _category_followups(description: str, metadata: dict) -> list[TaskType]:
+    """The category tasks a successful optimisation of this state gets, in creation order."""
+    followups = []
+    if categories.on_s0(description, metadata, categories.UVVIS):
+        followups.append(TaskType.singlepoint_uvvis)
+    if categories.on_s0(description, metadata, categories.NMR):
+        followups.append(TaskType.singlepoint_nmr)
+    return followups
+
+
 def _followup_categories(
     session: Session,
     task: ComputationTask,
@@ -544,15 +550,10 @@ def _followup_categories(
     """
     if task.output_geometry_id is None or state.singlepoint_header_id is None:
         return
-    if categories.on_s0(state.description, metadata, categories.UVVIS):
+    for task_type in _category_followups(state.description, metadata):
         _create_singlepoint_task(
             session, state.id, state.singlepoint_header_id, task.output_geometry_id,
-            task.id, TaskType.singlepoint_uvvis,
-        )
-    if categories.on_s0(state.description, metadata, categories.NMR):
-        _create_singlepoint_task(
-            session, state.id, state.singlepoint_header_id, task.output_geometry_id,
-            task.id, TaskType.singlepoint_nmr,
+            task.id, task_type,
         )
 
 

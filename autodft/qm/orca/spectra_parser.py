@@ -120,6 +120,6 @@ def parse_shieldings(content: str) -> list[Shielding]:
                 int(match.group(1)), match.group(2), float(match.group(3)), float(match.group(4)),
             ))
             continue
-        if rows and not line.strip():
+        if rows:
             break
     return rows

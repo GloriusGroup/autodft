@@ -2252,6 +2252,9 @@ def _submission_owner(session, identity: Identity, body: SubmitRequest) -> tuple
         # No account row: the shared-password admin on a database that has
         # not been bootstrapped. The project name cannot be qualified, but
         # the author is still the caller and not the body.
+        if nmr_references.is_reference_project(body.project):
+            raise HTTPException(status_code=400,
+                                detail=nmr_references.reserved_name_error(nmr_references.REFERENCE_PROJECT))
         return body.project, identity.username
 
     project = accounts.get_or_create_project(session, user, body.project)
