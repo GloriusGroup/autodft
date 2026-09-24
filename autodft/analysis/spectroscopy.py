@@ -17,7 +17,7 @@ from sqlmodel import Session, col, func, select
 
 from autodft import categories
 from autodft.db import get_session
-from autodft.extraction.extractor import ConformerResult, PipelineExtractor
+from autodft.extraction.extractor import PipelineExtractor
 from autodft.models import ComputationTask, Molecule, MoleculeState, TaskStatus, TaskType
 from autodft.qm.orca.parser import OrcaParser
 from autodft.qm.orca.spectra_parser import IRMode, parse_absorption, parse_ir
@@ -242,16 +242,13 @@ def _stage(session: Session, state: MoleculeState) -> str:
     return "searching" if busy else "none"
 
 
-def _follow_up(
-    session: Session, opt: ComputationTask, task_type: TaskType, successful: bool = False,
-) -> Optional[ComputationTask]:
-    query = select(ComputationTask).where(
-        ComputationTask.depends_on_task_id == opt.id,
-        ComputationTask.task_type == task_type,
-    )
-    if successful:
-        query = query.where(ComputationTask.status == TaskStatus.successful)
-    return session.exec(query).first()
+def _follow_up(session: Session, opt: ComputationTask, task_type: TaskType) -> Optional[ComputationTask]:
+    return session.exec(
+        select(ComputationTask).where(
+            ComputationTask.depends_on_task_id == opt.id,
+            ComputationTask.task_type == task_type,
+        )
+    ).first()
 
 
 def _uvvis(
