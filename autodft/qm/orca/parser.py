@@ -83,6 +83,10 @@ class OrcaParser(QMEngine):
             from autodft.qm.orca.spectra_parser import parse_absorption
 
             checks["Absorption Spectrum"] = bool(parse_absorption(content))
+        if task_type == "singlepoint_nmr":
+            from autodft.qm.orca.spectra_parser import parse_shieldings
+
+            checks["Shieldings"] = bool(parse_shieldings(content))
 
         success = all(checks.values())
 

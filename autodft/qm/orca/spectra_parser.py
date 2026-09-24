@@ -86,3 +86,40 @@ def parse_ir(content: str) -> list[IRMode]:
         if modes and not line.strip():
             break
     return modes
+
+
+_SHIELDING_TITLE = "CHEMICAL SHIELDING SUMMARY (ppm)"
+# "      2       C           67.627        182.501 "
+_SHIELDING_ROW = re.compile(r"^\s*(\d+)\s+([A-Z][a-z]?)\s+(-?[\d.]+)\s+(-?[\d.]+)\s*$")
+
+
+@dataclass(frozen=True)
+class Shielding:
+    index: int  # 0-based ORCA atom index
+    element: str
+    isotropic: float
+    anisotropy: float
+
+
+def parse_shieldings(content: str) -> list[Shielding]:
+    """Isotropic shieldings (ppm) from the last shielding summary.
+
+    Double hybrids print three -- SCF, unrelaxed and relaxed MP2 -- and the
+    last is the final result.
+    """
+    lines = content.splitlines()
+    starts = [i for i, line in enumerate(lines) if line.strip() == _SHIELDING_TITLE]
+    if not starts:
+        return []
+
+    rows: list[Shielding] = []
+    for line in lines[starts[-1] + 1:]:
+        match = _SHIELDING_ROW.match(line)
+        if match:
+            rows.append(Shielding(
+                int(match.group(1)), match.group(2), float(match.group(3)), float(match.group(4)),
+            ))
+            continue
+        if rows and not line.strip():
+            break
+    return rows

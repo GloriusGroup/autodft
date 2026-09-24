@@ -81,3 +81,46 @@ class TestUvvisCheck:
     def test_other_types_have_no_such_check(self, tmp_path):
         result = OrcaParser().check_output(self._write(tmp_path, "x"), "singlepoint")
         assert "Absorption Spectrum" not in result.checks
+
+
+from autodft.qm.orca.spectra_parser import parse_shieldings
+
+
+class TestShieldings:
+    def test_the_last_summary_wins(self):
+        rows = parse_shieldings((FIXTURES / "nmr_double_hybrid.out").read_text())
+        assert len(rows) == 38
+        assert (rows[2].index, rows[2].element) == (2, "C")
+        assert rows[2].isotropic == pytest.approx(67.627)
+        assert rows[-1].isotropic == pytest.approx(30.338)
+        assert sum(r.element == "H" for r in rows) == 21
+
+    def test_two_letter_elements(self):
+        rows = parse_shieldings((FIXTURES / "nmr_cfcl3.out").read_text())
+        assert [r.element for r in rows] == ["F", "C", "Cl", "Cl", "Cl"]
+        assert rows[0].isotropic == pytest.approx(204.130)
+
+    def test_tms(self):
+        rows = parse_shieldings((FIXTURES / "nmr_tms.out").read_text())
+        h = [r.isotropic for r in rows if r.element == "H"]
+        c = [r.isotropic for r in rows if r.element == "C"]
+        assert (len(h), len(c)) == (12, 4)
+        assert sum(h) / 12 == pytest.approx(31.354, abs=1e-3)
+
+    def test_no_summary_is_empty(self):
+        assert parse_shieldings("****ORCA TERMINATED NORMALLY****") == []
+
+
+class TestNmrCheck:
+    def _write(self, tmp_path, body: str):
+        (tmp_path / "output.out").write_text(body + "\n****ORCA TERMINATED NORMALLY****\n")
+        return tmp_path
+
+    def test_an_nmr_job_needs_its_summary(self, tmp_path):
+        result = OrcaParser().check_output(self._write(tmp_path, "no summary"), "singlepoint_nmr")
+        assert result.checks["Shieldings"] is False and result.success is False
+
+    def test_an_nmr_job_with_a_summary_passes(self, tmp_path):
+        body = (FIXTURES / "nmr_glyoxal.out").read_text()
+        result = OrcaParser().check_output(self._write(tmp_path, body), "singlepoint_nmr")
+        assert result.checks["Shieldings"] is True
