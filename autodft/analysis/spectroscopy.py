@@ -1,4 +1,4 @@
-"""UV/Vis, IR and NMR, Boltzmann-weighted over each molecule's S0 conformers.
+"""UV/Vis, IR, NMR and ESD results, per molecule, for the photophysics view.
 
 Only molecules submitted with the UV/Vis, IR or NMR category are analysed. The
 project view carries one summary per molecule; a single molecule's view adds
@@ -164,7 +164,7 @@ _CACHE: dict[str, tuple[tuple, dict]] = {}
 def analyze_spectra(
     project_name: str, molecule_id: Optional[int] = None, use_cache: bool = True,
 ) -> dict:
-    """UV/Vis, IR and NMR summaries for every flagged molecule, or the details of one.
+    """Photophysics summaries for every flagged molecule, or the details of one.
 
     Only the project view is cached; a molecule's sticks are read on request.
     """
@@ -216,16 +216,19 @@ def _analyze(project_name: str, molecule_id: Optional[int]) -> dict:
             ).all()
             for state in states:
                 metadata = json.loads(state.metadata_json) if state.metadata_json else {}
-                wanted = categories.requested(metadata) & {categories.UVVIS, categories.IR, categories.NMR}
+                wanted = categories.requested(metadata) & {
+                    categories.UVVIS, categories.IR, categories.NMR, categories.ESD,
+                }
                 if not wanted:
                     continue
+                needs_pool = bool(wanted & {categories.UVVIS, categories.IR, categories.NMR})
                 pool = [
                     c for c in conformer_pool(session, extractor, state, ir=categories.IR in wanted)
                     if c.opt.status != TaskStatus.failed
-                ]
+                ] if needs_pool else []
                 entry: dict = {"id": mol.id, "smiles": mol.smiles, "state_id": state.id,
                                "archived": mol.archived}
-                if not pool:
+                if needs_pool and not pool:
                     entry["stage"] = _stage(session, state)
                 if categories.UVVIS in wanted:
                     items = [(c, *_uvvis(session, extractor, c)) for c in pool]
@@ -239,6 +242,10 @@ def _analyze(project_name: str, molecule_id: Optional[int]) -> dict:
                     from autodft.analysis.nmr import molecule_nmr
 
                     entry["nmr"] = molecule_nmr(session, extractor, state, pool, detail, nmr_references_seen)
+                if categories.ESD in wanted:
+                    from autodft.analysis.esd import molecule_esd
+
+                    entry["esd"] = molecule_esd(session, extractor, state, detail)
                 molecules.append(entry)
     return {"project": project_name, "temperature_k": ROOM_TEMPERATURE, "molecules": molecules}
 

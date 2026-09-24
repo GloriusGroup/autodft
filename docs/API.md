@@ -429,7 +429,7 @@ vs SCE.
 
 ### `GET /api/projects/{name}/photophysics` `?molecule_id=`
 
-UV/Vis, IR and NMR for every molecule submitted with those categories.
+UV/Vis, IR, NMR and ESD for every molecule submitted with those categories.
 Categories are only added to new molecules: resubmitting an existing
 molecule with a category it does not have answers 400.
 
@@ -481,7 +481,56 @@ is a reserved project name, refused for every submitter.
 
 A molecule entry with no conformer left to show (every optimisation
 failed, or none has run yet) adds `stage`: `"searching"` while work is
-still open for that state, else `"none"`.
+still open for that state, else `"none"`. ESD needs no conformer pool
+(it works from S1/T1, not S0 conformers), so an ESD-only molecule never
+gets `stage`.
+
+An ESD molecule's entry adds `esd`:
+
+    "esd": {"status": "done", "temperature_k": 298.15, "herzberg_teller": false,
+            "tn_window_ev": 0.2, "seed_task_id": 118,
+            "rates": {"isc": {"status": "successful", "rate_s": 9521.34},
+                      "risc": {"status": "successful", "rate_s": 3.58e-05},
+                      "ic": {"status": "successful", "rate_s": 26468.9},
+                      "fluorescence": {"status": "successful", "rate_s": 4811.34, "e00_ev": 2.396},
+                      "isc_t1_s0": {"status": "successful", "rate_s": 0.1599},
+                      "phosphorescence": {"status": "successful", "rate_s": 44.47}},
+            "delta_est_ev": 0.6657, "delta_est_uks_ev": 0.5078,
+            "derived": {"tau_s1_ns": 33132.5, "phi_fluorescence": 0.1194,
+                        "phi_isc": 0.2365, "phi_ic": 0.6577,
+                        "tau_t1_us": 22484.0, "phi_phosphorescence": 0.9946,
+                        "phi_isc_t1_s0": 0.0036, "phi_risc": 0.0000000008},
+            "flags": ["isc T2: a negative rate (-1.54e-09 s⁻¹) was set to 0."]}
+
+`status` is `"waiting"` before the S1/T1 states are seeded (or while
+seeding waits for every S0 conformer to finish), `"running"` while any
+rate is still open, `"done"` once all six have settled, or `"failed"`
+(with `reason`) if seeding itself failed. Each entry of `rates` is one of
+`isc`, `risc`, `ic`, `fluorescence`, `isc_t1_s0`, `phosphorescence`, with
+its own `status`: `"successful"`, `"created"`, `"pending"`, `"failed"`
+(with `reason`), `"waiting"`, `"blocked"` (with `reason` — an upstream
+optimisation or SOC singlepoint failure, named with the `!LibXC(<functional>)`
+fix when that is the cause), or `"unavailable"` (the output has no rate
+to parse). A successful rate's `rate_s` sums its jobs for `isc` (one job
+per T_n channel within `tn_window_ev` of S1) and averages them for every
+other rate; `fluorescence` also reports `e00_ev`, its 0-0 energy.
+`herzberg_teller` reports whether the rates are the FC-only default or
+were requested with HT. `delta_est_ev` is the TDDFT ΔE(S1-T1);
+`delta_est_uks_ev` instead compares the TDDFT S1 against the T1 state's
+own (UKS) energy singlepoint at the T1 geometry. `derived` reports
+`tau_s1_ns` / `phi_fluorescence` / `phi_isc` / `phi_ic` once
+`fluorescence`, `isc` and `ic` are all in, and `tau_t1_us` /
+`phi_phosphorescence` / `phi_isc_t1_s0` / `phi_risc` once
+`phosphorescence`, `isc_t1_s0` and `risc` are all in. `flags` lists
+warnings: a negative rate clamped to 0, or a job whose sum of K*K
+exceeds 7 (geometries too far apart for a reliable harmonic rate).
+
+With `?molecule_id=`, each successful rate also adds `jobs` (its
+per-ORCA-job values — `rate_s`, `fc_percent`, `ht_percent`, `k_squared`,
+`e00_cm`, plus whatever went into building it), and `esd` adds
+`energies_eh` (E(S0), E(S1), E(T1)), `socme_cm` (`S1_T1_at_T1`,
+`S1_T1_at_S1`, `T1_S0_at_S0`) and a flag for any state whose optimisation
+still shows a soft imaginary mode.
 
 With `?molecule_id=`, that molecule's entries add `conformers` (read on
 request, not cached) and drop nothing:
