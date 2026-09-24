@@ -168,3 +168,15 @@ class TestPhotophysicsEndpoint:
         r = client.get("/api/projects/nho:p/molecules-detail", headers=key)
         conformer = r.json()["molecules"][0]["states"][0]["conformers"][0]
         assert conformer["singlepoint_uvvis"] == "pending"
+
+    def test_molecule_id_is_passed_through(self, api, monkeypatch):
+        from autodft.analysis import spectroscopy
+
+        seen = {}
+        monkeypatch.setattr(spectroscopy, "analyze_spectra",
+                            lambda name, molecule_id=None: seen.update(
+                                name=name, molecule_id=molecule_id) or {"molecules": []})
+        client, key = api
+        r = client.get("/api/projects/nho:p/photophysics?molecule_id=7", headers=key)
+        assert r.status_code == 200
+        assert seen == {"name": "nho/p", "molecule_id": 7}

@@ -855,21 +855,23 @@ def api_project_state_analysis_export(
 
 @router.get("/api/projects/{name}/photophysics")
 def api_project_photophysics(
-    name: str, identity: Identity = Depends(current_identity),
+    name: str, molecule_id: Optional[int] = None,
+    identity: Identity = Depends(current_identity),
 ):
-    """UV/Vis and IR spectra for every molecule submitted with those categories.
+    """UV/Vis and IR for every molecule submitted with those categories.
 
-    Per molecule: each S0 conformer's transitions / IR modes with its
-    Boltzmann weight (298.15 K, on G). Sticks only; the dashboard broadens.
+    Without ``molecule_id``: one summary per molecule (counts, weighting,
+    strongest band). With it: that molecule's sticks and Boltzmann weights
+    (298.15 K); the dashboard broadens them.
     """
     bad = _reject_bad_project(name)
     if bad is not None:
         return bad
     with get_session() as session:
         name = resolve_project(session, identity, name)
-    from autodft.analysis.spectroscopy import analyze_spectra
+    from autodft.analysis import spectroscopy
 
-    return analyze_spectra(name)
+    return spectroscopy.analyze_spectra(name, molecule_id=molecule_id)
 
 
 def _status_of(task: Optional[ComputationTask]) -> Optional[str]:

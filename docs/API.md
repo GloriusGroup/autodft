@@ -425,23 +425,40 @@ The same payload as a multi-sheet XLSX attachment (Summary, Lowest
 Energy, RMSD Matched, Conformers). Energies in Hartree, potentials in V
 vs SCE.
 
-### `GET /api/projects/{name}/photophysics`
+### `GET /api/projects/{name}/photophysics` `?molecule_id=`
 
 UV/Vis and IR for every molecule submitted with those categories. Categories
 are only added to new molecules: resubmitting an existing molecule with a
 category it does not have answers 400.
 
-    {"project": "nho/p", "temperature_k": 298.15, "molecules": [
-      {"id": 7, "smiles": "c1ccccc1", "state_id": 21,
-       "uvvis": {"missing": 0, "conformers": [{"conformer_index": 1, "opt_task_id": 90,
-                 "weight": 1.0, "transitions": [{"root": 1, "energy_ev": 5.4,
-                 "wavelength_nm": 229.6, "fosc": 0.0}]}]},
-       "ir": {"missing": 0, "conformers": [{"conformer_index": 1, "opt_task_id": 90,
-              "weight": 1.0, "modes": [{"frequency_cm": 410.2, "intensity_km_mol": 0.0}]}]}}]}
+Without `molecule_id`, one summary per molecule (this view is cached):
 
-Weights are Boltzmann populations over the conformers that have data
-(`missing` counts the rest), on G when any conformer has a thermal
-correction, else on the bare singlepoint energy.
+    {"project": "nho/p", "temperature_k": 298.15, "molecules": [
+      {"id": 7, "smiles": "c1ccccc1", "state_id": 21, "archived": false,
+       "uvvis": {"count": 1, "pending": 0, "failed": 0, "unavailable": 0,
+                 "weighting": "G", "shortest_nm": 156.5,
+                 "peak": {"wavelength_nm": 229.6, "energy_ev": 5.4, "fosc": 0.24}},
+       "ir": {"count": 1, "pending": 0, "failed": 0, "unavailable": 0,
+              "weighting": "G",
+              "peak": {"frequency_cm": 410.2, "intensity_km_mol": 12.3}}}]}
+
+`count` is conformers with a spectrum; `pending`, `failed`, `unavailable`
+account for the rest (job still running, job failed, or output missing/
+unparsable). `weighting` names the energy scale behind the Boltzmann
+weights: `"G"` when a conformer has a thermal correction, else `"E_sp"`,
+else `"equal"`. `peak` is the transition/mode with the largest weight ×
+fosc (or × intensity), or `null` when `count` is 0; UV/Vis also reports
+`shortest_nm`, the shortest wavelength across every counted transition.
+
+With `?molecule_id=`, that molecule's entries add `conformers` (read on
+request, not cached) and drop nothing:
+
+    "uvvis": {..., "conformers": [{"conformer_index": 1, "opt_task_id": 90,
+              "weight": 1.0, "transitions": [{"root": 1, "energy_ev": 5.4,
+              "wavelength_nm": 229.6, "fosc": 0.24}]}]}
+
+`conformer_index` is the conformer's 1-based position among the state's
+optimisation tasks by id, the same numbering as the Molecules page.
 
 ### `POST /api/projects/{name}/export` `?format=csv|json|files&all_conformers=true|false`
 
