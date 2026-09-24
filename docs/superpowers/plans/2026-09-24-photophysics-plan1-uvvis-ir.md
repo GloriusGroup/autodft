@@ -17,7 +17,9 @@
 - Nothing may change for rows without the new flags: state metadata, task creation, job input files and exports of unflagged submissions must stay byte-identical. Every task that touches an existing code path includes a regression test proving that.
 - Category keys, verbatim: `request_esd`, `request_esd_ht`, `request_spec_uvvis`, `request_spec_ir`, `request_spec_nmr`. Only `request_spec_uvvis` and `request_spec_ir` are available in this plan; the others are refused with "… is not available yet."
 - New task type name: `singlepoint_uvvis` (≤ 28 characters; the `singlepoint_` prefix deliberately inherits `has_followups=False`, the SP stage config and `RecoverSinglepointSCF`).
-- UV/Vis TDDFT block: `nroots 20`, `tda false`, appended on new lines after the singlepoint header.
+- UV/Vis TDDFT block: `nroots <uvvis_nroots>`, `tda <uvvis_tda>`, appended on new lines after the singlepoint header. Per-submission options `uvvis_nroots` (int, 1–100, default 20) and `uvvis_tda` (bool, default false) are stored — with their defaults filled in — in `request_metadata` and the S0 state metadata **only when UV/Vis is requested**.
+- Dashboard: each ticked category shows its own settings panel (like the per-state conformer inputs); unticked categories show nothing.
+- Execution order of this plan's tasks: 1, 2, 3, 4, **11**, 5, 6, 7, 8, 9, 10 (Task 11 was added after Tasks 1–4 were implemented).
 - Boltzmann weighting at 298.15 K on G (`e_combined`) when any conformer has it, otherwise on the bare singlepoint energy — never mixed.
 - Comments and docstrings short, matching the surrounding code. Commits: plain messages, **no** `Co-Authored-By` or any Claude attribution.
 - Full suite before this plan: 431 passed.
@@ -945,7 +947,8 @@ git commit -m "Add category options to the submit CLI"
 
 **Interfaces:**
 - Consumes: `categories.UVVIS`.
-- Produces: `TaskType.singlepoint_uvvis`; `blocks.HeaderConflict(ValueError)`; `blocks.has_block(header, name) -> bool`; `blocks.append_block(header, block) -> str`; `blocks.tddft_block(**settings) -> str`; `blocks.with_tddft(header, **settings) -> str`; `blocks.compose_header(task_type: str, header: str) -> str`; `blocks.UVVIS_NROOTS = 20`.
+- Consumes (Task 11): option keys `uvvis_nroots` / `uvvis_tda` in the S0 state metadata (absent on rows made before Task 11 — fall back to 20 / false).
+- Produces: `TaskType.singlepoint_uvvis`; `blocks.HeaderConflict(ValueError)`; `blocks.has_block(header, name) -> bool`; `blocks.append_block(header, block) -> str`; `blocks.tddft_block(**settings) -> str`; `blocks.with_tddft(header, **settings) -> str`; `blocks.compose_header(task_type: str, header: str, options: Optional[dict] = None) -> str` (*options* = the task's state metadata); `blocks.UVVIS_NROOTS = 20`.
 
 - [ ] **Step 1: Write the failing tests** — `tests/test_uvvis_tasks.py`
 
@@ -989,6 +992,12 @@ class TestBlocks:
     def test_uvvis_appends_a_tddft_block(self):
         header = blocks.compose_header("singlepoint_uvvis", SP)
         assert header == SP + "%tddft\n  nroots 20\n  tda false\nend\n"
+
+    def test_uvvis_honours_the_submitted_options(self):
+        header = blocks.compose_header(
+            "singlepoint_uvvis", SP, {"uvvis_nroots": 30, "uvvis_tda": True},
+        )
+        assert header == SP + "%tddft\n  nroots 30\n  tda true\nend\n"
 
     def test_the_block_starts_on_its_own_line(self):
         # Legacy headers were concatenated without a newline ("end%maxcore").
@@ -1073,8 +1082,8 @@ class TestFollowup:
 
 
 class TestJobInput:
-    def _job_input(self, session, tmp_path, task_type) -> str:
-        state, opt = _s0_with_opt(session, {})
+    def _job_input(self, session, tmp_path, task_type, metadata=None) -> str:
+        state, opt = _s0_with_opt(session, metadata or {})
         task = ComputationTask(
             task_type=task_type, status=TaskStatus.created, state_id=state.id,
             header_id=state.singlepoint_header_id, input_geometry_id=opt.output_geometry_id,
@@ -1089,6 +1098,11 @@ class TestJobInput:
         text = self._job_input(session, tmp_path, TaskType.singlepoint_uvvis)
         assert "%tddft\n  nroots 20\n  tda false\nend" in text
         assert "*xyzfile 0 1 input.xyz" in text
+
+    def test_uvvis_input_uses_the_state_options(self, session, tmp_path):
+        meta = {categories.UVVIS: True, "uvvis_nroots": 12, "uvvis_tda": True}
+        text = self._job_input(session, tmp_path, TaskType.singlepoint_uvvis, meta)
+        assert "%tddft\n  nroots 12\n  tda true\nend" in text
 
     def test_singlepoint_input_is_byte_identical(self, session, tmp_path):
         text = self._job_input(session, tmp_path, TaskType.singlepoint)
@@ -1122,8 +1136,9 @@ only what their calculation needs, always on lines of their own.
 from __future__ import annotations
 
 import re
+from typing import Optional
 
-# TDDFT roots for UV/Vis; enough to cover the near-UV for most organics.
+# Default TDDFT roots for UV/Vis; enough to cover the near-UV for most organics.
 UVVIS_NROOTS = 20
 
 
@@ -1157,10 +1172,19 @@ def with_tddft(header: str, **settings) -> str:
     return append_block(header, tddft_block(**settings))
 
 
-def compose_header(task_type: str, header: str) -> str:
-    """The header a job of *task_type* runs with. Other types: *header* itself."""
+def compose_header(task_type: str, header: str, options: Optional[dict] = None) -> str:
+    """The header a job of *task_type* runs with; other types get *header* itself.
+
+    *options* is the task's state metadata, where per-submission settings
+    such as ``uvvis_nroots`` live.
+    """
+    options = options or {}
     if task_type == "singlepoint_uvvis":
-        return with_tddft(header, nroots=UVVIS_NROOTS, tda=False)
+        return with_tddft(
+            header,
+            nroots=options.get("uvvis_nroots", UVVIS_NROOTS),
+            tda=bool(options.get("uvvis_tda", False)),
+        )
     return header
 
 
@@ -1191,7 +1215,7 @@ In `_followup_optimization`, between the `sp_header_id is None` early return and
         )
 ```
 
-In `_generate_job_files`, replace `header_text = header.header_text` with:
+In `_generate_job_files`, leave `header_text = header.header_text` where it is, and directly after the `if state is None: return _fail_task(...)` check (the state carries the per-submission options) insert:
 
 ```python
     # Category tasks add their own blocks; every other type runs the header
@@ -1199,10 +1223,15 @@ In `_generate_job_files`, replace `header_text = header.header_text` with:
     from autodft.qm.orca.blocks import HeaderConflict, compose_header
 
     try:
-        header_text = compose_header(task.task_type.value, header.header_text)
+        header_text = compose_header(
+            task.task_type.value, header_text,
+            json.loads(state.metadata_json) if state.metadata_json else {},
+        )
     except HeaderConflict as exc:
         return _fail_task(session, task, job, str(exc))
 ```
+
+(`json` is already imported in `state_machine.py`.) `_parse_resources_from_header(header_text)` further down keeps reading the composed header, which is unchanged for every pre-existing task type.
 
 `autodft/extraction/extractor.py` — add to `_FILE_MAP` after `"singlepoint_vert_red"`:
 
@@ -1891,7 +1920,9 @@ In `tests/test_authorization.py`, add `"/api/projects/{name}/photophysics",` to 
 `docs/API.md`: in the `POST /api/submit` field list add
 
 ```markdown
-| `request_spec_uvvis` | bool | `false` | UV/Vis: a TDDFT singlepoint (`%tddft nroots 20 tda false`, appended to the singlepoint header) on every optimised S0 conformer. The singlepoint header must not already contain `%tddft`, `NMR`, `%eprnmr` or `%esd`. |
+| `request_spec_uvvis` | bool | `false` | UV/Vis: a TDDFT singlepoint (`%tddft nroots <uvvis_nroots> tda <uvvis_tda>`, appended to the singlepoint header) on every optimised S0 conformer. The singlepoint header must not already contain `%tddft`, `NMR`, `%eprnmr` or `%esd`. |
+| `uvvis_nroots` | int | `20` | UV/Vis excited states (1–100). Stored only when UV/Vis is requested. |
+| `uvvis_tda` | bool | `false` | Tamm–Dancoff approximation for the UV/Vis TDDFT. Stored only when UV/Vis is requested. |
 | `request_spec_ir` | bool | `false` | IR: read from the S0 optimisation's frequency calculation — no extra job. Needs `Freq` in the optimisation header. |
 | `request_esd`, `request_esd_ht`, `request_spec_nmr` | bool | `false` | Not available yet; refused with 400. |
 ```
@@ -1953,7 +1984,7 @@ git commit -m "Serve UV/Vis and IR spectra per project"
 - Test: `tests/test_dashboard.py` (append)
 
 **Interfaces:**
-- Consumes: `request_spec_uvvis` / `request_spec_ir` body fields (Task 3); `GET /api/projects/{name}/photophysics` (Task 8); `molecules-detail` `singlepoint_uvvis` (Task 8).
+- Consumes: `request_spec_uvvis` / `request_spec_ir` body fields (Task 3); `uvvis_nroots` / `uvvis_tda` body fields (Task 11); `GET /api/projects/{name}/photophysics` (Task 8); `molecules-detail` `singlepoint_uvvis` (Task 8).
 
 - [ ] **Step 1: Write the failing test** (append to `tests/test_dashboard.py`)
 
@@ -1964,6 +1995,18 @@ def test_the_dashboard_offers_the_spectra_categories(client):
     for needle in ('id="requestUvvis"', 'id="requestIr"',
                    'data-page="projects.photophysics"', 'id="projectSelectPP"',
                    "request_spec_uvvis", "request_spec_ir"):
+        assert needle in html, needle
+
+
+def test_each_category_has_a_settings_panel_shown_only_when_ticked(client):
+    import re
+
+    c, headers = client
+    html = c.get("/", headers=headers).text
+    panels = re.findall(r'<div class="cat-detail" data-requires="(\w+)" style="display:none;">', html)
+    assert panels == ["requestUvvis", "requestIr"]
+    for needle in ('id="uvvisNroots"', 'id="uvvisTda"', 'id="irHeaderNote"',
+                   'id="uvvisHeaderNote"', "uvvis_nroots:", "uvvis_tda:"):
         assert needle in html, needle
 ```
 
@@ -1980,6 +2023,12 @@ Expected: the new test FAILS; the JS parse test passes.
         .pp-plot { margin-top: 10px; }
         .pp-plot-title { font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 4px; }
         .pp-waiting { font-size: 0.85rem; color: var(--text-muted); font-style: italic; margin-top: 10px; }
+        .cat-detail { border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; background: var(--bg-secondary); min-width: 260px; max-width: 440px; }
+        .cat-detail-title { font-weight: 600; font-size: 0.85rem; margin-bottom: 6px; color: var(--text-primary); }
+        .cat-detail-body { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
+        .cat-detail-note { font-size: 0.78rem; color: var(--text-muted); margin-top: 6px; }
+        .cat-detail-note:empty { display: none; }
+        .cat-detail-note.warn { color: var(--yellow); }
 ```
 
 (b) Sidebar — after the `projects.state-analysis` nav item:
@@ -2001,11 +2050,108 @@ Expected: the new test FAILS; the JS parse test passes.
                         </div>
 ```
 
+(c2) Category settings row — directly after the closing `</div>` of `<div class="form-row" id="conformersRow" ...>` (Row 2b), insert:
+
+```html
+                    <!-- Row 2c: settings of the ticked categories (only ticked ones show) -->
+                    <div class="form-row" id="categoryDetailsRow" style="gap: 12px;">
+                        <div class="cat-detail" data-requires="requestUvvis" style="display:none;">
+                            <div class="cat-detail-title">UV/Vis</div>
+                            <div class="cat-detail-body">
+                                <div class="form-group" style="min-width: 150px;">
+                                    <label for="uvvisNroots">Excited states (nroots)</label>
+                                    <input type="number" id="uvvisNroots" min="1" max="100" value="20" style="width: 100px;">
+                                </div>
+                                <div class="checkbox-group" title="Tamm-Dancoff approximation: cheaper and more robust; full TDDFT (off) gives better oscillator strengths.">
+                                    <input type="checkbox" id="uvvisTda">
+                                    <label for="uvvisTda">TDA</label>
+                                </div>
+                            </div>
+                            <div class="cat-detail-note">A TDDFT singlepoint on every optimised S0 conformer, with the singlepoint header's method; the spectrum is Boltzmann-weighted.</div>
+                            <div class="cat-detail-note" id="uvvisHeaderNote"></div>
+                        </div>
+                        <div class="cat-detail" data-requires="requestIr" style="display:none;">
+                            <div class="cat-detail-title">IR</div>
+                            <div class="cat-detail-note">No extra calculation: the spectrum is read from the S0 optimisation's frequency run and Boltzmann-weighted over conformers.</div>
+                            <div class="cat-detail-note" id="irHeaderNote"></div>
+                        </div>
+                    </div>
+```
+
 (d) `commonBody` in the submit handler — after `request_singlepoint_vertical_excitations: ...,`:
 
 ```js
                 request_spec_uvvis: document.getElementById('requestUvvis').checked,
                 request_spec_ir:    document.getElementById('requestIr').checked,
+                uvvis_nroots:       intOrDefault('uvvisNroots', 20),
+                uvvis_tda:          document.getElementById('uvvisTda').checked,
+```
+
+(d2) Panel logic — directly after the `// ── Show/hide per-state conformer inputs` IIFE (it ends with `refresh();\n        })();`), insert:
+
+```js
+        // ── Show/hide the settings of ticked categories ─────────────────
+        // Same rule as the conformer inputs: a .cat-detail panel is visible
+        // iff its category is ticked. The header notes warn about a choice
+        // the server would refuse, before the user submits.
+
+        (function () {
+            var panels = document.querySelectorAll('.cat-detail[data-requires]');
+            var FREQ_RE = /^\s*!.*\b(Freq|NumFreq|AnFreq)\b/im;
+            var SP_CONFLICT_RE = /%tddft\b|%eprnmr\b|%esd\b|^\s*!.*\bNMR\b/im;
+
+            // Text of the header chosen in a slot; headerCache is filled by
+            // fetchHeaders, which calls refreshCategoryDetails when done.
+            function chosenHeaderText(selectId, kind) {
+                if (typeof headerCache === 'undefined' || !headerCache) return '';
+                var v = document.getElementById(selectId).value;
+                if (v.indexOf('id:') === 0) {
+                    var id = parseInt(v.slice(3), 10);
+                    var row = headerCache.custom.filter(function (c) { return c.id === id; })[0];
+                    return row ? row.text : '';
+                }
+                if (v) return v;
+                var def = headerCache.defaults.filter(function (d) { return d.kind === kind; })[0];
+                return def ? def.text : '';
+            }
+
+            function setNote(id, ok, okText, badText) {
+                var el = document.getElementById(id);
+                if (!el) return;
+                el.textContent = ok ? okText : badText;
+                el.classList.toggle('warn', !ok);
+            }
+
+            function refresh() {
+                panels.forEach(function (el) {
+                    var cb = document.getElementById(el.dataset.requires);
+                    el.style.display = (cb && cb.checked) ? '' : 'none';
+                });
+                setNote('irHeaderNote',
+                        FREQ_RE.test(chosenHeaderText('headerOptimization', 'optimization')),
+                        'The chosen optimisation header runs Freq.',
+                        'The chosen optimisation header has no Freq keyword — IR will be refused.');
+                setNote('uvvisHeaderNote',
+                        !SP_CONFLICT_RE.test(chosenHeaderText('headerSinglepoint', 'singlepoint')),
+                        '',
+                        'The chosen singlepoint header already has a %tddft / NMR / %eprnmr / %esd block — UV/Vis will be refused.');
+            }
+
+            var watched = {};
+            panels.forEach(function (el) { watched[el.dataset.requires] = true; });
+            Object.keys(watched).concat(['headerOptimization', 'headerSinglepoint']).forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el) el.addEventListener('change', refresh);
+            });
+            window.refreshCategoryDetails = refresh;
+            refresh();
+        })();
+```
+
+In `fetchHeaders`, after the three `populateHeaderSelect(...)` calls and before `renderHeadersList();`, add:
+
+```js
+                if (window.refreshCategoryDetails) window.refreshCategoryDetails();
 ```
 
 (e) Molecules table — add `<th>UV/Vis</th>` after `<th>Vert-Spin</th>`; change `colspan="10"` to `colspan="11"` in the three places it occurs (initial tbody row and the two `tbody.innerHTML` messages in `loadMoleculesPage`); change the confsearch placeholder's `colspan="5"` to `colspan="6"`; after the `statusCell(c.singlepoint_vert_spin_change)` cell add:
@@ -2306,4 +2452,211 @@ Expected: `200 404` (page renders; unknown project is a 404).
 
 ```bash
 git status --short
+```
+
+---
+
+### Task 11: UV/Vis options through submission
+
+(Execute after Task 4 and before Task 5 — see Global Constraints.)
+
+**Files:**
+- Modify: `autodft/categories.py` (`OPTIONS`, `UVVIS_NROOTS_MAX`, new `options()`, `snapshot()`, `rejection()`)
+- Modify: `autodft/api/routes.py` (`SubmitRequest`, `_category_flags`)
+- Modify: `autodft/cli/submit.py` (`_category_options_to_flags`; `--uvvis-nroots` / `--uvvis-tda` on `submit` and `submit_batch`)
+- Test: `tests/test_categories.py`, `tests/test_categories_api.py`, `tests/test_categories_cli.py` (append)
+
+**Interfaces:**
+- Consumes: Tasks 1–4 (`categories.snapshot`, `categories.rejection`, `_category_flags`, `_category_options_to_flags`).
+- Produces: `categories.OPTIONS = {UVVIS: {"uvvis_nroots": 20, "uvvis_tda": False}}`; `categories.UVVIS_NROOTS_MAX = 100`; `categories.options(metadata) -> dict` (settings of the requested categories, defaults filled in); `snapshot()` now returns flags **plus** those settings; `SubmitRequest.uvvis_nroots: int = 20` (1–100) and `.uvvis_tda: bool = False`; CLI `--uvvis-nroots N`, `--uvvis-tda`. Task 5 reads `uvvis_nroots` / `uvvis_tda` from the S0 state metadata; Task 9's dashboard posts them.
+
+- [ ] **Step 1: Write the failing tests**
+
+Append to `tests/test_categories.py`:
+
+```python
+class TestOptions:
+    def test_no_category_no_options(self):
+        assert categories.options({}) == {}
+        assert categories.options({"uvvis_nroots": 30}) == {}
+
+    def test_defaults_are_filled_in(self):
+        assert categories.options({categories.UVVIS: True}) == {
+            "uvvis_nroots": 20, "uvvis_tda": False,
+        }
+
+    def test_submitted_values_win(self):
+        opts = categories.options({categories.UVVIS: True, "uvvis_nroots": 35, "uvvis_tda": True})
+        assert opts == {"uvvis_nroots": 35, "uvvis_tda": True}
+
+    def test_snapshot_carries_the_settings_of_requested_categories_only(self):
+        assert categories.snapshot({categories.UVVIS: True, "uvvis_tda": True}) == {
+            categories.UVVIS: True, "uvvis_nroots": 20, "uvvis_tda": True,
+        }
+        assert categories.snapshot({"uvvis_nroots": 30, "uvvis_tda": True}) == {}
+
+    @pytest.mark.parametrize("nroots", [0, 101, "20", True, 2.5])
+    def test_nroots_out_of_range_is_refused(self, nroots):
+        meta = {categories.UVVIS: True, "uvvis_nroots": nroots}
+        assert "uvvis_nroots" in categories.rejection({}, meta, OPT_FREQ, SP)
+
+    @pytest.mark.parametrize("nroots", [1, 100])
+    def test_nroots_bounds_are_inclusive(self, nroots):
+        meta = {categories.UVVIS: True, "uvvis_nroots": nroots}
+        assert categories.rejection({}, meta, OPT_FREQ, SP) is None
+```
+
+Append to `tests/test_categories_api.py` (inside a new class at the end of the file):
+
+```python
+class TestUvvisOptions:
+    def test_options_are_recorded_with_the_category(self, api):
+        client, key = api
+        r = client.post("/api/submit", headers=key, json={
+            "smiles": "c1ccccc1", "project": "p", "request_spec_uvvis": True,
+            "uvvis_nroots": 30, "uvvis_tda": True,
+        })
+        assert r.status_code == 200, r.text
+        meta = _metadata(r.json()["id"])
+        assert (meta["uvvis_nroots"], meta["uvvis_tda"]) == (30, True)
+
+    def test_options_without_the_category_are_not_recorded(self, api):
+        client, key = api
+        r = client.post("/api/submit", headers=key,
+                        json={"smiles": "c1ccccc1", "project": "p", "uvvis_nroots": 30})
+        assert r.status_code == 200
+        assert "uvvis_nroots" not in _metadata(r.json()["id"])
+
+    def test_out_of_range_nroots_is_a_422(self, api):
+        client, key = api
+        r = client.post("/api/submit", headers=key, json={
+            "smiles": "c1ccccc1", "project": "p", "request_spec_uvvis": True, "uvvis_nroots": 0,
+        })
+        assert r.status_code == 422
+```
+
+Append to `tests/test_categories_cli.py`:
+
+```python
+def test_uvvis_options_ride_with_the_category():
+    flags = cli._category_options_to_flags(
+        uvvis=True, ir=False, esd=False, esd_ht=False, nmr=False,
+        uvvis_nroots=25, uvvis_tda=True,
+    )
+    meta = _meta(flags)
+    assert (meta["uvvis_nroots"], meta["uvvis_tda"]) == (25, True)
+
+
+def test_uvvis_options_alone_are_dropped():
+    flags = cli._category_options_to_flags(
+        uvvis=False, ir=False, esd=False, esd_ht=False, nmr=False, uvvis_nroots=25,
+    )
+    assert "uvvis_nroots" not in _meta(flags)
+```
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `/mnt/share/dft_calculations/autodft/.venv/bin/python -m pytest tests/test_categories.py::TestOptions tests/test_categories_api.py::TestUvvisOptions tests/test_categories_cli.py -q`
+Expected: FAIL (`categories.options` missing, unknown keyword `uvvis_nroots`, options not recorded).
+
+- [ ] **Step 3: Implement**
+
+`autodft/categories.py` — after `_ON_SP_HEADER`, add:
+
+```python
+# Settings each category takes, with defaults. Stored -- defaults filled in --
+# only when the category is requested.
+OPTIONS: dict[str, dict] = {
+    UVVIS: {"uvvis_nroots": 20, "uvvis_tda": False},
+}
+UVVIS_NROOTS_MAX = 100
+```
+
+after `requested()`, add:
+
+```python
+def options(metadata: dict) -> dict:
+    """The settings of the requested categories, defaults filled in."""
+    out: dict = {}
+    for key in sorted(requested(metadata)):
+        for name, default in OPTIONS.get(key, {}).items():
+            out[name] = metadata.get(name, default)
+    return out
+```
+
+replace `snapshot()` with:
+
+```python
+def snapshot(metadata: dict) -> dict:
+    """Category keys and settings to store with a state: only for requested
+    categories, so an unflagged submission's metadata stays as it was."""
+    flags = {key: True for key in (*CATEGORIES, ESD_HT) if metadata.get(key)}
+    return {**flags, **options(metadata)}
+```
+
+and in `rejection()`, directly after the `request_optimization` check's `return`, insert:
+
+```python
+    if UVVIS in wanted:
+        nroots = metadata.get("uvvis_nroots", OPTIONS[UVVIS]["uvvis_nroots"])
+        if (isinstance(nroots, bool) or not isinstance(nroots, int)
+                or not 1 <= nroots <= UVVIS_NROOTS_MAX):
+            return f"UV/Vis needs between 1 and {UVVIS_NROOTS_MAX} excited states (uvvis_nroots)."
+```
+
+`autodft/api/routes.py` — in `SubmitRequest`, after `request_spec_nmr: bool = False`:
+
+```python
+    # Settings of the categories above; recorded only when the category is.
+    uvvis_nroots: int = Field(default=20, ge=1, le=100)
+    uvvis_tda: bool = False
+```
+
+and in `_category_flags`, add to the returned dict after `categories.NMR: body.request_spec_nmr,`:
+
+```python
+        "uvvis_nroots": body.uvvis_nroots,
+        "uvvis_tda": body.uvvis_tda,
+```
+
+`autodft/cli/submit.py` — replace `_category_options_to_flags` with:
+
+```python
+def _category_options_to_flags(
+    uvvis: bool, ir: bool, esd: bool, esd_ht: bool, nmr: bool,
+    uvvis_nroots: int = 20, uvvis_tda: bool = False,
+) -> dict:
+    """CLI options as ``request_metadata`` category keys and settings."""
+    from autodft import categories
+
+    return {
+        categories.UVVIS: uvvis,
+        categories.IR: ir,
+        categories.ESD: esd,
+        categories.ESD_HT: esd_ht,
+        categories.NMR: nmr,
+        "uvvis_nroots": uvvis_nroots,
+        "uvvis_tda": uvvis_tda,
+    }
+```
+
+In **both** `submit` and `submit_batch`, add after the `nmr` option:
+
+```python
+    uvvis_nroots: int = typer.Option(20, "--uvvis-nroots", help="UV/Vis excited states (1-100)"),
+    uvvis_tda: bool = typer.Option(False, "--uvvis-tda", help="Tamm-Dancoff approximation for UV/Vis"),
+```
+
+and pass them on: `flags = _category_options_to_flags(uvvis, ir, esd, esd_ht, nmr, uvvis_nroots, uvvis_tda)`.
+
+- [ ] **Step 4: Run to verify they pass, then the full suite**
+
+Run: `/mnt/share/dft_calculations/autodft/.venv/bin/python -m pytest tests/test_categories.py tests/test_categories_api.py tests/test_categories_cli.py -q && /mnt/share/dft_calculations/autodft/.venv/bin/python -m pytest -q -p no:cacheprovider`
+Expected: all pass (the Task 2 unflagged-metadata regression test included).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add autodft/categories.py autodft/api/routes.py autodft/cli/submit.py tests/test_categories.py tests/test_categories_api.py tests/test_categories_cli.py
+git commit -m "Per-submission UV/Vis settings, stored only with the category"
 ```
