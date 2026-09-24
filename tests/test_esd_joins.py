@@ -11,7 +11,7 @@ from sqlmodel import col, select
 from autodft import categories
 from autodft.config import Settings
 from autodft.engine import photophysics
-from autodft.engine.state_machine import _create_job_for_task
+from autodft.engine.state_machine import _create_job_for_task, create_retry_jobs
 from autodft.models import (
     ComputationHeader, ComputationJob, ComputationTask, Molecule, MoleculeGeometry, MoleculeState,
     TaskStatus, TaskType,
@@ -134,13 +134,32 @@ def test_rates_wait_for_their_inputs(session, esd):
     assert "esd_done" not in _meta(esd["states"]["S1"])
 
 
-def test_a_failed_input_settles_its_rates(session, esd):
+def test_a_failed_input_skips_its_rates_without_settling(session, esd):
     opt = esd["tasks"]["S1"][0]
     opt.status = TaskStatus.failed
     session.add(opt)
     session.commit()
     photophysics.advance_photophysics(session, Settings())
     assert set(_rates(session, esd)) == {TaskType.esd_isc_t1s0, TaskType.esd_phosp}
+    assert "esd_done" not in _meta(esd["states"]["S1"])
+
+
+def test_a_recovered_input_gets_its_rates_after_the_latch_would_have_fired(session, esd):
+    """I1: esd_done only latches once every rate type exists, so a prerequisite
+    recovered later (requeue, reset-task) still gets its rates created."""
+    soc = esd["tasks"]["S0"][1]
+    soc.status = TaskStatus.failed
+    session.add(soc)
+    session.commit()
+    photophysics.advance_photophysics(session, Settings())
+    assert set(_rates(session, esd)) == {TaskType.esd_isc, TaskType.esd_risc}
+    assert "esd_done" not in _meta(esd["states"]["S1"])
+
+    soc.status = TaskStatus.successful
+    session.add(soc)
+    session.commit()
+    photophysics.advance_photophysics(session, Settings())
+    assert set(_rates(session, esd)) == RATE_TYPES
     assert _meta(esd["states"]["S1"])["esd_done"] is True
 
 
@@ -198,6 +217,37 @@ class TestJobFiles:
         assert text.startswith("!B3LYP def2-SVP ESD(PHOSP)\n")
         assert text.rstrip().endswith("*xyzfile 0 1 input.xyz")
         assert 'cp "$WORK_DIR"/ts.hess "$TMP_DIR"/' in (path / "submit.cmd").read_text()
+
+    def test_a_timed_out_ht_rate_job_is_escalated_on_retry(self, session, esd):
+        s1 = esd["states"]["S1"]
+        meta = json.loads(s1.metadata_json)
+        meta[categories.ESD_HT] = True
+        s1.metadata_json = json.dumps(meta)
+        session.add(s1)
+        session.commit()
+        task, job, path = self._job(session, esd, TaskType.esd_isc)
+        assert "%tddft" in (path / "input.inp").read_text()
+        job.success = False
+        job.fail_reason = "['Termination']"
+        task.status = TaskStatus.pending
+        session.add_all([job, task])
+        session.commit()
+        settings = Settings()
+        create_retry_jobs(session, settings, OrcaParser())
+        job2 = session.exec(select(ComputationJob).where(
+            ComputationJob.task_id == task.id, ComputationJob.attempt == 2,
+        )).one()
+        submit = (Path(job2.job_path) / "submit.cmd").read_text()
+        assert f"--ntasks-per-node={settings.pipeline.retry.increased_nprocs}" in submit
+
+    def test_an_oserror_while_staging_a_hessian_fails_the_job_cleanly(self, session, esd, monkeypatch):
+        def _raise(*a, **k):
+            raise OSError("stale NFS handle")
+
+        monkeypatch.setattr(photophysics.shutil, "copyfile", _raise)
+        _, job, _ = self._job(session, esd, TaskType.esd_isc)
+        assert job.success is False
+        assert job.fail_reason == "ESD inputs: OSError: stale NFS handle"
 
     def test_a_missing_hessian_fails_the_job(self, session, esd):
         (esd["tmp_path"] / "jobs" / "opt_T1" / "input.hess").unlink()

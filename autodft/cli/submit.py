@@ -232,7 +232,7 @@ def submit(
         help="Excited-state dynamics: ISC/RISC/IC/fluorescence/phosphorescence rates from S1 and T1 seeded at the lowest S0",
     ),
     esd_ht: bool = typer.Option(
-        False, "--esd-ht", help="Herzberg-Teller for the ESD rates (much more expensive)"
+        False, "--esd-ht", help="Herzberg-Teller for the ESD rates (much more expensive: 6N TDDFT gradients per triplet sublevel; hours to days)"
     ),
     nmr: bool = typer.Option(
         False, "--nmr", help="NMR shifts (1H/13C/19F) vs automatically computed TMS / CFCl3"
@@ -335,7 +335,7 @@ def submit_batch(
         help="Excited-state dynamics: ISC/RISC/IC/fluorescence/phosphorescence rates from S1 and T1 seeded at the lowest S0",
     ),
     esd_ht: bool = typer.Option(
-        False, "--esd-ht", help="Herzberg-Teller for the ESD rates (much more expensive)"
+        False, "--esd-ht", help="Herzberg-Teller for the ESD rates (much more expensive: 6N TDDFT gradients per triplet sublevel; hours to days)"
     ),
     nmr: bool = typer.Option(
         False, "--nmr", help="NMR shifts (1H/13C/19F) vs automatically computed TMS / CFCl3"

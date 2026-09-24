@@ -133,11 +133,13 @@ class PipelineConfig:
     # Hessians take far longer than a ground-state optimisation.
     excited_optimization: StageConfig = field(
         default_factory=lambda: StageConfig(time_limit="4-00:00:00"))
-    # ESD rate jobs; FC ones are single-core minutes, TDDFT ones take the
-    # singlepoint header's %pal.
+    # FC ESD rate jobs: DELE and SOCME supplied, seconds on one core.
     esd: StageConfig = field(
         default_factory=lambda: StageConfig(time_limit="1-00:00:00", default_nprocs=1,
                                             default_mem_per_core=2000))
+    # TDDFT ESD rate jobs (IC, fluorescence, phosphorescence, every HT job):
+    # the singlepoint header's %pal; HT runs 6N displaced TDDFT gradients per sublevel.
+    esd_tddft: StageConfig = field(default_factory=lambda: StageConfig(time_limit="4-00:00:00"))
     retry: RetryConfig = field(default_factory=RetryConfig)
 
 

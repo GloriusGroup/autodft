@@ -2513,13 +2513,14 @@
         (function () {
             var panels = document.querySelectorAll('.cat-detail[data-requires]');
             var FREQ_RE = /^\s*!.*\b(Freq|NumFreq|AnFreq)\b/im;
-            var SP_CONFLICT_RE = /%tddft\b|%cis\b|%eprnmr\b|%esd\b|^\s*!.*\bNMR\b/im;
+            // Same rules as categories._SP_CONFLICTS.
+            var SP_CONFLICT_RE = /%tddft\b|%cis\b|%eprnmr\b|%esd\b|^\s*!.*\bNMR\b|^\s*!.*\b(Freq|NumFreq|AnFreq)\b|^\s*!.*\b\w*Opt(TS|H)?\b/im;
             var TDDFT_RE = /%(tddft|cis)\b/i;
             var ESD_KEYWORD_RE = /^\s*!.*\bESD\b/im;
             // Native B88-exchange functionals lack the third derivatives that
             // TDDFT gradients (S1 optimisation) and IC need in ORCA 6.1; the
             // same rule as categories._NATIVE_B88_RE.
-            var B88_RE = /^\s*!(?:.*\s)?(B3LYP|BLYP|BP86|B3P86|B2PLYP|B2GP-PLYP|X3LYP)(?![\w(])/im;
+            var B88_RE = /^\s*!(?:.*\s)?(?:RI-)?(B3LYP|BLYP|BP86|BP|B3P86|B3PW91|BPW91|B1LYP|BHANDHLYP|B2PLYP|B2GP-PLYP|X3LYP)(?![\w(])/im;
 
             // Text of the header chosen in a slot; headerCache is filled by
             // fetchHeaders, which calls refreshCategoryDetails when done.
@@ -2555,11 +2556,11 @@
                 setNote('uvvisHeaderNote',
                         !SP_CONFLICT_RE.test(chosenHeaderText('headerSinglepoint', 'singlepoint')),
                         '',
-                        'The chosen singlepoint header already has a %tddft / NMR / %eprnmr / %esd block — UV/Vis will be refused.');
+                        'The chosen singlepoint header already has a %tddft / NMR / %eprnmr / %esd block, or a Freq / optimisation keyword — UV/Vis will be refused.');
                 setNote('nmrHeaderNote',
                         !SP_CONFLICT_RE.test(chosenHeaderText('headerSinglepoint', 'singlepoint')),
                         '',
-                        'The chosen singlepoint header already has a %tddft / NMR / %eprnmr / %esd block — NMR will be refused.');
+                        'The chosen singlepoint header already has a %tddft / NMR / %eprnmr / %esd block, or a Freq / optimisation keyword — NMR will be refused.');
                 var optText = chosenHeaderText('headerOptimization', 'optimization');
                 var spText = chosenHeaderText('headerSinglepoint', 'singlepoint');
                 var esdProblems = [];
@@ -2569,7 +2570,7 @@
                     esdProblems.push('the optimisation header uses a native B88 functional — use its LibXC version, e.g. !LibXC(B3LYP)');
                 }
                 if (SP_CONFLICT_RE.test(spText) || ESD_KEYWORD_RE.test(spText)) {
-                    esdProblems.push('the singlepoint header already has a TDDFT / NMR / ESD block');
+                    esdProblems.push('the singlepoint header already has a TDDFT / NMR / ESD block, or a Freq / optimisation keyword');
                 }
                 var spB88 = B88_RE.test(spText);
                 setNote('esdHeaderNote', !esdProblems.length && !spB88, '',

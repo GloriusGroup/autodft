@@ -37,7 +37,8 @@ _TDDFT_RE = re.compile(r"%(?:tddft|cis)\b", re.IGNORECASE)
 # A refused header is cheaper than a wave of failed S1 optimisations tripping
 # the circuit breaker.
 _NATIVE_B88_RE = re.compile(
-    r"^\s*!(?:.*\s)?(?:B3LYP|BLYP|BP86|B3P86|B2PLYP|B2GP-PLYP|X3LYP)(?![\w(])",
+    r"^\s*!(?:.*\s)?(?:RI-)?(?:B3LYP|BLYP|BP86|BP|B3P86|B3PW91|BPW91|B1LYP|BHANDHLYP|B2PLYP"
+    r"|B2GP-PLYP|X3LYP)(?![\w(])",
     re.IGNORECASE | re.MULTILINE,
 )
 _SP_CONFLICTS = (
@@ -47,6 +48,8 @@ _SP_CONFLICTS = (
     (re.compile(r"%esd\b", re.IGNORECASE), "%esd"),
     (re.compile(r"^\s*!.*\bNMR\b", re.IGNORECASE | re.MULTILINE), "the NMR keyword"),
     (re.compile(r"^\s*!.*\bESD\b", re.IGNORECASE | re.MULTILINE), "the ESD keyword"),
+    (_FREQ_RE, "a frequency keyword (Freq, NumFreq, AnFreq)"),
+    (re.compile(r"^\s*!.*\b\w*Opt(?:TS|H)?\b", re.IGNORECASE | re.MULTILINE), "an optimisation keyword"),
 )
 
 # Settings each category takes, with defaults. Stored -- defaults filled in --

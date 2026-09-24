@@ -13,6 +13,7 @@ EV_TO_EH = 1 / 27.211386
 _FINAL = re.compile(r"FINAL SINGLE POINT ENERGY\s+(-?\d+\.\d+)")
 _SOC_CIS = re.compile(r"E\(SOC CIS\)\s*=\s*(-?\d+\.\d+) Eh")
 _DE_CIS = re.compile(r"DE\(CIS\)\s*=\s*(-?\d+\.\d+) Eh")
+_DE_CIS_ROOT = re.compile(r"DE\(CIS\)\s*=\s*-?\d+\.\d+ Eh \(Root\s*(\d+)\)")
 _ROOTS_TITLE = re.compile(r"^TD-DFT(?:/TDA)? EXCITED STATES \((SINGLETS|TRIPLETS)\)", re.MULTILINE)
 _ROOT = re.compile(r"^STATE\s+\d+:\s+E=\s+(-?\d+\.\d+) au", re.MULTILINE)
 _SOCME_TITLE = "CALCULATED SOCME BETWEEN TRIPLETS AND SINGLETS"
@@ -70,6 +71,12 @@ def followed_root_energy(content: str) -> Optional[float]:
     """Excitation energy (Eh) of the root a TDDFT job followed, from the last ``DE(CIS)``."""
     found = _DE_CIS.findall(content)
     return float(found[-1]) if found else None
+
+
+def followed_root(content: str) -> Optional[int]:
+    """The N of the last ``DE(CIS) = ... Eh (Root N)`` line."""
+    found = _DE_CIS_ROOT.findall(content)
+    return int(found[-1]) if found else None
 
 
 def socme(content: str) -> dict[tuple[int, int], float]:

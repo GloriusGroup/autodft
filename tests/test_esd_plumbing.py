@@ -50,13 +50,21 @@ def test_stage_configs():
     settings = Settings()
     assert settings.pipeline.excited_optimization.time_limit == "4-00:00:00"
     assert (settings.pipeline.esd.default_nprocs, settings.pipeline.esd.default_mem_per_core) == (1, 2000)
+    assert settings.pipeline.esd_tddft.time_limit == "4-00:00:00"
     s1 = MoleculeState(id=1, molecule_id=1, description="S1", charge=0, multiplicity=1,
                        metadata_json=json.dumps({"esd_role": "S1"}))
+    s1_ht = MoleculeState(id=3, molecule_id=1, description="S1", charge=0, multiplicity=1,
+                          metadata_json=json.dumps({"esd_role": "S1", categories.ESD_HT: True}))
     s0 = MoleculeState(id=2, molecule_id=1, description="S0", charge=0, multiplicity=1)
     assert _get_stage_config(settings, TaskType.optimization, s1) is settings.pipeline.excited_optimization
     assert _get_stage_config(settings, TaskType.optimization, s0) is settings.pipeline.optimization
-    assert _get_stage_config(settings, TaskType.esd_isc, s1) is settings.pipeline.esd
     assert _get_stage_config(settings, TaskType.singlepoint_soc, s0) is settings.pipeline.singlepoint
+    # FC ISC-type jobs (no HT): the FC stage. HT, and every IC/FLUOR/PHOSP job: the TDDFT stage.
+    assert _get_stage_config(settings, TaskType.esd_isc, s1) is settings.pipeline.esd
+    assert _get_stage_config(settings, TaskType.esd_isc, s1_ht) is settings.pipeline.esd_tddft
+    for task_type in (TaskType.esd_ic, TaskType.esd_fluor, TaskType.esd_phosp):
+        assert _get_stage_config(settings, task_type, s1) is settings.pipeline.esd_tddft
+        assert _get_stage_config(settings, task_type, s1_ht) is settings.pipeline.esd_tddft
 
 
 @pytest.mark.parametrize("task_type", [TaskType.singlepoint_soc, TaskType.esd_isc,
@@ -66,10 +74,24 @@ def test_esd_family_runs_the_closed_shell_reference(task_type):
     assert _get_job_charge_multiplicity(task_type, t1) == (-1, 1)
 
 
-def test_resources_are_not_escalated_for_esd_jobs():
-    failure = FailureInfo(fail_reason="['Termination']", previous_job_path="", attempt=2)
+def test_resources_are_not_escalated_for_fc_rate_jobs(tmp_path):
+    (tmp_path / "input.inp").write_text("! ESD(ISC) NOITER\n%maxcore 2000\n")
+    failure = FailureInfo(fail_reason="['Termination']", previous_job_path=str(tmp_path), attempt=2)
     assert not IncreaseResources().applies(failure, "esd_isc")
     assert IncreaseResources().applies(failure, "singlepoint")
+
+
+@pytest.mark.parametrize("task_type", ["esd_isc", "esd_ic"])
+def test_resources_are_escalated_for_tddft_rate_jobs(tmp_path, task_type):
+    (tmp_path / "input.inp").write_text("!B3LYP def2-SVP ESD(ISC)\n%tddft nroots 10 end\n")
+    failure = FailureInfo(fail_reason="['Termination']", previous_job_path=str(tmp_path), attempt=2)
+    assert IncreaseResources().applies(failure, task_type)
+
+
+def test_resources_are_escalated_when_the_fc_input_is_unreadable():
+    # An unreadable previous job path still counts as FC (the safe default).
+    failure = FailureInfo(fail_reason="['Termination']", previous_job_path="", attempt=2)
+    assert not IncreaseResources().applies(failure, "esd_isc")
 
 
 def _opt_job_script(session, tmp_path, metadata, description="S0") -> str:

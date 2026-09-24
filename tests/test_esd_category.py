@@ -41,6 +41,8 @@ class TestRejection:
     @pytest.mark.parametrize("header", [
         "!B3LYP def2-SVP Opt Freq\n", "! b3lyp-d3bj def2-TZVP Opt Freq\n",
         "!BP86 def2-SVP Opt Freq\n", "!RIJCOSX B2PLYP def2-SVP Opt Freq\n",
+        "! B3PW91 def2-SVP Opt Freq\n", "! BP def2-SVP Opt Freq\n",
+        "! RI-B2PLYP def2-SVP Opt Freq\n", "! BHandHLYP def2-SVP Opt Freq\n",
     ])
     def test_a_native_b88_optimisation_header_is_refused(self, header):
         assert "LibXC" in categories.rejection(SINGLET, ESD, header, SP)
@@ -48,6 +50,7 @@ class TestRejection:
     @pytest.mark.parametrize("header", [
         OPT_ESD, "!wB97X-D3 def2-TZVP Opt Freq\n", "!PBE0 def2-SVP Opt Freq\n",
         "!CAM-B3LYP def2-SVP Opt Freq\n",  # native, but ORCA 6.1 differentiates it (checked)
+        "! LibXC(B3LYP) def2-SVP Opt Freq\n",
     ])
     def test_other_optimisation_headers_are_fine(self, header):
         assert categories.rejection(SINGLET, ESD, header, SP) is None
@@ -74,6 +77,26 @@ class TestRejection:
     @pytest.mark.parametrize("block", ["%tddft iroot 1 end\n", "%CIS nroots 3 end\n"])
     def test_esd_refuses_an_optimisation_header_with_tddft(self, block):
         assert "%tddft" in categories.rejection(SINGLET, ESD, OPT_ESD + block, SP)
+
+    def test_a_freq_keyword_in_the_singlepoint_header_is_a_conflict(self):
+        reason = categories.rejection(SINGLET, {categories.UVVIS: True}, OPT_NOFREQ,
+                                      "! wB97X-D3 def2-TZVP Freq\n")
+        assert "frequency keyword" in reason
+
+    def test_an_optimisation_keyword_in_the_singlepoint_header_is_a_conflict(self):
+        reason = categories.rejection(SINGLET, {categories.UVVIS: True}, OPT_NOFREQ,
+                                      "! B3LYP def2-SVP TightOpt\n")
+        assert "optimisation keyword" in reason
+
+    def test_the_default_singlepoint_header_is_accepted(self):
+        from autodft.qm.orca.defaults import DEFAULT_HEADER_SINGLEPOINT
+        assert categories.rejection(SINGLET, {categories.UVVIS: True}, OPT_NOFREQ,
+                                    DEFAULT_HEADER_SINGLEPOINT) is None
+
+    def test_ir_does_not_care_about_freq_in_the_singlepoint_header(self):
+        # IR reads Freq off the optimisation header; it never touches the SP one.
+        assert categories.rejection(SINGLET, {categories.IR: True}, "!B3LYP def2-SVP Opt Freq\n",
+                                    "! wB97X-D3 def2-TZVP Freq\n") is None
 
 
 def test_esd_settings_for_the_excited_states():

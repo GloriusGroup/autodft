@@ -142,6 +142,59 @@ def test_paused_and_archived_projects_wait(session, esd, monkeypatch):
     assert _tasks(session, esd["s1"]) == []
 
 
+def test_one_molecules_file_error_does_not_stop_the_rest(session, monkeypatch):
+    """M4: step 4b isolates each molecule, so one raising extractor call does
+    not roll back the whole step."""
+    header = ComputationHeader(header_text="!B3LYP Opt Freq\n")
+    session.add(header)
+    session.commit()
+    ids = dict(confsearch_header_id=header.id, optimization_header_id=header.id,
+               singlepoint_header_id=header.id)
+    molecules = {}
+    for name, smiles in (("bad", "O=CC=O"), ("good", "CC=O")):
+        mol = Molecule(smiles=smiles, project_name="nho/p")
+        session.add(mol)
+        session.commit()
+        s0 = MoleculeState(molecule_id=mol.id, description="S0", multiplicity=1, charge=0,
+                           metadata_json=json.dumps({categories.ESD: True}), **ids)
+        s1 = MoleculeState(molecule_id=mol.id, description="S1", multiplicity=1, charge=0,
+                           metadata_json=json.dumps({"esd_role": "S1"}), **ids)
+        t1 = MoleculeState(molecule_id=mol.id, description="T1", multiplicity=3, charge=0,
+                           metadata_json=json.dumps({"esd_role": "T1"}), **ids)
+        session.add_all([s0, s1, t1])
+        session.commit()
+        opt = ComputationTask(task_type=TaskType.optimization, status=TaskStatus.successful,
+                              state_id=s0.id, header_id=header.id, has_followups=False)
+        session.add(opt)
+        session.commit()
+        geom = MoleculeGeometry(state_id=s0.id, xyz_data=XYZ.format(z=0.0), origin_task_id=opt.id)
+        session.add(geom)
+        session.commit()
+        opt.output_geometry_id = geom.id
+        sp = ComputationTask(task_type=TaskType.singlepoint, status=TaskStatus.successful,
+                             state_id=s0.id, header_id=header.id, depends_on_task_id=opt.id,
+                             has_followups=False)
+        session.add_all([opt, sp])
+        session.commit()
+        molecules[name] = {"mol": mol, "s1": s1, "opt": opt}
+
+    bad_id = molecules["bad"]["mol"].id
+
+    def results(self, session, mol, state):
+        if mol.id == bad_id:
+            raise OSError("stale NFS handle")
+        return [ConformerResult(molecule_id=mol.id, smiles=mol.smiles, state="S0", conformer_index=1,
+                                opt_task_id=molecules["good"]["opt"].id, e_singlepoint=-10.0,
+                                e_combined=-9.9)]
+
+    monkeypatch.setattr(PipelineExtractor, "extract_state_results", results)
+    photophysics.advance_photophysics(session, Settings())
+
+    assert _tasks(session, molecules["good"]["s1"]) != []
+    assert _tasks(session, molecules["bad"]["s1"]) == []
+    assert "esd_seed" not in json.loads(molecules["bad"]["s1"].metadata_json)
+
+
 def test_partner_matches_headers(session, esd):
     assert photophysics.partner(session, esd["s1"], "T1").id == esd["t1"].id
     other = ComputationHeader(header_text="!PBE0 Opt Freq\n")

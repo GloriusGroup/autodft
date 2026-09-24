@@ -23,6 +23,9 @@ EH_TO_EV = 27.211386
 CM_TO_EV = 1 / 8065.544
 # ORCA warns above this: the geometries are far apart and harmonic rates unreliable.
 K_SQUARED_LIMIT = 7.0
+BOLTZMANN_EV = 8.617333e-5
+# Beyond this many kT uphill, k_RISC sits at ESD's numerical floor (M5).
+RISC_UPHILL_KT = 10
 
 NAMES = {
     "esd_isc": "isc", "esd_risc": "risc", "esd_ic": "ic", "esd_fluor": "fluorescence",
@@ -74,10 +77,16 @@ def molecule_esd(
         out["rates"][NAMES[rate]] = _rate(
             session, extractor, rate, tasks.get(rate), inputs, (initial, final), out["flags"], detail,
         )
+    gap = out.get("delta_est_ev")
+    kt = BOLTZMANN_EV * out["temperature_k"]
+    if gap is not None and gap > RISC_UPHILL_KT * kt and out["rates"]["risc"]["status"] == "successful":
+        out["flags"].append(
+            f"risc: S1 lies {gap / kt:.0f} kT above T1; ESD's RISC rate is unreliable this far uphill."
+        )
     out["status"] = "running" if any(r["status"] in _OPEN for r in out["rates"].values()) else "done"
     out["derived"] = _derived(out["rates"])
     if detail:
-        out["flags"].extend(_imaginary_modes(session, extractor, inputs))
+        out["flags"].extend(_optimisation_warnings(session, extractor, inputs))
     return out
 
 
@@ -215,8 +224,8 @@ def _derived(rates: dict) -> dict:
     return out
 
 
-def _imaginary_modes(session, extractor, inputs) -> list[str]:
-    """Soft imaginary modes the optimisation checks let through; ORCA's ESD treats them as real."""
+def _optimisation_warnings(session, extractor, inputs) -> list[str]:
+    """Soft imaginary modes the optimisation checks let through, and a drifted S1 root."""
     flags = []
     for name, (opt, _) in inputs.items():
         if opt is None or opt.status != TaskStatus.successful:
@@ -227,4 +236,11 @@ def _imaginary_modes(session, extractor, inputs) -> list[str]:
             label = "S0*" if name == "S0" else name
             flags.append(f"{label} has imaginary modes ({', '.join(f'{m:.0f}' for m in modes)} cm⁻¹); "
                          f"ORCA's ESD treats them as real.")
+        if name == "S1" and content:
+            root = esd_parser.followed_root(content)
+            if root is not None and root != 1:
+                flags.append(
+                    f"The S1 optimisation followed root {root} at its final geometry; the S1 "
+                    f"rates use the lowest root's energy with this state's Hessian."
+                )
     return flags

@@ -201,7 +201,7 @@ package defaults in `autodft/qm/orca/defaults.py`.
 | `esd_tn_window_ev` | float | `0.2` | S1→Tn ISC is summed over triplets up to this many eV above S1 (0–1). Stored only with ESD. |
 | `esd_temperature_k` | float | `298.15` | Temperature of the rates (0 < T ≤ 1000). Stored only with ESD. |
 
-`request_S1` is **not** exposed: the S1 state is not yet supported.
+`request_S1` is **not** exposed: the S1 state exists only as part of ESD (`request_esd`).
 
 **Responses:**
 
@@ -495,16 +495,16 @@ An ESD molecule's entry adds `esd`:
     "esd": {"status": "done", "temperature_k": 298.15, "herzberg_teller": false,
             "tn_window_ev": 0.2, "seed_task_id": 118,
             "rates": {"isc": {"status": "successful", "rate_s": 9521.34},
-                      "risc": {"status": "successful", "rate_s": 3.58e-05},
-                      "ic": {"status": "successful", "rate_s": 26468.9},
-                      "fluorescence": {"status": "successful", "rate_s": 4811.34, "e00_ev": 2.396},
+                      "risc": {"status": "successful", "rate_s": 1.236e-05},
+                      "ic": {"status": "successful", "rate_s": 26472.1},
+                      "fluorescence": {"status": "successful", "rate_s": 13386.15, "e00_ev": 2.3955},
                       "isc_t1_s0": {"status": "successful", "rate_s": 0.1599},
-                      "phosphorescence": {"status": "successful", "rate_s": 44.47}},
+                      "phosphorescence": {"status": "successful", "rate_s": 42.84}},
             "delta_est_ev": 0.6657, "delta_est_uks_ev": 0.5078,
-            "derived": {"tau_s1_ns": 33132.5, "phi_fluorescence": 0.1194,
-                        "phi_isc": 0.2365, "phi_ic": 0.6577,
-                        "tau_t1_us": 22484.0, "phi_phosphorescence": 0.9946,
-                        "phi_isc_t1_s0": 0.0036, "phi_risc": 0.0000000008},
+            "derived": {"tau_s1_ns": 20251.3, "phi_fluorescence": 0.2711,
+                        "phi_isc": 0.1928, "phi_ic": 0.5361,
+                        "tau_t1_us": 23255.6, "phi_phosphorescence": 0.9963,
+                        "phi_isc_t1_s0": 0.0037, "phi_risc": 0.0000002874},
             "flags": ["isc T2: a negative rate (-1.54e-09 s⁻¹) was set to 0."]}
 
 `status` is `"waiting"` before the S1/T1 states are seeded (or while

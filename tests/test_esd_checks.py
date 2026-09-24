@@ -55,6 +55,27 @@ class TestChecks:
         result = _check(tmp_path, "soc_t1.out", "esd_isc")
         assert result.checks["ESD Rate"] is False
 
+    def test_a_multi_job_rate_checks_the_job_count(self, tmp_path):
+        # isc_two_channels.out has 2 rates (T1, T2); one $new_job = 2 jobs.
+        (tmp_path / "output.out").write_text((FIXTURES / "isc_two_channels.out").read_text())
+        (tmp_path / "input.inp").write_text("! ESD(ISC) NOITER\n%esd\nend\n$new_job\n%esd\nend\n")
+        assert OrcaParser().check_output(tmp_path, "esd_isc").checks["ESD Rate"] is True
+
+    def test_a_multi_job_rate_with_a_missing_job_fails(self, tmp_path):
+        # Same 2-rate output, but the input only ever asked for 1 job.
+        (tmp_path / "output.out").write_text((FIXTURES / "isc_two_channels.out").read_text())
+        (tmp_path / "input.inp").write_text("! ESD(ISC) NOITER\n%esd\nend\n")
+        assert OrcaParser().check_output(tmp_path, "esd_isc").checks["ESD Rate"] is False
+
+    def test_a_multi_job_rate_without_an_input_passes_as_before(self, tmp_path):
+        (tmp_path / "output.out").write_text((FIXTURES / "isc_two_channels.out").read_text())
+        assert OrcaParser().check_output(tmp_path, "esd_isc").checks["ESD Rate"] is True
+
+    def test_a_nonfinite_rate_fails(self, tmp_path):
+        text = (FIXTURES / "ic.out").read_text().replace("2.646887e+04", "nan")
+        (tmp_path / "output.out").write_text(text)
+        assert OrcaParser().check_output(tmp_path, "esd_ic").checks["ESD Rate"] is False
+
     def test_native_b88_is_named(self, tmp_path):
         result = _check(tmp_path, "ic_libxc_needed.out", "esd_ic")
         assert result.checks["LibXC Needed"] is False
@@ -69,6 +90,13 @@ class TestChecks:
         result = _check(tmp_path, "s1_opt_tail.out", "optimization_excited",
                         ("DE(CIS) =      0.087063157 Eh", "DE(CIS) =      0.001000000 Eh"))
         assert result.checks["Excited Root"] is False
+
+    def test_followed_root_reads_the_last_de_cis_line(self):
+        from autodft.qm.orca import esd_parser
+
+        text = (FIXTURES / "s1_opt_tail.out").read_text()
+        assert esd_parser.followed_root(text) == 1
+        assert esd_parser.followed_root(text.replace("(Root  1)", "(Root  2)")) == 2
 
     def test_existing_types_get_no_new_checks(self, tmp_path):
         for task_type in ("optimization", "singlepoint", "singlepoint_uvvis"):
@@ -86,6 +114,19 @@ def _state(session, metadata=None) -> MoleculeState:
     session.add(state)
     session.commit()
     return state
+
+
+def test_category_tasks_do_not_count_toward_the_circuit_breaker(session, sample_state, sample_header):
+    from autodft.engine.circuit_breaker import recent_failure_ratio
+
+    for _ in range(100):
+        session.add(ComputationTask(task_type=TaskType.esd_isc, state_id=sample_state.id,
+                                    header_id=sample_header.id, status=TaskStatus.failed))
+    for _ in range(10):
+        session.add(ComputationTask(task_type=TaskType.optimization, state_id=sample_state.id,
+                                    header_id=sample_header.id, status=TaskStatus.successful))
+    session.commit()
+    assert recent_failure_ratio(session, window=100) == (0.0, 0, 10)
 
 
 def test_check_type(session):
@@ -123,5 +164,21 @@ class TestNoRetry:
         monkeypatch.setattr(state_machine, "_create_job_for_task",
                             lambda session, task, attempt, *a, **k: calls.append(attempt))
         task = self._failed_task(session, "['Termination']")
+        create_retry_jobs(session, Settings(), OrcaParser())
+        assert calls == [2] and task.status == TaskStatus.pending
+
+    def test_a_collapsed_s1_root_is_final(self, session):
+        task = self._failed_task(session, "['Excited Root']")
+        create_retry_jobs(session, Settings(), OrcaParser())
+        assert task.status == TaskStatus.failed
+        assert len(session.exec(select(ComputationJob).where(ComputationJob.task_id == task.id)).all()) == 1
+
+    def test_excited_root_alongside_another_failure_is_retried(self, session, monkeypatch):
+        from autodft.engine import state_machine
+
+        calls = []
+        monkeypatch.setattr(state_machine, "_create_job_for_task",
+                            lambda session, task, attempt, *a, **k: calls.append(attempt))
+        task = self._failed_task(session, "['Imaginary Frequencies', 'Excited Root']")
         create_retry_jobs(session, Settings(), OrcaParser())
         assert calls == [2] and task.status == TaskStatus.pending

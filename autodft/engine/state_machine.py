@@ -631,12 +631,13 @@ def create_retry_jobs(
             default=None,
         )
 
-        # A functional without third derivatives fails identically every time.
-        if last_failed is not None and "LibXC Needed" in (last_failed.fail_reason or ""):
+        reason = (last_failed.fail_reason or "") if last_failed is not None else ""
+        # A functional without third derivatives, or a collapsed S1 root, fails identically every time.
+        if "LibXC Needed" in reason or reason == "['Excited Root']":
             task.status = TaskStatus.failed
             task.updated_at = datetime.now(timezone.utc)
             session.add(task)
-            logger.info("Task %d needs a LibXC functional; not retried", task.id)
+            logger.info("Task %d failed deterministically (%s); not retried", task.id, reason)
             continue
 
         next_attempt = failed_count + 1
@@ -1029,8 +1030,9 @@ def _generate_job_files(
 
         try:
             header_text, extra_inputs = prepare_rate_job(session, task, state, header_text, job_path)
-        except EsdInputError as exc:
-            return _fail_task(session, task, job, f"ESD inputs: {exc}")
+        except (OSError, KeyError, ValueError) as exc:  # EsdInputError is a ValueError
+            detail = str(exc) if isinstance(exc, EsdInputError) else f"{type(exc).__name__}: {exc}"
+            return _fail_task(session, task, job, f"ESD inputs: {detail}")
     else:
         # Category tasks add their own blocks; every other type runs the
         # header verbatim.
@@ -1339,7 +1341,12 @@ def _keeps_hessian(state: MoleculeState, task: ComputationTask) -> bool:
 def _get_stage_config(settings: Settings, task_type: TaskType, state: Optional[MoleculeState] = None):
     """Return the :class:`StageConfig` for a given task type."""
     if task_type.value.startswith("esd_"):
-        return settings.pipeline.esd
+        from autodft.qm.orca import esd_inputs
+
+        metadata = json.loads(state.metadata_json) if state is not None and state.metadata_json else {}
+        if state is None or esd_inputs.is_fc(task_type.value, metadata):
+            return settings.pipeline.esd
+        return settings.pipeline.esd_tddft
     elif task_type == TaskType.confsearch:
         return settings.pipeline.confsearch
     elif task_type == TaskType.optimization:

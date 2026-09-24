@@ -31,6 +31,13 @@ SUBLEVELS = (-1, 0, 1)
 # FC rates need no electronic structure: ORCA gets DELE and SOCME from us.
 FC_HEADER = "! ESD(ISC) NOITER\n%maxcore 2000\n"
 
+FC_RATES = ("esd_isc", "esd_risc", "esd_isc_t1s0")
+
+
+def is_fc(rate: str, options: dict) -> bool:
+    """Whether *rate* runs as an FC job: no electronic structure, seconds on one core."""
+    return rate in FC_RATES and not categories.esd_settings(options)[categories.ESD_HT]
+
 
 class EsdInputError(ValueError):
     """A rate job's inputs are missing or unusable."""
@@ -103,7 +110,7 @@ def build(
             (n, energies["S1"] - data["T1"].triplet(n), data["T1"].socme[(n, 1)])
             for n in isc_channels(data["S1"], data["T1"], settings["esd_tn_window_ev"])
         ]
-        jobs, record = _isc(channels, 1, ht, files, doht, temperature, sp_header)
+        jobs, record = _isc(channels, 1, is_fc(rate, options), files, doht, temperature, sp_header)
         combine = "sum"
     elif rate in ("esd_risc", "esd_isc_t1s0"):
         # T -> S: the three initial sublevels are equally populated.
@@ -112,8 +119,8 @@ def build(
         else:
             socme, sroot = data["S0"].socme[(1, 0)], 0
         gap = energies["T1"] - energies[final]
-        jobs, record = _isc([(1, gap, socme / math.sqrt(3))], sroot, ht, files, doht,
-                            temperature, sp_header)
+        jobs, record = _isc([(1, gap, socme / math.sqrt(3))], sroot, is_fc(rate, options), files,
+                            doht, temperature, sp_header)
         combine = "mean"
     elif rate in ("esd_ic", "esd_fluor"):
         dele = (energies["S1"] - energies["S0"]) * EH_TO_CM
@@ -146,13 +153,13 @@ def build(
     return _join(jobs, charge), computed
 
 
-def _isc(channels, sroot, ht, files, doht, temperature, sp_header) -> tuple[list[str], list[dict]]:
+def _isc(channels, sroot, fc, files, doht, temperature, sp_header) -> tuple[list[str], list[dict]]:
     """ISC-type jobs: FC gets DELE and SOCME; HT computes SOC per triplet sublevel."""
     jobs: list[str] = []
     record: list[dict] = []
     for n, gap, socme in channels:
         dele = f"{gap * EH_TO_CM:.1f}"
-        if not ht:
+        if fc:
             jobs.append(FC_HEADER + esd_block(
                 **files, DELE=dele, SOCME=f"0.0, {socme / EH_TO_CM:.6e}", USEJ="TRUE",
                 **temperature,

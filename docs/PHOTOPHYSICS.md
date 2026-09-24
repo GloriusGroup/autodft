@@ -73,11 +73,13 @@ amide — are averaged into one signal. `equivalence` is `"none"`, one signal
 per atom, when RDKit cannot perceive bonds from the geometry. Closed-shell
 molecules only.
 
-A reference whose optimisation or NMR job failed shows as `failed`; requeue
-it with `autodft admin requeue-failed --project admin/system_references`
-(check the command's exact options with `--help` and write them correctly
-here). `method_matches` compares both NMR inputs' `!` keywords and `%`
-blocks, ignoring `%pal`, `%maxcore`, `%scf` and SCF-convergence keywords.
+A reference whose optimisation or NMR job failed shows as `failed`;
+`requeue-failed` revives it only if it failed before using all its
+attempts — otherwise it needs an operator (a pre-existing limitation of
+`requeue-failed`/`reset-task`: the old failed jobs keep counting and the
+task is failed again on the next tick). `method_matches` compares both NMR
+inputs' `!` keywords and `%` blocks, ignoring `%pal`, `%maxcore`, `%scf`
+and SCF-convergence keywords.
 
 ## ESD
 
@@ -94,9 +96,11 @@ false` — and a T1 (UKS) optimisation. SOC TDDFT singlepoints (`nroots 10
 iroot 1 triplets true dosoc true tda false`) run on S0\*, S1 and T1. Each
 of the six rate jobs starts as soon as its two states are ready.
 
-**Energies.** ΔE and DELE use the TDDFT-consistent energies (FINAL SINGLE
-POINT ENERGY plus the SOC excitation energy at each geometry); the UKS
-ΔE_ST is reported alongside for comparison only, never used in a rate.
+**Energies.** ΔE and DELE use TDDFT-consistent energies: at each geometry
+the ground state is FINAL SINGLE POINT ENERGY minus the followed root's
+(SOC-corrected) excitation energy, and each root adds its own excitation
+energy to it; the UKS ΔE_ST is reported alongside for comparison only,
+never used in a rate.
 
 **SOCMEs.** |⟨T|H_SO|S⟩| is summed over the three triplet sublevels for a
 singlet→triplet transition, and that sum divided by √3 for triplet→singlet;
@@ -110,28 +114,48 @@ channel.
 **FC vs HT.** Franck-Condon rates by default. Herzberg-Teller
 (`request_esd_ht`) adds vibronic coupling for FC-forbidden transitions, far
 more expensive: an ISC-type HT job runs once per triplet sublevel
-(`trootssl -1/0/1`), PHOSP once per SOC root 1–3.
+(`trootssl -1/0/1`), PHOSP once per SOC root 1–3. Each ISC-type HT channel
+runs 6N displaced TDDFT+SOC gradients per sublevel: glyoxal/def2-SVP took
+715 s for its three sublevels; a 30–50-atom molecule on a large basis can
+take days.
 
 **Cost.** The S1 Hessian is always numerical — ORCA 6.1 has no analytic
 TDDFT Hessian, TDA or not. `[pipeline.excited_optimization]` defaults to 4
 days (`4-00:00:00`); check it against the SLURM partition's `MaxTime`
 before submitting, since `sbatch` refuses a job asking for longer than the
-partition allows.
+partition allows. FC ISC-type jobs (DELE and SOCME supplied, no electronic
+structure) run under `[pipeline.esd]` — 1 core, 1 day, never escalated on a
+timeout. IC, fluorescence, phosphorescence and every HT job run TDDFT on
+the singlepoint header and use `[pipeline.esd_tddft]` instead — 4 days, the
+singlepoint header's own `%pal`, escalated on a timeout like any
+singlepoint. Category jobs (UV/Vis, NMR, SOC, the six rate jobs) do not
+count toward the global failure circuit breaker; ESD S1/T1 optimisations
+do, like every optimisation. An S1 optimisation whose root collapsed
+(`Excited Root`) is not retried — re-running the same input from the same
+seed geometry collapses again.
 
-**LibXC.** Native B88-exchange functionals (B3LYP, BLYP, BP86, B3P86,
-B2PLYP, B2GP-PLYP, X3LYP) can't do TDDFT gradients in ORCA 6.1, so an
-optimisation header using one is refused for ESD at submission — the S1
-optimisation would always fail. Any other functional ORCA can't
-differentiate fails its S1 optimisation with `LibXC Needed` and is not
-retried. A native B88 *singlepoint* header only costs the IC rate (which
-needs the gradient); the other five rates are unaffected. Use
-`!LibXC(B3LYP)` etc. either way.
+**LibXC.** Native B88-exchange functionals (B3LYP, BLYP, BP86, BP, B3P86,
+B3PW91, BPW91, B1LYP, BHandHLYP, B2PLYP, B2GP-PLYP, X3LYP — with or without
+an `RI-` prefix) can't do TDDFT gradients in ORCA 6.1, so an optimisation
+header using one is refused for ESD at submission — the S1 optimisation
+would always fail. This list is a courtesy check: any other functional
+ORCA can't differentiate fails once with `LibXC Needed` and is not
+retried. A native B88 *singlepoint* header costs the IC rate and therefore
+τ(S1) and the S1 yields, which need k_IC; the other five rates are
+unaffected. Use `!LibXC(B3LYP)` etc. either way.
 
 **Caveats.** Rates are harmonic. A job whose Duschinsky rotation is large
 (sum of K\*K over 7) is flagged as unreliable rather than dropped. A
 negative rate is clamped to 0 and flagged. Soft imaginary modes that the
 optimisation's checks let through are flagged — ORCA's ESD module treats
-them as real. IC rates are order-of-magnitude at best.
+them as real. IC rates are order-of-magnitude at best. SOCMEs come from
+ORCA's two-decimal printout, so a tiny coupling (T1→S0 at S0\*, ~0.02
+cm⁻¹) carries up to ~±50% rounding error in its FC rate. k_RISC far uphill
+sits at ESD's numerical floor and is flagged once −ΔE_ST exceeds 10 kT.
+PHOSP assumes SOC roots 1–3 at S0\* are T1's sublevels, which fails for an
+inverted-gap (S1 < T1) molecule. The detail view (`?molecule_id=`) adds
+optimisation warnings — soft imaginary modes and a drifted S1 root — that
+the summary does not compute.
 
 ## Weighting
 

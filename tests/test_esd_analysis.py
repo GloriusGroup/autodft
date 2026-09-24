@@ -9,12 +9,13 @@ import pytest
 from sqlmodel import select
 
 from autodft import categories
-from autodft.analysis.esd import molecule_esd
+from autodft.analysis.esd import EH_TO_EV, molecule_esd
 from autodft.config import Settings
 from autodft.engine import photophysics
 from autodft.engine.state_machine import _create_job_for_task
 from autodft.extraction.extractor import PipelineExtractor
 from autodft.models import ComputationJob, ComputationTask, MoleculeGeometry, TaskStatus, TaskType
+from autodft.qm.orca import esd_inputs
 from autodft.qm.orca.parser import OrcaParser
 from tests.test_esd_joins import FIXTURES, _job, _rates, esd  # noqa: F401 - fixture
 
@@ -124,6 +125,25 @@ def test_a_failed_s1_optimisation_blocks_its_rates(session, esd):
     assert rates["phosphorescence"]["status"] == "created"
 
 
+def test_a_recovered_input_stops_reporting_waiting(session, esd):
+    """I1: once esd_done no longer latches on a partial join, a rate whose
+    input recovers is created instead of reporting 'waiting' forever."""
+    soc = esd["tasks"]["S0"][1]
+    soc.status = TaskStatus.failed
+    session.add(soc)
+    session.commit()
+    photophysics.advance_photophysics(session, Settings())
+    assert _analyse(session, esd)["rates"]["ic"]["status"] == "blocked"
+
+    soc.status = TaskStatus.successful
+    session.add(soc)
+    session.commit()
+    photophysics.advance_photophysics(session, Settings())
+    rates = _analyse(session, esd)["rates"]
+    for name in ("ic", "fluorescence", "isc_t1_s0", "phosphorescence"):
+        assert rates[name]["status"] != "waiting"
+
+
 def test_before_seeding_and_after_a_seed_error(session, esd):
     s1 = esd["states"]["S1"]
     s1.metadata_json = json.dumps({"esd_role": "S1"})
@@ -135,6 +155,28 @@ def test_before_seeding_and_after_a_seed_error(session, esd):
     session.commit()
     result = _analyse(session, esd)
     assert (result["status"], result["reason"]) == ("failed", "no conformer")
+
+
+def test_risc_far_uphill_is_flagged(session, done):
+    # glyoxal delta_est_ev ~= 0.6657 eV ~= 26 kT at 298.15 K.
+    result = _analyse(session, done)
+    assert any("risc" in f and "kT above T1" in f for f in result["flags"])
+
+
+def test_risc_close_to_thermal_is_not_flagged(session, done, monkeypatch):
+    fake = {"S0": 0.0, "S1": 0.1 / EH_TO_EV, "T1": 0.0}
+    monkeypatch.setattr(esd_inputs, "energy", lambda state, data: fake[state])
+    result = _analyse(session, done)
+    assert result["delta_est_ev"] == pytest.approx(0.1)
+    assert not any("kT above T1" in f for f in result["flags"])
+
+
+def test_a_drifted_s1_root_is_flagged_in_detail(session, done):
+    path = done["tmp_path"] / "jobs" / "opt_S1" / "output.out"
+    path.write_text("DE(CIS) =      0.087063157 Eh (Root  2)\n")
+    result = _analyse(session, done, detail=True)
+    assert any("followed root 2" in f for f in result["flags"])
+    assert not any("followed root" in f for f in _analyse(session, done, detail=False)["flags"])
 
 
 def test_a_large_displacement_is_flagged(session, done):

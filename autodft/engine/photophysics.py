@@ -14,6 +14,7 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, col, select
 
 from autodft.config import Settings
@@ -52,10 +53,15 @@ def advance_photophysics(session: Session, settings: Settings) -> None:
         if s0 is None or t1 is None:
             logger.error("ESD state %d has no matching S0/T1 state", s1.id)
             continue
-        if "esd_seed" not in metadata:
-            _seed(session, molecule, s0, s1, t1)
-        else:
-            _join(session, s0, s1, t1)
+        try:
+            if "esd_seed" not in metadata:
+                _seed(session, molecule, s0, s1, t1)
+            else:
+                _join(session, s0, s1, t1)
+        except SQLAlchemyError:
+            raise  # the session is unusable; the step rolls back
+        except Exception:  # noqa: BLE001 - one molecule must not stop the rest
+            logger.exception("ESD step failed for molecule %d", molecule.id)
     session.flush()
 
 
@@ -179,16 +185,14 @@ def _join(session: Session, s0: MoleculeState, s1: MoleculeState, t1: MoleculeSt
             col(ComputationTask.task_type).in_(_RATE_TYPES),
         )
     ).all())
-    settled = True
+    created = set(existing)
     for rate, (initial, final, _) in esd_inputs.RATES.items():
         task_type = TaskType(rate)
         if task_type in existing:
             continue
         status = {input_status(inputs[initial]), input_status(inputs[final])}
-        if "failed" in status:
-            continue
         if status != {"successful"}:
-            settled = False
+            # Failed or still open: skip it, unchanged, and re-check next tick.
             continue
         session.add(ComputationTask(
             task_type=task_type,
@@ -203,8 +207,9 @@ def _join(session: Session, s0: MoleculeState, s1: MoleculeState, t1: MoleculeSt
                 for name in (initial, final)
             }),
         ))
+        created.add(task_type)
         logger.info("Molecule %d: created %s", s1.molecule_id, rate)
-    if settled:
+    if len(created) == len(_RATE_TYPES):
         _mark(session, s1, esd_done=True)
 
 
