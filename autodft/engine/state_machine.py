@@ -364,6 +364,7 @@ def start_followup_tasks(session: Session, settings: Settings) -> None:
             _followup_confsearch(session, task, state, metadata)
         elif task.task_type == TaskType.optimization:
             _followup_optimization(session, task, state, metadata)
+            _followup_categories(session, task, state, metadata)
 
         session.flush()
         created = _count_tasks_depending_on(session, task.id) - before
@@ -377,7 +378,7 @@ def start_followup_tasks(session: Session, settings: Settings) -> None:
         # state just stops with everything looking green. Fail it instead so
         # it is visible in the dashboard. Zero is only legitimate when the
         # downstream stage was not requested.
-        if created == 0 and _followups_were_expected(task, metadata):
+        if created == 0 and _followups_were_expected(task, metadata, state.description):
             logger.error(
                 "Task %d (%s) completed but produced no follow-up tasks; "
                 "marking it failed so the dead end is visible",
@@ -397,7 +398,9 @@ def _count_tasks_depending_on(session: Session, task_id: int) -> int:
     ).all())
 
 
-def _followups_were_expected(task: ComputationTask, metadata: dict) -> bool:
+def _followups_were_expected(
+    task: ComputationTask, metadata: dict, description: str = "S0",
+) -> bool:
     """Whether this task should have produced downstream work.
 
     False when the user explicitly turned the next stage off, in which case
@@ -412,7 +415,10 @@ def _followups_were_expected(task: ComputationTask, metadata: dict) -> bool:
                 return False
         return True
     if task.task_type == TaskType.optimization:
-        return bool(metadata.get("request_singlepoint", True) or metadata.get(categories.UVVIS))
+        return bool(
+            metadata.get("request_singlepoint", True)
+            or categories.on_s0(description, metadata, categories.UVVIS)
+        )
     return False
 
 
@@ -480,13 +486,6 @@ def _followup_optimization(
         logger.error("No singlepoint header for state %d", state.id)
         return
 
-    # UV/Vis rides on every S0 conformer, independent of the energy singlepoint.
-    if state.description == "S0" and metadata.get(categories.UVVIS):
-        _create_singlepoint_task(
-            session, state.id, sp_header_id, output_geom_id,
-            task.id, TaskType.singlepoint_uvvis,
-        )
-
     if not metadata.get("request_singlepoint", True):
         logger.info("Skipping singlepoint follow-up for task %d", task.id)
         return
@@ -530,6 +529,25 @@ def _followup_optimization(
         _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, task.id, TaskType.singlepoint_vert_red)
     elif desc == "red":
         _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, task.id, TaskType.singlepoint_vert_ox)
+
+
+def _followup_categories(
+    session: Session,
+    task: ComputationTask,
+    state: MoleculeState,
+    metadata: dict,
+) -> None:
+    """Opt-in category tasks of a successful optimisation.
+
+    Created after the energy singlepoints, so they queue behind them.
+    """
+    if task.output_geometry_id is None or state.singlepoint_header_id is None:
+        return
+    if categories.on_s0(state.description, metadata, categories.UVVIS):
+        _create_singlepoint_task(
+            session, state.id, state.singlepoint_header_id, task.output_geometry_id,
+            task.id, TaskType.singlepoint_uvvis,
+        )
 
 
 def _create_singlepoint_task(

@@ -205,6 +205,14 @@ class TestExpansion:
             assert "already exists" in session.get(CalculationEntrypoint, entry.id).processing_error
             assert len(session.exec(select(MoleculeState)).all()) == 1
 
+    def test_uvvis_options_land_on_s0(self, engine, tmp_path, monkeypatch):
+        with Session(engine) as session:
+            _queue(session, "CCO", request_spec_uvvis=True, uvvis_nroots=12)
+            _expand(session, _settings(tmp_path), monkeypatch)
+            s0 = session.exec(select(MoleculeState)).one()
+            meta = json.loads(s0.metadata_json)
+        assert (meta["uvvis_nroots"], meta["uvvis_tda"]) == (12, False)
+
 
 class TestOnS0:
     def test_only_an_s0_state_that_asks(self):

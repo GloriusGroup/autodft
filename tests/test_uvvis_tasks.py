@@ -133,6 +133,23 @@ class TestFollowup:
         assert _followups_were_expected(opt, {"request_singlepoint": False, categories.UVVIS: True})
         assert not _followups_were_expected(opt, {"request_singlepoint": False})
 
+    def test_uvvis_is_queued_behind_the_energy_singlepoints(self, session):
+        _, opt = _s0_with_opt(session, {**self.LEGACY, categories.UVVIS: True})
+        start_followup_tasks(session, Settings())
+        children = session.exec(
+            select(ComputationTask).where(ComputationTask.depends_on_task_id == opt.id)
+            .order_by(ComputationTask.id)
+        ).all()
+        assert children[-1].task_type == TaskType.singlepoint_uvvis
+        assert len(children) == 5
+
+    def test_a_flag_on_another_state_is_not_a_dead_end(self, session):
+        meta = {**self.LEGACY, "request_singlepoint": False, categories.UVVIS: True}
+        _, opt = _s0_with_opt(session, meta, description="T1")
+        start_followup_tasks(session, Settings())
+        assert _children(session, opt) == []
+        assert opt.status == TaskStatus.successful
+
 
 class TestJobInput:
     def _job_input(self, session, tmp_path, task_type, metadata=None) -> str:
@@ -161,3 +178,19 @@ class TestJobInput:
         text = self._job_input(session, tmp_path, TaskType.singlepoint)
         reference = generate_orca_input(tmp_path / "ref", SP, 0, 1, "").read_text()
         assert text == reference
+
+    def test_a_header_conflict_fails_the_job(self, session, tmp_path):
+        state, opt = _s0_with_opt(session, {categories.UVVIS: True})
+        header = session.get(ComputationHeader, state.singlepoint_header_id)
+        header.header_text = "!B3LYP\n%TDDFT nroots 5 end\n"
+        session.add(header)
+        session.commit()
+        task = ComputationTask(
+            task_type=TaskType.singlepoint_uvvis, status=TaskStatus.created, state_id=state.id,
+            header_id=header.id, input_geometry_id=opt.output_geometry_id,
+            task_path=str(tmp_path / "uv"),
+        )
+        session.add(task)
+        session.commit()
+        job = _create_job_for_task(session, task, 1, Settings(), qm_engine=OrcaParser())
+        assert job.success is False and "%tddft" in job.fail_reason
