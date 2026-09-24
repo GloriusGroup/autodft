@@ -20,8 +20,7 @@ WORK_DIR="{{ job_path }}"
 {% if tmp_dir %}
 mkdir -p "$TMP_DIR"
 cp "$WORK_DIR"/input.inp "$TMP_DIR"/
-{% for name in extra_inputs %}cp "$WORK_DIR"/{{ name }} "$TMP_DIR"/
-{% endfor %}if [ -f "$WORK_DIR"/input.xyz ]; then
+if [ -f "$WORK_DIR"/input.xyz ]; then
     cp "$WORK_DIR"/input.xyz "$TMP_DIR"/
     cp "$WORK_DIR"/input.xyz "$TMP_DIR"/input_original.xyz
 fi
@@ -40,7 +39,6 @@ ORCA_EXIT=$?
 cp *.out *.txt *.xyz "$WORK_DIR"/ 2>/dev/null || true
 {% if keep_wavefunction %}cp *.gbw                                "$WORK_DIR"/ 2>/dev/null || true
 {% endif %}{% if keep_densities %}cp *.densities *.densitiesinfo *.cube   "$WORK_DIR"/ 2>/dev/null || true
-{% endif %}{% if keep_hessian %}cp *.hess                               "$WORK_DIR"/ 2>/dev/null || true
 {% endif %}cp input.finalensemble.xyz              "$WORK_DIR"/ 2>/dev/null || true
 
 cd /

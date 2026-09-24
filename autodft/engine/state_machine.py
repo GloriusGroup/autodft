@@ -1047,7 +1047,7 @@ def _generate_job_files(
 
     # --- Gap 3 fix: Parse resources from header, fall back to config ---
     nprocs, mem_per_core = _parse_resources_from_header(header_text)
-    stage_config = _get_stage_config(settings, task.task_type)
+    stage_config = _get_stage_config(settings, task.task_type, state)
     if nprocs is None:
         nprocs = stage_config.default_nprocs
     if mem_per_core is None:
@@ -1064,6 +1064,7 @@ def _generate_job_files(
         time_limit=time_limit,
         partition=settings.slurm.partition,
         nice=settings.slurm.nice,
+        keep_hessian=_keeps_hessian(state, task),
     )
 
     # --- Gap 1 fix: Apply failure-specific retry strategies on retries ---
@@ -1134,6 +1135,11 @@ def _get_job_charge_multiplicity(
             f"vert_spin_change is only defined for a singlet or triplet state; "
             f"state {state.id} has multiplicity {multiplicity}"
         )
+
+    # SOC TDDFT and every ESD rate job run from the closed-shell singlet
+    # reference, also on the T1 state.
+    if task_type == TaskType.singlepoint_soc or task_type.value.startswith("esd_"):
+        return charge, 1
 
     return charge, multiplicity
 
@@ -1284,11 +1290,29 @@ def _apply_retry_modifications(
     )
 
 
-def _get_stage_config(settings: Settings, task_type: TaskType):
+def _esd_role(state: MoleculeState) -> Optional[str]:
+    """``"S1"`` / ``"T1"`` for an ESD state, else None."""
+    metadata = json.loads(state.metadata_json) if state.metadata_json else {}
+    return metadata.get("esd_role")
+
+
+def _keeps_hessian(state: MoleculeState, task: ComputationTask) -> bool:
+    """Whether an optimisation's Hessian feeds ESD rates."""
+    if task.task_type != TaskType.optimization:
+        return False
+    metadata = json.loads(state.metadata_json) if state.metadata_json else {}
+    return bool(metadata.get("esd_role") or categories.on_s0(state.description, metadata, categories.ESD))
+
+
+def _get_stage_config(settings: Settings, task_type: TaskType, state: Optional[MoleculeState] = None):
     """Return the :class:`StageConfig` for a given task type."""
-    if task_type == TaskType.confsearch:
+    if task_type.value.startswith("esd_"):
+        return settings.pipeline.esd
+    elif task_type == TaskType.confsearch:
         return settings.pipeline.confsearch
     elif task_type == TaskType.optimization:
+        if state is not None and _esd_role(state) == "S1":
+            return settings.pipeline.excited_optimization
         return settings.pipeline.optimization
     else:
         # All singlepoint variants share the singlepoint config

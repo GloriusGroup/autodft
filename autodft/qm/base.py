@@ -83,6 +83,8 @@ class QMEngine(ABC):
         time_limit: str,
         partition: str,
         nice: int = 0,
+        keep_hessian: bool = False,
+        extra_inputs: Optional[list[str]] = None,
     ) -> None:
         """Write a cluster submit script (e.g. SLURM) into *job_path*.
 
@@ -94,5 +96,8 @@ class QMEngine(ABC):
             time_limit: Wall-time string understood by the scheduler
                         (e.g. ``"2-00:00:00"``).
             partition: Scheduler partition / queue name.
+            keep_hessian: Copy ``*.hess`` back from scratch when True.
+            extra_inputs: Files in *job_path* to stage into scratch next to
+                          the input file.
         """
         ...

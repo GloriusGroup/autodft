@@ -131,6 +131,8 @@ class OrcaParser(QMEngine):
         time_limit: str,
         partition: str,
         nice: int = 0,
+        keep_hessian: bool = False,
+        extra_inputs: Optional[list[str]] = None,
     ) -> None:
         """Delegated to :func:`input_generator.generate_submit_script`.
 
@@ -154,6 +156,8 @@ class OrcaParser(QMEngine):
             tmp_dir=self.orca.tmp_dir,
             keep_wavefunction=self.orca.keep_wavefunction,
             keep_densities=self.orca.keep_densities,
+            keep_hessian=keep_hessian,
+            extra_inputs=extra_inputs,
         )
 
     # ------------------------------------------------------------------

@@ -169,6 +169,9 @@ class IncreaseResources(RetryStrategy):
         return any(sig in out for sig in _ORCA_MEMORY_SIGNATURES)
 
     def applies(self, failure: FailureInfo, task_type: str) -> bool:
+        if task_type.startswith("esd_"):
+            # An ESD rate job fails on its inputs, not on resources.
+            return False
         return "Termination" in (failure.fail_reason or "") or self.is_memory_failure(failure)
 
     def modify(
