@@ -1869,6 +1869,10 @@
                 IR scale factor
                 <input type="number" id="ppIrScale" value="1.000" min="0.8" max="1.1" step="0.001" style="width: 90px;">
             </label>
+            <button type="button" class="btn" id="ppExportBtn" style="padding: 8px 16px; font-size: 0.85rem;"
+                    title="Download the photophysics workbook (XLSX) and the full JSON payload.">
+                Photophysics (XLSX)
+            </button>
         </div>
 
         <div id="ppEmptyState" class="empty-state" style="padding: 60px 16px;">
@@ -4358,6 +4362,48 @@
                 });
             }
         });
+
+        (function () {
+            var exportBtn = document.getElementById('ppExportBtn');
+            if (exportBtn) {
+                exportBtn.addEventListener('click', async function () {
+                    var sel = document.getElementById('projectSelectPP');
+                    var name = ppState.project || (sel ? sel.value : null);
+                    if (!name) return;
+                    exportBtn.disabled = true;
+                    var origLabel = exportBtn.textContent;
+                    exportBtn.textContent = 'Preparing…';
+                    // The workbook + JSON are built by a background job
+                    // (re-parsing every molecule's outputs is slow on a big
+                    // project); poll, then download the workbook.
+                    var started = await startProjectJob(
+                        '/api/projects/' + projectPath(name) + '/export?format=photophysics',
+                        { method: 'POST' }
+                    );
+                    if (!started.ok) {
+                        alert('Export failed: ' + started.detail);
+                        exportBtn.disabled = false;
+                        exportBtn.textContent = origLabel;
+                        return;
+                    }
+                    await pollProjectJob(started.project, started.job.id, {
+                        onRunning: function () { exportBtn.textContent = 'Building…'; },
+                        onSuccess: function (job) {
+                            exportBtn.disabled = false;
+                            exportBtn.textContent = origLabel;
+                            // Content-Disposition on the download endpoint makes
+                            // this save the .xlsx rather than navigate to it.
+                            window.location = '/api/jobs/' + job.id + '/download';
+                        },
+                        onError: function (e) {
+                            alert('Export failed: ' + e);
+                            exportBtn.disabled = false;
+                            exportBtn.textContent = origLabel;
+                        },
+                    });
+                });
+            }
+        })();
 
         // ── Refresh orchestration ────────────────────────────────────────
 

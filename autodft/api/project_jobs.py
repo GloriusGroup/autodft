@@ -318,6 +318,17 @@ def _execute(
         target.write_bytes(build_xlsx_bytes(payload))
         return {"format": "xlsx", "path": str(target), "downloadable": True}
 
+    if kind == ProjectJobKind.export_photophysics:
+        from autodft.analysis import spectroscopy
+        from autodft.analysis.photophysics_export import build_xlsx
+
+        payload = spectroscopy.full_payload(qualified_name)
+        data = out_root / f"{stem}_photophysics.json"
+        data.write_text(json.dumps(payload, indent=1))
+        target = out_root / f"{stem}_photophysics.xlsx"
+        target.write_bytes(build_xlsx(payload))
+        return {"format": "photophysics", "path": str(target), "json_path": str(data), "downloadable": True}
+
     if kind == ProjectJobKind.archive:
         extensions = params.get("extensions") or [".inp", ".xyz", ".out"]
         # Do not rmtree under a job still writing files. The pause has already

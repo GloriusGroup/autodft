@@ -3,13 +3,29 @@
 from __future__ import annotations
 
 import json
+from io import BytesIO
+from pathlib import Path
 
 import pytest
+from openpyxl import load_workbook
+from sqlmodel import select
 
+from autodft import accounts
+from autodft.analysis.photophysics_export import build_xlsx
+from autodft.api import project_jobs, routes
 from autodft.config import Settings
 from autodft.db import get_session, init_db, reset_engine
 from autodft.extraction.extractor import _FILE_MAP, PipelineExtractor, _copy_task_files
-from autodft.models import ComputationJob, ComputationTask, Molecule, MoleculeState, TaskStatus, TaskType
+from autodft.models import (
+    ComputationJob,
+    ComputationTask,
+    Molecule,
+    MoleculeState,
+    ProjectJobKind,
+    TaskStatus,
+    TaskType,
+)
+from tests.test_spectroscopy_analysis import project  # noqa: F401 - fixture
 
 
 def test_legacy_file_maps_are_unchanged():
@@ -100,3 +116,199 @@ def test_a_dry_run_counts_the_same_files(db):
         _job_dir(session, db, "esd_s1", {"esd_role": "S1"}, description="S1")
         _job_dir(session, db, "plain", {})
     assert PipelineExtractor("__all__").cleanup_large_files(dry_run=True) == 1 + 2
+
+
+# ----------------------------------------------------------------------
+# The photophysics workbook
+# ----------------------------------------------------------------------
+
+
+def _full_payload():
+    return {
+        "project": "nho/p",
+        "temperature_k": 298.15,
+        "molecules": [{
+            "id": 1, "smiles": "c1ccccc1", "state_id": 10, "archived": False,
+            "uvvis": {
+                "count": 1, "pending": 0, "failed": 0, "unavailable": 0, "unweighted": 0,
+                "weighting": "G", "peak": {"wavelength_nm": 300.0, "energy_ev": 4.13, "fosc": 0.5},
+                "shortest_nm": 248.0,
+                "conformers": [{
+                    "conformer_index": 1, "opt_task_id": 5, "weight": 1.0,
+                    "transitions": [
+                        {"root": 1, "energy_ev": 4.13, "wavelength_nm": 300.0, "fosc": 0.5},
+                        {"root": 2, "energy_ev": 5.0, "wavelength_nm": 248.0, "fosc": 0.1},
+                    ],
+                }],
+            },
+            "ir": {
+                "count": 1, "pending": 0, "failed": 0, "unavailable": 0, "unweighted": 0,
+                "weighting": "G", "peak": {"frequency_cm": 1650.0, "intensity_km_mol": 80.0},
+                "conformers": [{
+                    "conformer_index": 1, "opt_task_id": 5, "weight": 1.0,
+                    "modes": [
+                        {"frequency_cm": 1650.0, "intensity_km_mol": 80.0},
+                        {"frequency_cm": 3050.0, "intensity_km_mol": 15.0},
+                    ],
+                }],
+            },
+            "nmr": {
+                "equivalence": "topological",
+                "reference": {"H": {"compound": "CHCl3", "status": "ok", "method_matches": True}},
+                "nuclei": {"H": [
+                    {"atoms": [0, 1], "count": 2, "shielding_ppm": 30.5, "shift_ppm": 7.26},
+                    {"atoms": [2], "count": 1, "shielding_ppm": 28.0, "shift_ppm": 7.5},
+                ]},
+            },
+            "esd": {
+                "status": "done", "temperature_k": 298.15, "herzberg_teller": True,
+                "delta_est_ev": 0.35, "delta_est_uks_ev": 0.30,
+                "rates": {
+                    "isc": {"status": "successful", "rate_s": 1.0e7, "e00_ev": 2.5, "jobs": [
+                        {"triplet": 1, "dele_cm": 1200.0, "socme_cm": 4.5, "rate_s": 1.0e7,
+                         "fc_percent": 85.0, "ht_percent": 15.0, "k_squared": 1.2, "e00_cm": 20500.0},
+                    ]},
+                    "risc": {"status": "successful", "rate_s": 2.0e5},
+                    "ic": {"status": "successful", "rate_s": 5.0e9},
+                    "fluorescence": {"status": "successful", "rate_s": 1.0e8},
+                    "isc_t1_s0": {"status": "successful", "rate_s": 50.0},
+                    "phosphorescence": {"status": "successful", "rate_s": 10.0},
+                },
+                "derived": {
+                    "tau_s1_ns": 1.6, "phi_fluorescence": 0.6, "phi_isc": 0.35, "phi_ic": 0.05,
+                    "tau_t1_us": 15.0, "phi_phosphorescence": 0.2, "phi_isc_t1_s0": 0.7, "phi_risc": 0.1,
+                },
+                "flags": [],
+            },
+        }],
+    }
+
+
+def _header(ws, row=1):
+    return [c.value for c in ws[row]]
+
+
+def _col(ws, name, row=1):
+    return _header(ws, row).index(name) + 1
+
+
+def test_build_xlsx_has_a_sheet_per_category_plus_sticks_and_esd_jobs():
+    wb = load_workbook(BytesIO(build_xlsx(_full_payload())))
+    assert wb.sheetnames == [
+        "Summary", "UV-Vis", "UV-Vis sticks", "IR", "IR sticks", "NMR", "ESD", "ESD jobs",
+    ]
+
+    assert _header(wb["UV-Vis"]) == [
+        "mol_id", "smiles", "state_id", "count", "pending", "failed", "unavailable",
+        "unweighted", "weighting", "peak_nm", "peak_eV", "peak_fosc", "shortest_nm",
+    ]
+    assert _header(wb["UV-Vis sticks"]) == [
+        "mol_id", "conformer", "weight", "root", "energy_eV", "wavelength_nm", "fosc",
+    ]
+    assert _header(wb["IR"]) == [
+        "mol_id", "smiles", "count", "pending", "failed", "unavailable", "unweighted",
+        "weighting", "peak_cm", "peak_intensity_km_mol",
+    ]
+    assert _header(wb["IR sticks"]) == [
+        "mol_id", "conformer", "weight", "frequency_cm", "intensity_km_mol",
+    ]
+    assert _header(wb["NMR"]) == [
+        "mol_id", "smiles", "nucleus", "shift_ppm", "shielding_ppm", "count", "atoms",
+        "reference", "reference_status", "method_matches", "equivalence",
+    ]
+    assert _header(wb["ESD"]) == [
+        "mol_id", "smiles", "status", "temperature_K", "HT", "dEST_eV", "dEST_UKS_eV",
+        "k_ISC", "k_RISC", "k_IC", "k_F", "k_ISC_T1S0", "k_P", "tau_S1_ns", "phi_F",
+        "phi_ISC", "phi_IC", "tau_T1_us", "phi_P", "phi_ISC_T1S0", "phi_RISC", "flags",
+    ]
+    assert _header(wb["ESD jobs"]) == [
+        "mol_id", "rate", "triplet", "sublevel", "rate_s", "dele_cm", "socme_cm",
+        "fc_percent", "ht_percent", "k_squared", "e00_cm",
+    ]
+
+    sticks = wb["UV-Vis sticks"]
+    assert sticks["B2"].value == 1  # conformer index
+
+    esd = wb["ESD"]
+    assert esd.cell(row=2, column=_col(esd, "k_ISC")).value == 1.0e7
+
+    nmr = wb["NMR"]
+    assert nmr.cell(row=2, column=_col(nmr, "shift_ppm")).value == 7.26
+
+    jobs = wb["ESD jobs"]
+    assert jobs.cell(row=2, column=_col(jobs, "rate")).value == "isc"
+    assert jobs.cell(row=2, column=_col(jobs, "triplet")).value == 1
+
+
+def test_build_xlsx_on_an_empty_payload_has_only_the_summary_sheet():
+    wb = load_workbook(BytesIO(build_xlsx({"project": "nho/p", "molecules": []})))
+    assert wb.sheetnames == ["Summary"]
+
+
+def test_job_kind_values_stay_short():
+    assert max(len(k.value) for k in ProjectJobKind) <= 28
+
+
+@pytest.fixture()
+def settings(project):
+    active = Settings()
+    active.storage.data_path = str(project["tmp_path"])
+    routes.set_active_settings(active)
+    yield active
+    routes.set_active_settings(None)
+
+
+def test_execute_writes_the_workbook_and_the_full_json(project, settings):
+    from autodft.analysis import spectroscopy
+
+    full = spectroscopy.full_payload("nho/p")
+    result = project_jobs._execute(ProjectJobKind.export_photophysics, "nho/p", {}, settings)
+    assert result["format"] == "photophysics"
+    assert result["downloadable"] is True
+
+    xlsx_path = Path(result["path"])
+    json_path = Path(result["json_path"])
+    assert xlsx_path.name == "p_photophysics.xlsx"
+    assert json_path.name == "p_photophysics.json"
+    assert xlsx_path.is_file()
+    assert json.loads(json_path.read_text()) == full
+
+
+@pytest.fixture()
+def client(project, settings):
+    from fastapi.testclient import TestClient
+
+    from autodft.api.app import create_app
+
+    with get_session() as session:
+        admin = accounts.get_user_by_username(session, "admin")
+        key = accounts.rotate_api_key(session, admin)
+    with TestClient(create_app(settings)) as c:
+        yield c, {"X-AutoDFT-API-Key": key}
+    project_jobs.join_all(timeout=10)
+
+
+def _archive_every_molecule(name):
+    with get_session() as session:
+        for mol in session.exec(select(Molecule).where(Molecule.project_name == name)).all():
+            mol.archived = True
+            session.add(mol)
+        session.commit()
+
+
+class TestPhotophysicsExportRoute:
+    def test_it_returns_202(self, client):
+        c, headers = client
+        r = c.post("/api/projects/nho:p/export?format=photophysics", headers=headers)
+        assert r.status_code == 202, r.text
+        assert r.json()["job"]["kind"] == "export_photophysics"
+
+    def test_it_is_allowed_on_an_archived_project_unlike_csv(self, client, project):
+        c, headers = client
+        _archive_every_molecule("nho/p")
+
+        pp = c.post("/api/projects/nho:p/export?format=photophysics", headers=headers)
+        assert pp.status_code == 202, pp.text
+
+        csv = c.post("/api/projects/nho:p/export?format=csv", headers=headers)
+        assert csv.status_code == 409, csv.text

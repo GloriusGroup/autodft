@@ -208,7 +208,7 @@ the old code; later plans list any other rows they add here.
 import sqlite3
 NEW_TYPES = ("singlepoint_uvvis", "singlepoint_nmr", "singlepoint_soc", "esd_isc",
              "esd_risc", "esd_ic", "esd_fluor", "esd_isc_t1s0", "esd_phosp")
-NEW_JOB_KINDS = ()  # project-job kinds later plans add
+NEW_JOB_KINDS = ("export_photophysics",)
 db = sqlite3.connect("/path/to/autodft.db")
 marks = ",".join("?" * len(NEW_TYPES))
 with db:

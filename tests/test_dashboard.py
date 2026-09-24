@@ -179,3 +179,9 @@ def test_photophysics_empty_states_and_energy_counts():
     assert "ens.unweighted + ' without energy'" in html
     assert "if (m.stage) {" in html
     assert "if (ppState.project !== name) ppState.details = {};" not in html
+
+
+def test_the_photophysics_page_has_an_export_button():
+    html = (TEMPLATE / "dashboard.html").read_text()
+    assert 'id="ppExportBtn"' in html
+    assert "format=photophysics" in html

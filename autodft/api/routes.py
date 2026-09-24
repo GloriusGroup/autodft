@@ -996,12 +996,14 @@ def api_project_archive(
 
 
 # Export format -> the background-job kind that produces it. `xlsx` is the
-# state-analysis workbook; the rest come off the PipelineExtractor.
+# state-analysis workbook; `photophysics` is the photophysics workbook + JSON;
+# the rest come off the PipelineExtractor.
 _EXPORT_KINDS = {
     "csv": ProjectJobKind.export_csv,
     "json": ProjectJobKind.export_json,
     "files": ProjectJobKind.export_files,
     "xlsx": ProjectJobKind.export_xlsx,
+    "photophysics": ProjectJobKind.export_photophysics,
 }
 
 
@@ -1024,8 +1026,9 @@ def api_project_export(
 
     ``csv`` / ``json`` / ``files`` need the on-disk ORCA outputs, so an
     archived project is refused (409); ``xlsx`` is built from the frozen
-    archive CSV and is allowed. A project with a job already in flight is
-    refused (409).
+    archive CSV and is allowed. ``photophysics`` -> the photophysics workbook
+    plus JSON, allowed for archived projects (served from the frozen
+    payload). A project with a job already in flight is refused (409).
     """
     bad = _reject_bad_project(name)
     if bad is not None:
@@ -1045,7 +1048,7 @@ def api_project_export(
             state = _project_is_archived(session, name)
             if state is None:
                 return JSONResponse(status_code=404, content={"detail": f"Project {name!r} has no molecules"})
-            if state is True and kind is not ProjectJobKind.export_xlsx:
+            if state is True and kind not in (ProjectJobKind.export_xlsx, ProjectJobKind.export_photophysics):
                 return JSONResponse(
                     status_code=409,
                     content={"detail": f"Project {name!r} is archived — source files are no longer on disk."},
