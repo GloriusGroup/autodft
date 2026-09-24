@@ -10,8 +10,10 @@ Tick a category when you submit: the dashboard's checkboxes, the API's
 `--ir` / `--nmr` / `--esd` flags (with `--uvvis-nroots` / `--uvvis-tda` /
 `--nmr-nuclei` / `--esd-ht` / `--esd-tn-window` / `--esd-temperature`).
 Categories only attach to new molecules — resubmitting an existing
-molecule with a category it doesn't already have is refused. A
-category's options (`uvvis_nroots`, `uvvis_tda`, `nmr_nuclei`,
+molecule with a category it doesn't already have is refused, and so is
+resubmitting it with different options for a category it already has
+(options apply to new molecules only, same as the categories themselves).
+A category's options (`uvvis_nroots`, `uvvis_tda`, `nmr_nuclei`,
 `request_esd_ht`, `esd_tn_window_ev`, `esd_temperature_k`) are stored
 only when that category is requested. See [`docs/API.md`](API.md) for
 the field-level reference and the `GET /api/projects/{name}/photophysics`
@@ -31,9 +33,11 @@ Defaults are `nroots 20`, `tda false`; `nroots` must be between 1 and 100.
 The method comes from the singlepoint header, so it must be a DFT
 method — a non-DFT header such as DLPNO-CCSD(T) is not a valid UV/Vis
 singlepoint. The singlepoint header also must not already contain
-`%tddft`, `%cis`, the `NMR` keyword, `%eprnmr`, or `%esd`; submitting UV/Vis
-against such a header is refused — pick a plain singlepoint header
-instead.
+`%tddft`, `%cis`, `%eprnmr`, `%esd`, the `NMR` keyword, the `ESD`
+keyword, a frequency keyword (`Freq`, `NumFreq`, `AnFreq`) or an
+optimisation keyword (`Opt`, `OptTS`, `OptH`, …); submitting UV/Vis,
+NMR or ESD against such a header is refused — pick a plain singlepoint
+header instead.
 
 Only spin-allowed transitions are kept. ORCA also prints spin-forbidden
 rows when the header requests triplets; those are dropped. A job whose
@@ -63,7 +67,7 @@ element in a reference compound (TMS `C[Si](C)(C)C` for ¹H/¹³C, CFCl₃
 `FC(Cl)(Cl)Cl` for ¹⁹F), which the pipeline computes itself once per
 optimisation/singlepoint header pair, in the protected
 `admin/system_references` project. `method_matches` compares the `!`
-keywords of the molecule's and the reference's NMR inputs.
+keywords and `%` blocks of the molecule's and the reference's NMR inputs.
 
 Signals are grouped by topological symmetry from the optimised geometry:
 atoms are equivalent when RDKit's bonding graph places them in the same
@@ -81,6 +85,10 @@ task is failed again on the next tick). `method_matches` compares both NMR
 inputs' `!` keywords and `%` blocks, ignoring `%pal`, `%maxcore`, `%scf`
 and SCF-convergence keywords.
 
+An admin export or archive-job on `admin/system_references` pauses that
+project like any other, which delays every user's pending references for
+the duration — avoid running one while references are outstanding.
+
 ## ESD
 
 Excited-state dynamics (ISC, RISC, IC, fluorescence, T1→S0 ISC,
@@ -94,7 +102,11 @@ CSV/JSON exporters' reported conformer) seeds an S1 optimisation — the
 optimisation header plus `%tddft nroots 5 iroot 1 followiroot true tda
 false` — and a T1 (UKS) optimisation. SOC TDDFT singlepoints (`nroots 10
 iroot 1 triplets true dosoc true tda false`) run on S0\*, S1 and T1. Each
-of the six rate jobs starts as soon as its two states are ready.
+of the six rate jobs starts as soon as its two states are ready. That T1
+state also gets the normal T1 follow-ups — the energy singlepoint (used
+for ΔE_ST(UKS)) and the vertical spin-change singlepoint — even without
+`request_t1`, so T1 rows appear in the molecule's CSV export and state
+analysis regardless.
 
 **Energies.** ΔE and DELE use TDDFT-consistent energies: at each geometry
 the ground state is FINAL SINGLE POINT ENERGY minus the followed root's
@@ -150,12 +162,17 @@ negative rate is clamped to 0 and flagged. Soft imaginary modes that the
 optimisation's checks let through are flagged — ORCA's ESD module treats
 them as real. IC rates are order-of-magnitude at best. SOCMEs come from
 ORCA's two-decimal printout, so a tiny coupling (T1→S0 at S0\*, ~0.02
-cm⁻¹) carries up to ~±50% rounding error in its FC rate. k_RISC far uphill
-sits at ESD's numerical floor and is flagged once −ΔE_ST exceeds 10 kT.
-PHOSP assumes SOC roots 1–3 at S0\* are T1's sublevels, which fails for an
-inverted-gap (S1 < T1) molecule. The detail view (`?molecule_id=`) adds
-optimisation warnings — soft imaginary modes and a drifted S1 root — that
-the summary does not compute.
+cm⁻¹) carries up to ~±50% rounding error in its FC rate. When an FC
+ISC-type channel's SOCME prints as exactly `0.00` cm⁻¹ (below ORCA's
+print precision), its rate comes out 0 — a symmetry- or El-Sayed-forbidden
+channel that needs Herzberg–Teller (`request_esd_ht`) — and the affected
+rate and every lifetime/yield built on it are flagged (`socme_zero` on
+the rate in the API payload). k_RISC far uphill sits at ESD's numerical
+floor and is flagged once ΔE_ST exceeds 10 kT. PHOSP assumes SOC roots
+1–3 at S0\* are T1's sublevels, which fails for an inverted-gap (S1 < T1)
+molecule. The detail view (`?molecule_id=`) adds optimisation warnings —
+soft imaginary modes and a drifted S1 root — that the summary does not
+compute.
 
 ## Weighting
 
@@ -218,6 +235,12 @@ Re-archiving a project that gained molecules since its first archive
 freezes only the ones archived for the first time; an already-archived
 molecule keeps the payload it was frozen with.
 
+A frozen molecule is never re-analysed, so archiving refuses with `409`
+while a flagged NMR molecule's reference compound is still `pending` —
+otherwise the shift would stay `null` forever. A `failed` reference does
+not block the archive: the frozen detail keeps every signal's
+`shielding_ppm`, but `shift_ppm` stays `null`.
+
 **Cleanup.** `cleanup-files` (`autodft admin cleanup-files`) keeps
 `.hess` alongside `.out`/`.xyz`/`.inp` in the optimisation directories of
 ESD states — S0 with `request_esd`, and every state carrying `esd_role`
@@ -233,8 +256,27 @@ ones it actually removes.
 2. Back up the database: copy `autodft.db` (and `-wal`/`-shm` if present)
    while the controller is stopped.
 3. Check that no project is already named `system_references`: on the
-   controller host, `.venv/bin/python -c "import sqlite3; print(sqlite3.connect('/path/to/autodft.db').execute(\"SELECT project_name, COUNT(*) FROM molecules WHERE project_name LIKE '%/system_references' GROUP BY 1\").fetchall())"`
-   must print `[]`; rename such a project first.
+   controller host, with the repository's Python, all three of these must
+   print `[]` (rename or reassign such a project/entrypoint first):
+
+```bash
+.venv/bin/python - <<'EOF'
+import sqlite3
+db = sqlite3.connect("/path/to/autodft.db")
+print(db.execute(
+    "SELECT project_name, COUNT(*) FROM molecules WHERE project_name LIKE "
+    "'%/system_references' OR project_name = 'system_references' GROUP BY 1"
+).fetchall())
+print(db.execute(
+    "SELECT qualified_name FROM projects WHERE qualified_name LIKE "
+    "'%/system_references' OR name = 'system_references'"
+).fetchall())
+print(db.execute(
+    "SELECT id FROM calculation_entrypoints WHERE time_started IS NULL "
+    "AND request_metadata LIKE '%system_references%'"
+).fetchall())
+EOF
+```
 4. Merge the branch into `main` in `/mnt/share/dft_calculations/autodft`.
 5. Start the controller again; reload the dashboard.
 
@@ -243,10 +285,38 @@ ones it actually removes.
 Code from before this feature raises `LookupError` on any query that
 loads a row whose task type or project-job kind it does not know, which
 stops the pipeline for every project. Remove those rows before running
-the old code; later plans list any other rows they add here.
+the old code.
 
 1. Stop the controller; back up the database as above.
-2. On the controller host only (never open `autodft.db` from a second
+2. Cancel the SLURM jobs of the tasks the next step deletes or fails —
+   `esd_role` optimisations can run up to 4 days, and a killed controller
+   does not stop them:
+
+```bash
+.venv/bin/python - <<'EOF'
+import sqlite3
+NEW_TYPES = ("singlepoint_uvvis", "singlepoint_nmr", "singlepoint_soc", "esd_isc",
+             "esd_risc", "esd_ic", "esd_fluor", "esd_isc_t1s0", "esd_phosp")
+TRANSIENT = ("PENDING", "RUNNING", "COMPLETING", "CONFIGURING", "SUSPENDED",
+             "REQUEUED", "REQUEUE_HOLD", "REQUEUE_FED", "RESIZING", "SIGNALING",
+             "STAGE_OUT", "STOPPED", "UNKNOWN")
+db = sqlite3.connect("/path/to/autodft.db")
+marks, tmarks = ",".join("?" * len(NEW_TYPES)), ",".join("?" * len(TRANSIENT))
+rows = db.execute(
+    f"SELECT slurm_jobid FROM computation_jobs WHERE slurm_jobid IS NOT NULL "
+    f"AND slurm_status IN ({tmarks}) AND task_id IN ("
+    f"SELECT id FROM computation_tasks WHERE task_type IN ({marks}) "
+    f"UNION "
+    f"SELECT id FROM computation_tasks WHERE status IN ('created', 'pending') "
+    f"AND state_id IN (SELECT id FROM molecule_states WHERE metadata_json LIKE '%\"esd_role\"%'))",
+    (*TRANSIENT, *NEW_TYPES),
+).fetchall()
+print("scancel", " ".join(str(r[0]) for r in rows) or "-- nothing to cancel")
+EOF
+```
+
+   Run the `scancel` command it prints.
+3. On the controller host only (never open `autodft.db` from a second
    host while anything else has it open), with the repository's Python.
    Before the deletes, the script also holds back any queued submission
    that carries a category flag, since the old code would compute it
@@ -285,5 +355,13 @@ db.close()
 EOF
 ```
 
-3. Check out the previous `main` commit and start the controller. The
+4. Check out the previous `main` commit and start the controller. The
    category flags left in S0 state metadata are ignored by the old code.
+
+Redeploying the feature later does **not** recompute the category tasks
+this script deleted — wipe and resubmit those molecules. Harmless
+leftovers the script does not touch: the `inputs_json` column; ESD S1/T1
+states and their `esd_role` / `esd_seed` / `esd_done` metadata keys;
+category flags in S0 state metadata; `photophysics/` frozen directories
+and `_photophysics.{json,xlsx}` exports; and `admin/system_references`,
+which becomes an ordinary, wipeable project under the old code.

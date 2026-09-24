@@ -336,8 +336,9 @@ Every submission path (CLI, REST, Python) ends up writing the same
 * `request_spec_uvvis` / `request_spec_ir` / `request_spec_nmr` / `request_esd`
   — UV/Vis (TDDFT singlepoint on every S0 conformer), IR (from the
   optimisation's frequencies), NMR (¹H/¹³C/¹⁹F shifts referenced to TMS /
-  CFCl₃, closed-shell molecules only; the reference project
-  `admin/system_references` is reserved and cannot be submitted to), and
+  CFCl₃, closed-shell molecules only; computed in the protected
+  `admin/system_references` project — the bare name `system_references`
+  is reserved for every owner, not just admin), and
   ESD (S1/T1 excited-state dynamics — ISC, RISC, IC, fluorescence,
   phosphorescence — via ORCA's ESD module, closed-shell molecules only,
   much more expensive: a numerical S1 Hessian). Only added to new

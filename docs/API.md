@@ -190,7 +190,7 @@ package defaults in `autodft/qm/orca/defaults.py`.
 | `header_confsearch_id`                      | int?   | `null`        | ID of a stored `ComputationHeader`. Wins over the raw text version.                         |
 | `header_optimization_id`                    | int?   | `null`        | Same.                                                                                       |
 | `header_singlepoint_id`                     | int?   | `null`        | Same.                                                                                       |
-| `request_spec_uvvis`                        | bool   | `false`       | UV/Vis: a TDDFT singlepoint (`%tddft nroots <uvvis_nroots> tda <uvvis_tda>`, appended to the singlepoint header) on every optimised S0 conformer. The singlepoint header must not already contain `%tddft`, `NMR`, `%eprnmr` or `%esd`. |
+| `request_spec_uvvis`                        | bool   | `false`       | UV/Vis: a TDDFT singlepoint (`%tddft nroots <uvvis_nroots> tda <uvvis_tda>`, appended to the singlepoint header) on every optimised S0 conformer. The singlepoint header must not already contain `%tddft`, `%cis`, `%eprnmr`, `%esd`, the `NMR` or `ESD` keyword, a frequency keyword (`Freq`/`NumFreq`/`AnFreq`) or an optimisation keyword (`Opt`/`OptTS`/`OptH`/…) — the same rule applies to NMR and ESD. |
 | `uvvis_nroots`                              | int    | `20`          | UV/Vis excited states (1–100). Stored only when UV/Vis is requested.                        |
 | `uvvis_tda`                                 | bool   | `false`       | Tamm–Dancoff approximation for the UV/Vis TDDFT. Stored only when UV/Vis is requested.      |
 | `request_spec_ir`                           | bool   | `false`       | IR: read from the S0 optimisation's frequency calculation — no extra job. Needs `Freq` in the optimisation header. |
@@ -436,10 +436,14 @@ vs SCE.
 
 UV/Vis, IR, NMR and ESD for every molecule submitted with those categories.
 Categories are only added to new molecules: resubmitting an existing
-molecule with a category it does not have answers 400.
+molecule with a category it does not have, or with different options for
+one it already has, answers 400.
 
 Without `molecule_id`, one summary per molecule (this view is cached, and
-refreshed when this project or the NMR reference project changes):
+refreshed when this project or the NMR reference project changes — true
+for live molecules only; an archived molecule is served from its frozen
+payload and does not pick up a reference that finishes afterwards, see
+below):
 
     {"project": "nho/p", "temperature_k": 298.15, "molecules": [
       {"id": 7, "smiles": "c1ccccc1", "state_id": 21, "archived": false,
@@ -518,7 +522,11 @@ optimisation or SOC singlepoint failure, named with the `!LibXC(<functional>)`
 fix when that is the cause), or `"unavailable"` (the output has no rate
 to parse). A successful rate's `rate_s` sums its jobs for `isc` (one job
 per T_n channel within `tn_window_ev` of S1) and averages them for every
-other rate; `fluorescence` also reports `e00_ev`, its 0-0 energy.
+other rate; `fluorescence` also reports `e00_ev`, its 0-0 energy. An
+FC-mode `isc`, `isc_t1_s0` or `risc` rate whose SOCME printed as
+`0.00` cm⁻¹ (below ORCA's print precision) adds `socme_zero: true` —
+its rate is 0 because the channel is symmetry- or El-Sayed-forbidden,
+not because it is truly closed; `request_esd_ht` is the remedy.
 `herzberg_teller` reports whether the rates are the FC-only default or
 were requested with HT. `delta_est_ev` is the TDDFT ΔE(S1-T1);
 `delta_est_uks_ev` instead compares the TDDFT S1 against the T1 state's
@@ -527,8 +535,10 @@ own (UKS) energy singlepoint at the T1 geometry. `derived` reports
 `fluorescence`, `isc` and `ic` are all in, and `tau_t1_us` /
 `phi_phosphorescence` / `phi_isc_t1_s0` / `phi_risc` once
 `phosphorescence`, `isc_t1_s0` and `risc` are all in. `flags` lists
-warnings: a negative rate clamped to 0, or a job whose sum of K*K
-exceeds 7 (geometries too far apart for a reliable harmonic rate).
+warnings: a negative rate clamped to 0, a job whose sum of K*K exceeds 7
+(geometries too far apart for a reliable harmonic rate), a zero-SOCME FC
+channel (see `socme_zero` above), and, when that channel feeds a
+`derived` group, that its lifetime/yields count the rate as 0 too.
 
 With `?molecule_id=`, each successful rate also adds `jobs` (its
 per-ORCA-job values — `rate_s`, `fc_percent`, `ht_percent`, `k_squared`,
@@ -559,28 +569,40 @@ ascending shielding (descending shift).
 `conformer_index` is the conformer's 1-based position among the state's
 optimisation tasks by id, the same numbering as the Molecules page.
 
-### `POST /api/projects/{name}/export` `?format=csv|json|files|photophysics&all_conformers=true|false`
+### `POST /api/projects/{name}/export` `?format=csv|json|files|xlsx|photophysics&all_conformers=true|false`
 
-Non-destructive export. Writes into `<export_data>/<owner>/<project>/`,
-with the **bare** project name as the filename stem:
+Starts an export as a background job and answers **202** for every
+format — none of them block the request. Writes into
+`<export_data>/<owner>/<project>/`, with the **bare** project name as
+the filename stem:
 
 * `csv`   → `<project>.csv` (summary table of energies)
 * `json`  → `<project>.json`
 * `files` → `files/` tree with the canonical curated ORCA files
+* `xlsx`  → `<project>_state_analysis.xlsx`
 * `photophysics` → `<project>_photophysics.json` (the full UV/Vis, IR,
   NMR and ESD detail payload) plus `<project>_photophysics.xlsx`
 
 ```json
-{ "format": "csv", "path": "/.../export_data/admin/phenols/phenols.csv" }
+{ "project": "admin/phenols",
+  "job": { "id": 42, "qualified_name": "admin/phenols", "owner_id": 3,
+           "kind": "export_csv", "status": "running",
+           "params": {"all_conformers": false},
+           "result": null, "error": null,
+           "created_at": "2026-09-24T10:00:00+00:00",
+           "started_at": "2026-09-24T10:00:00+00:00", "finished_at": null } }
 ```
 
-`404` when the project holds no molecules, `409` when it has been
-archived — its source files are no longer on disk. `photophysics`
-returns **202** with a background job instead (poll
-`GET /api/projects/{name}/jobs`, download via
-`GET /api/jobs/{id}/download`), and is allowed even when the project is
-archived: it is served from the payload archiving froze — see
-[`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md).
+Poll `GET /api/projects/{name}/jobs` for the job's `status` and, once
+`successful`, its `result` (the written path); download the file via
+`GET /api/jobs/{id}/download`.
+
+`404` when the project holds no molecules; `409` when a job is already
+in flight for the project. `csv` / `json` / `files` also answer `409`
+for an archived project — their source files are no longer on disk.
+`xlsx` and `photophysics` are allowed on an archived project: `xlsx` is
+built from the archive's CSV, and `photophysics` is served from the
+payload archiving froze — see [`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md).
 
 ### `POST /api/projects/{name}/archive`
 
@@ -617,11 +639,15 @@ payload was frozen for later serving (see
 [`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md)); it is present only when that
 count is greater than 0.
 
-Refused with `409` for the protected `admin/default` project and for one
-that is already archived; `404` when the project holds no molecules.
-Tasks still in flight do **not** block it — archiving a project whose
-jobs are still running deletes the directories they are writing into, so
-check the project's `in_flight_tasks` first.
+Refused with `409` for the protected `admin/default` project, for one
+that is already archived, and for one with a flagged NMR molecule whose
+reference compound is still `pending` — a frozen molecule is never
+re-analysed, so the shift would stay `null` forever (a `failed`
+reference does not block it: the frozen detail keeps the shieldings, the
+shift stays `null`); `404` when the project holds no molecules. Tasks
+still in flight do **not** block it — archiving a project whose jobs are
+still running deletes the directories they are writing into, so check
+the project's `in_flight_tasks` first.
 
 ---
 
