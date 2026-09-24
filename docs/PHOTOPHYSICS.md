@@ -1,19 +1,20 @@
 # Photophysics categories
 
-UV/Vis and IR are opt-in categories you tick per submission. Later plans
-add NMR and ESD; they append their own sections to this file.
+UV/Vis, IR and NMR are opt-in categories you tick per submission. A later
+plan adds ESD; it appends its own section to this file.
 
 ## Categories
 
 Tick a category when you submit: the dashboard's checkboxes, the API's
-`request_spec_uvvis` / `request_spec_ir` fields (plus their options), or
-the CLI's `--uvvis` / `--ir` flags (with `--uvvis-nroots` /
-`--uvvis-tda`). Categories only attach to new molecules — resubmitting an
-existing molecule with a category it doesn't already have is refused. A
-category's options (`uvvis_nroots`, `uvvis_tda`) are stored only when
-that category is requested. See [`docs/API.md`](API.md) for the
-field-level reference and the `GET /api/projects/{name}/photophysics`
-response shape.
+`request_spec_uvvis` / `request_spec_ir` / `request_spec_nmr` fields
+(plus their options), or the CLI's `--uvvis` / `--ir` / `--nmr` flags
+(with `--uvvis-nroots` / `--uvvis-tda` / `--nmr-nuclei`). Categories only
+attach to new molecules — resubmitting an existing molecule with a
+category it doesn't already have is refused. A category's options
+(`uvvis_nroots`, `uvvis_tda`, `nmr_nuclei`) are stored only when that
+category is requested. See [`docs/API.md`](API.md) for the field-level
+reference and the `GET /api/projects/{name}/photophysics` response
+shape.
 
 ## UV/Vis
 
@@ -48,6 +49,27 @@ those is refused.
 Frequencies are harmonic and unscaled wherever the API reports them. The
 dashboard applies whatever scale factor you type on the Photophysics
 page; it never changes what's stored.
+
+## NMR
+
+Each optimised S0 conformer gets one `singlepoint_nmr` task. Its header
+is the state's singlepoint header with the `NMR` keyword appended to the
+first `!` line. NMR needs a closed-shell singlet reference (multiplicity
+1) — doublets and diradicals are refused.
+
+Shifts are δ = σ_ref − σ: σ_ref is the mean isotropic shielding of that
+element in a reference compound (TMS `C[Si](C)(C)C` for ¹H/¹³C, CFCl₃
+`FC(Cl)(Cl)Cl` for ¹⁹F), which the pipeline computes itself once per
+optimisation/singlepoint header pair, in the protected
+`admin/system_references` project. `method_matches` compares the `!`
+keywords of the molecule's and the reference's NMR inputs.
+
+Signals are grouped by topological symmetry from the optimised geometry:
+atoms are equivalent when RDKit's bonding graph places them in the same
+symmetry class, so protons that differ only by stereochemistry (e.g.
+diastereotopic CH2 protons) are averaged into one signal. `equivalence`
+is `"none"`, one signal per atom, when RDKit cannot perceive bonds from
+the geometry. Closed-shell molecules only.
 
 ## Weighting
 
@@ -92,7 +114,7 @@ the old code; later plans list any other rows they add here.
 ```bash
 .venv/bin/python - <<'EOF'
 import sqlite3
-NEW_TYPES = ("singlepoint_uvvis",)  # later plans add their task types here
+NEW_TYPES = ("singlepoint_uvvis", "singlepoint_nmr")  # later plans add their task types here
 NEW_JOB_KINDS = ()  # project-job kinds later plans add
 db = sqlite3.connect("/path/to/autodft.db")
 marks = ",".join("?" * len(NEW_TYPES))

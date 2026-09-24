@@ -333,9 +333,12 @@ Every submission path (CLI, REST, Python) ends up writing the same
 * `max_conformers_S0 / _T1 / _ox / _red` — per-state conformer cap
   (default **1 per state**). Legacy `max_conformers` still works as a
   blanket override.
-* `request_spec_uvvis` / `request_spec_ir` — UV/Vis (TDDFT singlepoint on every
-  S0 conformer) and IR (from the optimisation's frequencies). Only added to
-  new molecules; see [`docs/API.md`](docs/API.md#post-apisubmit). See
+* `request_spec_uvvis` / `request_spec_ir` / `request_spec_nmr` — UV/Vis
+  (TDDFT singlepoint on every S0 conformer), IR (from the optimisation's
+  frequencies), and NMR (¹H/¹³C/¹⁹F shifts referenced to TMS / CFCl₃,
+  closed-shell molecules only; the reference project `admin/system_references`
+  is reserved and cannot be submitted to). Only added to new molecules; see
+  [`docs/API.md`](docs/API.md#post-apisubmit). See
   [docs/PHOTOPHYSICS.md](docs/PHOTOPHYSICS.md) for the methods, deployment
   and rollback.
 * `header_confsearch_id / _optimization_id / _singlepoint_id` — pick a

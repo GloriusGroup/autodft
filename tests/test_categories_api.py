@@ -180,3 +180,24 @@ class TestPhotophysicsEndpoint:
         r = client.get("/api/projects/nho:p/photophysics?molecule_id=7", headers=key)
         assert r.status_code == 200
         assert seen == {"name": "nho/p", "molecule_id": 7}
+
+    def test_molecules_detail_reports_the_nmr_slot(self, api):
+        from autodft.models import ComputationHeader, ComputationTask, MoleculeState, TaskStatus, TaskType
+
+        client, key = api
+        with get_session() as session:
+            mol = session.exec(select(Molecule).where(Molecule.project_name == "nho/p")).first()
+            state = MoleculeState(molecule_id=mol.id, description="S0", multiplicity=1, charge=0)
+            session.add(state)
+            session.commit()
+            header_id = session.exec(select(ComputationHeader.id)).first()
+            opt = ComputationTask(task_type=TaskType.optimization, status=TaskStatus.successful,
+                                  state_id=state.id, header_id=header_id)
+            session.add(opt)
+            session.commit()
+            session.add(ComputationTask(task_type=TaskType.singlepoint_nmr, status=TaskStatus.failed,
+                                        state_id=state.id, header_id=header_id, depends_on_task_id=opt.id))
+            session.commit()
+        conformer = client.get("/api/projects/nho:p/molecules-detail", headers=key).json()[
+            "molecules"][0]["states"][0]["conformers"][0]
+        assert conformer["singlepoint_nmr"] == "failed"

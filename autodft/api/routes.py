@@ -760,6 +760,7 @@ def api_project_molecules_detail(
                     "singlepoint_vert_red":          _status_of(deps.get(TaskType.singlepoint_vert_red)),
                     "singlepoint_vert_spin_change":  _status_of(deps.get(TaskType.singlepoint_vert_spin_change)),
                     "singlepoint_uvvis":             _status_of(deps.get(TaskType.singlepoint_uvvis)),
+                    "singlepoint_nmr":                _status_of(deps.get(TaskType.singlepoint_nmr)),
                 })
             # Confsearch status for the state — useful when no opt tasks exist yet.
             cs = next((t for t in tasks_by_state.get(st.id, [])
@@ -859,7 +860,7 @@ def api_project_photophysics(
     name: str, molecule_id: Optional[int] = None,
     identity: Identity = Depends(current_identity),
 ):
-    """UV/Vis and IR for every molecule submitted with those categories.
+    """UV/Vis, IR and NMR for every molecule submitted with those categories.
 
     Without ``molecule_id``: one summary per molecule (counts, weighting,
     strongest band). With it: that molecule's sticks and Boltzmann weights

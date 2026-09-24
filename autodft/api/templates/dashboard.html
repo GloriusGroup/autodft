@@ -1037,6 +1037,9 @@
         .cat-detail-note { font-size: 0.78rem; color: var(--text-muted); margin-top: 6px; }
         .cat-detail-note:empty { display: none; }
         .cat-detail-note.warn { color: var(--yellow); }
+        .pp-nmr { border-collapse: collapse; font-size: 0.8rem; margin-top: 4px; }
+        .pp-nmr th, .pp-nmr td { padding: 2px 10px; border-bottom: 1px solid var(--border); text-align: left; }
+        .pp-nmr td.num { text-align: right; font-variant-numeric: tabular-nums; }
     </style>
 </head>
 <body>
@@ -1153,6 +1156,10 @@
                             <input type="checkbox" id="requestIr" name="request_spec_ir">
                             <label for="requestIr">IR</label>
                         </div>
+                        <div class="checkbox-group" title="NMR shifts (1H/13C/19F) on every optimised S0 conformer, referenced to TMS / CFCl3 computed automatically at the same method. Closed-shell molecules only.">
+                            <input type="checkbox" id="requestNmr" name="request_spec_nmr">
+                            <label for="requestNmr">NMR</label>
+                        </div>
                         <div id="diradicalNote" class="smiles-hint valid" style="display:none;">
                             Diradical detected — calculated in the triplet state only.
                         </div>
@@ -1199,6 +1206,16 @@
                             <div class="cat-detail-title">IR</div>
                             <div class="cat-detail-note">No extra calculation: the spectrum is read from the S0 optimisation's frequency run and Boltzmann-weighted over conformers.</div>
                             <div class="cat-detail-note" id="irHeaderNote"></div>
+                        </div>
+                        <div class="cat-detail" data-requires="requestNmr" style="display:none;">
+                            <div class="cat-detail-title">NMR</div>
+                            <div class="cat-detail-body">
+                                <div class="checkbox-group"><input type="checkbox" id="nmrNucH" checked><label for="nmrNucH">¹H</label></div>
+                                <div class="checkbox-group"><input type="checkbox" id="nmrNucC" checked><label for="nmrNucC">¹³C</label></div>
+                                <div class="checkbox-group"><input type="checkbox" id="nmrNucF" checked><label for="nmrNucF">¹⁹F</label></div>
+                            </div>
+                            <div class="cat-detail-note">An NMR singlepoint on every optimised S0 conformer with the singlepoint header's method. Shifts are referenced to TMS (¹H, ¹³C) and CFCl₃ (¹⁹F), computed once per method in the protected system_references project; closed-shell molecules only.</div>
+                            <div class="cat-detail-note" id="nmrHeaderNote"></div>
                         </div>
                     </div>
 
@@ -1733,10 +1750,11 @@
                             <th>Vert-Red</th>
                             <th>Vert-Spin</th>
                             <th>UV/Vis</th>
+                            <th>NMR</th>
                         </tr>
                     </thead>
                     <tbody id="moleculesTableBody">
-                        <tr><td colspan="11" class="empty-state">Loading...</td></tr>
+                        <tr><td colspan="12" class="empty-state">Loading...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -1801,7 +1819,7 @@
         <div class="page-header">
             <div>
                 <h1>Project Overview · Photophysics</h1>
-                <div class="subtitle">UV/Vis and IR spectra, Boltzmann-weighted over each molecule's S0 conformers (298.15 K). Open a card to plot its spectra.</div>
+                <div class="subtitle">UV/Vis, IR and NMR, Boltzmann-weighted over each molecule's S0 conformers (298.15 K). Open a card to plot its spectra.</div>
             </div>
             <div class="form-group" style="min-width: 240px;">
                 <label for="projectSelectPP">Project</label>
@@ -2467,7 +2485,7 @@
         (function () {
             var panels = document.querySelectorAll('.cat-detail[data-requires]');
             var FREQ_RE = /^\s*!.*\b(Freq|NumFreq|AnFreq)\b/im;
-            var SP_CONFLICT_RE = /%tddft\b|%eprnmr\b|%esd\b|^\s*!.*\bNMR\b/im;
+            var SP_CONFLICT_RE = /%tddft\b|%cis\b|%eprnmr\b|%esd\b|^\s*!.*\bNMR\b/im;
 
             // Text of the header chosen in a slot; headerCache is filled by
             // fetchHeaders, which calls refreshCategoryDetails when done.
@@ -2504,6 +2522,10 @@
                         !SP_CONFLICT_RE.test(chosenHeaderText('headerSinglepoint', 'singlepoint')),
                         '',
                         'The chosen singlepoint header already has a %tddft / NMR / %eprnmr / %esd block — UV/Vis will be refused.');
+                setNote('nmrHeaderNote',
+                        !SP_CONFLICT_RE.test(chosenHeaderText('headerSinglepoint', 'singlepoint')),
+                        '',
+                        'The chosen singlepoint header already has a %tddft / NMR / %eprnmr / %esd block — NMR will be refused.');
             }
 
             var watched = {};
@@ -2551,7 +2573,7 @@
             // red are cleared and disabled while one is in the textarea.
             // The server enforces this too; this is so the form can't ask
             // for something that would come back as a per-line rejection.
-            var STATE_BOXES = ['requestT1', 'requestOx', 'requestRed'];
+            var STATE_BOXES = ['requestT1', 'requestOx', 'requestRed', 'requestNmr'];
             var stashedChecks = null;   // user's choices before the lock
             var lockNote = document.getElementById('diradicalNote');
 
@@ -2921,6 +2943,7 @@
                 request_singlepoint_vertical_excitations: document.getElementById('requestVertEx').checked,
                 request_spec_uvvis: document.getElementById('requestUvvis').checked,
                 request_spec_ir:    document.getElementById('requestIr').checked,
+                request_spec_nmr:   document.getElementById('requestNmr').checked,
                 max_conformers_S0:  intOrDefault('maxConfS0',  1),
                 max_conformers_T1:  intOrDefault('maxConfT1',  1),
                 max_conformers_ox:  intOrDefault('maxConfOx',  1),
@@ -2937,6 +2960,11 @@
             if (commonBody.request_spec_uvvis) {
                 commonBody.uvvis_nroots = intOrDefault('uvvisNroots', 20);
                 commonBody.uvvis_tda = document.getElementById('uvvisTda').checked;
+            }
+            if (commonBody.request_spec_nmr) {
+                commonBody.nmr_nuclei = ['H', 'C', 'F'].filter(function (n) {
+                    return document.getElementById('nmrNuc' + n).checked;
+                });
             }
 
             // ── One request for the whole textarea. ───────────────────
@@ -3600,12 +3628,12 @@
             }
             empty.style.display = 'none';
             wrap.style.display = 'block';
-            tbody.innerHTML = '<tr><td colspan="11" class="empty-state">Loading...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="12" class="empty-state">Loading...</td></tr>';
 
             var resp = await fetch('/api/projects/' + projectPath(name) + '/molecules-detail');
             var data = await resp.json();
             if (!data.molecules || data.molecules.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="11" class="empty-state">No molecules yet for this project.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="12" class="empty-state">No molecules yet for this project.</td></tr>';
                 return;
             }
 
@@ -3630,7 +3658,7 @@
                         cells.push('<td rowspan="1" class="mol-state">' + escHtml(st.description) + '</td>');
                         cells.push('<td class="mol-conf"><em style="color:var(--text-muted);">—</em></td>');
                         // Show the confsearch status in the Opt column so the user sees something even before any opt task exists.
-                        cells.push('<td colspan="6" style="color:var(--text-muted); font-style:italic;">confsearch ' + (st.confsearch || 'not yet') + '</td>');
+                        cells.push('<td colspan="7" style="color:var(--text-muted); font-style:italic;">confsearch ' + (st.confsearch || 'not yet') + '</td>');
                         rows.push('<tr class="' + (rows.length === 0 || cells.length > 5 ? 'mol-first' : '') + '">' + cells.join('') + '</tr>');
                         return;
                     }
@@ -3652,6 +3680,7 @@
                         cells.push('<td>' + statusCell(c.singlepoint_vert_red) + '</td>');
                         cells.push('<td>' + statusCell(c.singlepoint_vert_spin_change) + '</td>');
                         cells.push('<td>' + statusCell(c.singlepoint_uvvis) + '</td>');
+                        cells.push('<td>' + statusCell(c.singlepoint_nmr) + '</td>');
                         var firstRowClass = (!molRendered ? '' : '') + (cells.some(function (c) { return c.indexOf('rowspan') !== -1 && c.indexOf('mol-id') !== -1; }) ? ' mol-first' : '');
                         rows.push('<tr class="' + (firstRowClass.trim()) + '">' + cells.join('') + '</tr>');
                     });
@@ -4006,6 +4035,35 @@
             return bits.join(', ');
         }
 
+        var NMR_LABELS = { H: '¹H', C: '¹³C', F: '¹⁹F' };
+
+        function ppNmr(nmr) {
+            var parts = [];
+            ['H', 'C', 'F'].forEach(function (el) {
+                var signals = (nmr.nuclei || {})[el];
+                if (!signals || !signals.length) return;
+                var ref = (nmr.reference || {})[el] || {};
+                var head = NMR_LABELS[el] + ' NMR · ';
+                if (ref.status === 'ok') {
+                    head += 'δ vs ' + escHtml(ref.compound) +
+                            (ref.method_matches === false ? ' — reference computed at a different method!' : '');
+                } else {
+                    head += 'reference ' + escHtml(ref.status || 'missing') + ' — shieldings σ shown';
+                }
+                var rows = signals.map(function (s) {
+                    var value = (s.shift_ppm !== null && s.shift_ppm !== undefined)
+                        ? s.shift_ppm.toFixed(2) : ('σ ' + s.shielding_ppm.toFixed(2));
+                    return '<tr><td class="num">' + escHtml(value) + '</td><td class="num">' +
+                           escHtml(s.count) + '</td><td>' + escHtml(s.atoms.join(', ')) + '</td></tr>';
+                }).join('');
+                parts.push('<div class="pp-plot"><div class="pp-plot-title">' + head + ' · ' +
+                           escHtml(ppCounts(nmr)) + (nmr.equivalence === 'none' ? ' · no symmetry averaging' : '') +
+                           '</div><table class="pp-nmr"><thead><tr><th>δ (ppm)</th><th>n</th><th>ORCA atoms</th></tr></thead><tbody>' +
+                           rows + '</tbody></table></div>');
+            });
+            return parts.join('');
+        }
+
         function ppSummary(m) {
             var rows = [];
             if (m.stage) {
@@ -4029,6 +4087,17 @@
                     : 'no spectrum yet';
                 rows.push('<div class="pp-summary">IR · ' + ir + ' · ' + escHtml(ppCounts(m.ir)) + '</div>');
             }
+            if (m.nmr) {
+                var signals = ['H', 'C', 'F'].filter(function (el) { return m.nmr.signals[el]; })
+                    .map(function (el) { return m.nmr.signals[el] + ' ' + NMR_LABELS[el]; });
+                var refs = Object.keys(m.nmr.reference || {}).filter(function (el) {
+                    return m.nmr.reference[el].status !== 'ok';
+                }).map(function (el) { return NMR_LABELS[el] + ' reference ' + m.nmr.reference[el].status; });
+                rows.push('<div class="pp-summary">NMR · ' +
+                          (signals.length ? '<b>' + escHtml(signals.join(', ')) + '</b> signals' : 'no shifts yet') +
+                          (refs.length ? ' · ' + escHtml(refs.join(', ')) : '') +
+                          ' · ' + escHtml(ppCounts(m.nmr)) + '</div>');
+            }
             if (m.archived) rows.push('<div class="pp-waiting">Archived: raw outputs removed.</div>');
             return rows.join('');
         }
@@ -4050,6 +4119,7 @@
                            escHtml(ppPeak(ir)[0]) + ' cm⁻¹ (scaled, broadened)</div>' +
                            ppSvg(ir, 'Wavenumber (cm⁻¹)', true) + '</div>');
             }
+            if (detail.nmr && detail.nmr.count) parts.push(ppNmr(detail.nmr));
             return parts.join('') || '<div class="pp-waiting">Nothing to plot yet.</div>';
         }
 
@@ -4059,7 +4129,7 @@
             var host = document.getElementById('ppCards');
             if (!payload.molecules.length) {
                 host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">' +
-                                 'No molecule in this project was submitted with UV/Vis or IR.</div>';
+                                 'No molecule in this project was submitted with UV/Vis, IR or NMR.</div>';
                 return;
             }
             var perMolecule = {};

@@ -137,9 +137,18 @@ def test_each_category_has_a_settings_panel_shown_only_when_ticked(client):
     c, headers = client
     html = c.get("/", headers=headers).text
     panels = re.findall(r'<div class="cat-detail" data-requires="(\w+)" style="display:none;">', html)
-    assert panels == ["requestUvvis", "requestIr"]
+    assert panels == ["requestUvvis", "requestIr", "requestNmr"]
     for needle in ('id="uvvisNroots"', 'id="uvvisTda"', 'id="irHeaderNote"',
                    'id="uvvisHeaderNote"', "commonBody.uvvis_nroots", "commonBody.uvvis_tda"):
+        assert needle in html, needle
+
+
+def test_the_dashboard_offers_nmr(client):
+    c, headers = client
+    html = c.get("/", headers=headers).text
+    for needle in ('id="requestNmr"', 'id="nmrNucH"', 'id="nmrNucC"', 'id="nmrNucF"',
+                   'id="nmrHeaderNote"', "request_spec_nmr:", "commonBody.nmr_nuclei =",
+                   "'requestNmr'", "function ppNmr"):
         assert needle in html, needle
 
 

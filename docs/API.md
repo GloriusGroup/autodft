@@ -194,7 +194,9 @@ package defaults in `autodft/qm/orca/defaults.py`.
 | `uvvis_nroots`                              | int    | `20`          | UV/Vis excited states (1–100). Stored only when UV/Vis is requested.                        |
 | `uvvis_tda`                                 | bool   | `false`       | Tamm–Dancoff approximation for the UV/Vis TDDFT. Stored only when UV/Vis is requested.      |
 | `request_spec_ir`                           | bool   | `false`       | IR: read from the S0 optimisation's frequency calculation — no extra job. Needs `Freq` in the optimisation header. |
-| `request_esd`, `request_esd_ht`, `request_spec_nmr` | bool   | `false`       | Not available yet; refused with 400.                                                        |
+| `request_spec_nmr`                          | bool   | `false`       | NMR: `NMR` is added to the singlepoint header's `!` line for a singlepoint on every optimised S0 conformer. Shifts are referenced to TMS (¹H, ¹³C) and CFCl₃ (¹⁹F), which the pipeline computes itself — once per optimisation/singlepoint header pair — in the protected `admin/system_references` project. Closed-shell molecules only. |
+| `nmr_nuclei`                                | list   | `["H","C","F"]` | Nuclei to report; stored only with NMR.                                                  |
+| `request_esd`, `request_esd_ht`             | bool   | `false`       | Not available yet; refused with 400.                                                        |
 
 `request_S1` is **not** exposed: the S1 state is not yet supported.
 
@@ -474,7 +476,8 @@ singlepoint headers in `admin/system_references`: `status` is `"ok"`,
 is its mean isotropic shielding for that element; `method_matches` says
 whether its NMR input's `!` keywords equal the molecule's (SCF convergence
 and `PALn` ignored), `null` if either input is missing. `signals` and
-`reference` stay empty until a conformer is counted.
+`reference` stay empty until a conformer is counted. `system_references`
+is a reserved project name, refused for every submitter.
 
 A molecule entry with no conformer left to show (every optimisation
 failed, or none has run yet) adds `stage`: `"searching"` while work is
