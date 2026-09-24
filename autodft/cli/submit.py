@@ -128,6 +128,13 @@ def _qualified_project(project: str, user: str) -> tuple[str, str]:
     leaving the work visible only to admin. The project is created if it
     does not exist, exactly as an API submission would.
     """
+    from autodft.engine import nmr_references
+
+    reserved = nmr_references.reserved_name_error(project)
+    if reserved:
+        console.print(f"[red]{reserved}[/red]")
+        raise typer.Exit(code=1)
+
     from autodft import accounts
     from autodft.db import get_session
 

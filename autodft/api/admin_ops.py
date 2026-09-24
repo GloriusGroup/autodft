@@ -70,10 +70,15 @@ def is_protected(name: str) -> bool:
     to ``admin/default``, silently unprotecting it. Comparing only the bare
     segment over-corrected: ``project`` defaults to ``"default"`` on every
     submission, so each user acquires an ``alice/default`` that no one
-    could ever wipe.
+    could ever wipe. The NMR reference project is always protected.
     """
     from autodft.accounts import ADMIN_USERNAME
     from autodft.paths import normalise_project_name
+
+    from autodft.engine.nmr_references import is_reference_project
+
+    if is_reference_project(name):
+        return True
 
     normalised = normalise_project_name(name or "")
     owner, separator, bare = normalised.partition("/")
@@ -933,6 +938,13 @@ def wipe_molecule(
         raise ValueError(f"Molecule {molecule_id} does not exist.")
 
     smiles, project = mol.smiles, mol.project_name
+
+    from autodft.engine.nmr_references import is_reference_project
+
+    if is_reference_project(project):
+        raise ValueError(
+            "NMR reference molecules are managed by the pipeline and cannot be wiped."
+        )
 
     _, _, _, job_ids = _descendants(session, [molecule_id])
     cancelled = _cancel_scheduled_jobs(session, job_ids, scheduler)

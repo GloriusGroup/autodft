@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
@@ -1804,6 +1804,13 @@ def api_reassign_project(
 
     with get_session() as session:
         name = resolve_project(session, identity, name)
+        from autodft.engine import nmr_references
+
+        if nmr_references.is_reference_project(name):
+            return JSONResponse(
+                status_code=409,
+                content={"detail": "The NMR reference project is managed by the pipeline and cannot be reassigned."},
+            )
         new_owner = accounts.get_user_by_username(session, body.owner)
         if new_owner is None:
             return JSONResponse(
@@ -2231,6 +2238,12 @@ def _submission_owner(session, identity: Identity, body: SubmitRequest) -> tuple
     and a name someone else already uses is simply the caller's own
     project of that name.
     """
+    from autodft.engine import nmr_references
+
+    reserved = nmr_references.reserved_name_error(body.project)
+    if reserved:
+        raise HTTPException(status_code=400, detail=reserved)
+
     from autodft import accounts
 
     user = accounts.get_user_by_username(session, identity.username)
