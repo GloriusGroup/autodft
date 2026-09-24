@@ -75,8 +75,11 @@ def _check_reference_state(
         console.print(f"[yellow]{check['warning']}[/yellow]")
 
 
-def _category_options_to_flags(uvvis: bool, ir: bool, esd: bool, esd_ht: bool, nmr: bool) -> dict:
-    """CLI options as ``request_metadata`` category keys."""
+def _category_options_to_flags(
+    uvvis: bool, ir: bool, esd: bool, esd_ht: bool, nmr: bool,
+    uvvis_nroots: int = 20, uvvis_tda: bool = False,
+) -> dict:
+    """CLI options as ``request_metadata`` category keys and settings."""
     from autodft import categories
 
     return {
@@ -85,6 +88,8 @@ def _category_options_to_flags(uvvis: bool, ir: bool, esd: bool, esd_ht: bool, n
         categories.ESD: esd,
         categories.ESD_HT: esd_ht,
         categories.NMR: nmr,
+        "uvvis_nroots": uvvis_nroots,
+        "uvvis_tda": uvvis_tda,
     }
 
 
@@ -210,10 +215,12 @@ def submit(
     esd: bool = typer.Option(False, "--esd", help="Excited-state dynamics (not available yet)"),
     esd_ht: bool = typer.Option(False, "--esd-ht", help="Herzberg-Teller for ESD rates"),
     nmr: bool = typer.Option(False, "--nmr", help="NMR shifts (not available yet)"),
+    uvvis_nroots: int = typer.Option(20, "--uvvis-nroots", help="UV/Vis excited states (1-100)"),
+    uvvis_tda: bool = typer.Option(False, "--uvvis-tda", help="Tamm-Dancoff approximation for UV/Vis"),
 ) -> None:
     """Submit a single molecule by SMILES string."""
     _check_reference_state(smiles, request_t1, request_ox, request_red)
-    flags = _category_options_to_flags(uvvis, ir, esd, esd_ht, nmr)
+    flags = _category_options_to_flags(uvvis, ir, esd, esd_ht, nmr, uvvis_nroots, uvvis_tda)
     qualified, author = _qualified_project(project, user)
 
     # Use custom headers if provided, otherwise use defaults
@@ -295,13 +302,15 @@ def submit_batch(
     esd: bool = typer.Option(False, "--esd", help="Excited-state dynamics (not available yet)"),
     esd_ht: bool = typer.Option(False, "--esd-ht", help="Herzberg-Teller for ESD rates"),
     nmr: bool = typer.Option(False, "--nmr", help="NMR shifts (not available yet)"),
+    uvvis_nroots: int = typer.Option(20, "--uvvis-nroots", help="UV/Vis excited states (1-100)"),
+    uvvis_tda: bool = typer.Option(False, "--uvvis-tda", help="Tamm-Dancoff approximation for UV/Vis"),
 ) -> None:
     """Submit molecules from a CSV file."""
     if not file.exists():
         console.print(f"[red]File not found:[/red] {file}")
         raise typer.Exit(code=1)
     qualified, author = _qualified_project(project, user)
-    flags = _category_options_to_flags(uvvis, ir, esd, esd_ht, nmr)
+    flags = _category_options_to_flags(uvvis, ir, esd, esd_ht, nmr, uvvis_nroots, uvvis_tda)
 
     request_metadata = _build_request_metadata(
         project_name=qualified,

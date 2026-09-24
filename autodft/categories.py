@@ -37,16 +37,33 @@ _SP_CONFLICTS = (
     (re.compile(r"^\s*!.*\bNMR\b", re.IGNORECASE | re.MULTILINE), "the NMR keyword"),
 )
 
+# Settings each category takes, with defaults. Stored -- defaults filled in --
+# only when the category is requested.
+OPTIONS: dict[str, dict] = {
+    UVVIS: {"uvvis_nroots": 20, "uvvis_tda": False},
+}
+UVVIS_NROOTS_MAX = 100
+
 
 def requested(metadata: dict) -> set[str]:
     """The categories *metadata* asks for."""
     return {key for key in CATEGORIES if metadata.get(key)}
 
 
-def snapshot(metadata: dict) -> dict[str, bool]:
-    """Category keys to store with a state: only those set, so an unflagged
-    submission's state metadata stays exactly as it was."""
-    return {key: True for key in (*CATEGORIES, ESD_HT) if metadata.get(key)}
+def options(metadata: dict) -> dict:
+    """The settings of the requested categories, defaults filled in."""
+    out: dict = {}
+    for key in sorted(requested(metadata)):
+        for name, default in OPTIONS.get(key, {}).items():
+            out[name] = metadata.get(name, default)
+    return out
+
+
+def snapshot(metadata: dict) -> dict:
+    """Category keys and settings to store with a state: only for requested
+    categories, so an unflagged submission's metadata stays as it was."""
+    flags = {key: True for key in (*CATEGORIES, ESD_HT) if metadata.get(key)}
+    return {**flags, **options(metadata)}
 
 
 def rejection(
@@ -71,6 +88,12 @@ def rejection(
     if not metadata.get("request_optimization", True):
         labels = ", ".join(sorted(LABELS[key] for key in wanted))
         return f"{labels} needs the optimisation stage."
+
+    if UVVIS in wanted:
+        nroots = metadata.get("uvvis_nroots", OPTIONS[UVVIS]["uvvis_nroots"])
+        if (isinstance(nroots, bool) or not isinstance(nroots, int)
+                or not 1 <= nroots <= UVVIS_NROOTS_MAX):
+            return f"UV/Vis needs between 1 and {UVVIS_NROOTS_MAX} excited states (uvvis_nroots)."
 
     if IR in wanted and not _FREQ_RE.search(header_optimization or ""):
         return (

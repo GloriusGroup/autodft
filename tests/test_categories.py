@@ -97,6 +97,37 @@ class TestExistingConflict:
         assert categories.existing_conflict(session, "nho/other", "c1ccccc1", {categories.UVVIS}) is None
 
 
+class TestOptions:
+    def test_no_category_no_options(self):
+        assert categories.options({}) == {}
+        assert categories.options({"uvvis_nroots": 30}) == {}
+
+    def test_defaults_are_filled_in(self):
+        assert categories.options({categories.UVVIS: True}) == {
+            "uvvis_nroots": 20, "uvvis_tda": False,
+        }
+
+    def test_submitted_values_win(self):
+        opts = categories.options({categories.UVVIS: True, "uvvis_nroots": 35, "uvvis_tda": True})
+        assert opts == {"uvvis_nroots": 35, "uvvis_tda": True}
+
+    def test_snapshot_carries_the_settings_of_requested_categories_only(self):
+        assert categories.snapshot({categories.UVVIS: True, "uvvis_tda": True}) == {
+            categories.UVVIS: True, "uvvis_nroots": 20, "uvvis_tda": True,
+        }
+        assert categories.snapshot({"uvvis_nroots": 30, "uvvis_tda": True}) == {}
+
+    @pytest.mark.parametrize("nroots", [0, 101, "20", True, 2.5])
+    def test_nroots_out_of_range_is_refused(self, nroots):
+        meta = {categories.UVVIS: True, "uvvis_nroots": nroots}
+        assert "uvvis_nroots" in categories.rejection({}, meta, OPT_FREQ, SP)
+
+    @pytest.mark.parametrize("nroots", [1, 100])
+    def test_nroots_bounds_are_inclusive(self, nroots):
+        meta = {categories.UVVIS: True, "uvvis_nroots": nroots}
+        assert categories.rejection({}, meta, OPT_FREQ, SP) is None
+
+
 from sqlmodel import Session, select
 
 from autodft.models.entrypoint import CalculationEntrypoint

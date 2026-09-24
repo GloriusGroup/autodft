@@ -193,6 +193,9 @@ class SubmitRequest(BaseModel):
     request_spec_uvvis: bool = False
     request_spec_ir: bool = False
     request_spec_nmr: bool = False
+    # Settings of the categories above; recorded only when the category is.
+    uvvis_nroots: int = Field(default=20, ge=1, le=100)
+    uvvis_tda: bool = False
     # For each slot you can pass either the raw header text OR the integer
     # ID of a stored ComputationHeader. ID takes precedence.
     header_confsearch: Optional[str] = None
@@ -1982,6 +1985,8 @@ def _category_flags(body: SubmitRequest) -> dict:
         categories.UVVIS: body.request_spec_uvvis,
         categories.IR: body.request_spec_ir,
         categories.NMR: body.request_spec_nmr,
+        "uvvis_nroots": body.uvvis_nroots,
+        "uvvis_tda": body.uvvis_tda,
         "request_optimization": body.request_optimization,
         "request_singlepoint": body.request_singlepoint,
     }

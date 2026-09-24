@@ -87,3 +87,29 @@ class TestBatch:
         assert [q["smiles"] for q in body["queued"]] == ["c1ccccc1"]
         assert body["rejected"][0]["smiles"] == "CCO"
         assert "already exists" in body["rejected"][0]["detail"]
+
+
+class TestUvvisOptions:
+    def test_options_are_recorded_with_the_category(self, api):
+        client, key = api
+        r = client.post("/api/submit", headers=key, json={
+            "smiles": "c1ccccc1", "project": "p", "request_spec_uvvis": True,
+            "uvvis_nroots": 30, "uvvis_tda": True,
+        })
+        assert r.status_code == 200, r.text
+        meta = _metadata(r.json()["id"])
+        assert (meta["uvvis_nroots"], meta["uvvis_tda"]) == (30, True)
+
+    def test_options_without_the_category_are_not_recorded(self, api):
+        client, key = api
+        r = client.post("/api/submit", headers=key,
+                        json={"smiles": "c1ccccc1", "project": "p", "uvvis_nroots": 30})
+        assert r.status_code == 200
+        assert "uvvis_nroots" not in _metadata(r.json()["id"])
+
+    def test_out_of_range_nroots_is_a_422(self, api):
+        client, key = api
+        r = client.post("/api/submit", headers=key, json={
+            "smiles": "c1ccccc1", "project": "p", "request_spec_uvvis": True, "uvvis_nroots": 0,
+        })
+        assert r.status_code == 422

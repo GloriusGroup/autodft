@@ -38,3 +38,19 @@ def test_ir_without_freq_exits():
 def test_defaults_pass():
     flags = cli._category_options_to_flags(uvvis=True, ir=True, esd=False, esd_ht=False, nmr=False)
     cli._check_categories("c1ccccc1", flags, DEFAULT_HEADER_OPTIMIZATION, DEFAULT_HEADER_SINGLEPOINT)
+
+
+def test_uvvis_options_ride_with_the_category():
+    flags = cli._category_options_to_flags(
+        uvvis=True, ir=False, esd=False, esd_ht=False, nmr=False,
+        uvvis_nroots=25, uvvis_tda=True,
+    )
+    meta = _meta(flags)
+    assert (meta["uvvis_nroots"], meta["uvvis_tda"]) == (25, True)
+
+
+def test_uvvis_options_alone_are_dropped():
+    flags = cli._category_options_to_flags(
+        uvvis=False, ir=False, esd=False, esd_ht=False, nmr=False, uvvis_nroots=25,
+    )
+    assert "uvvis_nroots" not in _meta(flags)
