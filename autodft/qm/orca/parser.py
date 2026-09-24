@@ -78,6 +78,11 @@ class OrcaParser(QMEngine):
             # the state with zero optimizations and no error recorded
             # anywhere -- the calculation simply stopped.
             checks["Conformer Ensemble"] = bool(self._parse_ensemble_table(content))
+        if task_type == "singlepoint_uvvis":
+            # A TDDFT that died after the SCF still terminates normally.
+            from autodft.qm.orca.spectra_parser import parse_absorption
+
+            checks["Absorption Spectrum"] = bool(parse_absorption(content))
 
         success = all(checks.values())
 
