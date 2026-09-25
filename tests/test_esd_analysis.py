@@ -126,6 +126,17 @@ def test_a_failed_s1_optimisation_blocks_its_rates(session, esd):
     assert rates["phosphorescence"]["status"] == "created"
 
 
+def test_a_dissociating_s1_is_explained(session, esd):
+    opt = esd["tasks"]["S1"][0]
+    opt.status = TaskStatus.failed
+    session.add(opt)
+    session.add(ComputationJob(task_id=opt.id, attempt=1, success=False,
+                               fail_reason="['Termination', 'S1 Stays Bound']"))
+    session.commit()
+    photophysics.advance_photophysics(session, Settings())
+    assert "S1 dissociates" in _analyse(session, esd)["rates"]["isc"]["reason"]
+
+
 def test_a_recovered_input_stops_reporting_waiting(session, esd):
     """I1: once esd_done no longer latches on a partial join, a rate whose
     input recovers is created instead of reporting 'waiting' forever."""

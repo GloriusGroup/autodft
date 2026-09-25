@@ -135,6 +135,13 @@ nbo_exe    = "/mnt/share/public/software/nbo7/bin/nbo7.i8.exe"
 # Parent of the per-job scratch dir. Empty string runs ORCA inside
 # the shared job dir without staging through /tmp.
 tmp_dir    = "/tmp"
+# Stall watchdog: kill ORCA once nothing in its scratch dir changed for
+# this many minutes; the job fails as "Stalled" and is resubmitted with
+# the same resources. 0 (the default) runs ORCA without a watchdog.
+stall_minutes       = 240
+# Copy output.out back from scratch this often while ORCA runs (needs
+# the watchdog), so running jobs show progress. 0 disables.
+sync_output_minutes = 10
 
 [api]
 enabled = true
@@ -226,7 +233,8 @@ autodft run --config config/reaction.toml
 That starts the worker loop (one tick every `loop_interval_seconds`)
 and, if `api.enabled = true`, boots the FastAPI dashboard at
 `http://<host>:<port>/`. Press Ctrl-C to stop. The standard way to leave
-it running on this cluster is inside a `screen` session.
+it running on this cluster is inside a `screen` session. The log also
+goes to `<data_path>/logs/controller.log` (rotated at 10 MB, five kept).
 
 For local testing without SLURM:
 

@@ -73,6 +73,18 @@ def followed_root_energy(content: str) -> Optional[float]:
     return float(found[-1]) if found else None
 
 
+def s1_dissociates(content: str) -> bool:
+    """Whether the followed root's gap to S0 fell below 1 eV and 30 % of its start.
+
+    A bound S1 keeps most of its gap over an optimisation; a dissociative one
+    runs towards a crossing with S0 and fails identically on every retry.
+    """
+    gaps = [float(g) for g in _DE_CIS.findall(content)]
+    if len(gaps) < 2:
+        return False
+    return gaps[-1] < 1.0 * EV_TO_EH and gaps[-1] < 0.3 * gaps[0]
+
+
 def followed_root(content: str) -> Optional[int]:
     """The N of the last ``DE(CIS) = ... Eh (Root N)`` line."""
     found = _DE_CIS_ROOT.findall(content)

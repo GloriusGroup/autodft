@@ -15,6 +15,19 @@ console = Console()
 app = typer.Typer(name="run", help="Start the pipeline worker.")
 
 
+def _log_to_file(settings) -> None:
+    """Also log to <data_path>/logs/controller.log (10 MB x 5), which outlives the screen scrollback."""
+    from logging.handlers import RotatingFileHandler
+
+    log_dir = settings.data_path / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(log_dir / "controller.log", maxBytes=10_000_000, backupCount=5)
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s", "%Y-%m-%d %H:%M:%S",
+    ))
+    logging.getLogger().addHandler(handler)
+
+
 @app.callback(invoke_without_command=True)
 def run(
     config: Optional[str] = typer.Option(None, "--config", help="Path to config TOML file"),
@@ -25,6 +38,7 @@ def run(
     from autodft.config import load_settings
 
     settings = load_settings(config)
+    _log_to_file(settings)
 
     # Select scheduler backend
     if scheduler == "local":

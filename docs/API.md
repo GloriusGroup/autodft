@@ -595,7 +595,7 @@ request, not cached) and drop nothing:
                        "C": [...]}}
 
 Each NMR signal is one symmetry class: `atoms` are 0-based ORCA atom
-indices, `shielding_ppm` is the Boltzmann-weighted isotropic shielding
+indices (the dashboard and the XLSX show them 1-based, like NBO), `shielding_ppm` is the Boltzmann-weighted isotropic shielding
 averaged over them, and `shift_ppm` = `sigma_ppm` − `shielding_ppm`, or
 `null` unless the reference's `status` is `"ok"`. Signals are sorted by
 ascending shielding (descending shift).

@@ -95,6 +95,8 @@ def generate_submit_script(
     keep_hessian: bool = False,
     keep_cubes: bool = False,
     extra_inputs: Optional[list[str]] = None,
+    stall_minutes: int = 0,
+    sync_minutes: int = 0,
 ) -> Path:
     """Render ``submit.cmd.j2`` and write ``submit.cmd`` into *job_path*.
 
@@ -123,6 +125,8 @@ def generate_submit_script(
         keep_cubes: Copy ``*.cube`` back from scratch when True.
         extra_inputs: Files in *job_path* to stage into scratch next to
                       ``input.inp``.
+        stall_minutes: Stall watchdog threshold; 0 runs ORCA in the foreground.
+        sync_minutes: Copy output.out back this often while the watchdog runs.
 
     Returns:
         Path to the written ``submit.cmd``.
@@ -151,6 +155,8 @@ def generate_submit_script(
         keep_hessian=keep_hessian,
         keep_cubes=keep_cubes,
         extra_inputs=extra_inputs or [],
+        stall_minutes=stall_minutes,
+        sync_minutes=sync_minutes,
     )
 
     submit_path = job_path / "submit.cmd"

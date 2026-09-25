@@ -50,6 +50,9 @@ logger = logging.getLogger(__name__)
 # I/O and lets waiting writers through between batches.
 _COMMIT_BATCH = 25
 
+# Failed checks that recur identically on every attempt, whatever else failed.
+DETERMINISTIC_CHECKS = ("LibXC Needed", "S1 Stays Bound")
+
 
 def _commit_batch(session: Session, index: int) -> None:
     """Release the SQLite write lock every ``_COMMIT_BATCH`` items."""
@@ -642,8 +645,9 @@ def create_retry_jobs(
         )
 
         reason = (last_failed.fail_reason or "") if last_failed is not None else ""
-        # A functional without third derivatives, or a collapsed S1 root, fails identically every time.
-        if "LibXC Needed" in reason or reason == "['Excited Root']":
+        # A functional without third derivatives, or an S1 that collapses or
+        # dissociates, fails identically every time.
+        if reason == "['Excited Root']" or any(f"'{c}'" in reason for c in DETERMINISTIC_CHECKS):
             task.status = TaskStatus.failed
             task.updated_at = datetime.now(timezone.utc)
             session.add(task)

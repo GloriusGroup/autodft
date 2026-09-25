@@ -147,7 +147,10 @@ singlepoint. Category jobs (UV/Vis, NMR, SOC, the six rate jobs) do not
 count toward the global failure circuit breaker; ESD S1/T1 optimisations
 do, like every optimisation. An S1 optimisation whose root collapsed
 (`Excited Root`) is not retried — re-running the same input from the same
-seed geometry collapses again.
+seed geometry collapses again. Nor is one whose S1 dissociates (`S1 Stays Bound`: the
+followed root's gap to S0 fell below 1 eV and below 30 % of its starting
+value, e.g. a σσ* state breaking a C–H bond); that is the chemistry, and the
+S1 rates are reported as blocked with that reason. The T1 rates still run.
 
 **LibXC.** Native B88-exchange functionals (B3LYP, BLYP, BP86, BP, B3P86,
 B3PW91, BPW91, B1LYP, BHandHLYP, B2PLYP, B2GP-PLYP, X3LYP — with or without

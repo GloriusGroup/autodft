@@ -32,9 +32,38 @@ cd "$WORK_DIR"
 {% endif %}
 
 # Run ORCA — full path or 'orca' from the [orca].path config field.
-{{ orca_path }} input.inp{% if orca_extra_args %} "{{ orca_extra_args }}"{% endif %} > output.out
+{% if stall_minutes %}# Stall watchdog: stop ORCA once no file here has changed for {{ stall_minutes }} min.
+# A background job of a non-interactive shell is no group leader, so setsid
+# does not fork: $! is the session id shared by ORCA and all its MPI ranks.
+setsid {{ orca_path }} input.inp{% if orca_extra_args %} "{{ orca_extra_args }}"{% endif %} > output.out &
+ORCA_PID=$!
+STALL_SEC={{ stall_minutes * 60 }}
+STALLED=0
+TICK=0
+while kill -0 "$ORCA_PID" 2>/dev/null; do
+    sleep 60
+    TICK=$((TICK + 1))
+{% if tmp_dir and sync_minutes %}    if [ $((TICK % {{ sync_minutes }})) -eq 0 ]; then
+        cp output.out "$WORK_DIR"/.output.out.part 2>/dev/null && mv -f "$WORK_DIR"/.output.out.part "$WORK_DIR"/output.out
+    fi
+{% endif %}    if [ -z "$(find . -newermt "@$(( $(date +%s) - STALL_SEC ))" -print -quit)" ]; then
+        STALLED=1
+        STALL_PS=$(ps -o pid,etime,time,args -s "$ORCA_PID")
+        pkill -TERM -s "$ORCA_PID"; sleep 30; pkill -KILL -s "$ORCA_PID"
+        break
+    fi
+done
+wait "$ORCA_PID"
 ORCA_EXIT=$?
-
+if [ "$STALLED" -eq 1 ]; then
+    # Appended only after ORCA is dead: its own non-append writes would overwrite it.
+    printf '\nAUTODFT STALLED: no file changed for %s min on %s at %s\n%s\n' \
+        "{{ stall_minutes }}" "$(hostname)" "$(date -Is)" "$STALL_PS" >> output.out
+    ORCA_EXIT=124
+fi
+{% else %}{{ orca_path }} input.inp{% if orca_extra_args %} "{{ orca_extra_args }}"{% endif %} > output.out
+ORCA_EXIT=$?
+{% endif %}
 {% if tmp_dir %}
 # Copy results back to the shared job directory
 cp *.out *.txt *.xyz "$WORK_DIR"/ 2>/dev/null || true

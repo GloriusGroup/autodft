@@ -4197,11 +4197,11 @@
                     var value = (s.shift_ppm !== null && s.shift_ppm !== undefined)
                         ? s.shift_ppm.toFixed(2) : ('σ ' + s.shielding_ppm.toFixed(2));
                     return '<tr><td class="num">' + escHtml(value) + '</td><td class="num">' +
-                           escHtml(s.count) + '</td><td>' + escHtml(s.atoms.join(', ')) + '</td></tr>';
+                           escHtml(s.count) + '</td><td>' + escHtml(s.atoms.map(function (a) { return a + 1; }).join(', ')) + '</td></tr>';
                 }).join('');
                 parts.push('<div class="pp-plot"><div class="pp-plot-title">' + head + ' · ' +
                            escHtml(ppCounts(nmr)) + (nmr.equivalence === 'none' ? ' · no symmetry averaging' : '') +
-                           '</div><table class="pp-nmr"><thead><tr><th>δ (ppm)</th><th>n</th><th>ORCA atoms</th></tr></thead><tbody>' +
+                           '</div><table class="pp-nmr"><thead><tr><th>δ (ppm)</th><th>n</th><th>Atoms</th></tr></thead><tbody>' +
                            rows + '</tbody></table></div>');
             });
             return parts.join('');

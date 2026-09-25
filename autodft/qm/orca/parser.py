@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 # routinely produce -20 to -50 cm^-1 modes that no amount of re-optimisation
 # removes; failing on them burns the whole retry budget for nothing.
 IMAGINARY_FREQ_THRESHOLD = -50.0
+# Written into output.out by submit.cmd when its watchdog kills a hung ORCA.
+STALL_MARKER = "AUTODFT STALLED:"
 
 
 def _esd_job_count(job_path: Path) -> Optional[int]:
@@ -68,6 +70,12 @@ class OrcaParser(QMEngine):
         """
         job_path = Path(job_path)
         content = self._load_output(job_path)
+        if STALL_MARKER in content:
+            # Killed by the submit script's watchdog: a hang, not a result.
+            return QMResult(success=False, checks={"Stalled": False})
+        if "orca finished by error termination in plot" in content.lower():
+            # Not a failure of the job, but its cube files are missing or empty.
+            logger.warning("orca_plot failed in %s; cube files missing or empty", job_path)
 
         checks: dict[str, bool] = {
             "Termination": self._check_normal_termination(content),
@@ -120,6 +128,7 @@ class OrcaParser(QMEngine):
                 # Below 0.1 eV the followed root has collapsed onto S0.
                 gap = esd_parser.followed_root_energy(content)
                 checks["Excited Root"] = gap is not None and gap >= 0.1 * esd_parser.EV_TO_EH
+                checks["S1 Stays Bound"] = not esd_parser.s1_dissociates(content)
 
         success = all(checks.values())
 
@@ -196,6 +205,8 @@ class OrcaParser(QMEngine):
             keep_hessian=keep_hessian,
             keep_cubes=keep_cubes,
             extra_inputs=extra_inputs,
+            stall_minutes=self.orca.stall_minutes,
+            sync_minutes=self.orca.sync_output_minutes,
         )
 
     # ------------------------------------------------------------------
@@ -596,7 +607,6 @@ class OrcaParser(QMEngine):
         # this module's error termination is ignored.
         plot_error = "orca finished by error termination in plot"
         if plot_error in lowered:
-            logger.info("Ignoring a failed orca_plot (PLOT) error termination")
             lowered = lowered.replace(plot_error, "")
 
         for marker in (

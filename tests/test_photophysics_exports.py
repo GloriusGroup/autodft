@@ -15,7 +15,12 @@ from autodft.analysis.photophysics_export import build_xlsx
 from autodft.api import project_jobs, routes
 from autodft.config import Settings
 from autodft.db import get_session, init_db, reset_engine
-from autodft.extraction.extractor import _FILE_MAP, PipelineExtractor, _copy_task_files
+from autodft.extraction.extractor import (
+    _FILE_MAP,
+    ConformerResult,
+    PipelineExtractor,
+    _copy_task_files,
+)
 from autodft.models import (
     ComputationJob,
     ComputationTask,
@@ -192,6 +197,40 @@ def test_export_copies_singlepoint_cubes(db):
     assert "conf1_sp_ElDens.cube" in names
 
 
+def test_export_takes_the_conformer_the_csv_reports(db, monkeypatch):
+    with get_session() as session:
+        mol = Molecule(smiles="Cconf", project_name="nho/p")
+        session.add(mol)
+        session.commit()
+        state = MoleculeState(molecule_id=mol.id, description="S0", multiplicity=1, charge=0)
+        session.add(state)
+        session.commit()
+        opt_ids = []
+        for name in ("first", "second"):
+            opt = ComputationTask(task_type=TaskType.optimization, status=TaskStatus.successful,
+                                  state_id=state.id, header_id=1, has_followups=True)
+            session.add(opt)
+            session.commit()
+            job_dir = db / "jobs" / name
+            job_dir.mkdir(parents=True)
+            (job_dir / "input.inp").write_text(name)
+            session.add(ComputationJob(task_id=opt.id, attempt=1, job_path=str(job_dir), success=True))
+            session.commit()
+            opt_ids.append(opt.id)
+        mol_id = mol.id
+
+    # The second conformer is the lower one.
+    def lowest(self, session, mol, state, all_conformers):
+        return [ConformerResult(molecule_id=mol.id, smiles=mol.smiles, state="S0",
+                                conformer_index=2, opt_task_id=opt_ids[1])]
+    monkeypatch.setattr(PipelineExtractor, "_extract_state_results", lowest)
+
+    dest = db / "export"
+    PipelineExtractor("nho/p").export_calculation_files(dest)
+    names = sorted(p.name for p in (dest / str(mol_id) / "S0").iterdir())
+    assert names == ["conf2_opt_input.inp"]
+
+
 # ----------------------------------------------------------------------
 # The photophysics workbook
 # ----------------------------------------------------------------------
@@ -301,7 +340,7 @@ def test_build_xlsx_has_a_sheet_per_category_plus_sticks_and_esd_jobs():
         "mol_id", "state_id", "conformer", "weight", "frequency_cm", "intensity_km_mol",
     ]
     assert _header(wb["NMR"]) == [
-        "mol_id", "smiles", "state_id", "nucleus", "shift_ppm", "shielding_ppm", "count", "atoms",
+        "mol_id", "smiles", "state_id", "nucleus", "shift_ppm", "shielding_ppm", "count", "atoms_1based",
         "reference", "reference_status", "method_matches", "equivalence",
     ]
     assert _header(wb["ESD"]) == [
@@ -314,7 +353,7 @@ def test_build_xlsx_has_a_sheet_per_category_plus_sticks_and_esd_jobs():
         "fc_percent", "ht_percent", "k_squared", "e00_cm",
     ]
     assert _header(wb["NBO"]) == [
-        "mol_id", "smiles", "state_id", "state", "atom", "element", "charge", "spin", "count", "weighting",
+        "mol_id", "smiles", "state_id", "state", "atom_1based", "element", "charge", "spin", "count", "weighting",
     ]
 
     sticks = wb["UV-Vis sticks"]
@@ -337,9 +376,11 @@ def test_build_xlsx_has_a_sheet_per_category_plus_sticks_and_esd_jobs():
     nbo_sheet = wb["NBO"]
     assert nbo_sheet.cell(row=2, column=_col(nbo_sheet, "state_id")).value == 10
     assert nbo_sheet.cell(row=2, column=_col(nbo_sheet, "state")).value == "S0"
-    assert nbo_sheet.cell(row=2, column=_col(nbo_sheet, "atom")).value == 1
+    nmr_sheet = wb["NMR"]
+    assert nmr_sheet.cell(row=2, column=_col(nmr_sheet, "atoms_1based")).value == "1, 2"
+    assert nbo_sheet.cell(row=2, column=_col(nbo_sheet, "atom_1based")).value == 1
     assert nbo_sheet.cell(row=2, column=_col(nbo_sheet, "charge")).value == 0.3
-    assert nbo_sheet.cell(row=3, column=_col(nbo_sheet, "atom")).value == 2
+    assert nbo_sheet.cell(row=3, column=_col(nbo_sheet, "atom_1based")).value == 2
     assert nbo_sheet.cell(row=3, column=_col(nbo_sheet, "element")).value == "O"
 
 

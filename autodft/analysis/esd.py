@@ -209,6 +209,8 @@ def _blocker(session, state: str, pair) -> str:
         text += f": {reason}"
     if "LibXC Needed" in reason:
         text += " — use the LibXC version of the functional, e.g. !LibXC(B3LYP)"
+    if "S1 Stays Bound" in reason:
+        text += " — S1 dissociates (its gap to S0 collapsed): no bound S1 minimum, no S1 rates"
     return text
 
 

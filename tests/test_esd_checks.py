@@ -91,6 +91,21 @@ class TestChecks:
                         ("DE(CIS) =      0.087063157 Eh", "DE(CIS) =      0.001000000 Eh"))
         assert result.checks["Excited Root"] is False
 
+    def test_a_dissociating_s1_fails(self, tmp_path):
+        gaps = "".join(f"DE(CIS) = {g:15.9f} Eh (Root  1)\n" for g in (0.371, 0.244, 0.056, 0.019))
+        (tmp_path / "output.out").write_text((FIXTURES / "s1_opt_tail.out").read_text() + gaps)
+        result = OrcaParser().check_output(tmp_path, "optimization_excited")
+        assert result.checks["S1 Stays Bound"] is False and result.checks["Excited Root"] is True
+
+    def test_a_bound_s1_keeps_its_gap(self):
+        from autodft.qm.orca import esd_parser
+
+        steady = "".join(f"DE(CIS) = {g:15.9f} Eh (Root  1)\n" for g in (0.200, 0.160, 0.150))
+        assert not esd_parser.s1_dissociates(steady)
+        # A low gap from the start is not a dissociation.
+        low = "".join(f"DE(CIS) = {g:15.9f} Eh (Root  1)\n" for g in (0.030, 0.028))
+        assert not esd_parser.s1_dissociates(low)
+
     def test_followed_root_reads_the_last_de_cis_line(self):
         from autodft.qm.orca import esd_parser
 
@@ -169,6 +184,13 @@ class TestNoRetry:
 
     def test_a_collapsed_s1_root_is_final(self, session):
         task = self._failed_task(session, "['Excited Root']")
+        create_retry_jobs(session, Settings(), OrcaParser())
+        assert task.status == TaskStatus.failed
+        assert len(session.exec(select(ComputationJob).where(ComputationJob.task_id == task.id)).all()) == 1
+
+    def test_a_dissociating_s1_is_final_whatever_else_failed(self, session):
+        task = self._failed_task(
+            session, "['Termination', 'Optimization Convergence', 'No Error Banner', 'S1 Stays Bound']")
         create_retry_jobs(session, Settings(), OrcaParser())
         assert task.status == TaskStatus.failed
         assert len(session.exec(select(ComputationJob).where(ComputationJob.task_id == task.id)).all()) == 1

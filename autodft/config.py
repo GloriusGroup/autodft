@@ -196,6 +196,13 @@ class OrcaConfig:
     # are never read by the pipeline. Turn on only if you need to re-plot
     # densities (which also needs keep_wavefunction).
     keep_densities: bool = False
+    # Kill ORCA once nothing in its scratch dir has changed for this many
+    # minutes (a hung MPI rank otherwise burns the full time limit); the job
+    # fails as "Stalled" and is resubmitted unchanged. 0 disables.
+    stall_minutes: int = 0
+    # Copy output.out from scratch to the job dir this often while ORCA
+    # runs, for progress and for a partial output after a kill. 0 disables.
+    sync_output_minutes: int = 0
 
 
 @dataclass
