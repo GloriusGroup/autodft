@@ -15,6 +15,13 @@ from autodft import categories
 ESD_NROOTS = 10
 # The S1 optimisation follows root 1; a few roots above keep the tracking stable.
 S1_NROOTS = 5
+# An orbital basis token of a route line; aux bases (def2/J, AutoAux) never match.
+_ORBITAL_BASIS_RE = re.compile(
+    r"(?:(?:ma|old|ZORA|DKH|SARC)-)*def2?-\S+|SARC-\S+|(?:[a-z]+-)?cc-p\S+|\d-\d+\+*G\S*"
+    r"|STO-\dG|(?:aug-)?pc(?:S?seg|[JHX])?-\d\S*|x2c-\S+|ANO-\S+|IGLO-\S+|EPR-\S+"
+    r"|SV\(P\)|SVP|TZVPP?|QZVPP?",
+    re.IGNORECASE,
+)
 _SOLVATION_RE = re.compile(r"^\s*!.*\b(?:CPCM|SMD|CPCMC)\b|%cpcm\b", re.IGNORECASE | re.MULTILINE)
 
 
@@ -68,6 +75,28 @@ def with_keyword(header: str, keyword: str) -> str:
             lines[i] = body.rstrip() + f" {keyword}" + (f" {hash_}{comment}" if hash_ else "") + ending
             return "".join(lines)
     return f"! {keyword}\n" + header
+
+
+def with_basis(header: str, basis: str) -> str:
+    """*header* with the orbital basis on its ``!`` lines replaced by *basis* (added if none)."""
+    found = False
+
+    def swap(match: re.Match) -> str:
+        nonlocal found
+        space, token = match.groups()
+        if "/" in token or not _ORBITAL_BASIS_RE.fullmatch(token):
+            return match.group(0)
+        if found:
+            return ""
+        found = True
+        return space + basis
+
+    lines = header.splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("!"):
+            body, hash_, comment = line.partition("#")
+            lines[i] = re.sub(r"(\s*)([^\s!]+)", swap, body) + hash_ + comment
+    return "".join(lines) if found else with_keyword(header, basis)
 
 
 def nbo_block(keywords: str) -> str:
@@ -137,7 +166,7 @@ def compose_header(
             tda=bool(options.get("uvvis_tda", defaults["uvvis_tda"])),
         )
     if task_type == "singlepoint_nmr":
-        return with_keyword(header, "NMR")
+        return with_keyword(with_basis(header, categories.NMR_BASIS), "NMR")
     if task_type == "singlepoint_soc":
         return with_tddft(
             header, nroots=ESD_NROOTS, iroot=1, triplets=True, dosoc=True, tda=False,

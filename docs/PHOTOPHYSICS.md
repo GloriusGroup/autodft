@@ -63,9 +63,16 @@ page; it never changes what's stored.
 ## NMR
 
 Each optimised S0 conformer gets one `singlepoint_nmr` task. Its header
-is the state's singlepoint header with the `NMR` keyword appended to the
-first `!` line. NMR needs a closed-shell singlet reference (multiplicity
-1) — doublets and diradicals are refused.
+is the state's singlepoint header with the orbital basis on its `!` lines
+(`def2-*`, `cc-pV*`, `6-31G*`, `pcseg-*`, `x2c-*`, …) replaced by Jensen's
+shielding basis `pcSseg-2` (added if the header names none) and the `NMR`
+keyword appended to the first `!` line. Functional, grid, solvent and RI
+settings stay as they are, auxiliary bases included (`def2/J` works with
+`pcSseg-2` under RIJCOSX; shieldings within 0.2 ppm of `AutoAux`). ORCA
+has `pcSseg-2` for H–Kr only, so NMR for a molecule with a heavier
+element is refused. The reference compounds run through the same rule, so
+references and molecules share one NMR method. NMR needs a closed-shell
+singlet reference (multiplicity 1) — doublets and diradicals are refused.
 
 Shifts are δ = σ_ref − σ: σ_ref is the mean isotropic shielding of that
 element in a reference compound (TMS `C[Si](C)(C)C` for ¹H/¹³C, CFCl₃

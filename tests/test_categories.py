@@ -78,6 +78,14 @@ class TestRejection:
         bromine = {"multiplicity": 1, "max_atomic_number": 35}
         assert categories.rejection(bromine, meta, opt, SP) is None
 
+    def test_nmr_refuses_elements_past_krypton(self):
+        meta = {categories.NMR: True}
+        iodine = {"multiplicity": 1, "max_atomic_number": 53}
+        reason = categories.rejection(iodine, meta, OPT_FREQ, SP)
+        assert "pcSseg-2" in reason and "Kr" in reason and "53" in reason
+        krypton = {"multiplicity": 1, "max_atomic_number": 36}
+        assert categories.rejection(krypton, meta, OPT_FREQ, SP) is None
+
     def test_ecp_elements_only_matter_for_esd(self):
         iodine = {"multiplicity": 1, "max_atomic_number": 53}
         assert categories.rejection(iodine, {categories.UVVIS: True}, OPT_FREQ, SP) is None
