@@ -1,7 +1,7 @@
 """ESD work across a molecule's S0, S1 and T1 states.
 
 Expansion creates the ESD S1 and T1 states without tasks. Once every S0
-conformer is finished, the lowest one (S0*) seeds their optimisations and a
+conformer is finished, the lowest intact one (S0*) seeds their optimisations and a
 SOC singlepoint at S0*; each rate task follows once its two states'
 optimisation and SOC singlepoint have succeeded.
 """
@@ -19,7 +19,7 @@ from sqlmodel import Session, col, select
 
 from autodft.config import Settings
 from autodft.engine.state_machine import _create_singlepoint_task, paused_project_names
-from autodft.extraction import results
+from autodft.extraction import connectivity, results
 from autodft.extraction.extractor import PipelineExtractor
 from autodft.models import (
     ComputationTask, Molecule, MoleculeGeometry, MoleculeState, TaskStatus, TaskType,
@@ -97,14 +97,19 @@ def _seed(
         return
 
     extractor = PipelineExtractor(molecule.project_name)
-    pick = extractor._pick_reported_conformer(extractor.extract_state_results(session, molecule, s0))
+    conformers = extractor.extract_state_results(session, molecule, s0)
+    broken = results.connectivity_by_task(session, [c.opt_task_id for c in conformers])
+    intact = [c for c in conformers if not connectivity.breaks(broken.get(c.opt_task_id))]
+    pick = extractor._pick_reported_conformer(intact)
     opt = session.get(ComputationTask, pick.opt_task_id) \
         if pick is not None and pick.e_singlepoint is not None else None
     geometry = session.get(MoleculeGeometry, opt.output_geometry_id) \
         if opt is not None and opt.output_geometry_id is not None else None
     if geometry is None:
         _mark(session, s1, esd_seed={
-            "error": "No S0 conformer finished both its optimisation and its energy singlepoint.",
+            "error": "Every S0 conformer's optimised geometry lost bonds of the molecule."
+            if conformers and not intact else
+            "No S0 conformer finished both its optimisation and its energy singlepoint.",
         })
         logger.warning("Molecule %d: no S0 conformer to seed ESD from", molecule.id)
         return
@@ -195,6 +200,8 @@ def _join(session: Session, s0: MoleculeState, s1: MoleculeState, t1: MoleculeSt
         if status != {"successful"}:
             # Failed or still open: skip it, unchanged, and re-check next tick.
             continue
+        if any(results.broken_bonds(session, inputs[name][0]) for name in (initial, final)):
+            continue  # a dissociated S1/T1 geometry gets no rates
         session.add(ComputationTask(
             task_type=task_type,
             state_id=states[initial].id,

@@ -17,7 +17,7 @@ from autodft import categories
 from autodft.accounts import ADMIN_USERNAME
 from autodft.models.entrypoint import CalculationEntrypoint
 
-REFERENCE_PROJECT = "system_references"
+REFERENCE_PROJECT = "reference_systems"
 REFERENCE_QUALIFIED = f"{ADMIN_USERNAME}/{REFERENCE_PROJECT}"
 
 

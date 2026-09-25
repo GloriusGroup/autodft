@@ -77,6 +77,12 @@ nbo_exe    = "/mnt/share/public/software/nbo7/bin/nbo7.i8.exe"
 # Per-job scratch directory parent. Empty string runs ORCA inside the
 # shared job dir without staging through /tmp.
 tmp_dir    = "/tmp"
+# Kill ORCA when nothing in its scratch dir changed for 4 h (hung MPI ranks
+# otherwise sit out the full time limit); the job is resubmitted unchanged.
+# The longest silent step seen in 447 finished outputs was 2.2 h.
+stall_minutes       = 240
+# Copy output.out back every 10 min so running jobs show progress.
+sync_output_minutes = 10
 
 [api]
 enabled = true

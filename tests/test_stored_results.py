@@ -763,6 +763,50 @@ class TestExtractorAndStateAnalysisParity:
         assert snapshot("after_delete") == before
 
 
+    def test_a_new_jobs_bond_check_reaches_the_state_analysis(self, export_project):
+        import io
+
+        from openpyxl import load_workbook
+
+        split = "7\n\nC 0 0 0\nH 1.09 0 0\nH -0.36 1.03 0\nH -0.36 -0.51 0.89\n" \
+                "C 5 0 0\nO 6.2 0 0\nH 4.4 0.9 0\n"
+        with get_session() as session:
+            t1 = session.exec(select(MoleculeState).where(MoleculeState.description == "T1")).one()
+            opt = session.exec(select(ComputationTask).where(
+                ComputationTask.state_id == t1.id, ComputationTask.task_type == TaskType.optimization,
+            )).one()
+            job = results.latest_successful_job(session, opt.id)
+            (Path(job.job_path) / "input.xyz").write_text(split)
+            results.store(session, opt, job, Path(job.job_path))
+            session.commit()
+
+        payload = state_analysis.analyze_project("nho/p", use_cache=False)
+        picks = payload["molecules"][0]["modes"]["lowest_energy"]["picks"]
+        assert "connectivity" not in picks["S0"]
+        assert picks["T1"]["connectivity"] == {
+            "ok": False, "lost": True, "fragments": 2, "detail": "dissociated: 2 fragments (CH3 + CHO); C-C bonds 1 -> 0",
+        }
+
+        wb = load_workbook(io.BytesIO(state_analysis.build_xlsx_bytes(payload)))
+        sheet = wb["Lowest Energy"]
+        header = [c.value for c in sheet[1]]
+        assert header[-1] == "broken_bonds"
+        assert sheet.cell(row=2, column=len(header)).value == (
+            "S0: unchecked | T1: dissociated: 2 fragments (CH3 + CHO); C-C bonds 1 -> 0"
+        )
+        assert [c.value for c in wb["Conformers"][1]][-1] == "connectivity"
+
+    def test_without_bond_checks_the_workbook_keeps_its_columns(self, export_project):
+        import io
+
+        from openpyxl import load_workbook
+
+        payload = state_analysis.analyze_project("nho/p", use_cache=False)
+        wb = load_workbook(io.BytesIO(state_analysis.build_xlsx_bytes(payload)))
+        assert len(wb["Lowest Energy"][1]) == len(state_analysis._xlsx_mode_columns())
+        assert [c.value for c in wb["Conformers"][1]][-1] == "e_vert_spin_change_Eh"
+
+
 class TestParityGaps:
     """M13: cases the single-conformer, single-job fixture above doesn't cover."""
 
@@ -871,6 +915,131 @@ class TestParityGaps:
         assert extractor.extract_results() == []
         results.backfill()
         assert extractor.extract_results() == []
+
+
+FIXTURES_CONNECTIVITY = Path(__file__).parent / "fixtures" / "connectivity"
+
+
+class TestConnectivity:
+    def _opt(self, session, tmp_path, geometry="fluorobutane_t1", name="opt"):
+        task = _setup(session, TaskType.optimization)
+        session.get(Molecule, session.get(MoleculeState, task.state_id).molecule_id).smiles = "CCCCF"
+        session.commit()
+        path = _job_dir(tmp_path, name, output=OPT_OUTPUT)
+        if geometry is not None:
+            (path / "input.xyz").write_text((FIXTURES_CONNECTIVITY / f"{geometry}.xyz").read_text())
+        return task, path, _make_job(session, task, path)
+
+    def test_a_new_optimisation_stores_its_check(self, session, tmp_path):
+        task, path, job = self._opt(session, tmp_path)
+        results.store(session, task, job, path)
+        session.commit()
+
+        expected = {"ok": False, "lost": True, "fragments": 2,
+                    "detail": "dissociated: 2 fragments (C4H8F + H); C-H bonds 9 -> 8"}
+        assert results.for_task(session, task)["connectivity"] == expected
+        assert results.connectivity_by_task(session, [task.id]) == {task.id: expected}
+        assert results.broken_bonds(session, task) == expected["detail"]
+
+    def test_an_intact_geometry_is_not_broken(self, session, tmp_path):
+        task, path, job = self._opt(session, tmp_path, geometry="fluorobutane_s0")
+        results.store(session, task, job, path)
+        session.commit()
+
+        assert results.connectivity_by_task(session, [task.id])[task.id]["ok"] is True
+        assert results.broken_bonds(session, task) is None
+
+    def test_no_geometry_no_check(self, session, tmp_path):
+        task, path, job = self._opt(session, tmp_path, geometry=None)
+        results.store(session, task, job, path)
+        session.commit()
+
+        assert "connectivity" not in results.for_task(session, task)
+        assert results.connectivity_by_task(session, [task.id]) == {}
+
+    def test_backfilled_and_reparsed_jobs_are_left_unchecked(self, tmp_path):
+        settings = Settings()
+        settings.storage.data_path = str(tmp_path)
+        reset_engine()
+        init_db(settings)
+        try:
+            with get_session() as session:
+                task, _, _ = self._opt(session, tmp_path)
+                assert "connectivity" not in results.for_task(session, task)  # no record: parsed
+            assert results.backfill()["stored"] == 1
+            with get_session() as session:
+                assert results.connectivity_by_task(session, [task.id]) == {}
+        finally:
+            reset_engine()
+
+    def test_a_record_of_another_job_is_not_served(self, session, tmp_path):
+        task, path, job = self._opt(session, tmp_path)
+        results.store(session, task, job, path)
+        job.job_path = str(tmp_path / "elsewhere")
+        session.add(job)
+        session.commit()
+
+        assert results.connectivity_by_task(session, [task.id]) == {}
+
+    def test_a_failing_check_still_stores_the_record(self, session, tmp_path, monkeypatch, caplog):
+        from autodft.extraction import connectivity
+
+        def boom(smiles, xyz):
+            raise RuntimeError("rdkit exploded")
+
+        monkeypatch.setattr(connectivity, "check", boom)
+        task, path, job = self._opt(session, tmp_path)
+        with caplog.at_level(logging.WARNING):
+            assert results.store(session, task, job, path) is True
+        session.commit()
+        row = session.exec(select(JobResult).where(JobResult.job_id == job.id)).one()
+        assert "connectivity" not in json.loads(row.data_json)
+        assert "Connectivity check failed" in caplog.text
+
+    def test_a_backfill_of_the_same_job_keeps_its_check(self, tmp_path):
+        settings = Settings()
+        settings.storage.data_path = str(tmp_path)
+        reset_engine()
+        init_db(settings)
+        try:
+            with get_session() as session:
+                task, path, job = self._opt(session, tmp_path)
+                results.store(session, task, job, path)
+                row = session.exec(select(JobResult).where(JobResult.job_id == job.id)).one()
+                row.parser_version = results.PARSER_VERSION - 1  # an older parser's record
+                session.add(row)
+                session.commit()
+                job_id = job.id
+            assert results.backfill()["stored"] == 1
+            with get_session() as session:
+                row = session.exec(select(JobResult).where(JobResult.job_id == job_id)).one()
+                assert row.parser_version == results.PARSER_VERSION
+                assert json.loads(row.data_json)["connectivity"]["lost"] is True
+        finally:
+            reset_engine()
+
+    def test_another_jobs_check_is_not_carried_over(self, session, tmp_path):
+        task, path, job = self._opt(session, tmp_path)
+        results.store(session, task, job, path)
+        session.commit()
+        job.job_path = str(tmp_path / "recycled")
+        results._upsert(session, job.id, task.id, job.job_path, job.time_end, {"energy": None})
+        session.commit()
+        row = session.exec(select(JobResult).where(JobResult.job_id == job.id)).one()
+        assert "connectivity" not in json.loads(row.data_json)
+
+    def test_the_latest_successful_job_counts(self, session, tmp_path):
+        task, path, job = self._opt(session, tmp_path)
+        results.store(session, task, job, path)
+        retry_path = _job_dir(tmp_path, "retry", output=OPT_OUTPUT)
+        (retry_path / "input.xyz").write_text((FIXTURES_CONNECTIVITY / "fluorobutane_s0.xyz").read_text())
+        retry = ComputationJob(task_id=task.id, attempt=2, job_path=str(retry_path), success=True)
+        session.add(retry)
+        session.commit()
+        results.store(session, task, retry, retry_path)
+        session.commit()
+
+        assert results.broken_bonds(session, task) is None
 
 
 class _StubEngine:

@@ -78,7 +78,7 @@ def _check_reference_state(
 def _category_options_to_flags(
     uvvis: bool, ir: bool, esd: bool, esd_ht: bool, nmr: bool,
     uvvis_nroots: int = 20, uvvis_tda: bool = False, nmr_nuclei: Optional[list] = None,
-    esd_tn_window_ev: float = 0.2, esd_temperature_k: float = 298.15,
+    esd_tn_window_ev: float = 0.3, esd_temperature_k: float = 298.15,
     densities: bool = False, density_eldens: bool = True, density_spindens: bool = True,
     density_grid: int = 75, density_eldens_file: str = "ElDens.cube",
     density_spindens_file: str = "SpinDens.cube",
@@ -237,7 +237,7 @@ def submit(
         None, "--header-opt", help="ORCA header file for optimization (default: wB97X-D3 / def2-SVP CPCM(MeCN))"
     ),
     header_sp: Optional[Path] = typer.Option(
-        None, "--header-sp", help="ORCA header file for singlepoint (default: wB97X-D3 / def2-TZVPD CPCM(MeCN))"
+        None, "--header-sp", help="ORCA header file for singlepoint (default: wB97X-D3 / def2-TZVP CPCM(MeCN))"
     ),
     max_conformers_s0: int = typer.Option(1, "--max-conformers-s0", help="Max conformers kept for S0"),
     max_conformers_t1: int = typer.Option(1, "--max-conformers-t1", help="Max conformers kept for T1"),
@@ -250,7 +250,7 @@ def submit(
         help="Excited-state dynamics: ISC/RISC/IC/fluorescence/phosphorescence rates from S1 and T1 seeded at the lowest S0",
     ),
     esd_ht: bool = typer.Option(
-        False, "--esd-ht", help="Herzberg-Teller for the ESD rates (much more expensive: 6N TDDFT gradients per triplet sublevel; hours to days)"
+        False, "--esd-ht", help="Herzberg-Teller for fluorescence, phosphorescence and ISC channels with SOCME below 5 cm-1 (much more expensive: 3N-6 or more displaced TDDFT+SOC singlepoints per triplet sublevel; hours to days)"
     ),
     nmr: bool = typer.Option(
         False, "--nmr", help="NMR shifts (1H/13C/19F) vs automatically computed TMS / CFCl3"
@@ -260,7 +260,7 @@ def submit(
     nmr_nuclei: str = typer.Option(
         "H,C,F", "--nmr-nuclei", help="NMR nuclei to report, comma-separated"
     ),
-    esd_tn_window_ev: float = typer.Option(0.2, "--esd-tn-window", help="Include S1->Tn ISC for Tn up to this many eV above S1"),
+    esd_tn_window_ev: float = typer.Option(0.3, "--esd-tn-window", help="Include S1->Tn ISC for Tn up to this many eV above S1"),
     esd_temperature_k: float = typer.Option(298.15, "--esd-temperature", help="Temperature of the ESD rates (K)"),
     densities: bool = typer.Option(False, "--densities", help="Electron / spin density cube files from every state's energy singlepoint"),
     no_eldens: bool = typer.Option(False, "--no-eldens", help="Skip the electron density cube"),
@@ -357,7 +357,7 @@ def submit_batch(
         None, "--header-opt", help="ORCA header file for optimization (default: wB97X-D3 / def2-SVP CPCM(MeCN))"
     ),
     header_sp: Optional[Path] = typer.Option(
-        None, "--header-sp", help="ORCA header file for singlepoint (default: wB97X-D3 / def2-TZVPD CPCM(MeCN))"
+        None, "--header-sp", help="ORCA header file for singlepoint (default: wB97X-D3 / def2-TZVP CPCM(MeCN))"
     ),
     max_conformers_s0: int = typer.Option(1, "--max-conformers-s0", help="Max conformers kept for S0"),
     max_conformers_t1: int = typer.Option(1, "--max-conformers-t1", help="Max conformers kept for T1"),
@@ -370,7 +370,7 @@ def submit_batch(
         help="Excited-state dynamics: ISC/RISC/IC/fluorescence/phosphorescence rates from S1 and T1 seeded at the lowest S0",
     ),
     esd_ht: bool = typer.Option(
-        False, "--esd-ht", help="Herzberg-Teller for the ESD rates (much more expensive: 6N TDDFT gradients per triplet sublevel; hours to days)"
+        False, "--esd-ht", help="Herzberg-Teller for fluorescence, phosphorescence and ISC channels with SOCME below 5 cm-1 (much more expensive: 3N-6 or more displaced TDDFT+SOC singlepoints per triplet sublevel; hours to days)"
     ),
     nmr: bool = typer.Option(
         False, "--nmr", help="NMR shifts (1H/13C/19F) vs automatically computed TMS / CFCl3"
@@ -380,7 +380,7 @@ def submit_batch(
     nmr_nuclei: str = typer.Option(
         "H,C,F", "--nmr-nuclei", help="NMR nuclei to report, comma-separated"
     ),
-    esd_tn_window_ev: float = typer.Option(0.2, "--esd-tn-window", help="Include S1->Tn ISC for Tn up to this many eV above S1"),
+    esd_tn_window_ev: float = typer.Option(0.3, "--esd-tn-window", help="Include S1->Tn ISC for Tn up to this many eV above S1"),
     esd_temperature_k: float = typer.Option(298.15, "--esd-temperature", help="Temperature of the ESD rates (K)"),
     densities: bool = typer.Option(False, "--densities", help="Electron / spin density cube files from every state's energy singlepoint"),
     no_eldens: bool = typer.Option(False, "--no-eldens", help="Skip the electron density cube"),

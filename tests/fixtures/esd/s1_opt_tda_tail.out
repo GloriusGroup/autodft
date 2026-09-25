@@ -1,0 +1,32 @@
+TD-DFT/TDA EXCITED STATES (SINGLETS)
+------------------------------------
+
+the weight of the individual excitations are printed if larger than 1.0e-02
+
+STATE  1:  E=   0.116339 au      3.166 eV    25533.5 cm**-1 <S**2> =   0.000000 Mult 1
+     7a ->   8a  :     0.996223 (c=  0.99810978)
+
+  State      Overlap      cos(t)
+  ------------------------------
+      1        0.999       0.761
+      2      skipped - delta E larger than 1.00 eV
+      3      skipped - delta E larger than 1.00 eV
+      4      skipped - delta E larger than 1.00 eV
+      5      skipped - delta E larger than 1.00 eV
+
+Largest overlap:                                 ... 0.999293
+Ratio second largest/largest:                    ... 0.000000
+The IROOT now is:                                ... 1
+
+-----------------------
+CIS/TD-DFT TOTAL ENERGY
+-----------------------
+
+    E(SCF)  =   -114.264224950 Eh
+    DE(CIS) =      0.116339158 Eh (Root  1)
+    ----------------------------- ---------
+    E(tot)  =   -114.147885792 Eh
+
+
+                                *** OPTIMIZATION RUN DONE ***
+                             ****ORCA TERMINATED NORMALLY****

@@ -17,6 +17,8 @@ class MoleculeGeometry(SQLModel, table=True):
     energy: Optional[float] = None
     origin_task_id: Optional[int] = Field(default=None, foreign_key="computation_tasks.id")
     label: Optional[str] = None
+    # GOAT's degeneracy of a conformer; None (older rows, non-GOAT geometries) counts as 1.
+    degeneracy: Optional[int] = None
 
     # relationships
     state: Optional["MoleculeState"] = Relationship(back_populates="geometries")

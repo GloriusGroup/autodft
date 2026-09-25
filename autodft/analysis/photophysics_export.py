@@ -11,6 +11,8 @@ from openpyxl.styles import Font, PatternFill
 _HEADER_FONT = Font(bold=True, color="FFFFFF")
 _HEADER_FILL = PatternFill("solid", fgColor="2F3340")
 RATES = ("isc", "risc", "ic", "fluorescence", "isc_t1_s0", "phosphorescence")
+# The FC reruns of analysis.esd, in the diagnostics sheet's column order.
+DIAGNOSTICS = ("inlinew_100", "inlinew_25", "inlinew_250", "tcutfreq_300")
 DERIVED = ("tau_s1_ns", "phi_fluorescence", "phi_isc", "phi_ic",
            "tau_t1_us", "phi_phosphorescence", "phi_isc_t1_s0", "phi_risc")
 
@@ -30,8 +32,12 @@ def build_xlsx(payload: dict) -> bytes:
     summary.column_dimensions["A"].width = 28
     summary.column_dimensions["B"].width = 40
 
-    uv, uv_sticks, ir, ir_sticks, nmr, esd, esd_jobs, nbo = [], [], [], [], [], [], [], []
+    uv, uv_sticks, ir, ir_sticks, nmr, esd, esd_jobs, esd_checks, nbo = [], [], [], [], [], [], [], [], []
+    broken = []
     for m in payload.get("molecules", []):
+        for b in m.get("broken_bonds", []):
+            broken.append((m["id"], m["smiles"], b["state"], b["state_id"], b["conformer_index"],
+                           b["opt_task_id"], b["detail"]))
         if m.get("uvvis"):
             e, peak = m["uvvis"], m["uvvis"].get("peak") or {}
             uv.append((m["id"], m["smiles"], m["state_id"], e["count"], e["pending"], e["failed"],
@@ -56,7 +62,7 @@ def build_xlsx(payload: dict) -> bytes:
                 ref = e.get("reference", {}).get(element, {})
                 for s in signals:
                     nmr.append((m["id"], m["smiles"], m["state_id"], element, s["shift_ppm"], s["shielding_ppm"],
-                                s["count"], ", ".join(str(a) for a in s["atoms"]), ref.get("compound"),
+                                s["count"], ", ".join(str(a + 1) for a in s["atoms"]), ref.get("compound"),
                                 ref.get("status"), ref.get("method_matches"), e.get("equivalence")))
         if m.get("esd"):
             e, d = m["esd"], m["esd"].get("derived") or {}
@@ -66,10 +72,17 @@ def build_xlsx(payload: dict) -> bytes:
                         *(rates.get(r, {}).get("rate_s") for r in RATES),
                         *(d.get(k) for k in DERIVED), " | ".join(e.get("flags", []))))
             for r in RATES:
-                for j in rates.get(r, {}).get("jobs", []):
+                entry = rates.get(r, {})
+                for j in entry.get("jobs", []):
+                    ht = j.get("ht", entry.get("ht"))
                     esd_jobs.append((m["id"], m["state_id"], r, j.get("triplet"), j.get("sublevel"),
                                      j.get("rate_s"), j.get("dele_cm"), j.get("socme_cm"), j.get("fc_percent"),
-                                     j.get("ht_percent"), j.get("k_squared"), j.get("e00_cm")))
+                                     j.get("ht_percent"), j.get("k_squared"), j.get("e00_cm"), ht,
+                                     j.get("ht_reason", entry.get("ht_reason"))))
+                for c in entry.get("diagnostics", []):
+                    esd_checks.append((m["id"], m["state_id"], r, c["triplet"],
+                                       *(c.get(f"k_{v}") for v in DIAGNOSTICS),
+                                       c["width_sensitive"], c["soft_mode_dominated"]))
         if m.get("nbo"):
             for s in m["nbo"]["states"]:
                 for a in s.get("atoms", []):
@@ -81,19 +94,26 @@ def build_xlsx(payload: dict) -> bytes:
     _sheet(wb, "UV-Vis sticks", ("mol_id", "state_id", "conformer", "weight", "root", "energy_eV",
                                  "wavelength_nm", "fosc"), uv_sticks)
     _sheet(wb, "IR", ("mol_id", "smiles", "state_id", "count", "pending", "failed", "unavailable",
-                      "unweighted", "weighting", "peak_cm", "peak_intensity_km_mol"), ir)
-    _sheet(wb, "IR sticks", ("mol_id", "state_id", "conformer", "weight", "frequency_cm",
+                      "unweighted", "weighting", "peak_cm_unscaled", "peak_intensity_km_mol"), ir)
+    # Harmonic frequencies as ORCA prints them; no scale factor applied.
+    _sheet(wb, "IR sticks", ("mol_id", "state_id", "conformer", "weight", "frequency_cm_unscaled",
                              "intensity_km_mol"), ir_sticks)
     _sheet(wb, "NMR", ("mol_id", "smiles", "state_id", "nucleus", "shift_ppm", "shielding_ppm", "count",
-                       "atoms", "reference", "reference_status", "method_matches", "equivalence"), nmr)
+                       "atoms_1based", "reference", "reference_status", "method_matches", "equivalence"), nmr)
     _sheet(wb, "ESD", ("mol_id", "smiles", "state_id", "status", "temperature_K", "HT", "dEST_eV",
                        "dEST_UKS_eV", "k_ISC", "k_RISC", "k_IC", "k_F", "k_ISC_T1S0", "k_P", "tau_S1_ns",
                        "phi_F", "phi_ISC", "phi_IC", "tau_T1_us", "phi_P", "phi_ISC_T1S0", "phi_RISC",
                        "flags"), esd)
     _sheet(wb, "ESD jobs", ("mol_id", "state_id", "rate", "triplet", "sublevel", "rate_s", "dele_cm",
-                            "socme_cm", "fc_percent", "ht_percent", "k_squared", "e00_cm"), esd_jobs)
-    _sheet(wb, "NBO", ("mol_id", "smiles", "state_id", "state", "atom", "element", "charge", "spin",
+                            "socme_cm", "fc_percent", "ht_percent", "k_squared", "e00_cm", "HT",
+                            "HT_reason"), esd_jobs)
+    _sheet(wb, "ESD diagnostics", ("mol_id", "state_id", "rate", "triplet", "k_FC_INLINEW100",
+                                   "k_FC_INLINEW25", "k_FC_INLINEW250", "k_FC_TCUTFREQ300",
+                                   "width_sensitive", "soft_mode_dominated"), esd_checks)
+    _sheet(wb, "NBO", ("mol_id", "smiles", "state_id", "state", "atom_1based", "element", "charge", "spin",
                        "count", "weighting"), nbo)
+    _sheet(wb, "Broken bonds", ("mol_id", "smiles", "state", "state_id", "conformer", "opt_task_id",
+                                "detail"), broken)
 
     buffer = BytesIO()
     wb.save(buffer)

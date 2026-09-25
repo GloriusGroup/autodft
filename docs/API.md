@@ -194,11 +194,11 @@ package defaults in `autodft/qm/orca/defaults.py`.
 | `uvvis_nroots`                              | int    | `20`          | UV/Vis excited states (1–100). Stored only when UV/Vis is requested.                        |
 | `uvvis_tda`                                 | bool   | `false`       | Tamm–Dancoff approximation for the UV/Vis TDDFT. Stored only when UV/Vis is requested.      |
 | `request_spec_ir`                           | bool   | `false`       | IR: read from the S0 optimisation's frequency calculation — no extra job. Needs `Freq` in the optimisation header. |
-| `request_spec_nmr`                          | bool   | `false`       | NMR: `NMR` is added to the singlepoint header's `!` line for a singlepoint on every optimised S0 conformer. Shifts are referenced to TMS (¹H, ¹³C) and CFCl₃ (¹⁹F), which the pipeline computes itself — once per optimisation/singlepoint header pair — in the protected `admin/system_references` project. Closed-shell molecules only. |
+| `request_spec_nmr`                          | bool   | `false`       | NMR: a singlepoint on every optimised S0 conformer with the singlepoint header's orbital basis replaced by `pcSseg-2` and `NMR` added to its `!` line; refused for elements past Kr (no `pcSseg-2`). Shifts are referenced to TMS (¹H, ¹³C) and CFCl₃ (¹⁹F), which the pipeline computes itself — once per optimisation/singlepoint header pair — in the protected `admin/reference_systems` project. Closed-shell molecules only. |
 | `nmr_nuclei`                                | list   | `["H","C","F"]` | Nuclei to report; stored only with NMR.                                                  |
-| `request_esd` | bool | `false` | Excited-state dynamics: S1 and T1 optimised from the lowest S0 conformer, SOC TDDFT, ORCA ESD rates (ISC, RISC, IC, fluorescence, T1→S0 ISC, phosphorescence). Needs a closed-shell singlet, `Freq` in the optimisation header, the energy singlepoint, and a functional whose TDDFT gradients ORCA supports (native B88 functionals such as B3LYP need `LibXC(...)`). |
-| `request_esd_ht` | bool | `false` | Herzberg–Teller for the ESD rates; only with `request_esd`. |
-| `esd_tn_window_ev` | float | `0.2` | S1→Tn ISC is summed over triplets up to this many eV above S1 (0–1). Stored only with ESD. |
+| `request_esd` | bool | `false` | Excited-state dynamics: S1 and T1 optimised from the lowest S0 conformer, SOC TDDFT, ORCA ESD rates (ISC, RISC, IC, fluorescence, T1→S0 ISC, phosphorescence). Needs a closed-shell singlet, `Freq` in the optimisation header, the energy singlepoint, and a functional whose TDDFT gradients ORCA supports (native B88 functionals such as B3LYP need `LibXC(...)`). Molecules with an element past Kr (ECP in def2, e.g. I) need `ZORA`/`DKH`/`X2C` in the singlepoint header. |
+| `request_esd_ht` | bool | `false` | Herzberg–Teller where it matters: fluorescence, phosphorescence, and ISC channels whose SOCME is below 5 cm⁻¹ (RISC more than 10 kT uphill stays FC); only with `request_esd`. |
+| `esd_tn_window_ev` | float | `0.3` | S1→Tn ISC is summed over triplets up to this many eV above S1 (0–1). Stored only with ESD. |
 | `esd_temperature_k` | float | `298.15` | Temperature of the rates (0 < T ≤ 1000). Stored only with ESD. |
 | `request_densities` | bool | `false` | Gaussian cube files (electron and/or spin density) from a `%plots` block added to every state's own energy singlepoint — S0, T1, ox, red, not only S0's (ESD's S1 has no energy singlepoint, so it never gets one). Needs the energy singlepoint stage; the singlepoint header must not already contain `%plots`. |
 | `density_eldens` | bool | `true` | Write the electron density cube. Stored only with Densities; at least one of `density_eldens` / `density_spindens` must be true. |
@@ -207,7 +207,7 @@ package defaults in `autodft/qm/orca/defaults.py`.
 | `density_eldens_file` | str | `"ElDens.cube"` | Cube file name: `NAME.cube`, letters/digits/`_.-` only, max 64 characters; must differ from `density_spindens_file`. Stored only with Densities. |
 | `density_spindens_file` | str | `"SpinDens.cube"` | Same rule as `density_eldens_file`, for the spin density cube. Stored only with Densities. |
 | `request_singlepoint_nbo` | bool | `false` | Natural population analysis via ORCA's NBO 7: the `NBO` keyword plus a `%nbo` block on every state's own energy singlepoint (same states as Densities, above). Needs the energy singlepoint stage, a singlepoint header that does not already contain the `NBO` keyword or a `%nbo` block, and `[orca].nbo_exe` configured on the server — refused with `400` otherwise (see [`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md#densities-and-nbo)). |
-| `nbo_keywords` | str | `""` | Extra keywords placed inside `NBOKEYLIST = "$NBO ... $END"`, e.g. `"BNDIDX"`. Letters, digits, spaces and `=_.,+-` only (max 200 characters) — no `$`, quotes or newlines. Stored only with NBO. |
+| `nbo_keywords` | str | `""` | Extra keywords placed inside `NBOKEYLIST = "$NBO ... $END"`, e.g. `"BNDIDX"`; `ARCHIVE` is added so NBO's `FILE.47` is still written (copied back to the job directory). Letters, digits, spaces and `=_.,+-` only (max 200 characters) — no `$`, quotes or newlines. Stored only with NBO. |
 
 `request_S1` is **not** exposed: the S1 state exists only as part of ESD (`request_esd`).
 
@@ -347,7 +347,8 @@ Paginated molecule list.
 
 ### `GET /api/molecules/{id}`
 
-Full molecule tree: states → tasks → jobs.
+Full molecule tree: states → tasks → jobs. An optimisation task judged
+since the broken-bond check existed adds `connectivity` (below).
 
 ### `GET /api/tasks` `?status=&type=&limit=`
 
@@ -427,18 +428,30 @@ plus `esd`: one combined status (`failed` > `pending` > `created` >
 `singlepoint_soc` and every `esd_*` rate task. This is what the
 dashboard's *Project Overview → Molecules* subpage renders.
 
+A conformer whose optimisation was judged since the broken-bond check
+existed adds `connectivity`: `{"ok": false, "lost": true, "fragments": 2,
+"detail": "dissociated: 2 fragments (C4H8F + H); C-H bonds 9 -> 8"}`
+(`ok: true`, `detail: ""` when intact; `lost: false` with `bond formed: ...`
+when only an extra bond appeared). Older conformers carry no key. See
+[`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md#broken-bonds).
+
 ### `GET /api/projects/{name}/state-analysis`
 
 Triplet energies, redox free energies / E vs SCE in MeCN, and 4-point
 Marcus reorganisation energies, for both the `lowest_energy` and the
 `rmsd_matched` conformer-selection modes. Solvation is detected from the
-header text; without it, redox values are reported as ΔG only.
+header text; without it, redox values are reported as ΔG only. A pick
+whose optimisation has a broken-bond check adds `connectivity` (same shape
+as in `molecules-detail`).
 
 ### `GET /api/projects/{name}/state-analysis/export`
 
 The same payload as a multi-sheet XLSX attachment (Summary, Lowest
 Energy, RMSD Matched, Conformers). Energies in Hartree, potentials in V
-vs SCE.
+vs SCE. When any pick has a broken-bond check, the mode sheets add a last
+column `broken_bonds` (`<state>: ok`, `<state>: <detail>` or
+`<state>: unchecked` per pick, joined by ` | `) and
+Conformers a last column `connectivity`.
 
 ### `GET /api/projects/{name}/photophysics` `?molecule_id=`
 
@@ -461,7 +474,7 @@ below):
                  "unweighted": 0, "weighting": "G", "shortest_nm": 156.5,
                  "peak": {"wavelength_nm": 229.6, "energy_ev": 5.4, "fosc": 0.24}},
        "ir": {"count": 1, "pending": 0, "failed": 0, "unavailable": 0,
-              "unweighted": 0, "weighting": "G",
+              "unweighted": 0, "weighting": "G", "scaled": false, "scale_factor": 1.0,
               "peak": {"frequency_cm": 410.2, "intensity_km_mol": 12.3}}}]}
 
 `count` is conformers with a spectrum and the energy the weights use;
@@ -474,6 +487,9 @@ correction, else `"E_sp"`, else `"equal"`. `peak` is the transition/mode
 with the largest weight × fosc (or × intensity), or `null` when `count`
 is 0; it is present for UV/Vis and IR only. UV/Vis also reports
 `shortest_nm`, the shortest wavelength across every counted transition.
+IR frequencies are unscaled harmonic ones (`"scaled": false`,
+`"scale_factor": 1.0`); the dashboard's scale factor (default 0.95)
+changes only its plot.
 
 An NMR molecule's entry adds `nmr`, with the same counts and no `peak`:
 
@@ -490,12 +506,12 @@ when atoms are grouped by the symmetry classes of the bonds perceived from
 the first counted conformer's geometry, else `"none"` (one signal per
 atom). `reference` names, per reported nucleus, the reference compound
 (TMS for H and C, CFCl₃ for F) at the molecule's optimisation and
-singlepoint headers in `admin/system_references`: `status` is `"ok"`,
+singlepoint headers in `admin/reference_systems`: `status` is `"ok"`,
 `"pending"`, `"failed"` or `"missing"` (none at this method); `sigma_ppm`
 is its mean isotropic shielding for that element; `method_matches` says
 whether its NMR input's `!` keywords equal the molecule's (SCF convergence
 and `PALn` ignored), `null` if either input is missing. `signals` and
-`reference` stay empty until a conformer is counted. `system_references`
+`reference` stay empty until a conformer is counted. `reference_systems`
 is a reserved project name, refused for every submitter.
 
 A molecule entry with no conformer left to show (every optimisation
@@ -507,8 +523,14 @@ gets `stage`.
 An ESD molecule's entry adds `esd`:
 
     "esd": {"status": "done", "temperature_k": 298.15, "herzberg_teller": false,
-            "tn_window_ev": 0.2, "seed_task_id": 118,
-            "rates": {"isc": {"status": "successful", "rate_s": 9521.34},
+            "tn_window_ev": 0.3, "seed_task_id": 118,
+            "rates": {"isc": {"status": "successful", "rate_s": 9521.34, "ht": false,
+                              "ht_reason": "Herzberg-Teller not requested",
+                              "diagnostics": [{"triplet": 1, "k_inlinew_100": 9521.34,
+                                               "k_inlinew_25": 8810.2, "k_inlinew_250": 10240.7,
+                                               "k_tcutfreq_300": 9120.5,
+                                               "width_sensitive": false,
+                                               "soft_mode_dominated": false}]},
                       "risc": {"status": "successful", "rate_s": 1.236e-05},
                       "ic": {"status": "successful", "rate_s": 26472.1},
                       "fluorescence": {"status": "successful", "rate_s": 13386.15, "e00_ev": 2.3955},
@@ -529,16 +551,31 @@ rate is still open, `"done"` once all six have settled, or `"failed"`
 its own `status`: `"successful"`, `"created"`, `"pending"`, `"failed"`
 (with `reason`), `"waiting"`, `"blocked"` (with `reason` — an upstream
 optimisation or SOC singlepoint failure, named with the `!LibXC(<functional>)`
-fix when that is the cause), or `"unavailable"` (the output has no rate
-to parse). A successful rate's `rate_s` sums its jobs for `isc` (one job
+fix when that is the cause, or an S1/T1 optimisation whose geometry lost
+bonds: `T1 geometry dissociated: ... (optimisation task N); no rates on a
+broken geometry`), `"unavailable"` (the output has no rate
+to parse), or `"incomplete"` (`rate_s` null, `reason` naming the ORCA
+jobs that printed no rate: a multi-job rate is never combined from a
+subset). A successful rate's `rate_s` sums its jobs for `isc` (one job
 per T_n channel within `tn_window_ev` of S1) and averages them for every
 other rate; `fluorescence` also reports `e00_ev`, its 0-0 energy. An
 FC-mode `isc`, `isc_t1_s0` or `risc` rate whose SOCME printed as
 `0.00` cm⁻¹ (below ORCA's print precision) adds `socme_zero: true` —
 its rate is 0 because the channel is symmetry- or El-Sayed-forbidden,
 not because it is truly closed; `request_esd_ht` is the remedy.
-`herzberg_teller` reports whether the rates are the FC-only default or
-were requested with HT. `delta_est_ev` is the TDDFT ΔE(S1-T1);
+`herzberg_teller` reports whether HT was requested; each built rate's
+`ht` and `ht_reason` say whether it actually ran HT and why (per channel
+for `isc`, e.g. `"T1: SOCME 0.88 cm-1 < 5; T2: SOCME 20.00 cm-1 >= 5"`),
+and the detail view's `jobs` rows carry the same per job. `isc`,
+`isc_t1_s0` and `risc` add `diagnostics`, one entry per channel with the
+FC reruns' rates (`k_inlinew_100`, `k_inlinew_25`, `k_inlinew_250`,
+`k_tcutfreq_300`; null for a rerun that printed no rate) and the verdicts
+`width_sensitive` (25 vs 250 cm⁻¹ more than 3× apart) and
+`soft_mode_dominated` (TCUTFREQ 300 below a tenth of the baseline);
+channels whose rates stay below 1 s⁻¹ are never flagged. The verdicts
+describe the FC lineshape only — an HT channel's rerun uses its total
+SOCME, often ~0, and is then not judged. These reruns never enter
+`rate_s`, and a failed rerun never fails the rate. `delta_est_ev` is the TDDFT ΔE(S1-T1);
 `delta_est_uks_ev` instead compares the TDDFT S1 against the T1 state's
 own (UKS) energy singlepoint at the T1 geometry. `derived` reports
 `tau_s1_ns` / `phi_fluorescence` / `phi_isc` / `phi_ic` once
@@ -548,7 +585,8 @@ own (UKS) energy singlepoint at the T1 geometry. `derived` reports
 warnings: a negative rate clamped to 0, a job whose sum of K*K exceeds 7
 (geometries too far apart for a reliable harmonic rate), a zero-SOCME FC
 channel (see `socme_zero` above), and, when that channel feeds a
-`derived` group, that its lifetime/yields count the rate as 0 too.
+`derived` group, that its lifetime/yields count the rate as 0 too, and a
+width-sensitive or soft-mode-dominated channel.
 
 An NBO molecule's entry adds `nbo`, one entry per NBO-flagged state that
 has its own energy singlepoint — S0, and T1 / ox / red when requested;
@@ -576,7 +614,8 @@ still in.
 
 With `?molecule_id=`, each successful rate also adds `jobs` (its
 per-ORCA-job values — `rate_s`, `fc_percent`, `ht_percent`, `k_squared`,
-`e00_cm`, plus whatever went into building it), and `esd` adds
+`e00_cm`, plus whatever went into building it; an HT job's `socme_cm` is
+its own sublevel's |SOC| as ORCA printed it), and `esd` adds
 `energies_eh` (E(S0), E(S1), E(T1)), `socme_cm` (`S1_T1_at_T1`,
 `S1_T1_at_S1`, `T1_S0_at_S0`) and a flag for any state whose optimisation
 still shows a soft imaginary mode.
@@ -585,17 +624,17 @@ With `?molecule_id=`, that molecule's entries add `conformers` (read on
 request, not cached) and drop nothing:
 
     "uvvis": {..., "conformers": [{"conformer_index": 1, "opt_task_id": 90,
-              "weight": 1.0, "transitions": [{"root": 1, "energy_ev": 5.4,
+              "degeneracy": 3, "weight": 1.0, "transitions": [{"root": 1, "energy_ev": 5.4,
               "wavelength_nm": 229.6, "fosc": 0.24}]}]}
 
     "nmr": {..., "conformers": [{"conformer_index": 1, "opt_task_id": 90,
-            "weight": 1.0}],
+            "degeneracy": 3, "weight": 1.0}],
             "nuclei": {"H": [{"atoms": [4, 5], "count": 2,
                               "shielding_ppm": 22.614, "shift_ppm": 8.74}],
                        "C": [...]}}
 
 Each NMR signal is one symmetry class: `atoms` are 0-based ORCA atom
-indices, `shielding_ppm` is the Boltzmann-weighted isotropic shielding
+indices (the dashboard and the XLSX show them 1-based, like NBO), `shielding_ppm` is the Boltzmann-weighted isotropic shielding
 averaged over them, and `shift_ppm` = `sigma_ppm` − `shielding_ppm`, or
 `null` unless the reference's `status` is `"ok"`. Signals are sorted by
 ascending shielding (descending shift).
@@ -605,7 +644,7 @@ Each of `nbo`'s states adds `atoms` (the weighted natural charge, and
 
     "nbo": {"states": [{..., "atoms": [{"index": 0, "element": "C", "charge": 0.812},
                         {"index": 1, "element": "O", "charge": -0.612, "spin": 0.034}],
-                        "conformers": [{"conformer_index": 1, "opt_task_id": 90, "weight": 1.0,
+                        "conformers": [{"conformer_index": 1, "opt_task_id": 90, "degeneracy": 3, "weight": 1.0,
                                         "charges": [{"index": 0, "element": "C", "charge": 0.812,
                                                      "spin": null}, {"index": 1, ...}]}]}]}
 
@@ -615,6 +654,14 @@ state's atoms; a closed-shell state's atoms carry no `spin` key.
 
 `conformer_index` is the conformer's 1-based position among the state's
 optimisation tasks by id, the same numbering as the Molecules page.
+`degeneracy` is GOAT's g of the conformer the optimisation started from (1
+without one); `weight` ∝ g·exp(−E/kT). A conformer whose optimisation was
+flagged by the broken-bond check adds `connectivity_ok: false`; see
+[`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md#weighting).
+
+A molecule any of whose state family's optimisations lost bonds adds
+`broken_bonds` (summary and detail): `[{"state": "T1", "state_id": 23,
+"conformer_index": 1, "opt_task_id": 95, "detail": "dissociated: ..."}]`.
 
 ### `POST /api/projects/{name}/export` `?format=csv|json|files|xlsx|photophysics&all_conformers=true|false`
 

@@ -119,12 +119,14 @@ class RetryStrategy(ABC):
 
 
 def _fc_rate_job(job_path: str) -> bool:
-    """An FC ESD input (``! ESD(ISC) NOITER``); unreadable counts as FC."""
+    """An FC-only ESD input (``! ESD(ISC) NOITER``, no TDDFT job); unreadable counts as FC."""
     try:
         text = (Path(job_path) / "input.inp").read_text(encoding="utf-8", errors="replace")
     except (OSError, TypeError):
         return True
-    return re.search(r"^\s*!\s*ESD\(ISC\)\s+NOITER\b", text, re.IGNORECASE | re.MULTILINE) is not None
+    # HT inputs carry FC diagnostics too; their TDDFT jobs decide.
+    return re.search(r"^\s*!\s*ESD\(ISC\)\s+NOITER\b", text, re.IGNORECASE | re.MULTILINE) is not None \
+        and re.search(r"%tddft\b", text, re.IGNORECASE) is None
 
 
 class IncreaseResources(RetryStrategy):

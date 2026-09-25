@@ -40,6 +40,7 @@ import numpy as np
 from sqlmodel import col, func, select
 
 from autodft.db import get_session
+from autodft.extraction import results as stored
 from autodft.extraction.extractor import ConformerResult, PipelineExtractor
 from autodft.models import (
     ComputationHeader,
@@ -142,6 +143,7 @@ class StatePick:
     e_vert_ox: Optional[float]           # Hartree
     e_vert_red: Optional[float]          # Hartree
     e_vert_spin_change: Optional[float]  # Hartree
+    connectivity: Optional[dict] = None  # stored bond check of the optimisation (new jobs only)
 
 
 @dataclass
@@ -453,6 +455,7 @@ def _analyze_project_uncached(project_name: str) -> dict:
             if out_geom_ids else []
         )
         geom_by_id = {g.id: g for g in out_geoms}
+        connectivity = stored.connectivity_by_task(session, opt_task_ids)
 
     def _coords_for(opt_task_id: int) -> Optional[np.ndarray]:
         task = opt_by_id.get(opt_task_id)
@@ -487,6 +490,7 @@ def _analyze_project_uncached(project_name: str) -> dict:
             e_vert_ox=r.e_vert_ox,
             e_vert_red=r.e_vert_red,
             e_vert_spin_change=r.e_vert_spin_change,
+            connectivity=connectivity.get(r.opt_task_id),
         )
 
     out_mols = []
@@ -583,18 +587,7 @@ def _ana_to_dict(a: ModeAnalysis) -> dict:
     return {
         "mode": a.mode,
         "picks": {
-            st: {
-                "state": p.state,
-                "conformer_index": p.conformer_index,
-                "opt_task_id": p.opt_task_id,
-                "rmsd_to_s0": p.rmsd_to_s0,
-                "e_sp": p.e_sp,
-                "e_correction": p.e_correction,
-                "e_combined": p.e_combined,
-                "e_vert_ox": p.e_vert_ox,
-                "e_vert_red": p.e_vert_red,
-                "e_vert_spin_change": p.e_vert_spin_change,
-            }
+            st: _pick_to_dict(p)
             for st, p in a.picks.items()
         },
         "triplet": {
@@ -615,6 +608,25 @@ def _ana_to_dict(a: ModeAnalysis) -> dict:
             "lambda_bwd_h":  a.red_lambda_bwd_h,
         },
     }
+
+
+def _pick_to_dict(p: StatePick) -> dict:
+    out = {
+        "state": p.state,
+        "conformer_index": p.conformer_index,
+        "opt_task_id": p.opt_task_id,
+        "rmsd_to_s0": p.rmsd_to_s0,
+        "e_sp": p.e_sp,
+        "e_correction": p.e_correction,
+        "e_combined": p.e_combined,
+        "e_vert_ox": p.e_vert_ox,
+        "e_vert_red": p.e_vert_red,
+        "e_vert_spin_change": p.e_vert_spin_change,
+    }
+    # Only jobs judged since the check existed have one; older payloads stay as they were.
+    if p.connectivity is not None:
+        out["connectivity"] = p.connectivity
+    return out
 
 
 # ----------------------------------------------------------------------
@@ -664,6 +676,23 @@ def _lookup(obj: object, path: str):
     return cur
 
 
+def _check_text(found: Optional[dict]) -> Optional[str]:
+    """``ok``, what broke, or None when the optimisation was never checked."""
+    if found is None:
+        return None
+    return "ok" if found["ok"] else found["detail"]
+
+
+def _broken_bonds(ana: Optional[dict]) -> Optional[str]:
+    """Each pick's bond check, e.g. ``S0: ok | T1: dissociated: ... | red: unchecked``; None if none has one."""
+    picks = (ana or {}).get("picks") or {}
+    if not any("connectivity" in p for p in picks.values()):
+        return None
+    return " | ".join(
+        f"{st}: {_check_text(p.get('connectivity')) or 'unchecked'}" for st, p in picks.items()
+    )
+
+
 def build_xlsx_bytes(payload: dict) -> bytes:
     """Render the state-analysis ``payload`` (the dict returned by
     :func:`analyze_project`) into an XLSX file and return the raw bytes.
@@ -710,6 +739,14 @@ def build_xlsx_bytes(payload: dict) -> bytes:
 
     # ── Per-mode summary sheets ──────────────────────────────────────
     columns = _xlsx_mode_columns()
+    # Bond checks exist only for jobs judged since they were added; without
+    # any, the workbook keeps its old layout.
+    checked = any(
+        "connectivity" in p
+        for m in payload.get("molecules", [])
+        for ana in (m.get("modes") or {}).values() if ana
+        for p in (ana.get("picks") or {}).values()
+    )
     for mode_key, sheet_title in (
         ("lowest_energy", "Lowest Energy"),
         ("rmsd_matched",  "RMSD Matched"),
@@ -730,6 +767,12 @@ def build_xlsx_bytes(payload: dict) -> bytes:
                 else:
                     val = _lookup(row_src, path) if ana else None
                 ws.cell(row=r_idx, column=c_idx, value=val)
+            if checked:
+                ws.cell(row=r_idx, column=len(columns) + 1, value=_broken_bonds(ana))
+        if checked:
+            cell = ws.cell(row=1, column=len(columns) + 1, value="broken_bonds")
+            cell.font = header_font
+            cell.fill = header_fill
 
         # Sensible default widths.
         for col_letter, width in (
@@ -746,7 +789,7 @@ def build_xlsx_bytes(payload: dict) -> bytes:
         "mode", "mol_id", "smiles", "state", "conformer_index", "opt_task_id",
         "rmsd_to_S0_A", "e_sp_Eh", "e_correction_Eh", "e_combined_Eh",
         "e_vert_ox_Eh", "e_vert_red_Eh", "e_vert_spin_change_Eh",
-    ]
+    ] + (["connectivity"] if checked else [])
     for col_idx, label in enumerate(headers, start=1):
         cell = ws.cell(row=1, column=col_idx, value=label)
         cell.font = header_font
@@ -775,6 +818,8 @@ def build_xlsx_bytes(payload: dict) -> bytes:
                 ws.cell(row=r, column=11, value=p.get("e_vert_ox"))
                 ws.cell(row=r, column=12, value=p.get("e_vert_red"))
                 ws.cell(row=r, column=13, value=p.get("e_vert_spin_change"))
+                if checked:
+                    ws.cell(row=r, column=14, value=_check_text(p.get("connectivity")))
                 r += 1
     for col_idx, width in enumerate(
         [16, 8, 30, 8, 8, 10, 14, 18, 18, 18, 18, 18, 22], start=1

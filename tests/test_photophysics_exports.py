@@ -15,7 +15,12 @@ from autodft.analysis.photophysics_export import build_xlsx
 from autodft.api import project_jobs, routes
 from autodft.config import Settings
 from autodft.db import get_session, init_db, reset_engine
-from autodft.extraction.extractor import _FILE_MAP, PipelineExtractor, _copy_task_files
+from autodft.extraction.extractor import (
+    _FILE_MAP,
+    ConformerResult,
+    PipelineExtractor,
+    _copy_task_files,
+)
 from autodft.models import (
     ComputationJob,
     ComputationTask,
@@ -111,6 +116,18 @@ def test_cleanup_keeps_the_hessians_esd_needs(db):
     assert deleted == 3 + 2 * 3
 
 
+def test_cleanup_drops_a_rate_jobs_by_products_but_not_the_opt_hessian(db):
+    with get_session() as session:
+        opt = _job_dir(session, db, "esd_t1", {"esd_role": "T1"}, description="T1")
+        rate = _job_dir(session, db, "rate", {"esd_role": "T1"}, task_type=TaskType.esd_isc_t1s0,
+                        description="T1")
+    for name in ("input.FS.hess", "input.spectrum", "input.corrfunc", "initial.hess"):
+        (rate / name).write_text(name)
+    PipelineExtractor("__all__").cleanup_large_files()
+    assert sorted(p.name for p in opt.iterdir()) == ["input.hess", "output.out"]
+    assert sorted(p.name for p in rate.iterdir()) == ["output.out"]
+
+
 def test_a_dry_run_counts_the_same_files(db):
     with get_session() as session:
         _job_dir(session, db, "esd_s1", {"esd_role": "S1"}, description="S1")
@@ -192,6 +209,40 @@ def test_export_copies_singlepoint_cubes(db):
     assert "conf1_sp_ElDens.cube" in names
 
 
+def test_export_takes_the_conformer_the_csv_reports(db, monkeypatch):
+    with get_session() as session:
+        mol = Molecule(smiles="Cconf", project_name="nho/p")
+        session.add(mol)
+        session.commit()
+        state = MoleculeState(molecule_id=mol.id, description="S0", multiplicity=1, charge=0)
+        session.add(state)
+        session.commit()
+        opt_ids = []
+        for name in ("first", "second"):
+            opt = ComputationTask(task_type=TaskType.optimization, status=TaskStatus.successful,
+                                  state_id=state.id, header_id=1, has_followups=True)
+            session.add(opt)
+            session.commit()
+            job_dir = db / "jobs" / name
+            job_dir.mkdir(parents=True)
+            (job_dir / "input.inp").write_text(name)
+            session.add(ComputationJob(task_id=opt.id, attempt=1, job_path=str(job_dir), success=True))
+            session.commit()
+            opt_ids.append(opt.id)
+        mol_id = mol.id
+
+    # The second conformer is the lower one.
+    def lowest(self, session, mol, state, all_conformers):
+        return [ConformerResult(molecule_id=mol.id, smiles=mol.smiles, state="S0",
+                                conformer_index=2, opt_task_id=opt_ids[1])]
+    monkeypatch.setattr(PipelineExtractor, "_extract_state_results", lowest)
+
+    dest = db / "export"
+    PipelineExtractor("nho/p").export_calculation_files(dest)
+    names = sorted(p.name for p in (dest / str(mol_id) / "S0").iterdir())
+    assert names == ["conf2_opt_input.inp"]
+
+
 # ----------------------------------------------------------------------
 # The photophysics workbook
 # ----------------------------------------------------------------------
@@ -238,9 +289,14 @@ def _full_payload():
                 "status": "done", "temperature_k": 298.15, "herzberg_teller": True,
                 "delta_est_ev": 0.35, "delta_est_uks_ev": 0.30,
                 "rates": {
-                    "isc": {"status": "successful", "rate_s": 1.0e7, "e00_ev": 2.5, "jobs": [
+                    "isc": {"status": "successful", "rate_s": 1.0e7, "e00_ev": 2.5,
+                            "ht": True, "ht_reason": "SOCME 4.50 cm-1 < 5", "jobs": [
                         {"triplet": 1, "dele_cm": 1200.0, "socme_cm": 4.5, "rate_s": 1.0e7,
-                         "fc_percent": 85.0, "ht_percent": 15.0, "k_squared": 1.2, "e00_cm": 20500.0},
+                         "fc_percent": 85.0, "ht_percent": 15.0, "k_squared": 1.2, "e00_cm": 20500.0,
+                         "ht": True, "ht_reason": "SOCME 4.50 cm-1 < 5"},
+                    ], "diagnostics": [
+                        {"triplet": 1, "k_inlinew_100": 2.0e6, "k_inlinew_25": 1.0e5, "k_inlinew_250": 3.0e6,
+                         "k_tcutfreq_300": 1.5e6, "width_sensitive": True, "soft_mode_dominated": False},
                     ]},
                     "risc": {"status": "successful", "rate_s": 2.0e5},
                     "ic": {"status": "successful", "rate_s": 5.0e9},
@@ -283,7 +339,8 @@ def _col(ws, name, row=1):
 def test_build_xlsx_has_a_sheet_per_category_plus_sticks_and_esd_jobs():
     wb = load_workbook(BytesIO(build_xlsx(_full_payload())))
     assert wb.sheetnames == [
-        "Summary", "UV-Vis", "UV-Vis sticks", "IR", "IR sticks", "NMR", "ESD", "ESD jobs", "NBO",
+        "Summary", "UV-Vis", "UV-Vis sticks", "IR", "IR sticks", "NMR", "ESD", "ESD jobs",
+        "ESD diagnostics", "NBO",
     ]
 
     assert _header(wb["UV-Vis"]) == [
@@ -295,13 +352,13 @@ def test_build_xlsx_has_a_sheet_per_category_plus_sticks_and_esd_jobs():
     ]
     assert _header(wb["IR"]) == [
         "mol_id", "smiles", "state_id", "count", "pending", "failed", "unavailable", "unweighted",
-        "weighting", "peak_cm", "peak_intensity_km_mol",
+        "weighting", "peak_cm_unscaled", "peak_intensity_km_mol",
     ]
     assert _header(wb["IR sticks"]) == [
-        "mol_id", "state_id", "conformer", "weight", "frequency_cm", "intensity_km_mol",
+        "mol_id", "state_id", "conformer", "weight", "frequency_cm_unscaled", "intensity_km_mol",
     ]
     assert _header(wb["NMR"]) == [
-        "mol_id", "smiles", "state_id", "nucleus", "shift_ppm", "shielding_ppm", "count", "atoms",
+        "mol_id", "smiles", "state_id", "nucleus", "shift_ppm", "shielding_ppm", "count", "atoms_1based",
         "reference", "reference_status", "method_matches", "equivalence",
     ]
     assert _header(wb["ESD"]) == [
@@ -311,10 +368,14 @@ def test_build_xlsx_has_a_sheet_per_category_plus_sticks_and_esd_jobs():
     ]
     assert _header(wb["ESD jobs"]) == [
         "mol_id", "state_id", "rate", "triplet", "sublevel", "rate_s", "dele_cm", "socme_cm",
-        "fc_percent", "ht_percent", "k_squared", "e00_cm",
+        "fc_percent", "ht_percent", "k_squared", "e00_cm", "HT", "HT_reason",
+    ]
+    assert _header(wb["ESD diagnostics"]) == [
+        "mol_id", "state_id", "rate", "triplet", "k_FC_INLINEW100", "k_FC_INLINEW25", "k_FC_INLINEW250",
+        "k_FC_TCUTFREQ300", "width_sensitive", "soft_mode_dominated",
     ]
     assert _header(wb["NBO"]) == [
-        "mol_id", "smiles", "state_id", "state", "atom", "element", "charge", "spin", "count", "weighting",
+        "mol_id", "smiles", "state_id", "state", "atom_1based", "element", "charge", "spin", "count", "weighting",
     ]
 
     sticks = wb["UV-Vis sticks"]
@@ -333,13 +394,18 @@ def test_build_xlsx_has_a_sheet_per_category_plus_sticks_and_esd_jobs():
     assert jobs.cell(row=2, column=_col(jobs, "state_id")).value == 10
     assert jobs.cell(row=2, column=_col(jobs, "rate")).value == "isc"
     assert jobs.cell(row=2, column=_col(jobs, "triplet")).value == 1
+    assert jobs.cell(row=2, column=_col(jobs, "HT_reason")).value == "SOCME 4.50 cm-1 < 5"
+    checks = wb["ESD diagnostics"]
+    assert [c.value for c in checks[2]][1:] == [10, "isc", 1, 2.0e6, 1.0e5, 3.0e6, 1.5e6, True, False]
 
     nbo_sheet = wb["NBO"]
     assert nbo_sheet.cell(row=2, column=_col(nbo_sheet, "state_id")).value == 10
     assert nbo_sheet.cell(row=2, column=_col(nbo_sheet, "state")).value == "S0"
-    assert nbo_sheet.cell(row=2, column=_col(nbo_sheet, "atom")).value == 1
+    nmr_sheet = wb["NMR"]
+    assert nmr_sheet.cell(row=2, column=_col(nmr_sheet, "atoms_1based")).value == "1, 2"
+    assert nbo_sheet.cell(row=2, column=_col(nbo_sheet, "atom_1based")).value == 1
     assert nbo_sheet.cell(row=2, column=_col(nbo_sheet, "charge")).value == 0.3
-    assert nbo_sheet.cell(row=3, column=_col(nbo_sheet, "atom")).value == 2
+    assert nbo_sheet.cell(row=3, column=_col(nbo_sheet, "atom_1based")).value == 2
     assert nbo_sheet.cell(row=3, column=_col(nbo_sheet, "element")).value == "O"
 
 
@@ -362,6 +428,19 @@ def test_nbo_sheet_writes_each_states_own_state_id():
     rows = list(load_workbook(BytesIO(build_xlsx(payload)))["NBO"].iter_rows(values_only=True))[1:]
     assert [r[2] for r in rows if r[3] == "S0"] == [10]
     assert [r[2] for r in rows if r[3] == "ox"] == [11]
+
+
+def test_broken_geometries_get_their_own_sheet():
+    payload = {"project": "nho/p", "molecules": [{
+        "id": 1, "smiles": "CCCCF", "state_id": 10, "archived": False,
+        "broken_bonds": [{"state": "T1", "state_id": 12, "conformer_index": 1, "opt_task_id": 99,
+                          "detail": "dissociated: 2 fragments (C4H8F + H); C-H bonds 9 -> 8"}],
+    }]}
+    ws = load_workbook(BytesIO(build_xlsx(payload)))["Broken bonds"]
+    assert _header(ws) == ["mol_id", "smiles", "state", "state_id", "conformer", "opt_task_id", "detail"]
+    assert [c.value for c in ws[2]] == [
+        1, "CCCCF", "T1", 12, 1, 99, "dissociated: 2 fragments (C4H8F + H); C-H bonds 9 -> 8",
+    ]
 
 
 def test_build_xlsx_on_an_empty_payload_has_only_the_summary_sheet():

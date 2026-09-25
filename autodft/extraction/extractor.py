@@ -476,10 +476,12 @@ class PipelineExtractor:
             [t for t in tasks if t.task_type == TaskType.optimization],
             key=lambda t: t.id,  # type: ignore[arg-type]
         )
-        if not all_conformers and opt_tasks:
-            opt_tasks = [opt_tasks[0]]
-
         opt_id_to_conf = {t.id: i + 1 for i, t in enumerate(opt_tasks)}
+        if not all_conformers and opt_tasks:
+            # The conformer the CSV reports, under the CSV's conformer index.
+            picked = self._extract_state_results(session, mol, state, all_conformers=False)
+            keep = picked[0].opt_task_id if picked else opt_tasks[0].id
+            opt_id_to_conf = {keep: opt_id_to_conf[keep]}
         metadata = json.loads(state.metadata_json) if state.metadata_json else {}
         densities_flagged = bool(metadata.get(categories.DENSITIES))
         plan: list[tuple[Path, Path, int, str, bool]] = []
@@ -668,7 +670,7 @@ class PipelineExtractor:
         Returns:
             Number of files deleted.
         """
-        extensions = {".out", ".xyz", ".inp"}
+        extensions = {".out", ".xyz", ".inp", ".47"}
         if keep_extensions:
             extensions.update(keep_extensions)
 

@@ -212,12 +212,26 @@ class TestJobFiles:
         computed = json.loads(task.inputs_json)["computed"]
         assert computed["combine"] == "sum" and computed["jobs"][0]["triplet"] == 1
 
+    def test_an_ht_request_decided_fc_runs_on_the_fc_stage(self, session, esd):
+        # Glyoxal RISC is far uphill: FC even with HT requested, so one core.
+        for name in ("S1", "T1"):
+            state = esd["states"][name]
+            state.metadata_json = json.dumps({**json.loads(state.metadata_json), categories.ESD_HT: True})
+            session.add(state)
+        session.commit()
+        task, _, path = self._job(session, esd, TaskType.esd_risc)
+        assert "%tddft" not in (path / "input.inp").read_text()
+        assert "--ntasks-per-node=1\n" in (path / "submit.cmd").read_text()
+        assert json.loads(task.inputs_json)["computed"]["ht"] is False
+
     def test_a_t1_rate_job_runs_the_singlet_reference(self, session, esd):
         _, _, path = self._job(session, esd, TaskType.esd_phosp)
         text = (path / "input.inp").read_text()
-        assert text.startswith("!B3LYP def2-SVP ESD(PHOSP)\n")
+        assert text.startswith("!B3LYP def2-SVP DEFGRID2 ESD(PHOSP)\n")
         assert text.rstrip().endswith("*xyzfile 0 1 input.xyz")
-        assert 'cp "$WORK_DIR"/ts.hess "$TMP_DIR"/' in (path / "submit.cmd").read_text()
+        submit = (path / "submit.cmd").read_text()
+        assert 'cp "$WORK_DIR"/ts.hess "$TMP_DIR"/' in submit
+        assert "cp *.FS.hess *.GS.hess *.ES.hess *.spectrum* *.corrfunc" in submit
 
     def test_a_timed_out_ht_rate_job_is_escalated_on_retry(self, session, esd):
         s1 = esd["states"]["S1"]
@@ -281,3 +295,51 @@ def test_stored_records_build_the_same_rate_job_input(session, esd, tmp_path):
     assert after_hess == before_hess
     for filename in after_hess:
         assert (after_path / filename).read_bytes() == (before_path / filename).read_bytes()
+
+
+def _flag_broken(session, task, detail="dissociated: 2 fragments (C4H8F + H); C-H bonds 9 -> 8"):
+    """Give *task*'s successful job a stored record whose geometry lost bonds."""
+    from autodft.models.result import JobResult
+
+    job = results.latest_successful_job(session, task.id)
+    session.add(JobResult(
+        job_id=job.id, task_id=task.id, job_path=job.job_path, finished_at=job.time_end,
+        parser_version=results.PARSER_VERSION, data_json=json.dumps({
+            "energy": None, "free_energy_correction": None, "imaginary": [], "followed_root": None,
+            "connectivity": {"ok": False, "lost": True, "fragments": 2, "detail": detail},
+        }),
+    ))
+    session.commit()
+
+
+def test_a_broken_t1_geometry_gets_no_rates_and_says_why(session, esd):
+    from autodft.analysis.esd import molecule_esd
+    from autodft.extraction.extractor import PipelineExtractor
+
+    t1_opt = esd["tasks"]["T1"][0]
+    _flag_broken(session, t1_opt)
+    photophysics.advance_photophysics(session, Settings())
+    assert set(_rates(session, esd)) == {TaskType.esd_ic, TaskType.esd_fluor}
+    assert "esd_done" not in _meta(esd["states"]["S1"])
+
+    out = molecule_esd(session, PipelineExtractor("nho/p"), esd["states"]["S0"], detail=False)
+    for name in ("isc", "risc", "isc_t1_s0", "phosphorescence"):
+        assert out["rates"][name] == {"status": "blocked", "reason": (
+            f"T1 geometry dissociated: 2 fragments (C4H8F + H); C-H bonds 9 -> 8 "
+            f"(optimisation task {t1_opt.id}); no rates on a broken geometry")}
+    assert out["rates"]["ic"]["status"] == "created"
+
+
+def test_a_bond_formed_without_one_lost_does_not_block_rates(session, esd):
+    from autodft.models.result import JobResult
+
+    opt = esd["tasks"]["S1"][0]
+    job = results.latest_successful_job(session, opt.id)
+    session.add(JobResult(job_id=job.id, task_id=opt.id, job_path=job.job_path, finished_at=job.time_end,
+                          parser_version=results.PARSER_VERSION,
+                          data_json=json.dumps({"connectivity": {
+                              "ok": False, "lost": False, "fragments": 1, "detail": "bond formed: C-C bonds 3 -> 4",
+                          }})))
+    session.commit()
+    photophysics.advance_photophysics(session, Settings())
+    assert set(_rates(session, esd)) == RATE_TYPES

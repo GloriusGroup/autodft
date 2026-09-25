@@ -25,6 +25,8 @@ _RATE = re.compile(r"^The calculated (.+?) rate constant is\s+(\S+) s-1", re.MUL
 _SPLIT = re.compile(r"^with\s+(-?[\d.]+)%? from FC and\s+(-?[\d.]+)%? from HT", re.MULTILINE)
 _K_SQUARED = re.compile(r"^The sum of K\*K is:\s+(\S+)", re.MULTILINE)
 _E00 = re.compile(r"^0-0 energy difference:\s+(-?[\d.]+) cm-1", re.MULTILINE)
+_REFERENCE_SOC = re.compile(r"^Reference SOC \(Re and Im\):\s+(\S+),\s*(\S+)", re.MULTILINE)
+_JOB_NUMBER = re.compile(r"JOB NUMBER\s+(\d+)")
 _LIBXC = re.compile(r"Third functional derivative of a B88|Native implementation of 3d derivative")
 
 
@@ -38,6 +40,10 @@ class Rate:
     ht_percent: Optional[float] = None
     k_squared: Optional[float] = None
     e00_cm: Optional[float] = None
+    # |SOC| (cm-1) of this job's own sublevel pair, from ORCA's "Reference SOC" line.
+    socme_cm: Optional[float] = None
+    # ORCA's "JOB NUMBER" (1-based); None in a single-job output.
+    job: Optional[int] = None
 
 
 def ground_energy(content: str) -> Optional[float]:
@@ -73,6 +79,18 @@ def followed_root_energy(content: str) -> Optional[float]:
     return float(found[-1]) if found else None
 
 
+def s1_dissociates(content: str) -> bool:
+    """Whether the followed root's gap to S0 fell below 1 eV and 30 % of its start.
+
+    A bound S1 keeps most of its gap over an optimisation; a dissociative one
+    runs towards a crossing with S0 and fails identically on every retry.
+    """
+    gaps = [float(g) for g in _DE_CIS.findall(content)]
+    if len(gaps) < 2:
+        return False
+    return gaps[-1] < 1.0 * EV_TO_EH and gaps[-1] < 0.3 * gaps[0]
+
+
 def followed_root(content: str) -> Optional[int]:
     """The N of the last ``DE(CIS) = ... Eh (Root N)`` line."""
     found = _DE_CIS_ROOT.findall(content)
@@ -105,6 +123,8 @@ def rates(content: str) -> list[Rate]:
         split = _SPLIT.findall(job)
         k_squared = _K_SQUARED.findall(job)
         e00 = _E00.findall(job)
+        soc = _REFERENCE_SOC.findall(job)
+        number = _JOB_NUMBER.findall(job)
         found.append(Rate(
             process=rate[-1][0],
             rate=float(rate[-1][1]),
@@ -112,6 +132,8 @@ def rates(content: str) -> list[Rate]:
             ht_percent=float(split[-1][1]) if split else None,
             k_squared=float(k_squared[-1]) if k_squared else None,
             e00_cm=float(e00[-1]) if e00 else None,
+            socme_cm=math.hypot(float(soc[-1][0]), float(soc[-1][1])) * EH_TO_CM if soc else None,
+            job=int(number[-1]) if number else None,
         ))
     return found
 

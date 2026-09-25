@@ -43,6 +43,13 @@ _NATIVE_B88_RE = re.compile(
     r"|B2GP-PLYP|X3LYP)(?![\w(])",
     re.IGNORECASE | re.MULTILINE,
 )
+# def2 puts an ECP on every element past Kr, and ORCA has no SOC integrals
+# for ECPs; a scalar-relativistic all-electron header is the way around it.
+ECP_MIN_Z = 37
+# NMR runs in Jensen's shielding basis, which ORCA 6.1 has for H-Kr only.
+NMR_BASIS = "pcSseg-2"
+NMR_BASIS_MAX_Z = 36
+_RELATIVISTIC_RE = re.compile(r"^\s*!.*\b(?:ZORA|DKH2?|X2C)\b", re.IGNORECASE | re.MULTILINE)
 _SP_CONFLICTS = (
     (re.compile(r"%tddft\b", re.IGNORECASE), "%tddft"),
     (re.compile(r"%cis\b", re.IGNORECASE), "%cis"),
@@ -69,7 +76,7 @@ _NBO_KEYWORDS_RE = re.compile(r"^[A-Za-z0-9 =_.,+-]{0,200}\Z")
 # Settings each category takes, with defaults. Stored -- defaults filled in --
 # only when the category is requested.
 OPTIONS: dict[str, dict] = {
-    ESD: {"esd_tn_window_ev": 0.2, "esd_temperature_k": 298.15},
+    ESD: {"esd_tn_window_ev": 0.3, "esd_temperature_k": 298.15},
     UVVIS: {"uvvis_nroots": 20, "uvvis_tda": False},
     NMR: {"nmr_nuclei": ["H", "C", "F"]},
     DENSITIES: {
@@ -193,6 +200,14 @@ def rejection(
                 "compute with a native B88 functional (B3LYP, BLYP, BP86, ...); use "
                 "its LibXC version in the optimisation header, e.g. !LibXC(B3LYP)."
             )
+        if ((check.get("max_atomic_number") or 0) >= ECP_MIN_Z
+                and not _RELATIVISTIC_RE.search(header_singlepoint or "")):
+            return (
+                "ESD needs spin-orbit coupling, which ORCA cannot compute for "
+                "atoms on an effective core potential (def2 puts one on every "
+                "element past Kr, e.g. I). Use a singlepoint header with a "
+                "scalar-relativistic all-electron setup (ZORA/DKH/X2C) instead."
+            )
         window = metadata.get("esd_tn_window_ev", OPTIONS[ESD]["esd_tn_window_ev"])
         if not _number(window) or not 0 <= window <= 1:
             return "The ESD triplet window must be between 0 and 1 eV (esd_tn_window_ev)."
@@ -213,6 +228,17 @@ def rejection(
             return (
                 f"NMR nuclei must be a non-empty subset of "
                 f"{', '.join(NMR_NUCLEI)} (nmr_nuclei)."
+            )
+        max_z = check.get("max_atomic_number") or 0
+        if max_z > NMR_BASIS_MAX_Z:
+            return (
+                f"NMR runs in the {NMR_BASIS} basis, which ORCA only has for "
+                f"H to Kr; this molecule has an element past Kr (Z = {max_z})."
+            )
+        if re.search(r"%basis\b", header_singlepoint or "", re.IGNORECASE):
+            return (
+                f"The singlepoint header has a %basis block, which would override "
+                f"the {NMR_BASIS} basis NMR runs in; pick a header without one."
             )
 
     if IR in wanted and not _FREQ_RE.search(header_optimization or ""):

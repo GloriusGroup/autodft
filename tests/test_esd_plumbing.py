@@ -55,6 +55,29 @@ def test_cubes_are_copied_back_only_when_requested(tmp_path):
     assert 'cp *.cube "$WORK_DIR"/ 2>/dev/null || true' in with_cubes
 
 
+ESD_COPY = 'cp *.FS.hess *.GS.hess *.ES.hess *.spectrum* *.corrfunc "$WORK_DIR"/ 2>/dev/null || true'
+
+
+def test_esd_by_products_are_copied_back_only_when_requested(tmp_path):
+    without = generate_submit_script(tmp_path / "a", "j", 1, 2000, "1-00:00:00", "CPU").read_text()
+    with_esd = generate_submit_script(
+        tmp_path / "b", "j", 1, 2000, "1-00:00:00", "CPU", keep_esd_files=True,
+    ).read_text()
+    assert ESD_COPY not in without
+    assert ESD_COPY + "\ncp input.finalensemble.xyz" in with_esd
+    assert without == with_esd.replace(ESD_COPY + "\n", "").replace(str(tmp_path / "b"), str(tmp_path / "a"))
+
+
+def test_nbo_archive_is_copied_back_only_when_requested(tmp_path):
+    copy = 'cp *.47 "$WORK_DIR"/ 2>/dev/null || true'
+    without = generate_submit_script(tmp_path / "a", "j", 1, 2000, "1-00:00:00", "CPU").read_text()
+    with_nbo = generate_submit_script(
+        tmp_path / "b", "j", 1, 2000, "1-00:00:00", "CPU", keep_nbo_archive=True,
+    ).read_text()
+    assert copy not in without
+    assert without == with_nbo.replace(copy + "\n", "").replace(str(tmp_path / "b"), str(tmp_path / "a"))
+
+
 def test_stage_configs():
     settings = Settings()
     assert settings.pipeline.excited_optimization.time_limit == "4-00:00:00"
@@ -74,6 +97,10 @@ def test_stage_configs():
     for task_type in (TaskType.esd_ic, TaskType.esd_fluor, TaskType.esd_phosp):
         assert _get_stage_config(settings, task_type, s1) is settings.pipeline.esd_tddft
         assert _get_stage_config(settings, task_type, s1_ht) is settings.pipeline.esd_tddft
+    # Once built, the per-channel decision counts: HT requested but every channel FC.
+    assert _get_stage_config(settings, TaskType.esd_isc, s1_ht, {"ht": False}) is settings.pipeline.esd
+    assert _get_stage_config(settings, TaskType.esd_risc, s1_ht, {"ht": True}) is settings.pipeline.esd_tddft
+    assert _get_stage_config(settings, TaskType.esd_fluor, s1_ht, {"ht": False}) is settings.pipeline.esd_tddft
 
 
 @pytest.mark.parametrize("task_type", [TaskType.singlepoint_soc, TaskType.esd_isc,
@@ -95,6 +122,14 @@ def test_resources_are_escalated_for_tddft_rate_jobs(tmp_path, task_type):
     (tmp_path / "input.inp").write_text("!B3LYP def2-SVP ESD(ISC)\n%tddft nroots 10 end\n")
     failure = FailureInfo(fail_reason="['Termination']", previous_job_path=str(tmp_path), attempt=2)
     assert IncreaseResources().applies(failure, task_type)
+
+
+def test_resources_are_escalated_for_ht_jobs_with_fc_diagnostics(tmp_path):
+    (tmp_path / "input.inp").write_text(
+        "!B3LYP def2-SVP ESD(ISC)\n%tddft nroots 4 end\n\n$new_job\n! ESD(ISC) NOITER\n%maxcore 2000\n"
+    )
+    failure = FailureInfo(fail_reason="['Termination']", previous_job_path=str(tmp_path), attempt=2)
+    assert IncreaseResources().applies(failure, "esd_isc")
 
 
 def test_resources_are_escalated_when_the_fc_input_is_unreadable():
@@ -120,3 +155,7 @@ def test_esd_optimisations_keep_their_hessian(session, tmp_path):
 
 def test_other_optimisations_do_not(session, tmp_path):
     assert "cp *.hess" not in _opt_job_script(session, tmp_path, {})
+
+
+def test_only_rate_jobs_keep_the_esd_by_products(session, tmp_path):
+    assert "*.corrfunc" not in _opt_job_script(session, tmp_path, {categories.ESD: True})

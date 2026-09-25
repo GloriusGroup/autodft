@@ -7,9 +7,10 @@ from pathlib import Path
 import pytest
 
 from autodft.qm.orca import esd_parser
-from autodft.qm.orca.esd_parser import Rate
+from autodft.qm.orca.esd_parser import EH_TO_CM, Rate
 
 FIXTURES = Path(__file__).parent / "fixtures" / "esd"
+DONE = "\n                      ****ORCA ESD FINISHED WITHOUT ERROR****\n"
 
 
 def _read(name: str) -> str:
@@ -48,6 +49,13 @@ class TestEnergies:
         assert sorted(triplets) == list(range(1, 11))
         assert triplets[1] == pytest.approx(0.064920)
 
+    def test_a_tda_s1_optimisation(self):
+        # Formaldehyde, PBE0/def2-SVP, TDA with followiroot and cpcmeq (ORCA 6.1.1).
+        text = _read("s1_opt_tda_tail.out")
+        assert esd_parser.followed_root(text) == 1
+        assert esd_parser.followed_root_energy(text) == pytest.approx(0.116339158)
+        assert esd_parser.excitation_energies(text, "SINGLETS")[1] == pytest.approx(0.116339)
+
     def test_followed_root_of_an_s1_optimisation(self):
         assert esd_parser.followed_root_energy(_read("s1_opt_tail.out")) == pytest.approx(0.087063157)
         assert esd_parser.followed_root_energy("no tddft") is None
@@ -72,9 +80,37 @@ class TestSocme:
 class TestRates:
     def test_two_isc_channels(self):
         assert esd_parser.rates(_read("isc_two_channels.out")) == [
-            Rate("ISC", 9.521341e3, 100.0, 0.0, 0.011699, 5331.09),
-            Rate("ISC", -1.537670e-09, 100.0, -0.0, 0.011699, -4602.11),
+            Rate("ISC", 9.521341e3, 100.0, 0.0, 0.011699, 5331.09, 4.009575e-06 * EH_TO_CM),
+            Rate("ISC", -1.537670e-09, 100.0, -0.0, 0.011699, -4602.11, 4.556335e-08 * EH_TO_CM),
         ]
+
+    def test_reference_soc_per_job(self):
+        text = (
+            "Reference SOC (Re and Im):\t\t\t-6.326655e-05, -5.262007e-07\n"
+            "The calculated ISC rate constant is\t\t3.592258e+08 s-1\n" + DONE
+            + "Reference SOC (Re and Im):\t\t\t0.000000e+00, 2.303857e-04\n"
+            "The calculated ISC rate constant is\t\t3.901168e+09 s-1\n" + DONE
+        )
+        found = esd_parser.rates(text)
+        assert [r.socme_cm for r in found] == [pytest.approx(13.886, abs=1e-3), pytest.approx(50.564, abs=1e-3)]
+
+    def test_job_numbers_skip_a_job_without_a_rate(self):
+        rate = "The calculated ISC rate constant is\t\t1.0e+00 s-1\n"
+        text = "".join(
+            f"$$$$$$$$$$$$$$$$  JOB NUMBER  {i} $$$$$$$$$$$$$$\n" + (rate + DONE if i != 2 else "aborted\n")
+            for i in (1, 2, 3)
+        )
+        assert [r.job for r in esd_parser.rates(text)] == [1, 3]
+        assert esd_parser.rates(rate + DONE)[0].job is None
+
+    def test_tda_ht_jobs_and_fc_diagnostics_are_numbered(self):
+        # Formaldehyde: three TDA HT sublevel jobs, one FC channel, seven FC diagnostics.
+        found = esd_parser.rates(_read("isc_tda_diagnostics.out"))
+        assert [r.job for r in found] == list(range(1, 12))
+        assert [r.ht_percent for r in found[:4]] == [100.0, 100.0, 100.0, 0.0]
+        assert found[0].rate == pytest.approx(8.169736e4)
+        assert found[3].socme_cm == pytest.approx(41.49, abs=0.01)
+        assert found[4].fc_percent is None  # "-nan from FC" for a zero SOCME
 
     def test_herzberg_teller_split_without_percent_sign(self):
         [rate] = esd_parser.rates(_read("isc_ht.out"))
@@ -92,12 +128,13 @@ class TestRates:
 
     def test_t1_to_s0(self):
         assert esd_parser.rates(_read("t1s0.out")) == [
-            Rate("ISC", 1.598812e-01, 100.0, 0.0, 0.870030, 13990.18),
+            Rate("ISC", 1.598812e-01, 100.0, 0.0, 0.870030, 13990.18, 5.261203e-08 * EH_TO_CM),
         ]
 
     def test_internal_conversion_has_no_split(self):
         [rate] = esd_parser.rates(_read("ic.out"))
         assert (rate.process, rate.rate, rate.fc_percent) == ("internal conversion", 2.646887e4, None)
+        assert rate.socme_cm is None
 
     def test_three_phosphorescence_sublevels(self):
         found = esd_parser.rates(_read("phosp.out"))

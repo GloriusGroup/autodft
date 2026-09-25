@@ -30,7 +30,10 @@ results are extractable as CSV / JSON or as raw ORCA files.
 Parsing a successful job's output (`parse outputs`, above) also stores
 the result once, in `job_results`; readers — analyses, exports, the
 Photophysics page, ESD rate-job inputs — use the stored record and fall
-back to the job's files only when there is none.
+back to the job's files only when there is none. A newly judged
+optimisation's record also says whether its geometry kept the SMILES's
+bonds; a broken one is badged in the dashboard and never used for ESD
+(see [docs/PHOTOPHYSICS.md](docs/PHOTOPHYSICS.md#broken-bonds)).
 
 All persistent state lives in **one directory** — the `data_path`. Per
 the production config (`config/reaction.toml`):
@@ -135,6 +138,13 @@ nbo_exe    = "/mnt/share/public/software/nbo7/bin/nbo7.i8.exe"
 # Parent of the per-job scratch dir. Empty string runs ORCA inside
 # the shared job dir without staging through /tmp.
 tmp_dir    = "/tmp"
+# Stall watchdog: kill ORCA once nothing in its scratch dir changed for
+# this many minutes; the job fails as "Stalled" and is resubmitted with
+# the same resources. 0 (the default) runs ORCA without a watchdog.
+stall_minutes       = 240
+# Copy output.out back from scratch this often while ORCA runs (needs
+# the watchdog), so running jobs show progress. 0 disables.
+sync_output_minutes = 10
 
 [api]
 enabled = true
@@ -186,7 +196,7 @@ first run:
 | 3 | optimization | wB97X-D3 / def2-TZVP TightOpt + Freq + CPCM(MeCN)    |
 | 4 | singlepoint  | wB97X-D3 / def2-QZVPD KeepDens + CPCM(MeCN)          |
 | 5 | optimization | wB97X-D3 / def2-SVP Opt + Freq + CPCM(MeCN)          |
-| 6 | singlepoint  | wB97X-D3 / def2-TZVPD KeepDens + CPCM(MeCN)          |
+| 6 | singlepoint  | wB97X-D3 / def2-TZVP KeepDens + CPCM(MeCN)           |
 
 Headers 5 and 6 are the package defaults (`autodft/qm/orca/defaults.py`)
 applied when a submission sets neither `header_*` nor `header_*_id`; 3
@@ -226,7 +236,8 @@ autodft run --config config/reaction.toml
 That starts the worker loop (one tick every `loop_interval_seconds`)
 and, if `api.enabled = true`, boots the FastAPI dashboard at
 `http://<host>:<port>/`. Press Ctrl-C to stop. The standard way to leave
-it running on this cluster is inside a `screen` session.
+it running on this cluster is inside a `screen` session. The log also
+goes to `<data_path>/logs/controller.log` (rotated at 10 MB, five kept).
 
 For local testing without SLURM:
 
@@ -358,11 +369,14 @@ Every submission path (CLI, REST, Python) ends up writing the same
   — UV/Vis (TDDFT singlepoint on every S0 conformer), IR (from the
   optimisation's frequencies), NMR (¹H/¹³C/¹⁹F shifts referenced to TMS /
   CFCl₃, closed-shell molecules only; computed in the protected
-  `admin/system_references` project — the bare name `system_references`
+  `admin/reference_systems` project — the bare name `reference_systems`
   is reserved for every owner, not just admin), and
   ESD (S1/T1 excited-state dynamics — ISC, RISC, IC, fluorescence,
   phosphorescence — via ORCA's ESD module, closed-shell molecules only,
-  much more expensive: a numerical S1 Hessian). Only added to new
+  much more expensive: a numerical S1 Hessian; TDA throughout except IC,
+  TightOpt for its optimisations, Herzberg–Teller only where the SOC is
+  weak, FC reruns flagging width- and soft-mode-sensitive ISC rates;
+  S1→Tn window 0.3 eV by default). Only added to new
   molecules; see [`docs/API.md`](docs/API.md#post-apisubmit). See
   [docs/PHOTOPHYSICS.md](docs/PHOTOPHYSICS.md) for the methods, deployment
   and rollback.
@@ -643,7 +657,7 @@ from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.qm.orca.defaults import (
     DEFAULT_HEADER_CONFSEARCH,        # GOAT GFN2-xTB
     DEFAULT_HEADER_OPTIMIZATION,      # wB97X-D3 / def2-SVP + CPCM(MeCN)
-    DEFAULT_HEADER_SINGLEPOINT,       # wB97X-D3 / def2-TZVPD + CPCM(MeCN)
+    DEFAULT_HEADER_SINGLEPOINT,       # wB97X-D3 / def2-TZVP + CPCM(MeCN)
     GXTB_HEADER_CONFSEARCH,           # GOAT g-xTB variant
     TZVP_MECN_HEADER_OPTIMIZATION,    # larger-basis alternate
     QZVPD_MECN_HEADER_SINGLEPOINT,    # larger-basis alternate

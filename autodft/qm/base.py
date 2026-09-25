@@ -26,6 +26,8 @@ class QMResult:
                     with ``conformers``. Without these every conformer
                     geometry is stored with the same scalar energy, which
                     makes the "keep the N lowest" ORDER BY an arbitrary tie.
+        conformer_degeneracies: GOAT's degeneracy per conformer, index-aligned
+                    with ``conformers``.
     """
 
     success: bool
@@ -34,6 +36,7 @@ class QMResult:
     free_energy_correction: Optional[float] = None
     conformers: Optional[list[str]] = None
     conformer_energies: Optional[list[float]] = None
+    conformer_degeneracies: Optional[list[Optional[int]]] = None
 
 
 class QMEngine(ABC):
@@ -85,6 +88,8 @@ class QMEngine(ABC):
         nice: int = 0,
         keep_hessian: bool = False,
         keep_cubes: bool = False,
+        keep_nbo_archive: bool = False,
+        keep_esd_files: bool = False,
         extra_inputs: Optional[list[str]] = None,
     ) -> None:
         """Write a cluster submit script (e.g. SLURM) into *job_path*.
@@ -99,6 +104,9 @@ class QMEngine(ABC):
             partition: Scheduler partition / queue name.
             keep_hessian: Copy ``*.hess`` back from scratch when True.
             keep_cubes: Copy ``*.cube`` back from scratch when True.
+            keep_nbo_archive: Copy NBO's ``*.47`` archive back from scratch when True.
+            keep_esd_files: Copy ESD's derivative Hessians, spectra and
+                            correlation functions back from scratch when True.
             extra_inputs: Files in *job_path* to stage into scratch next to
                           the input file.
         """

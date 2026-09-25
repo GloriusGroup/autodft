@@ -360,7 +360,7 @@ class TestUnbootstrappedSubmissionOwner:
         with get_session(settings) as session:
             with pytest.raises(HTTPException) as exc:
                 _submission_owner(
-                    session, identity, SubmitRequest(smiles="CCO", project="admin/system_references"),
+                    session, identity, SubmitRequest(smiles="CCO", project="admin/reference_systems"),
                 )
         assert exc.value.status_code == 400
         reset_engine()

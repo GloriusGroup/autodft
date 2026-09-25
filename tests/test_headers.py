@@ -23,14 +23,14 @@ from autodft.qm.orca.defaults import (
 def test_default_optimization_header_is_svp_with_cpcm():
     assert DEFAULT_HEADER_OPTIMIZATION == (
         "!wB97X-D3 def2-SVP def2/J RIJCOSX DEFGRID3 Opt TightSCF CPCM(MeCN) Freq\n"
-        "%maxcore 1000\n%pal nprocs 8 end\n"
+        "%maxcore 1250\n%pal nprocs 12 end\n"
     )
 
 
-def test_default_singlepoint_header_is_tzvpd_with_cpcm():
+def test_default_singlepoint_header_is_tzvp_with_cpcm():
     assert DEFAULT_HEADER_SINGLEPOINT == (
-        "!wB97X-D3 def2-TZVPD def2/J RIJCOSX DEFGRID3 TightSCF CPCM(MeCN) KeepDens\n"
-        "%maxcore 1500\n%pal nprocs 2 end\n"
+        "!wB97X-D3 def2-TZVP def2/J RIJCOSX DEFGRID3 TightSCF CPCM(MeCN) KeepDens\n"
+        "%maxcore 2000\n%pal nprocs 8 end\n"
     )
 
 
@@ -44,7 +44,7 @@ def test_seed_headers_contains_exactly_these_six_headers():
          QZVPD_MECN_HEADER_SINGLEPOINT),
         ("optimization", "wB97X-D3 / def2-SVP Opt + Freq + CPCM(MeCN)",
          DEFAULT_HEADER_OPTIMIZATION),
-        ("singlepoint", "wB97X-D3 / def2-TZVPD KeepDens + CPCM(MeCN)",
+        ("singlepoint", "wB97X-D3 / def2-TZVP KeepDens + CPCM(MeCN)",
          DEFAULT_HEADER_SINGLEPOINT),
     ]
 

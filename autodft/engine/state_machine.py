@@ -35,6 +35,7 @@ from autodft.models.project_job import ProjectJob
 from autodft.models.state import MoleculeState
 from autodft.models.task import ComputationTask
 from autodft.qm.base import QMEngine
+from autodft.qm.orca.parser import DENSITY_CUBES, OrcaParser
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,9 @@ logger = logging.getLogger(__name__)
 # out mid-campaign. Committing every few items caps the hold at one item's
 # I/O and lets waiting writers through between batches.
 _COMMIT_BATCH = 25
+
+# Failed checks that recur identically on every attempt, whatever else failed.
+DETERMINISTIC_CHECKS = ("LibXC Needed", "S1 Stays Bound")
 
 
 def _commit_batch(session: Session, index: int) -> None:
@@ -100,7 +104,7 @@ def update_running_jobs(session: Session, scheduler: Scheduler) -> None:
 # Step 2 -- Process finished jobs (check QM output)
 # ======================================================================
 
-def process_finished_jobs(session: Session, qm_engine: QMEngine) -> None:
+def process_finished_jobs(session: Session, qm_engine: QMEngine, max_attempts: int = 3) -> None:
     """For jobs with a terminal slurm_status but ``success IS NULL``:
     check the QM output, set ``success`` / ``fail_reason``, and extract
     geometries for successful confsearch/optimization jobs.
@@ -166,11 +170,19 @@ def process_finished_jobs(session: Session, qm_engine: QMEngine) -> None:
             # memory (the one failure mode where that is the right response).
             if job.slurm_status == "OUT_OF_MEMORY":
                 failed_checks.append("OUT_OF_MEMORY")
-            job.fail_reason = str(failed_checks)
+            if failed_checks == [DENSITY_CUBES] and _accept_cube_miss(session, job, max_attempts):
+                # Retried once already, or no retry left; the energy is fine.
+                logger.warning(
+                    "Job %d: density cubes still missing or empty after a retry in %s (%s); "
+                    "accepting the job", job.id, job_path, ", ".join(OrcaParser.missing_cubes(job_path)),
+                )
+                job.success = True
+            else:
+                job.fail_reason = str(failed_checks)
         job.time_end = job.time_end or datetime.now(timezone.utc)
         session.add(job)
 
-        if not result.success:
+        if not job.success:
             continue
 
         # -- Extract geometries for successful jobs -----------------------
@@ -179,7 +191,7 @@ def process_finished_jobs(session: Session, qm_engine: QMEngine) -> None:
             if task.task_type == TaskType.confsearch and result.conformers:
                 _create_conformer_geometries(
                     session, task, result.conformers, result.energy,
-                    result.conformer_energies,
+                    result.conformer_energies, result.conformer_degeneracies,
                 )
 
             elif task.task_type == TaskType.optimization:
@@ -216,6 +228,7 @@ def _create_conformer_geometries(
     conformers: list[str],
     energy: Optional[float],
     conformer_energies: Optional[list[float]] = None,
+    conformer_degeneracies: Optional[list[Optional[int]]] = None,
 ) -> None:
     """Store each conformer XYZ as a :class:`MoleculeGeometry`.
 
@@ -244,6 +257,8 @@ def _create_conformer_geometries(
             energy=geom_energy,
             origin_task_id=task.id,
             label=f"conformer_{i}",
+            degeneracy=conformer_degeneracies[i]
+            if conformer_degeneracies is not None and i < len(conformer_degeneracies) else None,
         )
         session.add(geom)
         logger.debug(
@@ -282,6 +297,22 @@ def _create_optimization_geometry(
 # ======================================================================
 # Step 3 -- Update task statuses based on job results
 # ======================================================================
+
+def _accept_cube_miss(session: Session, job: ComputationJob, max_attempts: int) -> bool:
+    """Whether a cubes-only failure of *job* is accepted: its run's previous attempt
+    failed on the cubes alone, or it was the run's last attempt."""
+    task = session.get(ComputationTask, job.task_id)
+    base = (task.retry_base or 0) if task is not None else 0
+    if job.attempt - base >= max_attempts:
+        return True
+    previous = session.exec(
+        select(ComputationJob)
+        .where(ComputationJob.task_id == job.task_id,
+               ComputationJob.attempt < job.attempt, ComputationJob.attempt > base)
+        .order_by(col(ComputationJob.attempt).desc())
+    ).first()
+    return previous is not None and previous.fail_reason == str([DENSITY_CUBES])
+
 
 def update_task_statuses(session: Session, max_attempts: int = 3) -> None:
     """Mark tasks successful if any job succeeded, failed if all attempts
@@ -642,8 +673,9 @@ def create_retry_jobs(
         )
 
         reason = (last_failed.fail_reason or "") if last_failed is not None else ""
-        # A functional without third derivatives, or a collapsed S1 root, fails identically every time.
-        if "LibXC Needed" in reason or reason == "['Excited Root']":
+        # A functional without third derivatives, or an S1 that collapses or
+        # dissociates, fails identically every time.
+        if reason == "['Excited Root']" or any(f"'{c}'" in reason for c in DETERMINISTIC_CHECKS):
             task.status = TaskStatus.failed
             task.updated_at = datetime.now(timezone.utc)
             session.add(task)
@@ -1092,7 +1124,8 @@ def _generate_job_files(
 
     # --- Gap 3 fix: Parse resources from header, fall back to config ---
     nprocs, mem_per_core = _parse_resources_from_header(header_text)
-    stage_config = _get_stage_config(settings, task.task_type, state)
+    computed = json.loads(task.inputs_json or "{}").get("computed") if extra_inputs is not None else None
+    stage_config = _get_stage_config(settings, task.task_type, state, computed)
     if nprocs is None:
         nprocs = stage_config.default_nprocs
     if mem_per_core is None:
@@ -1111,6 +1144,8 @@ def _generate_job_files(
         nice=settings.slurm.nice,
         keep_hessian=_keeps_hessian(state, task),
         keep_cubes=_keeps_cubes(state, task),
+        keep_nbo_archive=_keeps_nbo_archive(state, task),
+        keep_esd_files=task.task_type.value.startswith("esd_"),
         extra_inputs=extra_inputs,
     )
 
@@ -1283,6 +1318,10 @@ def _apply_retry_modifications(
     ).all()
     if not prior_failures:
         prior_failures = [failed_job]
+    # Missing cubes are a plotting hiccup: rerun unchanged, never escalate.
+    prior_failures = [p for p in prior_failures if p.fail_reason != str([DENSITY_CUBES])]
+    if not prior_failures:
+        return
 
     all_strategies = build_strategies(settings)
     # Geometry perturbation is NOT replayable: it rewrites *xyzfile into an
@@ -1345,11 +1384,16 @@ def _esd_role(state: MoleculeState) -> Optional[str]:
 
 
 def _check_type(session: Session, task: ComputationTask) -> str:
-    """The task type whose output checks apply; an ESD S1 optimisation gets the excited-state ones."""
+    """The task type whose output checks apply; an ESD S1 optimisation gets the
+    excited-state ones, a densities singlepoint the cube check."""
     if task.task_type == TaskType.optimization:
         state = session.get(MoleculeState, task.state_id)
         if state is not None and _esd_role(state) == "S1":
             return "optimization_excited"
+    if task.task_type == TaskType.singlepoint:
+        state = session.get(MoleculeState, task.state_id)
+        if state is not None and _keeps_cubes(state, task):
+            return "singlepoint_densities"
     return task.task_type.value
 
 
@@ -1369,13 +1413,27 @@ def _keeps_cubes(state: MoleculeState, task: ComputationTask) -> bool:
     return bool(metadata.get(categories.DENSITIES))
 
 
-def _get_stage_config(settings: Settings, task_type: TaskType, state: Optional[MoleculeState] = None):
-    """Return the :class:`StageConfig` for a given task type."""
+def _keeps_nbo_archive(state: MoleculeState, task: ComputationTask) -> bool:
+    """Whether a singlepoint runs NBO, whose archive (``FILE.47``) is kept."""
+    if task.task_type != TaskType.singlepoint:
+        return False
+    metadata = json.loads(state.metadata_json) if state.metadata_json else {}
+    return bool(metadata.get(categories.NBO))
+
+
+def _get_stage_config(
+    settings: Settings, task_type: TaskType, state: Optional[MoleculeState] = None,
+    computed: Optional[dict] = None,
+):
+    """Return the :class:`StageConfig` for a given task type.
+
+    *computed* is a built rate task's record, which says whether any channel runs HT.
+    """
     if task_type.value.startswith("esd_"):
         from autodft.qm.orca import esd_inputs
 
         metadata = json.loads(state.metadata_json) if state is not None and state.metadata_json else {}
-        if state is None or esd_inputs.is_fc(task_type.value, metadata):
+        if state is None or esd_inputs.is_fc(task_type.value, metadata, computed):
             return settings.pipeline.esd
         return settings.pipeline.esd_tddft
     elif task_type == TaskType.confsearch:

@@ -340,3 +340,39 @@ class TestPhotophysicsEndpoint:
         r = client.get("/api/projects/nho:p/molecules-detail", headers=key)
         [s1] = [s for s in r.json()["molecules"][0]["states"] if s["description"] == "S1"]
         assert s1["conformers"][0]["esd"] == "failed"
+
+    def test_molecules_detail_carries_a_stored_bond_check(self, api):
+        from autodft.extraction import results
+        from autodft.models import (
+            ComputationHeader, ComputationJob, ComputationTask, MoleculeState, TaskStatus, TaskType,
+        )
+        from autodft.models.result import JobResult
+
+        client, key = api
+        broken = {"ok": False, "lost": True, "fragments": 2, "detail": "dissociated: 2 fragments (C2H5 + H)"}
+        with get_session() as session:
+            mol = session.exec(select(Molecule).where(Molecule.project_name == "nho/p")).first()
+            state = MoleculeState(molecule_id=mol.id, description="T1", multiplicity=3, charge=0)
+            session.add(state)
+            session.commit()
+            header_id = session.exec(select(ComputationHeader.id)).first()
+            opts = [ComputationTask(task_type=TaskType.optimization, status=TaskStatus.successful,
+                                    state_id=state.id, header_id=header_id) for _ in range(2)]
+            session.add_all(opts)
+            session.commit()
+            job = ComputationJob(task_id=opts[0].id, attempt=1, job_path="/jobs/1", success=True)
+            session.add(job)
+            session.commit()
+            session.add(JobResult(job_id=job.id, task_id=opts[0].id, job_path=job.job_path,
+                                  parser_version=results.PARSER_VERSION,
+                                  data_json=json.dumps({"connectivity": broken})))
+            session.commit()
+            mol_id = mol.id
+        r = client.get("/api/projects/nho:p/molecules-detail", headers=key)
+        [t1] = [s for s in r.json()["molecules"][0]["states"] if s["description"] == "T1"]
+        assert t1["conformers"][0]["connectivity"] == broken
+        assert "connectivity" not in t1["conformers"][1]
+
+        detail = client.get(f"/api/molecules/{mol_id}", headers=key).json()
+        [t1] = [s for s in detail["states"] if s["description"] == "T1"]
+        assert [t.get("connectivity") for t in t1["tasks"]] == [broken, None]

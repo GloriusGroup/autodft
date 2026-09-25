@@ -94,7 +94,11 @@ def generate_submit_script(
     keep_densities: bool = False,
     keep_hessian: bool = False,
     keep_cubes: bool = False,
+    keep_nbo_archive: bool = False,
+    keep_esd_files: bool = False,
     extra_inputs: Optional[list[str]] = None,
+    stall_minutes: int = 0,
+    sync_minutes: int = 0,
 ) -> Path:
     """Render ``submit.cmd.j2`` and write ``submit.cmd`` into *job_path*.
 
@@ -121,8 +125,13 @@ def generate_submit_script(
                         back from scratch when True.
         keep_hessian: Copy ``*.hess`` back from scratch when True.
         keep_cubes: Copy ``*.cube`` back from scratch when True.
+        keep_nbo_archive: Copy NBO's ``*.47`` archive back from scratch when True.
+        keep_esd_files: Copy ESD's derivative Hessians, spectra and correlation
+                        functions back from scratch when True.
         extra_inputs: Files in *job_path* to stage into scratch next to
                       ``input.inp``.
+        stall_minutes: Stall watchdog threshold; 0 runs ORCA in the foreground.
+        sync_minutes: Copy output.out back this often while the watchdog runs.
 
     Returns:
         Path to the written ``submit.cmd``.
@@ -150,7 +159,11 @@ def generate_submit_script(
         keep_densities=keep_densities,
         keep_hessian=keep_hessian,
         keep_cubes=keep_cubes,
+        keep_nbo_archive=keep_nbo_archive,
+        keep_esd_files=keep_esd_files,
         extra_inputs=extra_inputs or [],
+        stall_minutes=stall_minutes,
+        sync_minutes=sync_minutes,
     )
 
     submit_path = job_path / "submit.cmd"

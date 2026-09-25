@@ -219,6 +219,12 @@ def test_the_photophysics_page_has_an_export_button():
     assert "format=photophysics" in html
 
 
+def test_ir_plot_scales_unscaled_frequencies_by_095_by_default():
+    html = (TEMPLATE / "dashboard.html").read_text()
+    assert re.search(r'id="ppIrScale" value="0\.950"', html)
+    assert "unscaled harmonic × " in html
+
+
 def test_the_submit_form_is_never_clipped():
     # Nothing collapses these panels; a fixed height hid the Submit button once every category was ticked.
     css = (TEMPLATE / "dashboard.html").read_text().split(".collapsible-body {", 1)[1].split("}", 1)[0]
@@ -242,3 +248,10 @@ def test_header_select_preselects_the_stored_package_default():
     assert "function normalizeHeaderText(s) {" in html
     assert "replace(/\\s+/g, ' ')" in html
     assert "normalizeHeaderText(c.text) === defText" in html
+
+
+def test_broken_geometries_are_badged():
+    html = (TEMPLATE / "dashboard.html").read_text()
+    assert "brokenBadge(c.connectivity)" in html
+    assert "p.connectivity && !p.connectivity.ok" in html
+    assert "(m.broken_bonds || []).forEach" in html

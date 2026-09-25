@@ -15,6 +15,19 @@ from autodft import categories
 ESD_NROOTS = 10
 # The S1 optimisation follows root 1; a few roots above keep the tracking stable.
 S1_NROOTS = 5
+# An orbital basis token of a route line; aux bases (def2/J, AutoAux) never match.
+_ORBITAL_BASIS_RE = re.compile(
+    r"(?:(?:ma|old|ZORA|DKH|SARC)-)*def2?-\S+|SARC-\S+|(?:[a-z]+-)?cc-p\S+|\d-\d+\+*G\S*"
+    r"|STO-\dG|(?:aug-)?pc(?:S?seg|[JHX])?-\d\S*|x2c-\S+|ANO-\S+|IGLO-\S+|EPR-\S+"
+    r"|SV\(P\)|SVP|TZVPP?|QZVPP?|vDZP",
+    re.IGNORECASE,
+)
+_SOLVATION_RE = re.compile(r"^\s*!.*\b(?:CPCM|SMD|CPCMC)\b|%cpcm\b", re.IGNORECASE | re.MULTILINE)
+# A standalone Opt: not L-Opt, COpt or the like.
+_OPT_RE = re.compile(r"(?<![\w-])Opt(?![\w-])", re.IGNORECASE)
+_OPT_LEVEL_RE = re.compile(r"\b(?:Tight|VeryTight|Loose|Normal|Sloppy)Opt\b", re.IGNORECASE)
+_GRID_RE = re.compile(r"\bDEFGRID\d\b", re.IGNORECASE)
+_KEEPDENS_RE = re.compile(r"\s*\bKeepDens\b", re.IGNORECASE)
 
 
 class HeaderConflict(ValueError):
@@ -69,8 +82,63 @@ def with_keyword(header: str, keyword: str) -> str:
     return f"! {keyword}\n" + header
 
 
+def with_basis(header: str, basis: str) -> str:
+    """*header* with the orbital basis on its ``!`` lines replaced by *basis* (added if none)."""
+    found = False
+
+    def swap(match: re.Match) -> str:
+        nonlocal found
+        space, token = match.groups()
+        if "/" in token or not _ORBITAL_BASIS_RE.fullmatch(token):
+            return match.group(0)
+        if found:
+            return ""
+        found = True
+        return space + basis
+
+    lines = header.splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("!"):
+            body, hash_, comment = line.partition("#")
+            lines[i] = re.sub(r"(\s*)([^\s!]+)", swap, body) + hash_ + comment
+    return "".join(lines) if found else with_keyword(header, basis)
+
+
+def _on_keyword_lines(header: str, change) -> str:
+    """*header* with *change* applied to each ``!`` line, comments left alone."""
+    lines = header.splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("!"):
+            ending = "\n" if line.endswith("\n") else ""
+            body, hash_, comment = line.rstrip("\n").partition("#")
+            lines[i] = change(body) + hash_ + comment + ending
+    return "".join(lines)
+
+
+def with_tight_opt(header: str) -> str:
+    """*header* with a plain ``Opt`` made ``TightOpt``, unless it sets an opt level already."""
+    if any(_OPT_LEVEL_RE.search(line) for line in _keyword_lines(header)):
+        return header
+    return _on_keyword_lines(header, lambda body: _OPT_RE.sub("TightOpt", body))
+
+
+def rate_header(header: str) -> str:
+    """*header* for an ESD rate job: DEFGRID2 and no KeepDens (written per displacement)."""
+    header = _on_keyword_lines(header, lambda body: _KEEPDENS_RE.sub("", body))
+    if any(_GRID_RE.search(line) for line in _keyword_lines(header)):
+        return _on_keyword_lines(header, lambda body: _GRID_RE.sub("DEFGRID2", body))
+    return with_keyword(header, "DEFGRID2")
+
+
+def _keyword_lines(header: str) -> list[str]:
+    return [line.partition("#")[0] for line in header.splitlines() if line.lstrip().startswith("!")]
+
+
 def nbo_block(keywords: str) -> str:
-    """A ``%nbo`` block requesting *keywords* on top of the NPA summary."""
+    """A ``%nbo`` block requesting *keywords* on top of the NPA summary, plus the archive."""
+    # A keyword list replaces ORCA's default one, and with it ARCHIVE (the FILE.47).
+    if not re.search(r"\bARCHIVE\b", keywords, re.IGNORECASE):
+        keywords = f"{keywords} ARCHIVE"
     return f'%nbo\n  NBOKEYLIST = "$NBO {keywords} $END"\nend\n'
 
 
@@ -136,13 +204,22 @@ def compose_header(
             tda=bool(options.get("uvvis_tda", defaults["uvvis_tda"])),
         )
     if task_type == "singlepoint_nmr":
-        return with_keyword(header, "NMR")
+        return with_keyword(with_basis(header, categories.NMR_BASIS), "NMR")
     if task_type == "singlepoint_soc":
+        # Equilibrium solvation, as in the S1 optimisation, keeps DELE consistent.
+        solvated = {"cpcmeq": True} if _SOLVATION_RE.search(header) else {}
         return with_tddft(
-            header, nroots=ESD_NROOTS, iroot=1, triplets=True, dosoc=True, tda=False,
+            header, nroots=ESD_NROOTS, iroot=1, triplets=True, dosoc=True, tda=True, **solvated,
         )
     if task_type == "optimization" and options.get("esd_role") == "S1":
-        return with_tddft(header, nroots=S1_NROOTS, iroot=1, followiroot=True, tda=False)
+        # ORCA solvates the excited state in equilibrium only for analytic gradients;
+        # its numerical frequencies otherwise mix in non-equilibrium LR-CPCM.
+        solvated = {"cpcmeq": True} if _SOLVATION_RE.search(header) else {}
+        return with_tddft(with_tight_opt(header), nroots=S1_NROOTS, iroot=1, followiroot=True,
+                          tda=True, **solvated)
+    if task_type == "optimization" and (options.get("esd_role") == "T1" or options.get(categories.ESD)):
+        # ESD Hessians of T1 and of the S0 conformers (request_esd sits on S0 only).
+        return with_tight_opt(header)
     if task_type == "singlepoint":
         if options.get(categories.NBO):
             defaults = categories.OPTIONS[categories.NBO]

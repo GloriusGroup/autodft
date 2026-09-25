@@ -25,14 +25,33 @@ logger = logging.getLogger(__name__)
 # routinely produce -20 to -50 cm^-1 modes that no amount of re-optimisation
 # removes; failing on them burns the whole retry budget for nothing.
 IMAGINARY_FREQ_THRESHOLD = -50.0
+# Written into output.out by submit.cmd when its watchdog kills a hung ORCA.
+STALL_MARKER = "AUTODFT STALLED:"
+# A densities singlepoint's requested cubes are missing or empty.
+DENSITY_CUBES = "Density Cubes"
+_PLOTS_RE = re.compile(r"^\s*%plots\b(.*?)^\s*end\b", re.IGNORECASE | re.MULTILINE | re.DOTALL)
+_CUBE_FILE_RE = re.compile(r'\(\s*"([^"]+\.cube)"\s*\)', re.IGNORECASE)
 
 
-def _esd_job_count(job_path: Path) -> Optional[int]:
-    """ORCA jobs in *job_path*'s input: one plus each ``$new_job``."""
+def _esd_main_jobs(job_path: Path) -> Optional[int]:
+    """ORCA jobs in *job_path*'s input before its FC diagnostics (all of them without any)."""
+    from autodft.qm.orca.esd_inputs import DIAGNOSTICS_MARKER
+
     try:
-        return (Path(job_path) / "input.inp").read_text(encoding="utf-8", errors="replace").count("$new_job") + 1
+        text = (Path(job_path) / "input.inp").read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
+    main, marker, _ = text.partition(DIAGNOSTICS_MARKER)
+    # The $new_job right before the marker closes the last main job.
+    return main.count("$new_job") + (0 if marker else 1)
+
+
+def _before_diagnostics(content: str, main_jobs: Optional[int]) -> Optional[str]:
+    """*content* up to where the first diagnostic job starts; None if none started."""
+    if main_jobs is None:
+        return None
+    start = re.search(rf"^.*JOB NUMBER\s+{main_jobs + 1}\b", content, re.MULTILINE)
+    return content[:start.start()] if start else None
 
 
 class OrcaParser(QMEngine):
@@ -68,9 +87,20 @@ class OrcaParser(QMEngine):
         """
         job_path = Path(job_path)
         content = self._load_output(job_path)
+        if STALL_MARKER in content:
+            # Killed by the submit script's watchdog: a hang, not a result.
+            return QMResult(success=False, checks={"Stalled": False})
+        if "orca finished by error termination in plot" in content.lower():
+            # Not a failure of the job, but its cube files are missing or empty.
+            logger.warning("orca_plot failed in %s; cube files missing or empty", job_path)
 
+        main_jobs = _esd_main_jobs(job_path) if task_type.startswith("esd_") else None
+        main_content = _before_diagnostics(content, main_jobs)
+        if main_content is not None:
+            # FC diagnostics never cost the rate: whatever they do, judge the main jobs only.
+            content = main_content
         checks: dict[str, bool] = {
-            "Termination": self._check_normal_termination(content),
+            "Termination": main_content is not None or self._check_normal_termination(content),
             "Optimization Convergence": self._check_for_optimization_convergence(
                 content, task_type
             ),
@@ -92,6 +122,8 @@ class OrcaParser(QMEngine):
             from autodft.qm.orca.spectra_parser import parse_absorption
 
             checks["Absorption Spectrum"] = bool(parse_absorption(content))
+        if task_type == "singlepoint_densities":
+            checks[DENSITY_CUBES] = not self.missing_cubes(job_path)
         if task_type == "singlepoint_nmr":
             from autodft.qm.orca.spectra_parser import parse_shieldings
 
@@ -111,15 +143,17 @@ class OrcaParser(QMEngine):
                 checks["LibXC Needed"] = not esd_parser.needs_libxc(content)
             if task_type.startswith("esd_"):
                 found = esd_parser.rates(content)
-                expected = _esd_job_count(job_path)
-                # One rate per ORCA job; a missing sublevel would skew the sum or mean.
+                # One rate per main ORCA job; a missing sublevel would skew the sum or mean.
                 checks["ESD Rate"] = bool(found) and all(math.isfinite(r.rate) for r in found) and (
-                    expected is None or len(found) == expected
+                    main_jobs is None or len(found) == main_jobs
                 )
             if task_type == "optimization_excited":
                 # Below 0.1 eV the followed root has collapsed onto S0.
                 gap = esd_parser.followed_root_energy(content)
                 checks["Excited Root"] = gap is not None and gap >= 0.1 * esd_parser.EV_TO_EH
+                # A converged S1 with a small gap is a bound state, not a dissociation.
+                checks["S1 Stays Bound"] = checks["Optimization Convergence"] \
+                    or not esd_parser.s1_dissociates(content)
 
         success = all(checks.values())
 
@@ -131,9 +165,11 @@ class OrcaParser(QMEngine):
 
         conformers: Optional[list[str]] = None
         conformer_energies: Optional[list[float]] = None
+        conformer_degeneracies: Optional[list[int]] = None
         if task_type == "confsearch":
             conformers = self.extract_conformer_ensemble(job_path, content)
             conformer_energies = self.extract_conformer_ensemble_energies(content)
+            conformer_degeneracies = self.extract_conformer_ensemble_degeneracies(content)
 
         return QMResult(
             success=success,
@@ -142,6 +178,7 @@ class OrcaParser(QMEngine):
             free_energy_correction=free_energy_correction,
             conformers=conformers,
             conformer_energies=conformer_energies,
+            conformer_degeneracies=conformer_degeneracies,
         )
 
     def generate_input(
@@ -169,6 +206,8 @@ class OrcaParser(QMEngine):
         nice: int = 0,
         keep_hessian: bool = False,
         keep_cubes: bool = False,
+        keep_nbo_archive: bool = False,
+        keep_esd_files: bool = False,
         extra_inputs: Optional[list[str]] = None,
     ) -> None:
         """Delegated to :func:`input_generator.generate_submit_script`.
@@ -195,8 +234,27 @@ class OrcaParser(QMEngine):
             keep_densities=self.orca.keep_densities,
             keep_hessian=keep_hessian,
             keep_cubes=keep_cubes,
+            keep_nbo_archive=keep_nbo_archive,
+            keep_esd_files=keep_esd_files,
             extra_inputs=extra_inputs,
+            stall_minutes=self.orca.stall_minutes,
+            sync_minutes=self.orca.sync_output_minutes,
         )
+
+    @staticmethod
+    def missing_cubes(job_path: Path) -> list[str]:
+        """The cube files input.inp's ``%plots`` block asks for that are missing or empty."""
+        try:
+            text = (Path(job_path) / "input.inp").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return []
+        names = [name for block in _PLOTS_RE.findall(text) for name in _CUBE_FILE_RE.findall(block)]
+        missing = []
+        for name in names:
+            path = Path(job_path) / name
+            if not path.is_file() or path.stat().st_size == 0:
+                missing.append(name)
+        return missing
 
     # ------------------------------------------------------------------
     # File loading
@@ -414,33 +472,13 @@ class OrcaParser(QMEngine):
             List of XYZ-format strings, or ``None`` if no ensemble data
             was found.
         """
-        contributions: list[list] = []  # [index, %total, energy]
-        start_reading = False
-
-        for line in content.splitlines():
-            if "# Final ensemble info #" in line:
-                start_reading = True
-                continue
-
-            if start_reading:
-                if "Conformer" in line or "----" in line:
-                    continue
-                parts = line.strip().split()
-                if len(parts) == 5 and parts[0].isdigit():
-                    index = int(parts[0])
-                    energy = float(parts[1])
-                    total_pct = float(parts[3])
-                    contributions.append([index, total_pct, energy])
-
+        contributions = cls._parse_ensemble_table(content)
         if not contributions:
             logger.warning("No conformers found in the output file.")
             return None
 
-        # Sort by energy (ascending) and filter by contribution > 0.1%
-        contributions.sort(key=lambda x: x[2])
-        used = [c[0] for c in contributions if c[1] > 0.1]
-        if len(used) > max_conformers:
-            used = used[:max_conformers]
+        # Already sorted by energy; keep those contributing > 0.1 %.
+        used = [c[0] for c in contributions if c[1] > 0.1][:max_conformers]
 
         ensemble_file = job_path / "input.finalensemble.xyz"
         conformers: list[str] = []
@@ -466,9 +504,21 @@ class OrcaParser(QMEngine):
             return None
         return [c[2] for c in contributions if c[1] > 0.1][:max_conformers]
 
+    @classmethod
+    def extract_conformer_ensemble_degeneracies(
+        cls,
+        content: str,
+        max_conformers: int = 20,
+    ) -> Optional[list[Optional[int]]]:
+        """GOAT's per-conformer degeneracy (``Degen.``), index-aligned like the energies."""
+        contributions = cls._parse_ensemble_table(content)
+        if not contributions:
+            return None
+        return [c[3] for c in contributions if c[1] > 0.1][:max_conformers]
+
     @staticmethod
     def _parse_ensemble_table(content: str) -> list[list]:
-        """Parse the ``# Final ensemble info #`` table into [index, %total, energy].
+        """Parse the ``# Final ensemble info #`` table into [index, %total, energy, degeneracy].
 
         Sorted by energy ascending. Shared by the geometry and energy
         extractors so the two can never drift out of alignment.
@@ -486,7 +536,7 @@ class OrcaParser(QMEngine):
                 parts = line.strip().split()
                 if len(parts) == 5 and parts[0].isdigit():
                     contributions.append(
-                        [int(parts[0]), float(parts[3]), float(parts[1])]
+                        [int(parts[0]), float(parts[3]), float(parts[1]), _degeneracy(parts[2])]
                     )
 
         contributions.sort(key=lambda x: x[2])
@@ -596,7 +646,6 @@ class OrcaParser(QMEngine):
         # this module's error termination is ignored.
         plot_error = "orca finished by error termination in plot"
         if plot_error in lowered:
-            logger.info("Ignoring a failed orca_plot (PLOT) error termination")
             lowered = lowered.replace(plot_error, "")
 
         for marker in (
@@ -616,3 +665,12 @@ class OrcaParser(QMEngine):
             logger.warning("ORCA aborted the run and the optimisation failed")
             return False
         return True
+
+
+def _degeneracy(text: str) -> Optional[int]:
+    """GOAT's ``Degen.`` entry; None when it is not a positive number."""
+    try:
+        value = int(float(text))
+    except (ValueError, OverflowError):
+        return None
+    return value if value >= 1 else None

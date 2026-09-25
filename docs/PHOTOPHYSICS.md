@@ -56,22 +56,31 @@ frequency calculation, so the optimisation header must set `Freq`,
 `NumFreq`, or `AnFreq` — submitting IR against a header without one of
 those is refused.
 
-Frequencies are harmonic and unscaled wherever the API reports them. The
-dashboard applies whatever scale factor you type on the Photophysics
-page; it never changes what's stored.
+Frequencies are harmonic and unscaled wherever the API reports them
+(`"scaled": false, "scale_factor": 1.0` in the IR payload; the workbook's
+columns are `peak_cm_unscaled` / `frequency_cm_unscaled`). The dashboard
+plot applies the scale factor on the Photophysics page (default 0.95);
+it never changes what's stored.
 
 ## NMR
 
 Each optimised S0 conformer gets one `singlepoint_nmr` task. Its header
-is the state's singlepoint header with the `NMR` keyword appended to the
-first `!` line. NMR needs a closed-shell singlet reference (multiplicity
-1) — doublets and diradicals are refused.
+is the state's singlepoint header with the orbital basis on its `!` lines
+(`def2-*`, `cc-pV*`, `6-31G*`, `pcseg-*`, `x2c-*`, …) replaced by Jensen's
+shielding basis `pcSseg-2` (added if the header names none) and the `NMR`
+keyword appended to the first `!` line. Functional, grid, solvent and RI
+settings stay as they are, auxiliary bases included (`def2/J` works with
+`pcSseg-2` under RIJCOSX; shieldings within 0.2 ppm of `AutoAux`). ORCA
+has `pcSseg-2` for H–Kr only, so NMR for a molecule with a heavier
+element is refused. The reference compounds run through the same rule, so
+references and molecules share one NMR method. NMR needs a closed-shell
+singlet reference (multiplicity 1) — doublets and diradicals are refused.
 
 Shifts are δ = σ_ref − σ: σ_ref is the mean isotropic shielding of that
 element in a reference compound (TMS `C[Si](C)(C)C` for ¹H/¹³C, CFCl₃
 `FC(Cl)(Cl)Cl` for ¹⁹F), which the pipeline computes itself once per
 optimisation/singlepoint header pair, in the protected
-`admin/system_references` project. `method_matches` compares the `!`
+`admin/reference_systems` project. `method_matches` compares the `!`
 keywords and `%` blocks of the molecule's and the reference's NMR inputs.
 
 Signals are grouped by topological symmetry from the optimised geometry:
@@ -88,7 +97,7 @@ many it already used. `method_matches` compares both NMR inputs' `!`
 keywords and `%` blocks, ignoring `%pal`, `%maxcore`, `%scf`
 and SCF-convergence keywords.
 
-An admin export or archive-job on `admin/system_references` pauses that
+An admin export or archive-job on `admin/reference_systems` pauses that
 project like any other, which delays every user's pending references for
 the duration — avoid running one while references are outstanding.
 
@@ -103,8 +112,19 @@ singlet only.
 terminal, the best S0 conformer (S0\*, picked by G like the
 CSV/JSON exporters' reported conformer) seeds an S1 optimisation — the
 optimisation header plus `%tddft nroots 5 iroot 1 followiroot true tda
-false` — and a T1 (UKS) optimisation. SOC TDDFT singlepoints (`nroots 10
-iroot 1 triplets true dosoc true tda false`) run on S0\*, S1 and T1. Each
+true cpcmeq true` — and a T1 (UKS) optimisation. All three ESD
+optimisations (S1, T1 and every S0 conformer of an ESD molecule) run with
+a plain `Opt` promoted to `TightOpt`, unless the header already sets
+`TightOpt`, `VeryTightOpt` or `LooseOpt`; other molecules' optimisations
+are untouched. `cpcmeq true` matters
+with CPCM: ORCA solvates the excited state in equilibrium only when
+analytic gradients are requested, and its numerical S1 frequencies
+otherwise mix in non-equilibrium LR-CPCM (benzene: a spurious
+−1900 cm⁻¹ mode that disappears with the flag or without solvent). SOC TDDFT singlepoints (`nroots 10
+iroot 1 triplets true dosoc true tda true`, plus `cpcmeq true` when the
+header is solvated, so DELE compares equilibrium-solvated states) run on
+S0\*, S1 and T1. Every ESD TDDFT job uses TDA except IC, whose NACMEs the
+manual computes with full TDDFT; UV/Vis keeps its own `uvvis_tda`. Each
 of the six rate jobs starts as soon as its two states are ready. That T1
 state also gets the normal T1 follow-ups — the energy singlepoint (used
 for ΔE_ST(UKS)) and the vertical spin-change singlepoint — even without
@@ -120,6 +140,8 @@ never used in a rate.
 **SOCMEs.** |⟨T|H_SO|S⟩| is summed over the three triplet sublevels for a
 singlet→triplet transition, and that sum divided by √3 for triplet→singlet;
 each rate reads the SOC table computed at its final state's geometry.
+An HT job computes its own SOC instead; its `socme_cm` is that sublevel's
+|SOC| from ORCA's `Reference SOC` line.
 
 **S1→Tn.** Every Tn (n ≥ 2) up to `esd_tn_window_ev` eV above S1 shares the
 T1 Hessian and geometry — the shifted-T1 proxy, no extra Hessian per
@@ -129,13 +151,62 @@ channel.
 **FC vs HT.** Franck-Condon rates by default. Herzberg-Teller
 (`request_esd_ht`) adds vibronic coupling for FC-forbidden transitions, far
 more expensive: an ISC-type HT job runs once per triplet sublevel
-(`trootssl -1/0/1`), PHOSP once per SOC root 1–3. Each ISC-type HT channel
-runs 6N displaced TDDFT+SOC gradients per sublevel: glyoxal/def2-SVP took
-715 s for its three sublevels; a 30–50-atom molecule on a large basis can
-take days.
+(`trootssl -1/0/1`), PHOSP once per SOC root 1–3. Each such job takes
+numerical derivatives: 3N−6 (+)-displaced TDDFT+SOC singlepoints, plus a
+(−) displacement for each mode whose change is not small (central
+differences). Singlepoints, not gradients: glyoxal/def2-SVP took 715 s for
+its three sublevels; a 30–50-atom molecule on a large basis can take days.
+
+With `request_esd_ht` on, HT runs only where it matters (manual 5.5.4.2:
+above ~5 cm⁻¹ of SOC the HT term is negligible). Fluorescence and
+phosphorescence always get HT; IC never does. An S→T channel (`esd_isc`,
+decided per Tn) gets HT when its SOCME — the channel total, summed over
+the sublevels — is below 5 cm⁻¹, else FC. T→S (`esd_isc_t1s0`,
+`esd_risc`) likewise runs FC at a total SOCME of 5 cm⁻¹ or more, and
+RISC also runs FC when it is more than 10 kT uphill (−DELE > 10 ×
+0.6950348 × T cm⁻¹). Each rate task records the decision in its
+`inputs_json["computed"]` as `ht` (any channel HT) and `ht_reason` (e.g.
+`SOCME 54.20 cm-1 >= 5`, or `T1: …; T2: …` per channel), and per job;
+the API, the dashboard's ESD table and the workbook's *ESD jobs* sheet
+show it. A rate task whose channels all came out FC runs under
+`[pipeline.esd]` like a plain FC job.
+
+**Lineshape.** ISC-type and IC rates set `LINES GAUSS` and `INLINEW 100`
+explicitly (ORCA's default 250 cm⁻¹ is wide; the manual advises varying
+it). Fluorescence and phosphorescence keep ORCA's defaults.
+
+**Diagnostics.** Every ISC-type channel also gets cheap FC reruns
+(`NOITER`, the channel's DELE and SOCME, seconds each) as extra `$new_job`s
+in the same rate input: `INLINEW` 100 (the baseline; an FC main job is its
+own), 25 and 250, and `INLINEW 100` with `TCUTFREQ 300` (modes below
+300 cm⁻¹ removed). They never enter the reported rate; their ORCA job
+numbers are recorded in `computed["diagnostics"]`. A channel is flagged
+*width-sensitive* when the 25 and 250 cm⁻¹ rates differ by more than 3×,
+and *soft-mode dominated* when the TCUTFREQ rate is below a tenth of the
+baseline — harmonic low-frequency modes (e.g. methyl torsions) then carry
+the rate. Channels whose rates all stay below 1 s⁻¹ are not judged. The
+verdicts describe the FC lineshape only: for an HT channel the rerun uses
+the channel's total SOCME, which may be ~0 (that is why it runs HT), so
+its FC rates then stay below the cut-off and it is not judged at all. The
+verdicts are in the rate's `diagnostics` list, the flags, the dashboard
+and the workbook's *ESD diagnostics* sheet. The reruns never cost the
+rate: the first one opens with an `# autodft: FC diagnostics …` comment,
+and the output check reads only the jobs before it — a rerun that aborts
+or prints a non-finite rate neither fails the task nor escalates its
+resources; its entry is then null. After TDDFT jobs they carry no
+`%maxcore` of their own and inherit the header's. IC gets no diagnostics: ORCA
+cannot be handed precomputed NACMEs, so every rerun would repeat the
+TDDFT and NACME calculation. Since `$new_job` inherits whatever a job
+does not repeat, HT jobs come first, FC jobs say `DOHT FALSE`, and the
+TCUTFREQ reruns come last.
 
 **Cost.** The S1 Hessian is always numerical — ORCA 6.1 has no analytic
-TDDFT Hessian, TDA or not. `[pipeline.excited_optimization]` defaults to 4
+TDDFT Hessian, TDA or not. Rate jobs are trimmed: ISC-type TDDFT jobs ask
+for three roots above the highest one they read (`nroots 4` for S1→T1),
+fluorescence and IC for 5, phosphorescence for 10 (the SOC singlepoints
+keep 10); any `DEFGRIDn` on the header's `!` line becomes `DEFGRID2`
+(added when there is none) and `KeepDens` is dropped, since HT would write
+a density per displacement. `[pipeline.excited_optimization]` defaults to 4
 days (`4-00:00:00`); check it against the SLURM partition's `MaxTime`
 before submitting, since `sbatch` refuses a job asking for longer than the
 partition allows. FC ISC-type jobs (DELE and SOCME supplied, no electronic
@@ -147,7 +218,10 @@ singlepoint. Category jobs (UV/Vis, NMR, SOC, the six rate jobs) do not
 count toward the global failure circuit breaker; ESD S1/T1 optimisations
 do, like every optimisation. An S1 optimisation whose root collapsed
 (`Excited Root`) is not retried — re-running the same input from the same
-seed geometry collapses again.
+seed geometry collapses again. Nor is one whose S1 dissociates (`S1 Stays Bound`: the
+followed root's gap to S0 fell below 1 eV and below 30 % of its starting
+value, e.g. a σσ* state breaking a C–H bond); that is the chemistry, and the
+S1 rates are reported as blocked with that reason. The T1 rates still run.
 
 **LibXC.** Native B88-exchange functionals (B3LYP, BLYP, BP86, BP, B3P86,
 B3PW91, BPW91, B1LYP, BHandHLYP, B2PLYP, B2GP-PLYP, X3LYP — with or without
@@ -158,6 +232,15 @@ ORCA can't differentiate fails once with `LibXC Needed` and is not
 retried. A native B88 *singlepoint* header costs the IC rate and therefore
 τ(S1) and the S1 yields, which need k_IC; the other five rates are
 unaffected. Use `!LibXC(B3LYP)` etc. either way.
+
+**Heavy elements.** def2 basis sets put an effective core potential on
+every element past Kr (Rb onwards, e.g. I), and ORCA has no spin-orbit
+integrals for ECPs, so SOCMEs and every rate built on them would be
+wrong. ESD is refused at submission for such molecules unless the
+singlepoint header's `!` line asks for a scalar-relativistic all-electron
+treatment (`ZORA`, `DKH`/`DKH2` or `X2C`, with matching basis sets such as
+`ZORA-def2-TZVP` plus `SARC-ZORA-TZVP` on the heavy atom). Br and lighter
+elements are all-electron in def2 and need nothing extra.
 
 **Caveats.** Rates are harmonic. A job whose Duschinsky rotation is large
 (sum of K\*K over 7) is flagged as unreliable rather than dropped. A
@@ -197,12 +280,22 @@ points per axis (default 75, 10–300). Spin density is silently skipped on
 a closed-shell state (multiplicity 1) — ORCA's `orca_plot` cannot produce
 one there — rather than refused.
 
+A densities singlepoint also has to pass a `Density Cubes` check: every
+cube its `%plots` block names must be in the job directory and non-empty
+(`orca_plot` can crash after a good SCF, leaving a 0-byte cube). The
+first such failure reruns the job unchanged — no retry strategy applies,
+so no extra cores, memory or SCF settings. If the rerun misses its cubes
+too, the job is accepted anyway for its energy, with a WARNING naming the
+job directory and the missing cubes.
+
 **NBO.** Adds the `NBO` keyword, plus, when `nbo_keywords` is set, a
-`%nbo` block (`NBOKEYLIST = "$NBO <nbo_keywords> $END"`), for ORCA's NBO
-7. Needs `[orca].nbo_exe` configured on the controller (exported as
+`%nbo` block (`NBOKEYLIST = "$NBO <nbo_keywords> ARCHIVE $END"`), for
+ORCA's NBO 7. Needs `[orca].nbo_exe` configured on the controller (exported as
 `NBOEXE` in the job's submit script); a submission requesting NBO without
 it configured is refused, from the dashboard, the REST API and the CLI
-alike.
+alike. NBO's archive, `FILE.47` (ORCA's default keyword list writes it;
+a custom list replaces that list, hence the added `ARCHIVE`), is copied
+back into the job directory, and `cleanup` keeps `*.47` files.
 
 **Natural charges.** Each NBO singlepoint's output is parsed for its
 first "Summary of Natural Population Analysis" table (stopped at that
@@ -243,14 +336,66 @@ nothing about its Densities flag there — the cube files above are its
 only trace outside the job directory. NBO does appear, like any other
 category, and the workbook's `NBO` sheet adds one row per atom per state.
 
+## Broken bonds
+
+Every optimisation judged successful since this check exists (older jobs
+are left unchecked) compares its optimised geometry (`input.xyz`) with the
+molecule's SMILES: bonds are perceived from covalent radii (RDKit's
+`DetermineConnectivity`, cut-off ≈ r₁ + r₂ + 0.45 Å) and the two
+element/bond graphs are compared — bond orders, charges, atom order and
+bonds to metals (alkali, alkaline-earth, transition, lanthanide/actinide and
+the heavier main-group metals; drawn ionically or datively in SMILES) play
+no part. A geometry that lost a SMILES bond — fell apart, or an H shift —
+has `lost: true`; one that only formed an extra bond is flagged with
+`lost: false`. The result is stored in the optimisation's `job_results`
+record as `"connectivity": {"ok", "lost", "fragments", "detail"}`, e.g.
+`"dissociated: 2 fragments (C4H8F + H); C-H bonds 9 -> 8"`,
+`"bonds changed: C-H bonds 4 -> 3, H-O bonds 0 -> 1"` or
+`"bond formed: C-C bonds 3 -> 4"`. A geometry whose atoms do not match the
+SMILES formula is not checked; a record without `connectivity` is
+unchecked. A later re-parse of the same job keeps the check.
+
+It shows as a `⚠ bonds` badge on the Molecules page, next to the picked
+conformer in the State Analysis (JSON `picks.<state>.connectivity`, XLSX
+column `broken_bonds` and `Conformers` column `connectivity` — added only
+when some pick has a check), and as `broken_bonds` on each photophysics
+molecule (the whole state family; XLSX sheet `Broken bonds`). The flag
+changes no energy or conformer pick, and the summary CSV/JSON export is
+unchanged. Spectra/NBO detail conformers of a flagged optimisation carry
+`connectivity_ok: false` and are still weighted.
+
+ESD never picks an S0 conformer that lost bonds as S0\* (if all did, the
+molecule's ESD ends with that reason), and never creates a rate job on an
+S1 or T1 optimisation that lost bonds (`bond formed` alone does not
+block): the rate is reported `blocked`, e.g. `T1
+geometry dissociated: 2 fragments (C4H8F + H); C-H bonds 9 -> 8
+(optimisation task 37435); no rates on a broken geometry`.
+
+Calibration on real outputs: fluorobutane's T1 (lost an H) and radical
+anion (lost F⁻) are flagged; its S0 and cation, the other test molecules,
+TMS and CFCl₃ are not. Older projects' flags were all real bond changes:
+halide loss and disulfide S–S cleavage on reduction (the ~2.85 Å S∴S
+two-centre three-electron bond of a disulfide radical anion counts as
+broken), thiophene/thiazole C–S ring opening in T1 or the anion.
+
 ## Weighting
 
-Conformers are Boltzmann-weighted at 298.15 K:
+Conformers are Boltzmann-weighted at 298.15 K, each by g·exp(−E/kT):
 
 * on **G** (the singlepoint energy plus the optimisation's G − E(el)
   correction) when any conformer has a thermal correction,
 * otherwise on the bare singlepoint energy (`weighting: "E_sp"`),
-* otherwise equal weights (`weighting: "equal"`).
+* otherwise equal weights (`weighting: "equal"`), i.e. g alone.
+
+g is GOAT's degeneracy of the conformer the optimisation started from (the
+`Degen.` column of the final ensemble table; the confsearch header runs
+`CONFDEGEN AUTO`), stored per conformer geometry. Conformers from before
+this, or not from GOAT (ESD S1/T1 seeds, no confsearch), count g = 1. Each
+detail conformer carries its `degeneracy`. GOAT itself prints g = 1 for its
+high-energy conformers (above ~3 kcal/mol in our outputs), so those count once
+whatever their symmetry — their weight is negligible anyway. The CSV and State Analysis
+still report the lowest conformer; g changes only these weights (UV/Vis,
+IR, NMR, NBO).
 
 A molecule never mixes scales across its conformers. Conformer numbers in
 the photophysics data are the same 1-based numbering as the Molecules
@@ -281,7 +426,7 @@ when it has rows:
   `pending`, `failed`, `unavailable`, `unweighted`), `weighting`, and the
   weighted peak.
 * `UV-Vis sticks` / `IR sticks` — one row per transition or mode, per
-  conformer.
+  conformer. IR frequencies are unscaled harmonic.
 * `NMR` — one row per signal (symmetry class) per requested nucleus.
 * `ESD` — one row per molecule: status, the six rates, ΔE_ST (TDDFT and
   UKS), the derived lifetimes/yields, and flags.
@@ -289,6 +434,8 @@ when it has rows:
   sublevel or triplet).
 * `NBO` — one row per atom per state: the weighted natural charge, `spin`
   (open-shell states only), and the state's ensemble counts and `weighting`.
+* `Broken bonds` — one row per flagged optimisation (see
+  [Broken bonds](#broken-bonds)).
 
 **JSON.** `<project>_photophysics.json` is `spectroscopy.full_payload` —
 every flagged molecule with full detail, the same shape `?molecule_id=`
@@ -316,7 +463,10 @@ not block the archive: the frozen detail keeps every signal's
 `.hess` alongside `.out`/`.xyz`/`.inp` in the optimisation directories of
 ESD states — S0 with `request_esd`, and every state carrying `esd_role`
 (S1, T1) — since the rate jobs read that Hessian back whenever they
-(re)run. `--dry-run` now counts every file it would delete, not only the
+(re)run. Rate jobs copy ESD's by-products back from scratch
+(`*.FS.hess`, `*.GS.hess`, `*.ES.hess`, `*.spectrum*`, `*.corrfunc`);
+nothing reads them back, so `cleanup-files` deletes them from successful
+rate jobs like any other large file. `--dry-run` now counts every file it would delete, not only the
 ones it actually removes.
 
 ## Deploy
@@ -326,7 +476,7 @@ ones it actually removes.
    otherwise talk to the old API, which silently drops the new fields.
 2. Back up the database: copy `autodft.db` (and `-wal`/`-shm` if present)
    while the controller is stopped.
-3. Check that no project is already named `system_references`: on the
+3. Check that no project is already named `reference_systems`: on the
    controller host, with the repository's Python, all three of these must
    print `[]` (rename or reassign such a project/entrypoint first):
 
@@ -336,15 +486,15 @@ import sqlite3
 db = sqlite3.connect("/path/to/autodft.db")
 print(db.execute(
     "SELECT project_name, COUNT(*) FROM molecules WHERE project_name LIKE "
-    "'%/system_references' OR project_name = 'system_references' GROUP BY 1"
+    "'%/reference_systems' OR project_name = 'reference_systems' GROUP BY 1"
 ).fetchall())
 print(db.execute(
     "SELECT qualified_name FROM projects WHERE qualified_name LIKE "
-    "'%/system_references' OR name = 'system_references'"
+    "'%/reference_systems' OR name = 'reference_systems'"
 ).fetchall())
 print(db.execute(
     "SELECT id FROM calculation_entrypoints WHERE time_started IS NULL "
-    "AND request_metadata LIKE '%system_references%'"
+    "AND request_metadata LIKE '%reference_systems%'"
 ).fetchall())
 EOF
 ```
@@ -452,7 +602,7 @@ states and their `esd_role` / `esd_seed` / `esd_done` metadata keys;
 category flags in S0 state metadata (including `request_densities` /
 `request_singlepoint_nbo` on every state); `photophysics/` frozen
 directories and `_photophysics.{json,xlsx}` exports; and
-`admin/system_references`, which becomes an ordinary, wipeable project
+`admin/reference_systems`, which becomes an ordinary, wipeable project
 under the old code.
 
 ## Stored results
@@ -466,6 +616,10 @@ identity no longer matches the job (see **Roll back**). A job without its
 output falls back to the stored record instead: served when it has every
 key the reader needs, else treated as having no results for that reader
 (e.g. an old record read by a reader that needs a key added since).
+
+The broken-bond check is made only when a job is judged — neither
+re-parsing nor `backfill-results` adds it, so jobs judged before it stay
+unchecked; a record without `connectivity` means unchecked.
 
 **Deploy.** Once the controller is up on the new code, run
 `autodft admin backfill-results --config <config>` on the controller

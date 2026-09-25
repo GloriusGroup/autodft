@@ -1,0 +1,347 @@
+                 $$$$$$$$$$$$$$$$  JOB NUMBER  1 $$$$$$$$$$$$$$
+The sum of K*K is:				4.246817
+
+Checking for transition data:			...done
+Computing transition dipole derivatives		... (6 modes)
+
+	  (will need at least 6 displacements)
+		<<Displacing mode 1 (+)>>
+		<<Displacing mode 1 (-)>>
+		<<Displacing mode 2 (+)>>
+		<<Displacing mode 2 (-)>>
+		<<Displacing mode 3 (+)>>
+		<<Displacing mode 3 (-)>>
+		<<Displacing mode 4 (+)>>
+		<<Displacing mode 5 (+)>>
+		<<Displacing mode 6 (+)>>
+		<<Displacing mode 6 (-)>>
+
+Final check on derivatives:			...done
+Writting FS hessian to:				input.FS.hess
+
+          ***Everything is set, now computing the correlation function***
+
+Homogeneous linewidth is:			50.00 cm-1
+Inhomogeneous linewidth is:			100.00 cm-1
+Number of points:				32768
+Maximum time:					394.65 fs
+Temperature used:				298.15 K
+Z value:					4.198826e-13
+Cutoff for the correlation function:		1.00e-12
+Adiabatic energy difference:			5908.30 cm-1
+0-0 energy difference:				6598.68 cm-1
+Reference SOC (Re and Im):			-2.183010e-12, -8.610742e-13
+Calculating correlation function:		...done
+Last element of the correlation function:	-0.000000,0.000000
+
+The calculated ISC rate constant is		8.169736e+04 s-1
+with 0.00 from FC and 100.00 from HT
+
+Total run time: 0 days 0 hours 0 minutes 28 seconds
+
+                      ****ORCA ESD FINISHED WITHOUT ERROR****
+                 $$$$$$$$$$$$$$$$  JOB NUMBER  2 $$$$$$$$$$$$$$
+The sum of K*K is:				4.246817
+
+Checking for transition data:			...done
+Computing transition dipole derivatives		... (6 modes)
+
+	  (will need at least 6 displacements)
+		<<Displacing mode 1 (+)>>
+		<<Displacing mode 1 (-)>>
+		<<Displacing mode 2 (+)>>
+		<<Displacing mode 2 (-)>>
+		<<Displacing mode 3 (+)>>
+		<<Displacing mode 3 (-)>>
+		<<Displacing mode 4 (+)>>
+		<<Displacing mode 4 (-)>>
+		<<Displacing mode 5 (+)>>
+		<<Displacing mode 5 (-)>>
+		<<Displacing mode 6 (+)>>
+		<<Displacing mode 6 (-)>>
+
+Final check on derivatives:			...done
+Writting FS hessian to:				input_job2.FS.hess
+
+          ***Everything is set, now computing the correlation function***
+
+Homogeneous linewidth is:			50.00 cm-1
+Inhomogeneous linewidth is:			100.00 cm-1
+Number of points:				32768
+Maximum time:					394.65 fs
+Temperature used:				298.15 K
+Z value:					4.198826e-13
+Cutoff for the correlation function:		1.00e-12
+Adiabatic energy difference:			5908.30 cm-1
+0-0 energy difference:				6598.68 cm-1
+Reference SOC (Re and Im):			0.000000e+00, 6.260124e-14
+Calculating correlation function:		...done
+Last element of the correlation function:	-0.000000,0.000000
+
+The calculated ISC rate constant is		5.582226e+00 s-1
+with 0.00 from FC and 100.00 from HT
+
+Total run time: 0 days 0 hours 0 minutes 35 seconds
+
+                      ****ORCA ESD FINISHED WITHOUT ERROR****
+                 $$$$$$$$$$$$$$$$  JOB NUMBER  3 $$$$$$$$$$$$$$
+The sum of K*K is:				4.246817
+
+Checking for transition data:			...done
+Computing transition dipole derivatives		... (6 modes)
+
+	  (will need at least 6 displacements)
+		<<Displacing mode 1 (+)>>
+		<<Displacing mode 1 (-)>>
+		<<Displacing mode 2 (+)>>
+		<<Displacing mode 2 (-)>>
+		<<Displacing mode 3 (+)>>
+		<<Displacing mode 3 (-)>>
+		<<Displacing mode 4 (+)>>
+		<<Displacing mode 4 (-)>>
+		<<Displacing mode 5 (+)>>
+		<<Displacing mode 5 (-)>>
+		<<Displacing mode 6 (+)>>
+		<<Displacing mode 6 (-)>>
+
+Final check on derivatives:			...done
+Writting FS hessian to:				input_job3.FS.hess
+
+          ***Everything is set, now computing the correlation function***
+
+Homogeneous linewidth is:			50.00 cm-1
+Inhomogeneous linewidth is:			100.00 cm-1
+Number of points:				32768
+Maximum time:					394.65 fs
+Temperature used:				298.15 K
+Z value:					4.198826e-13
+Cutoff for the correlation function:		1.00e-12
+Adiabatic energy difference:			5908.30 cm-1
+0-0 energy difference:				6598.68 cm-1
+Reference SOC (Re and Im):			-2.190701e-12, -1.777616e-11
+Calculating correlation function:		...done
+Last element of the correlation function:	-0.000000,0.000000
+
+The calculated ISC rate constant is		8.150821e+04 s-1
+with 0.00 from FC and 100.00 from HT
+
+Total run time: 0 days 0 hours 0 minutes 35 seconds
+
+                      ****ORCA ESD FINISHED WITHOUT ERROR****
+                 $$$$$$$$$$$$$$$$  JOB NUMBER  4 $$$$$$$$$$$$$$
+The sum of K*K is:				4.246817
+
+Checking for transition data:			...done
+
+          ***Everything is set, now computing the correlation function***
+
+Homogeneous linewidth is:			50.00 cm-1
+Inhomogeneous linewidth is:			100.00 cm-1
+Number of points:				131072
+Maximum time:					394.65 fs
+Temperature used:				298.15 K
+Z value:					4.198826e-13
+Cutoff for the correlation function:		1.00e-12
+Adiabatic energy difference:			-15166.80 cm-1
+0-0 energy difference:				-14476.42 cm-1
+Reference SOC (Re and Im):			0.000000e+00, 1.890424e-04
+Calculating correlation function:		...done
+Last element of the correlation function:	0.000000,-0.000000
+
+The calculated ISC rate constant is		1.198548e-02 s-1
+with 100.00 from FC and 0.00 from HT
+
+Total run time: 0 days 0 hours 0 minutes 1 seconds
+
+                      ****ORCA ESD FINISHED WITHOUT ERROR****
+                 $$$$$$$$$$$$$$$$  JOB NUMBER  5 $$$$$$$$$$$$$$
+The sum of K*K is:				4.246817
+
+Checking for transition data:			...done
+
+          ***Everything is set, now computing the correlation function***
+
+Homogeneous linewidth is:			50.00 cm-1
+Inhomogeneous linewidth is:			100.00 cm-1
+Number of points:				32768
+Maximum time:					394.65 fs
+Temperature used:				298.15 K
+Z value:					4.198826e-13
+Cutoff for the correlation function:		1.00e-12
+Adiabatic energy difference:			5908.30 cm-1
+0-0 energy difference:				6598.68 cm-1
+Reference SOC (Re and Im):			0.000000e+00, 0.000000e+00
+Calculating correlation function:		...done
+Last element of the correlation function:	-0.000000,0.000000
+
+The calculated ISC rate constant is		0.000000e+00 s-1
+with -nan from FC and -nan from HT
+
+Total run time: 0 days 0 hours 0 minutes 0 seconds
+
+                      ****ORCA ESD FINISHED WITHOUT ERROR****
+                 $$$$$$$$$$$$$$$$  JOB NUMBER  6 $$$$$$$$$$$$$$
+The sum of K*K is:				4.246817
+
+Checking for transition data:			...done
+
+          ***Everything is set, now computing the correlation function***
+
+Homogeneous linewidth is:			50.00 cm-1
+Inhomogeneous linewidth is:			25.00 cm-1
+Number of points:				131072
+Maximum time:					1578.60 fs
+Temperature used:				298.15 K
+Z value:					4.198826e-13
+Cutoff for the correlation function:		1.00e-12
+Adiabatic energy difference:			5908.30 cm-1
+0-0 energy difference:				6598.68 cm-1
+Reference SOC (Re and Im):			0.000000e+00, 0.000000e+00
+Calculating correlation function:		...done
+Last element of the correlation function:	-0.000000,0.000000
+
+The calculated ISC rate constant is		0.000000e+00 s-1
+with -nan from FC and -nan from HT
+
+Total run time: 0 days 0 hours 0 minutes 1 seconds
+
+                      ****ORCA ESD FINISHED WITHOUT ERROR****
+                 $$$$$$$$$$$$$$$$  JOB NUMBER  7 $$$$$$$$$$$$$$
+The sum of K*K is:				4.246817
+
+Checking for transition data:			...done
+
+          ***Everything is set, now computing the correlation function***
+
+Homogeneous linewidth is:			50.00 cm-1
+Inhomogeneous linewidth is:			250.00 cm-1
+Number of points:				32768
+Maximum time:					157.86 fs
+Temperature used:				298.15 K
+Z value:					4.198826e-13
+Cutoff for the correlation function:		1.00e-12
+Adiabatic energy difference:			5908.30 cm-1
+0-0 energy difference:				6598.68 cm-1
+Reference SOC (Re and Im):			0.000000e+00, 0.000000e+00
+Calculating correlation function:		...done
+Last element of the correlation function:	0.000000,0.000000
+
+The calculated ISC rate constant is		0.000000e+00 s-1
+with -nan from FC and -nan from HT
+
+Total run time: 0 days 0 hours 0 minutes 0 seconds
+
+                      ****ORCA ESD FINISHED WITHOUT ERROR****
+                 $$$$$$$$$$$$$$$$  JOB NUMBER  8 $$$$$$$$$$$$$$
+The sum of K*K is:				4.246817
+
+Checking for transition data:			...done
+
+          ***Everything is set, now computing the correlation function***
+
+Homogeneous linewidth is:			50.00 cm-1
+Inhomogeneous linewidth is:			25.00 cm-1
+Number of points:				524288
+Maximum time:					1578.60 fs
+Temperature used:				298.15 K
+Z value:					4.198826e-13
+Cutoff for the correlation function:		1.00e-12
+Adiabatic energy difference:			-15166.80 cm-1
+0-0 energy difference:				-14476.42 cm-1
+Reference SOC (Re and Im):			0.000000e+00, 1.890424e-04
+Calculating correlation function:		...done
+Last element of the correlation function:	0.000000,-0.000000
+
+The calculated ISC rate constant is		-2.949105e-03 s-1
+with 100.00 from FC and -0.00 from HT
+
+WARNING: negative rates are unphysical! It means something went wrong with the CorrFunc integration.
+Pease, try changing the LINEW, or increasing NPOINTS
+
+
+Total run time: 0 days 0 hours 0 minutes 6 seconds
+
+                      ****ORCA ESD FINISHED WITHOUT ERROR****
+                 $$$$$$$$$$$$$$$$  JOB NUMBER  9 $$$$$$$$$$$$$$
+The sum of K*K is:				4.246817
+
+Checking for transition data:			...done
+
+          ***Everything is set, now computing the correlation function***
+
+Homogeneous linewidth is:			50.00 cm-1
+Inhomogeneous linewidth is:			250.00 cm-1
+Number of points:				65536
+Maximum time:					157.86 fs
+Temperature used:				298.15 K
+Z value:					4.198826e-13
+Cutoff for the correlation function:		1.00e-12
+Adiabatic energy difference:			-15166.80 cm-1
+0-0 energy difference:				-14476.42 cm-1
+Reference SOC (Re and Im):			0.000000e+00, 1.890424e-04
+Calculating correlation function:		...done
+Last element of the correlation function:	-0.000000,0.000000
+
+The calculated ISC rate constant is		-4.302655e-03 s-1
+with 100.00 from FC and -0.00 from HT
+
+WARNING: negative rates are unphysical! It means something went wrong with the CorrFunc integration.
+Pease, try changing the LINEW, or increasing NPOINTS
+
+
+Total run time: 0 days 0 hours 0 minutes 1 seconds
+
+                      ****ORCA ESD FINISHED WITHOUT ERROR****
+                 $$$$$$$$$$$$$$$$  JOB NUMBER 10 $$$$$$$$$$$$$$
+The sum of K*K is:				4.246817
+
+Checking for transition data:			...done
+
+          ***Everything is set, now computing the correlation function***
+
+Homogeneous linewidth is:			50.00 cm-1
+Inhomogeneous linewidth is:			100.00 cm-1
+Number of points:				32768
+Maximum time:					394.65 fs
+Temperature used:				298.15 K
+Z value:					4.198826e-13
+Cutoff for the correlation function:		1.00e-12
+Adiabatic energy difference:			5908.30 cm-1
+0-0 energy difference:				6598.68 cm-1
+Reference SOC (Re and Im):			0.000000e+00, 0.000000e+00
+Calculating correlation function:		...done
+Last element of the correlation function:	-0.000000,0.000000
+
+The calculated ISC rate constant is		0.000000e+00 s-1
+with -nan from FC and -nan from HT
+
+Total run time: 0 days 0 hours 0 minutes 0 seconds
+
+                      ****ORCA ESD FINISHED WITHOUT ERROR****
+                 $$$$$$$$$$$$$$$$  JOB NUMBER 11 $$$$$$$$$$$$$$
+The sum of K*K is:				4.246817
+
+Checking for transition data:			...done
+
+          ***Everything is set, now computing the correlation function***
+
+Homogeneous linewidth is:			50.00 cm-1
+Inhomogeneous linewidth is:			100.00 cm-1
+Number of points:				131072
+Maximum time:					394.65 fs
+Temperature used:				298.15 K
+Z value:					4.198826e-13
+Cutoff for the correlation function:		1.00e-12
+Adiabatic energy difference:			-15166.80 cm-1
+0-0 energy difference:				-14476.42 cm-1
+Reference SOC (Re and Im):			0.000000e+00, 1.890424e-04
+Calculating correlation function:		...done
+Last element of the correlation function:	0.000000,-0.000000
+
+The calculated ISC rate constant is		1.198548e-02 s-1
+with 100.00 from FC and 0.00 from HT
+
+Total run time: 0 days 0 hours 0 minutes 1 seconds
+
+                      ****ORCA ESD FINISHED WITHOUT ERROR****
+                             ****ORCA TERMINATED NORMALLY****

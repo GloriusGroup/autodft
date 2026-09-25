@@ -69,6 +69,27 @@ class TestRejection:
         meta = {categories.ESD: True, categories.ESD_HT: True}
         assert categories.rejection({"multiplicity": 1}, meta, "!LibXC(B3LYP) def2-SVP Opt Freq\n", SP) is None
 
+    def test_esd_refuses_ecp_elements_without_a_relativistic_header(self):
+        meta = {categories.ESD: True}
+        opt = "!wB97X-D3 def2-SVP Opt Freq\n"
+        iodine = {"multiplicity": 1, "max_atomic_number": 53}
+        assert "effective core potential" in categories.rejection(iodine, meta, opt, SP)
+        assert categories.rejection(iodine, meta, opt, "!wB97X-D3 ZORA SARC-ZORA-TZVP\n") is None
+        bromine = {"multiplicity": 1, "max_atomic_number": 35}
+        assert categories.rejection(bromine, meta, opt, SP) is None
+
+    def test_nmr_refuses_elements_past_krypton(self):
+        meta = {categories.NMR: True}
+        iodine = {"multiplicity": 1, "max_atomic_number": 53}
+        reason = categories.rejection(iodine, meta, OPT_FREQ, SP)
+        assert "pcSseg-2" in reason and "Kr" in reason and "53" in reason
+        krypton = {"multiplicity": 1, "max_atomic_number": 36}
+        assert categories.rejection(krypton, meta, OPT_FREQ, SP) is None
+
+    def test_ecp_elements_only_matter_for_esd(self):
+        iodine = {"multiplicity": 1, "max_atomic_number": 53}
+        assert categories.rejection(iodine, {categories.UVVIS: True}, OPT_FREQ, SP) is None
+
 
 class TestExistingConflict:
     def _molecule(self, session, metadata=None):
@@ -433,3 +454,9 @@ class TestNboUnavailable:
         settings = Settings()
         settings.orca.nbo_exe = "/path/to/nbo7.i8.exe"
         assert categories.nbo_unavailable(settings) is None
+
+
+def test_nmr_refuses_a_singlepoint_header_with_a_basis_block():
+    header = "!wB97X-D3 def2-TZVP\n%basis NewGTO C \"def2-QZVP\" end end\n"
+    reason = categories.rejection({"multiplicity": 1}, {categories.NMR: True}, OPT_FREQ, header)
+    assert "%basis" in reason

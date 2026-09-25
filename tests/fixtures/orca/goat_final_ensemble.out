@@ -1,0 +1,28 @@
+		   1    -257.674071   2.872       -0.611
+		   2    -257.674071   2.887       -0.605
+		   3    -257.674071   2.888       -0.605
+
+		Global minimum found!
+		Writing structure to input.globalminimum.xyz
+
+		# Final ensemble info #
+		Conformer     Energy     Degen.   % total   % cumul.  
+		              (kcal/mol)
+		------------------------------------------------------
+		        0     0.000	     3      20.27      20.27
+		        1     0.003	     6      40.30      60.57
+		        2     0.480	     6      18.02      78.60
+		        3     0.695	     6      12.55      91.14
+		        4     0.903	     6       8.83      99.97
+		        5     3.334	     1       0.02     100.00
+		        6     5.182	     1       0.00     100.00
+
+		Conformers below 3 kcal/mol: 5
+		Lowest energy conformer    : -257.674071 Eh
+		Sconf at 298.15 K          :  2.89 cal/(molK)
+		Gconf at 298.15 K          : -0.61 kcal/mol
+
+		Writing final ensemble to input.finalensemble.xyz
+
+--------------------------------
+SUGGESTED CITATIONS FOR THIS RUN

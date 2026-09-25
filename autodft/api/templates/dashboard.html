@@ -1230,26 +1230,26 @@
                                 <div class="checkbox-group"><input type="checkbox" id="nmrNucC" checked><label for="nmrNucC">¹³C</label></div>
                                 <div class="checkbox-group"><input type="checkbox" id="nmrNucF" checked><label for="nmrNucF">¹⁹F</label></div>
                             </div>
-                            <div class="cat-detail-note">An NMR singlepoint on every optimised S0 conformer with the singlepoint header's method. Shifts are referenced to TMS (¹H, ¹³C) and CFCl₃ (¹⁹F), computed once per method in the protected system_references project; closed-shell molecules only.</div>
+                            <div class="cat-detail-note">An NMR singlepoint on every optimised S0 conformer with the singlepoint header's method. Shifts are referenced to TMS (¹H, ¹³C) and CFCl₃ (¹⁹F), computed once per method in the protected reference_systems project; closed-shell molecules only.</div>
                             <div class="cat-detail-note" id="nmrHeaderNote"></div>
                         </div>
                         <div class="cat-detail" data-requires="requestEsd" style="display:none;">
                             <div class="cat-detail-title">ESD</div>
                             <div class="cat-detail-body">
-                                <div class="checkbox-group" title="Herzberg-Teller vibronic coupling, for transitions that are forbidden at the Franck-Condon level. Much more expensive: numerical derivatives for every triplet sublevel.">
+                                <div class="checkbox-group" title="Herzberg-Teller vibronic coupling, for transitions that are forbidden at the Franck-Condon level. Much more expensive: 3N-6 or more displaced TDDFT+SOC singlepoints for every triplet sublevel. Applied where it matters: fluorescence, phosphorescence, and ISC channels whose SOCME is below 5 cm⁻¹ (not RISC more than 10 kT uphill).">
                                     <input type="checkbox" id="requestEsdHt">
                                     <label for="requestEsdHt">Herzberg–Teller</label>
                                 </div>
                                 <div class="form-group" style="min-width: 160px;">
                                     <label for="esdTnWindow">Tn window above S1 (eV)</label>
-                                    <input type="number" id="esdTnWindow" min="0" max="1" step="0.05" value="0.2" style="width: 100px;">
+                                    <input type="number" id="esdTnWindow" min="0" max="1" step="0.05" value="0.3" style="width: 100px;">
                                 </div>
                                 <div class="form-group" style="min-width: 130px;">
                                     <label for="esdTemperature">Temperature (K)</label>
                                     <input type="number" id="esdTemperature" min="1" max="1000" step="0.01" value="298.15" style="width: 100px;">
                                 </div>
                             </div>
-                            <div class="cat-detail-note">S1 and T1 start from the lowest S0 conformer once every S0 conformer is done. Franck-Condon rates unless Herzberg-Teller is ticked; S1→Tn channels within the window use the T1 geometry and Hessian.</div>
+                            <div class="cat-detail-note">S1 and T1 start from the lowest S0 conformer once every S0 conformer is done. Franck-Condon rates unless Herzberg-Teller is ticked; S1→Tn channels within the window use the T1 geometry and Hessian. ISC channels also get cheap FC reruns flagging width-sensitive and soft-mode-dominated rates.</div>
                             <div class="cat-detail-note" id="esdHeaderNote"></div>
                         </div>
                         <div class="cat-detail" data-requires="requestDensities" style="display:none;">
@@ -1911,9 +1911,9 @@
                 <input type="number" id="ppIrFwhm" value="15" min="1" max="200" step="1" style="width: 80px;">
             </label>
             <label for="ppIrScale" style="font-size: 0.82rem; color: var(--text-secondary); display: flex; align-items: center; gap: 8px;"
-                   title="Harmonic frequencies are usually scaled; the factor depends on the functional and basis.">
-                IR scale factor
-                <input type="number" id="ppIrScale" value="1.000" min="0.8" max="1.1" step="0.001" style="width: 90px;">
+                   title="Plot only: stored IR frequencies are unscaled harmonic ones. The right factor depends on the functional and basis.">
+                IR scale factor (plot)
+                <input type="number" id="ppIrScale" value="0.950" min="0.8" max="1.1" step="0.001" style="width: 90px;">
             </label>
             <button type="button" class="btn" id="ppExportBtn" style="padding: 8px 16px; font-size: 0.85rem;"
                     title="Download the photophysics workbook (XLSX); the full JSON is written next to it in the project's export directory.">
@@ -1942,6 +1942,12 @@
         const POLL_INTERVAL = 5000;
 
         // ── Helpers ──────────────────────────────────────────────────────
+
+        // Warning for an optimised geometry that lost bonds of its molecule (new jobs only).
+        function brokenBadge(check) {
+            if (!check || check.ok) return '';
+            return ' <span class="badge badge-failed" title="' + escHtml(check.detail) + '">⚠ bonds</span>';
+        }
 
         function badge(value) {
             if (!value) return '<span class="badge badge-created">unknown</span>';
@@ -3095,7 +3101,7 @@
                 var esdWindow = parseFloat(document.getElementById('esdTnWindow').value);
                 var esdTemperature = parseFloat(document.getElementById('esdTemperature').value);
                 commonBody.request_esd_ht = document.getElementById('requestEsdHt').checked;
-                commonBody.esd_tn_window_ev = isFinite(esdWindow) ? esdWindow : 0.2;
+                commonBody.esd_tn_window_ev = isFinite(esdWindow) ? esdWindow : 0.3;
                 commonBody.esd_temperature_k = isFinite(esdTemperature) ? esdTemperature : 298.15;
             }
             if (commonBody.request_densities) {
@@ -3815,7 +3821,7 @@
                         if (ci === 0) {
                             cells.push('<td rowspan="' + rowsForState + '" class="mol-state" title="charge ' + st.charge + ' / mult ' + st.multiplicity + '">' + escHtml(st.description) + '</td>');
                         }
-                        cells.push('<td class="mol-conf">' + escHtml(c.index) + '</td>');
+                        cells.push('<td class="mol-conf">' + escHtml(c.index) + brokenBadge(c.connectivity) + '</td>');
                         cells.push('<td>' + statusCell(c.optimization) + '</td>');
                         cells.push('<td>' + statusCell(c.singlepoint) + '</td>');
                         cells.push('<td>' + statusCell(c.singlepoint_vert_ox) + '</td>');
@@ -3978,8 +3984,10 @@
                     var p = picks[st];
                     var rmsd = (st === 'S0' || p.rmsd_to_s0 === null)
                                ? '' : ' (RMSD ' + fmtRmsd(p.rmsd_to_s0) + ' vs S0)';
+                    var broken = (p.connectivity && !p.connectivity.ok)
+                               ? ' <span class="pp-warn">⚠ geometry ' + escHtml(p.connectivity.detail) + '</span>' : '';
                     return '<div><code>' + escHtml(st) + '</code> — conformer ' +
-                           escHtml(p.conformer_index) + rmsd + '</div>';
+                           escHtml(p.conformer_index) + rmsd + broken + '</div>';
                 }).join('');
 
                 return '<div class="sa-card">' +
@@ -4197,11 +4205,11 @@
                     var value = (s.shift_ppm !== null && s.shift_ppm !== undefined)
                         ? s.shift_ppm.toFixed(2) : ('σ ' + s.shielding_ppm.toFixed(2));
                     return '<tr><td class="num">' + escHtml(value) + '</td><td class="num">' +
-                           escHtml(s.count) + '</td><td>' + escHtml(s.atoms.join(', ')) + '</td></tr>';
+                           escHtml(s.count) + '</td><td>' + escHtml(s.atoms.map(function (a) { return a + 1; }).join(', ')) + '</td></tr>';
                 }).join('');
                 parts.push('<div class="pp-plot"><div class="pp-plot-title">' + head + ' · ' +
                            escHtml(ppCounts(nmr)) + (nmr.equivalence === 'none' ? ' · no symmetry averaging' : '') +
-                           '</div><table class="pp-nmr"><thead><tr><th>δ (ppm)</th><th>n</th><th>ORCA atoms</th></tr></thead><tbody>' +
+                           '</div><table class="pp-nmr"><thead><tr><th>δ (ppm)</th><th>n</th><th>Atoms</th></tr></thead><tbody>' +
                            rows + '</tbody></table></div>');
             });
             return parts.join('');
@@ -4242,7 +4250,8 @@
         }
 
         function ppEsdJobs(r) {
-            if (!r.jobs) return escHtml(r.reason || '');
+            var ht = r.ht_reason ? '<div class="pp-summary">' + (r.ht ? 'FC+HT' : 'FC') + ': ' + escHtml(r.ht_reason) + '</div>' : '';
+            if (!r.jobs) return escHtml(r.reason || '') + ht;
             return r.jobs.map(function (j) {
                 var label = j.triplet ? 'T' + j.triplet : '';
                 if (j.sublevel !== undefined) label += (label ? ' ' : '') + 'sublevel ' + j.sublevel;
@@ -4251,7 +4260,7 @@
                 if (j.socme_cm !== undefined) bits.push('SOCME ' + j.socme_cm.toFixed(2) + ' cm⁻¹');
                 if (j.ht_percent !== null && j.ht_percent !== undefined) bits.push(j.ht_percent.toFixed(0) + '% HT');
                 return escHtml(bits.join(', '));
-            }).join('<br>');
+            }).join('<br>') + ht;
         }
 
         function ppEsd(esd) {
@@ -4350,6 +4359,10 @@
             }
             if (m.esd) rows.push(ppEsdSummary(m.esd));
             if (m.nbo) rows.push(ppNboSummary(m.nbo));
+            (m.broken_bonds || []).forEach(function (b) {
+                rows.push('<div class="pp-summary pp-warn">⚠ ' + escHtml(b.state) + ' conformer ' +
+                          escHtml(b.conformer_index) + ' geometry ' + escHtml(b.detail) + '</div>');
+            });
             if (m.archived) rows.push('<div class="pp-waiting">Archived: raw outputs removed.</div>');
             return rows.join('');
         }
@@ -4357,7 +4370,7 @@
         function ppPlots(m, detail) {
             var uvFwhm  = parseFloat(document.getElementById('ppUvFwhm').value)  || 0.3;
             var irFwhm  = parseFloat(document.getElementById('ppIrFwhm').value)  || 15;
-            var irScale = parseFloat(document.getElementById('ppIrScale').value) || 1;
+            var irScale = parseFloat(document.getElementById('ppIrScale').value) || 0.95;
             var parts = [];
             if (detail.uvvis && detail.uvvis.conformers.length) {
                 var uv = ppUvCurve(detail.uvvis, uvFwhm);
@@ -4368,7 +4381,8 @@
             if (detail.ir && detail.ir.conformers.length) {
                 var ir = ppIrCurve(detail.ir, irFwhm, irScale);
                 parts.push('<div class="pp-plot"><div class="pp-plot-title">IR · strongest band ≈ ' +
-                           escHtml(ppPeak(ir)[0]) + ' cm⁻¹ (scaled, broadened)</div>' +
+                           escHtml(ppPeak(ir)[0]) + ' cm⁻¹ (unscaled harmonic × ' + escHtml(irScale.toFixed(3)) +
+                           ', broadened)</div>' +
                            ppSvg(ir, 'Wavenumber (cm⁻¹)', true) + '</div>');
             }
             if (detail.nmr && detail.nmr.count) parts.push(ppNmr(detail.nmr));

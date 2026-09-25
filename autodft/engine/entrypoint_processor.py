@@ -132,7 +132,8 @@ def _process_entrypoint_body(
     # Opt-in categories. Validated here as well as at the API, because the
     # CLI and direct inserts skip the API.
     reason = categories.rejection(
-        {"multiplicity": multiplicity}, metadata,
+        {"multiplicity": multiplicity,
+         "max_atomic_number": validate_smiles(smiles).get("max_atomic_number")}, metadata,
         entrypoint.header_optimization, entrypoint.header_singlepoint,
     )
     if reason:
@@ -395,7 +396,7 @@ def validate_smiles(smiles: str) -> dict:
         {"valid": bool, "canonical": str|None, "atoms": int|None,
          "heavy_atoms": int|None, "charge": int|None,
          "multiplicity": int|None, "radical_centers": int|None,
-         "diradical": bool, "error": str|None}
+         "diradical": bool, "max_atomic_number": int|None, "error": str|None}
 
     The check is intentionally strict: empty input, anything RDKit
     refuses to parse, and any structure that wouldn't produce a usable
@@ -413,6 +414,7 @@ def validate_smiles(smiles: str) -> dict:
         # A diradical is submitted as a triplet and nothing else; the caller
         # uses this to lock the requested-state choices.
         "diradical": False,
+        "max_atomic_number": None,
         "error": None,
         # Non-fatal note about a structure that parses but is probably not
         # what the user meant (see the multiplicity check below).
@@ -465,6 +467,7 @@ def validate_smiles(smiles: str) -> dict:
     base["multiplicity"] = multiplicity
     base["radical_centers"] = centers
     base["diradical"] = centers == 2
+    base["max_atomic_number"] = max(a.GetAtomicNum() for a in mol_h.GetAtoms())
 
     # Supported reference states are closed-shell singlets, radicals
     # (doublets) and diradical triplets, neutral or charged. Three or more
