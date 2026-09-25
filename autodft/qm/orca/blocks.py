@@ -15,6 +15,7 @@ from autodft import categories
 ESD_NROOTS = 10
 # The S1 optimisation follows root 1; a few roots above keep the tracking stable.
 S1_NROOTS = 5
+_SOLVATION_RE = re.compile(r"^\s*!.*\b(?:CPCM|SMD|CPCMC)\b|%cpcm\b", re.IGNORECASE | re.MULTILINE)
 
 
 class HeaderConflict(ValueError):
@@ -144,8 +145,9 @@ def compose_header(
     if task_type == "optimization" and options.get("esd_role") == "S1":
         # ORCA solvates the excited state in equilibrium only for analytic gradients;
         # its numerical frequencies otherwise mix in non-equilibrium LR-CPCM.
+        solvated = {"cpcmeq": True} if _SOLVATION_RE.search(header) else {}
         return with_tddft(header, nroots=S1_NROOTS, iroot=1, followiroot=True, tda=False,
-                          cpcmeq=True)
+                          **solvated)
     if task_type == "singlepoint":
         if options.get(categories.NBO):
             defaults = categories.OPTIONS[categories.NBO]

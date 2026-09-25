@@ -26,7 +26,13 @@ class TestBlocks:
 
     def test_the_esd_s1_optimisation_follows_its_root(self):
         assert blocks.compose_header("optimization", OPT, {"esd_role": "S1"}) == OPT + (
-            "%tddft\n  nroots 5\n  iroot 1\n  followiroot true\n  tda false\n  cpcmeq true\nend\n"
+            "%tddft\n  nroots 5\n  iroot 1\n  followiroot true\n  tda false\nend\n"
+        )
+
+    def test_a_solvated_s1_optimisation_is_in_equilibrium(self):
+        opt = "!wB97X-D3 def2-SVP Opt Freq CPCM(MeCN)\n"
+        assert blocks.compose_header("optimization", opt, {"esd_role": "S1"}).endswith(
+            "  tda false\n  cpcmeq true\nend\n"
         )
 
     @pytest.mark.parametrize("options", [None, {}, {"esd_role": "T1"}, {"request_esd": True}])

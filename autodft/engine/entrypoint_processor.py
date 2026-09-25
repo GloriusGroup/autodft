@@ -132,7 +132,8 @@ def _process_entrypoint_body(
     # Opt-in categories. Validated here as well as at the API, because the
     # CLI and direct inserts skip the API.
     reason = categories.rejection(
-        {"multiplicity": multiplicity}, metadata,
+        {"multiplicity": multiplicity,
+         "max_atomic_number": validate_smiles(smiles).get("max_atomic_number")}, metadata,
         entrypoint.header_optimization, entrypoint.header_singlepoint,
     )
     if reason:

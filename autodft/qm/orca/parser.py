@@ -128,7 +128,9 @@ class OrcaParser(QMEngine):
                 # Below 0.1 eV the followed root has collapsed onto S0.
                 gap = esd_parser.followed_root_energy(content)
                 checks["Excited Root"] = gap is not None and gap >= 0.1 * esd_parser.EV_TO_EH
-                checks["S1 Stays Bound"] = not esd_parser.s1_dissociates(content)
+                # A converged S1 with a small gap is a bound state, not a dissociation.
+                checks["S1 Stays Bound"] = checks["Optimization Convergence"] \
+                    or not esd_parser.s1_dissociates(content)
 
         success = all(checks.values())
 

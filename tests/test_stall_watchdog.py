@@ -13,7 +13,7 @@ def test_watchdog_renders_valid_bash(tmp_path):
     path = generate_submit_script(tmp_path, "j", 8, 1000, "1-00:00:00", "CPU",
                                   orca_path="/o/orca", stall_minutes=240, sync_minutes=10)
     text = path.read_text()
-    assert "setsid /o/orca input.inp > output.out &" in text
+    assert "setsid -w /o/orca input.inp > output.out &" in text
     assert "STALL_SEC=14400" in text
     assert "TICK % 10" in text
     assert STALL_MARKER in text

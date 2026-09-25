@@ -93,9 +93,16 @@ class TestChecks:
 
     def test_a_dissociating_s1_fails(self, tmp_path):
         gaps = "".join(f"DE(CIS) = {g:15.9f} Eh (Root  1)\n" for g in (0.371, 0.244, 0.056, 0.019))
-        (tmp_path / "output.out").write_text((FIXTURES / "s1_opt_tail.out").read_text() + gaps)
+        crashed = (FIXTURES / "s1_opt_tail.out").read_text().replace("OPTIMIZATION RUN DONE", "")
+        (tmp_path / "output.out").write_text(crashed + gaps)
         result = OrcaParser().check_output(tmp_path, "optimization_excited")
         assert result.checks["S1 Stays Bound"] is False and result.checks["Excited Root"] is True
+
+    def test_a_converged_s1_with_a_small_gap_is_bound(self, tmp_path):
+        gaps = "".join(f"DE(CIS) = {g:15.9f} Eh (Root  1)\n" for g in (0.371, 0.244, 0.056, 0.019))
+        text = (FIXTURES / "s1_opt_tail.out").read_text()
+        (tmp_path / "output.out").write_text(gaps + text)
+        assert OrcaParser().check_output(tmp_path, "optimization_excited").checks["S1 Stays Bound"]
 
     def test_a_bound_s1_keeps_its_gap(self):
         from autodft.qm.orca import esd_parser
