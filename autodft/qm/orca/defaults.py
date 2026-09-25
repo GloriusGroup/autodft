@@ -1,9 +1,7 @@
 """Default ORCA input headers for common calculation types.
 
-Copied verbatim from the legacy
-``/mnt/share/dft_calculations/scripts/job_submission/submit_to_db_zmy.py``
-submission script so this package reproduces what's been running in
-production on this cluster.
+Also holds the larger-basis and g-xTB alternates, and the ``SEED_HEADERS``
+rows a fresh database is seeded with.
 """
 
 DEFAULT_HEADER_CONFSEARCH = (

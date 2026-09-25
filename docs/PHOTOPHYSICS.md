@@ -1,23 +1,28 @@
 # Photophysics categories
 
-UV/Vis, IR, NMR and ESD are opt-in categories you tick per submission.
+UV/Vis, IR, NMR, ESD, Densities and NBO are opt-in categories you tick
+per submission.
 
 ## Categories
 
 Tick a category when you submit: the dashboard's checkboxes, the API's
 `request_spec_uvvis` / `request_spec_ir` / `request_spec_nmr` /
-`request_esd` fields (plus their options), or the CLI's `--uvvis` /
-`--ir` / `--nmr` / `--esd` flags (with `--uvvis-nroots` / `--uvvis-tda` /
-`--nmr-nuclei` / `--esd-ht` / `--esd-tn-window` / `--esd-temperature`).
+`request_esd` / `request_densities` / `request_singlepoint_nbo` fields
+(plus their options), or the CLI's `--uvvis` / `--ir` / `--nmr` / `--esd`
+/ `--densities` / `--nbo` flags (with `--uvvis-nroots` / `--uvvis-tda` /
+`--nmr-nuclei` / `--esd-ht` / `--esd-tn-window` / `--esd-temperature` /
+`--density-grid` / `--eldens-file` / `--spindens-file` / `--nbo-keywords`).
 Categories only attach to new molecules — resubmitting an existing
 molecule with a category it doesn't already have is refused, and so is
 resubmitting it with different options for a category it already has
 (options apply to new molecules only, same as the categories themselves).
 A category's options (`uvvis_nroots`, `uvvis_tda`, `nmr_nuclei`,
-`request_esd_ht`, `esd_tn_window_ev`, `esd_temperature_k`) are stored
-only when that category is requested. See [`docs/API.md`](API.md) for
-the field-level reference and the `GET /api/projects/{name}/photophysics`
-response shape.
+`request_esd_ht`, `esd_tn_window_ev`, `esd_temperature_k`, the `density_*`
+settings, `nbo_keywords`) are stored only when that category is requested.
+See [`docs/API.md`](API.md) for the field-level reference and the
+`GET /api/projects/{name}/photophysics` response shape. Densities and NBO
+also differ from the other four in *where* they run — see
+[Densities and NBO](#densities-and-nbo) below.
 
 ## UV/Vis
 
@@ -172,6 +177,64 @@ molecule. The detail view (`?molecule_id=`) adds optimisation warnings —
 soft imaginary modes and a drifted S1 root — that the summary does not
 compute.
 
+## Densities and NBO
+
+Tick `request_densities` and/or `request_singlepoint_nbo`. Unlike UV/Vis,
+IR, NMR and ESD, both attach to **every state's own energy singlepoint** —
+S0, and T1 / ox / red when requested — not only S0's; ESD's S1
+optimisation has no ordinary energy singlepoint, so it never gets either
+block even though the flag reaches its metadata. Both need the energy
+singlepoint stage, and are refused if the singlepoint header already
+carries the block they would add (`%plots` for Densities; the `NBO`
+keyword or `%nbo` for NBO). When a job carries both, `NBO` is composed
+first, `%plots` second.
+
+**Densities.** A `%plots` block writes Gaussian cube files: `density_eldens`
+(electron density, default on) and `density_spindens` (spin density,
+default on), named by `density_eldens_file` / `density_spindens_file`
+(default `ElDens.cube` / `SpinDens.cube`), on a grid of `density_grid`
+points per axis (default 75, 10–300). Spin density is silently skipped on
+a closed-shell state (multiplicity 1) — ORCA's `orca_plot` cannot produce
+one there — rather than refused.
+
+**NBO.** Adds the `NBO` keyword, plus, when `nbo_keywords` is set, a
+`%nbo` block (`NBOKEYLIST = "$NBO <nbo_keywords> $END"`), for ORCA's NBO
+7. Needs `[orca].nbo_exe` configured on the controller (exported as
+`NBOEXE` in the job's submit script); a submission requesting NBO without
+it configured is refused, from the dashboard, the REST API and the CLI
+alike.
+
+**Natural charges.** Each NBO singlepoint's output is parsed for its
+first "Summary of Natural Population Analysis" table (stopped at that
+block's `====` line, so the total row and any later alpha/beta summary
+are never read) and stored as `npa_charges` alongside the job's other
+results (parser version bumped to 2 — run `backfill-results` to parse it
+into singlepoints judged before this feature). Charges are
+Boltzmann-weighted the same way UV/Vis and IR are: per state, on that
+state's own conformers and energies. `GET /api/projects/{name}/photophysics`
+reports each state's weighted charge per atom plus the most negative /
+most positive atom (`extremes`); an open-shell state's atoms also report
+`spin` (Natural Spin Density). See
+[`docs/API.md`](API.md#get-apiprojectsnamephotophysics-molecule_id) for
+the payload shape.
+
+**Files, cleanup and archive.** `export files` copies each conformer's
+cubes as `conf<N>_sp_<name>` (e.g. `conf1_sp_ElDens.cube`), alongside the
+singlepoint's usual input, geometry and output. `cleanup-files` keeps
+`.cube` (with `.out`/`.xyz`/`.inp`) in the job directory of a
+Densities-flagged state's **singlepoint** task only, not its optimisation.
+Archiving a project with any Densities-flagged molecule adds `.cube` to
+the kept extensions automatically, on top of whatever the request body
+listed.
+
+**Photophysics page and export.** Densities has no summary or detail of
+its own anywhere in this payload: it never gets a molecule into the
+photophysics view, export or workbook by itself, and even a molecule that
+qualifies through another category (UV/Vis, IR, NMR, ESD or NBO) shows
+nothing about its Densities flag there — the cube files above are its
+only trace outside the job directory. NBO does appear, like any other
+category, and the workbook's `NBO` sheet adds one row per atom per state.
+
 ## Weighting
 
 Conformers are Boltzmann-weighted at 298.15 K:
@@ -216,6 +279,8 @@ when it has rows:
   UKS), the derived lifetimes/yields, and flags.
 * `ESD jobs` — one row per ORCA job behind a rate (FC/HT channel,
   sublevel or triplet).
+* `NBO` — one row per atom per state: the weighted natural charge, `spin`
+  (open-shell states only), and the state's ensemble counts and `weighting`.
 
 **JSON.** `<project>_photophysics.json` is `spectroscopy.full_payload` —
 every flagged molecule with full detail, the same shape `?molecule_id=`
@@ -362,13 +427,25 @@ EOF
 4. Check out the previous `main` commit and start the controller. The
    category flags left in S0 state metadata are ignored by the old code.
 
+**Densities and NBO need none of the above.** The old code doesn't know
+`request_densities` / `request_singlepoint_nbo` or their `density_*` /
+`nbo_keywords` metadata keys — it just ignores them, on every state that
+carries them, the same way it ignores any other unrecognised metadata
+key. Neither category added a new `TaskType` or `project_jobs` kind (both
+ride the existing `singlepoint` task), and their `%plots` / `%nbo` blocks
+are composed onto the singlepoint header per job, at generation time, not
+stored anywhere the old code reads — so there is nothing to cancel, delete
+or otherwise undo in the database for them.
+
 Redeploying the feature later does **not** recompute the category tasks
 this script deleted — wipe and resubmit those molecules. Harmless
 leftovers the script does not touch: the `inputs_json` column; ESD S1/T1
 states and their `esd_role` / `esd_seed` / `esd_done` metadata keys;
-category flags in S0 state metadata; `photophysics/` frozen directories
-and `_photophysics.{json,xlsx}` exports; and `admin/system_references`,
-which becomes an ordinary, wipeable project under the old code.
+category flags in S0 state metadata (including `request_densities` /
+`request_singlepoint_nbo` on every state); `photophysics/` frozen
+directories and `_photophysics.{json,xlsx}` exports; and
+`admin/system_references`, which becomes an ordinary, wipeable project
+under the old code.
 
 ## Stored results
 

@@ -161,8 +161,8 @@ if __name__ == "__main__":
         print(f"  #{c['id']:<3} kind={c['kind']:<13}  {c['description']}")
 
     id_gxtb = first_custom_header("confsearch", "g-xTB")
-    id_b3lyp_opt = first_custom_header("optimization", "B3LYP")
-    id_b3lyp_sp = first_custom_header("singlepoint", "B3LYP")
+    id_default_opt = first_custom_header("optimization", "def2-SVP")
+    id_default_sp = first_custom_header("singlepoint", "def2-TZVPD")
 
     # 3) Minimal submission — defaults everywhere.
     r = submit("CCO", project=DEFAULT_PROJECT)
@@ -184,8 +184,8 @@ if __name__ == "__main__":
         max_conformers_ox=2,
         max_conformers_red=2,
         header_confsearch_id=id_gxtb,
-        header_optimization_id=id_b3lyp_opt,
-        header_singlepoint_id=id_b3lyp_sp,
+        header_optimization_id=id_default_opt,
+        header_singlepoint_id=id_default_sp,
     )
     print(f"submitted #{r['id']}  {r['smiles']}  (full coverage)")
 
