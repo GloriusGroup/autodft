@@ -212,10 +212,22 @@ class TestJobFiles:
         computed = json.loads(task.inputs_json)["computed"]
         assert computed["combine"] == "sum" and computed["jobs"][0]["triplet"] == 1
 
+    def test_an_ht_request_decided_fc_runs_on_the_fc_stage(self, session, esd):
+        # Glyoxal RISC is far uphill: FC even with HT requested, so one core.
+        for name in ("S1", "T1"):
+            state = esd["states"][name]
+            state.metadata_json = json.dumps({**json.loads(state.metadata_json), categories.ESD_HT: True})
+            session.add(state)
+        session.commit()
+        task, _, path = self._job(session, esd, TaskType.esd_risc)
+        assert "%tddft" not in (path / "input.inp").read_text()
+        assert "--ntasks-per-node=1\n" in (path / "submit.cmd").read_text()
+        assert json.loads(task.inputs_json)["computed"]["ht"] is False
+
     def test_a_t1_rate_job_runs_the_singlet_reference(self, session, esd):
         _, _, path = self._job(session, esd, TaskType.esd_phosp)
         text = (path / "input.inp").read_text()
-        assert text.startswith("!B3LYP def2-SVP ESD(PHOSP)\n")
+        assert text.startswith("!B3LYP def2-SVP DEFGRID2 ESD(PHOSP)\n")
         assert text.rstrip().endswith("*xyzfile 0 1 input.xyz")
         submit = (path / "submit.cmd").read_text()
         assert 'cp "$WORK_DIR"/ts.hess "$TMP_DIR"/' in submit

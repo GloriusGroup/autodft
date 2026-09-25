@@ -199,7 +199,7 @@ class SubmitRequest(BaseModel):
     uvvis_nroots: int = 20
     uvvis_tda: bool = False
     nmr_nuclei: list[str] = Field(default_factory=lambda: ["H", "C", "F"])
-    esd_tn_window_ev: float = 0.2
+    esd_tn_window_ev: float = 0.3
     esd_temperature_k: float = 298.15
     density_eldens: bool = True
     density_spindens: bool = True

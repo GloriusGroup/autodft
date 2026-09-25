@@ -19,6 +19,7 @@ from autodft.models import ComputationJob, ComputationTask, MoleculeGeometry, Ta
 from autodft.qm.orca import esd_inputs
 from autodft.qm.orca.parser import OrcaParser
 from tests.test_esd_joins import FIXTURES, _job, _rates, esd  # noqa: F401 - fixture
+from tests.test_esd_parser import DONE
 
 OUTPUTS = {
     TaskType.esd_isc: "isc_two_channels.out", TaskType.esd_risc: "risc_ht.out",
@@ -48,11 +49,25 @@ def _finish_rates(session, esd):
     for task in _rates(session, esd).values():
         task.task_path = str(esd["tmp_path"] / "rates" / task.task_type.value)
         job = _create_job_for_task(session, task, 1, Settings(), qm_engine=OrcaParser())
-        (Path(job.job_path) / "output.out").write_text((FIXTURES / OUTPUTS[task.task_type]).read_text())
+        (Path(job.job_path) / "output.out").write_text(
+            _with_diagnostics(task, (FIXTURES / OUTPUTS[task.task_type]).read_text()))
         job.success = True
         task.status = TaskStatus.successful
         session.add_all([job, task])
     session.commit()
+
+
+def _diagnostic_chunk(rate: float) -> str:
+    return f"The calculated ISC rate constant is\t\t{rate:e} s-1\n{DONE}"
+
+
+def _with_diagnostics(task, text: str, rates: dict = None) -> str:
+    """*text* (the main jobs' output) plus one FC rate per separate diagnostic job."""
+    computed = json.loads(task.inputs_json)["computed"]
+    extra = sorted({d["job"]: d for d in computed.get("diagnostics", [])
+                    if d["job"] > len(computed["jobs"])}.values(), key=lambda d: d["job"])
+    rates = rates or {}
+    return text + "".join(_diagnostic_chunk(rates.get((d["triplet"], d["variant"]), 1.0e4)) for d in extra)
 
 
 @pytest.fixture()
@@ -268,7 +283,7 @@ def _zero_socme(session, esd):
     task.inputs_json = json.dumps(payload)
     session.add(task)
     job = session.exec(select(ComputationJob).where(ComputationJob.task_id == task.id)).one()
-    Path(job.job_path, "output.out").write_text(ZERO_RATE_T1S0)
+    Path(job.job_path, "output.out").write_text(_with_diagnostics(task, ZERO_RATE_T1S0))
     session.commit()
     return task
 
@@ -283,11 +298,12 @@ class TestZeroSocme:
         assert any("τ(T1)" in f and "T1→S0 ISC" in f for f in result["flags"])
 
     def test_ht_mode_does_not_flag_a_zero_socme_record(self, session, done):
-        s1 = done["states"]["S1"]
-        s1.metadata_json = json.dumps({**json.loads(s1.metadata_json), categories.ESD_HT: True})
-        session.add(s1)
+        task = _zero_socme(session, done)
+        payload = json.loads(task.inputs_json)
+        payload["computed"]["jobs"][0]["ht"] = True
+        task.inputs_json = json.dumps(payload)
+        session.add(task)
         session.commit()
-        _zero_socme(session, done)
         result = _analyse(session, done)
         assert "socme_zero" not in result["rates"]["isc_t1_s0"]
         assert not any("SOCME below" in f for f in result["flags"])
@@ -312,9 +328,9 @@ def _ht_t1s0(session, esd, present=(1, 2, 3)):
     task = _rates(session, esd)[TaskType.esd_isc_t1s0]
     payload = json.loads(task.inputs_json)
     # An older builder's record: the channel's SOCME repeated on every sublevel.
-    payload["computed"]["jobs"] = [
+    payload["computed"] = {"combine": "mean", "jobs": [
         {"triplet": 1, "sublevel": ms, "dele_cm": 14444.5, "socme_cm": 31.0} for ms in (-1, 0, 1)
-    ]
+    ]}
     task.inputs_json = json.dumps(payload)
     session.add_all([s1, task])
     job = session.exec(select(ComputationJob).where(ComputationJob.task_id == task.id)).one()
@@ -368,3 +384,77 @@ def test_an_unnumbered_mismatch_is_incomplete_too(session, done):
     assert entry["status"] == "incomplete" and entry["rate_s"] is None
     assert entry["reason"].startswith("1 rates for 2 ORCA jobs;") and "no rate from" not in entry["reason"]
     assert "jobs" not in entry
+
+
+# ----------------------------------------------------------------------
+# FC diagnostics: flagged per channel, never part of the rate.
+# ----------------------------------------------------------------------
+
+def _rewrite_isc(session, esd, rates):
+    task = _rates(session, esd)[TaskType.esd_isc]
+    job = session.exec(select(ComputationJob).where(ComputationJob.task_id == task.id)).one()
+    text = (FIXTURES / "isc_two_channels.out").read_text()
+    Path(job.job_path, "output.out").write_text(_with_diagnostics(task, text, rates))
+    session.commit()
+
+
+def test_diagnostics_are_reported_but_not_combined(session, done):
+    result = _analyse(session, done, detail=False)
+    isc = result["rates"]["isc"]
+    assert isc["rate_s"] == pytest.approx(9.521341e3)
+    t1, t2 = isc["diagnostics"]
+    assert t1["triplet"] == 1 and t1["k_inlinew_100"] == pytest.approx(9.521341e3)  # the FC main job
+    assert (t1["k_inlinew_25"], t1["k_inlinew_250"], t1["k_tcutfreq_300"]) == (1e4, 1e4, 1e4)
+    assert t2["k_inlinew_100"] == 0.0  # its negative main rate, clamped
+    assert not t1["width_sensitive"] and not t1["soft_mode_dominated"]
+    assert not any("width-sensitive" in f or "soft-mode" in f for f in result["flags"])
+    assert (isc["ht"], isc["ht_reason"]) == (False, "Herzberg-Teller not requested")
+
+
+def test_width_and_soft_mode_flags(session, done):
+    _rewrite_isc(session, done, {(1, "inlinew_25"): 1e2, (1, "tcutfreq_300"): 5e2})
+    result = _analyse(session, done, detail=False)
+    [t1, _] = result["rates"]["isc"]["diagnostics"]
+    assert t1["width_sensitive"] and t1["soft_mode_dominated"]
+    assert any(f.startswith("isc T1: width-sensitive") for f in result["flags"])
+    assert any(f.startswith("isc T1: soft-mode dominated") for f in result["flags"])
+    assert result["rates"]["isc"]["rate_s"] == pytest.approx(9.521341e3)
+
+
+def test_diagnostics_within_limits_are_not_flagged(session, done):
+    # 3x apart exactly and a 10x drop exactly: neither is "more than".
+    _rewrite_isc(session, done, {(1, "inlinew_25"): 1e4, (1, "inlinew_250"): 3e4,
+                                 (1, "tcutfreq_300"): 9.521341e2})
+    [t1, _] = _analyse(session, done, detail=False)["rates"]["isc"]["diagnostics"]
+    assert not t1["width_sensitive"] and not t1["soft_mode_dominated"]
+
+
+def test_negligible_channels_are_not_judged(session, done):
+    # T2's rates stay below 1 s-1: a 100x spread there means nothing.
+    _rewrite_isc(session, done, {(2, "inlinew_25"): 1e-3, (2, "inlinew_250"): 1e-1})
+    [_, t2] = _analyse(session, done, detail=False)["rates"]["isc"]["diagnostics"]
+    assert not t2["width_sensitive"]
+
+
+def test_a_real_mixed_ht_and_fc_output(session, done):
+    # Formaldehyde (ORCA 6.1.1): T1 by HT (three TDA sublevels), T2 by FC, then the FC diagnostics.
+    task = _rates(session, done)[TaskType.esd_isc]
+    payload = json.loads(task.inputs_json)
+    payload["computed"] = json.loads((FIXTURES / "isc_tda_diagnostics.json").read_text())
+    task.inputs_json = json.dumps(payload)
+    session.add(task)
+    job = session.exec(select(ComputationJob).where(ComputationJob.task_id == task.id)).one()
+    Path(job.job_path, "output.out").write_text((FIXTURES / "isc_tda_diagnostics.out").read_text())
+    session.commit()
+    result = _analyse(session, done)
+    isc = result["rates"]["isc"]
+    assert isc["rate_s"] == pytest.approx(8.169736e4 + 5.582226 + 8.150821e4 + 1.198548e-02)
+    assert [(j["triplet"], j.get("sublevel"), j["ht"]) for j in isc["jobs"]] == [
+        (1, -1, True), (1, 0, True), (1, 1, True), (2, None, False),
+    ]
+    assert isc["jobs"][3]["socme_cm"] == pytest.approx(41.49)
+    t1, t2 = isc["diagnostics"]
+    assert t2["k_inlinew_100"] == pytest.approx(1.198548e-02) and t2["k_inlinew_25"] == 0.0
+    assert not t2["width_sensitive"]  # below 1 s-1: not judged
+    assert isc["ht_reason"] == "T1: SOCME 0.00 cm-1 < 5; T2: SOCME 41.49 cm-1 >= 5"
+    assert not any("incomplete" in f or "ORCA jobs" in f for f in result["flags"])

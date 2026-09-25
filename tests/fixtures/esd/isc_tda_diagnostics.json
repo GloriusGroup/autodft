@@ -1,0 +1,81 @@
+{
+ "combine": "sum",
+ "energies_eh": {
+  "S1": -114.137745927995,
+  "T1": -114.164665927995
+ },
+ "jobs": [
+  {
+   "triplet": 1,
+   "dele_cm": 5908.25703960089,
+   "ht": true,
+   "ht_reason": "SOCME 0.00 cm-1 < 5",
+   "sublevel": -1
+  },
+  {
+   "triplet": 1,
+   "dele_cm": 5908.25703960089,
+   "ht": true,
+   "ht_reason": "SOCME 0.00 cm-1 < 5",
+   "sublevel": 0
+  },
+  {
+   "triplet": 1,
+   "dele_cm": 5908.25703960089,
+   "ht": true,
+   "ht_reason": "SOCME 0.00 cm-1 < 5",
+   "sublevel": 1
+  },
+  {
+   "triplet": 2,
+   "dele_cm": -15166.794306148533,
+   "ht": false,
+   "ht_reason": "SOCME 41.49 cm-1 >= 5",
+   "socme_cm": 41.49
+  }
+ ],
+ "ht": true,
+ "ht_reason": "T1: SOCME 0.00 cm-1 < 5; T2: SOCME 41.49 cm-1 >= 5",
+ "diagnostics": [
+  {
+   "job": 5,
+   "triplet": 1,
+   "variant": "inlinew_100"
+  },
+  {
+   "job": 6,
+   "triplet": 1,
+   "variant": "inlinew_25"
+  },
+  {
+   "job": 7,
+   "triplet": 1,
+   "variant": "inlinew_250"
+  },
+  {
+   "job": 4,
+   "triplet": 2,
+   "variant": "inlinew_100"
+  },
+  {
+   "job": 8,
+   "triplet": 2,
+   "variant": "inlinew_25"
+  },
+  {
+   "job": 9,
+   "triplet": 2,
+   "variant": "inlinew_250"
+  },
+  {
+   "job": 10,
+   "triplet": 1,
+   "variant": "tcutfreq_300"
+  },
+  {
+   "job": 11,
+   "triplet": 2,
+   "variant": "tcutfreq_300"
+  }
+ ]
+}

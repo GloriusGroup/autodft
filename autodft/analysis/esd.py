@@ -24,8 +24,12 @@ CM_TO_EV = 1 / 8065.544
 # ORCA warns above this: the geometries are far apart and harmonic rates unreliable.
 K_SQUARED_LIMIT = 7.0
 BOLTZMANN_EV = 8.617333e-5
-# Beyond this many kT uphill, k_RISC sits at ESD's numerical floor (M5).
-RISC_UPHILL_KT = 10
+# FC diagnostics: INLINEW 25 vs 250 more than this far apart is width-sensitive...
+WIDTH_RATIO = 3.0
+# ...and a TCUTFREQ 300 rate this many times below INLINEW 100 is soft-mode dominated.
+SOFT_MODE_RATIO = 10.0
+# Channels whose FC rates all stay below this (s^-1) are not judged.
+NEGLIGIBLE_RATE = 1.0
 
 NAMES = {
     "esd_isc": "isc", "esd_risc": "risc", "esd_ic": "ic", "esd_fluor": "fluorescence",
@@ -80,7 +84,8 @@ def molecule_esd(
         )
     gap = out.get("delta_est_ev")
     kt = BOLTZMANN_EV * out["temperature_k"]
-    if gap is not None and gap > RISC_UPHILL_KT * kt and out["rates"]["risc"]["status"] == "successful":
+    uphill = gap is not None and gap > esd_inputs.RISC_UPHILL_KT * kt
+    if uphill and out["rates"]["risc"]["status"] == "successful":
         out["flags"].append(
             f"risc: S1 lies {gap / kt:.0f} kT above T1; ESD's RISC rate is unreliable this far uphill."
         )
@@ -167,19 +172,33 @@ def _rate(session, extractor, rate, task, inputs, states, flags, detail, herzber
         return {"status": "unavailable"}
     computed = json.loads(task.inputs_json or "{}").get("computed", {})
     jobs = computed.get("jobs") or []
-    pairs = list(zip(jobs, found))
+    diagnostics = computed.get("diagnostics") or []
+    total = max([len(jobs), *(d["job"] for d in diagnostics)])
+    if all(r.job is not None for r in found):
+        by_job = {r.job: r for r in found}
+    elif len(found) == total:
+        by_job = dict(enumerate(found, 1))
+    else:
+        by_job = {}
+    # The main jobs come first; diagnostics' rates never enter the rate.
+    main = [by_job[i] for i in range(1, len(jobs) + 1) if i in by_job]
     incomplete = None
     if not jobs:
         flags.append(f"{name}: {len(found)} rates for 0 jobs; per-job inputs not shown.")
         pairs = [({}, r) for r in found]
-    elif len(jobs) != len(found):
-        incomplete = _incomplete(jobs, found)
+    elif len(main) != len(jobs):
+        incomplete = _incomplete(jobs, main if by_job else found)
         flags.append(f"{name}: {incomplete}")
-        pairs = [(jobs[r.job - 1] if r.job and r.job <= len(jobs) else {}, r) for r in found]
-    fc_mode = rate in esd_inputs.FC_RATES and not herzberg_teller
+        # Unnumbered and short: which job printed which rate is unknown.
+        pairs = [(jobs[i - 1], r) for i, r in sorted(by_job.items()) if i <= len(jobs)] if by_job \
+            else [({}, r) for r in found]
+    else:
+        pairs = list(zip(jobs, main))
     values, rows, zero_socme = [], [], 0
     for job, found_rate in pairs:
         label = name + (f" T{job['triplet']}" if "triplet" in job else "")
+        # Records before the per-channel HT decision carry no "ht".
+        fc_job = rate in esd_inputs.FC_RATES and not job.get("ht", herzberg_teller)
         value = found_rate.rate
         if value < 0:
             flags.append(f"{label}: a negative rate ({value:.2e} s⁻¹) was set to 0.")
@@ -189,7 +208,7 @@ def _rate(session, extractor, rate, task, inputs, states, flags, detail, herzber
                 f"{label}: sum of K*K {found_rate.k_squared:.1f} > {K_SQUARED_LIMIT:g}; the "
                 f"geometries are far apart and the harmonic rate is unreliable."
             )
-        if fc_mode and job.get("socme_cm") == 0:
+        if fc_job and job.get("socme_cm") == 0:
             zero_socme += 1
             flags.append(
                 f"{label}: SOCME below ORCA's print precision (0.00 cm⁻¹), so the FC rate is "
@@ -199,27 +218,60 @@ def _rate(session, extractor, rate, task, inputs, states, flags, detail, herzber
         row = {**job, "rate_s": value, "fc_percent": found_rate.fc_percent,
                "ht_percent": found_rate.ht_percent, "k_squared": found_rate.k_squared,
                "e00_cm": found_rate.e00_cm}
-        if not fc_mode:
+        if not fc_job:
             # HT: ORCA's own per-sublevel SOC, not the channel's total from the builder.
             row.pop("socme_cm", None)
             if found_rate.socme_cm is not None:
                 row["socme_cm"] = found_rate.socme_cm
         rows.append(row)
+    checks = _diagnostics(name, diagnostics, by_job, flags)
     if incomplete is not None:
         entry: dict = {"status": "incomplete", "rate_s": None, "reason": incomplete}
-        if detail:
-            entry["jobs"] = rows
-        return entry
-    total = sum(values) if computed.get("combine") == "sum" else sum(values) / len(values)
-    entry = {"status": "successful", "rate_s": total}
-    if fc_mode and jobs and zero_socme == len(jobs):
-        entry["socme_zero"] = True
-    e00 = [r.e00_cm for r in found if r.e00_cm is not None]
-    if e00:
-        entry["e00_ev"] = e00[0] * CM_TO_EV
+    else:
+        combined = sum(values) if computed.get("combine") == "sum" else sum(values) / len(values)
+        entry = {"status": "successful", "rate_s": combined}
+        if jobs and zero_socme == len(jobs):
+            entry["socme_zero"] = True
+        e00 = [r.e00_cm for _, r in pairs if r.e00_cm is not None]
+        if e00:
+            entry["e00_ev"] = e00[0] * CM_TO_EV
+    if "ht" in computed:
+        entry.update(ht=computed["ht"], ht_reason=computed["ht_reason"])
+    if checks:
+        entry["diagnostics"] = checks
     if detail:
         entry["jobs"] = rows
     return entry
+
+
+def _diagnostics(name: str, diagnostics: list[dict], by_job: dict, flags: list) -> list[dict]:
+    """Per channel, the FC reruns' rates and the width and soft-mode verdicts (flagged)."""
+    channels: dict[int, dict] = {}
+    for d in diagnostics:
+        found = by_job.get(d["job"])
+        channel = channels.setdefault(d["triplet"], {"triplet": d["triplet"]})
+        channel[f"k_{d['variant']}"] = max(found.rate, 0.0) if found is not None else None
+    out = []
+    for n, channel in channels.items():
+        narrow, wide = channel.get("k_inlinew_25"), channel.get("k_inlinew_250")
+        base, cut = channel.get("k_inlinew_100"), channel.get("k_tcutfreq_300")
+        channel["width_sensitive"] = narrow is not None and wide is not None \
+            and max(narrow, wide) >= NEGLIGIBLE_RATE and max(narrow, wide) > WIDTH_RATIO * min(narrow, wide)
+        channel["soft_mode_dominated"] = base is not None and cut is not None \
+            and base >= NEGLIGIBLE_RATE and cut < base / SOFT_MODE_RATIO
+        if channel["width_sensitive"]:
+            flags.append(
+                f"{name} T{n}: width-sensitive — the FC rate is {narrow:.2e} s⁻¹ at INLINEW 25 "
+                f"and {wide:.2e} s⁻¹ at 250 cm⁻¹ (more than {WIDTH_RATIO:g}× apart)."
+            )
+        if channel["soft_mode_dominated"]:
+            flags.append(
+                f"{name} T{n}: soft-mode dominated — without modes below 300 cm⁻¹ the FC rate "
+                f"drops from {base:.2e} to {cut:.2e} s⁻¹ (more than {SOFT_MODE_RATIO:g}×); "
+                f"harmonic low-frequency modes carry it."
+            )
+        out.append(channel)
+    return out
 
 
 def _incomplete(jobs: list[dict], found) -> str:

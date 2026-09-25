@@ -373,7 +373,10 @@ Every submission path (CLI, REST, Python) ends up writing the same
   is reserved for every owner, not just admin), and
   ESD (S1/T1 excited-state dynamics — ISC, RISC, IC, fluorescence,
   phosphorescence — via ORCA's ESD module, closed-shell molecules only,
-  much more expensive: a numerical S1 Hessian). Only added to new
+  much more expensive: a numerical S1 Hessian; TDA throughout except IC,
+  TightOpt for its optimisations, Herzberg–Teller only where the SOC is
+  weak, FC reruns flagging width- and soft-mode-sensitive ISC rates;
+  S1→Tn window 0.3 eV by default). Only added to new
   molecules; see [`docs/API.md`](docs/API.md#post-apisubmit). See
   [docs/PHOTOPHYSICS.md](docs/PHOTOPHYSICS.md) for the methods, deployment
   and rollback.

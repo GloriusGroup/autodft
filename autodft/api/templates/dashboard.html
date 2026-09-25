@@ -1236,20 +1236,20 @@
                         <div class="cat-detail" data-requires="requestEsd" style="display:none;">
                             <div class="cat-detail-title">ESD</div>
                             <div class="cat-detail-body">
-                                <div class="checkbox-group" title="Herzberg-Teller vibronic coupling, for transitions that are forbidden at the Franck-Condon level. Much more expensive: 3N-6 or more displaced TDDFT+SOC singlepoints for every triplet sublevel.">
+                                <div class="checkbox-group" title="Herzberg-Teller vibronic coupling, for transitions that are forbidden at the Franck-Condon level. Much more expensive: 3N-6 or more displaced TDDFT+SOC singlepoints for every triplet sublevel. Applied where it matters: fluorescence, phosphorescence, and ISC channels whose SOCME is below 5 cm⁻¹ (not RISC more than 10 kT uphill).">
                                     <input type="checkbox" id="requestEsdHt">
                                     <label for="requestEsdHt">Herzberg–Teller</label>
                                 </div>
                                 <div class="form-group" style="min-width: 160px;">
                                     <label for="esdTnWindow">Tn window above S1 (eV)</label>
-                                    <input type="number" id="esdTnWindow" min="0" max="1" step="0.05" value="0.2" style="width: 100px;">
+                                    <input type="number" id="esdTnWindow" min="0" max="1" step="0.05" value="0.3" style="width: 100px;">
                                 </div>
                                 <div class="form-group" style="min-width: 130px;">
                                     <label for="esdTemperature">Temperature (K)</label>
                                     <input type="number" id="esdTemperature" min="1" max="1000" step="0.01" value="298.15" style="width: 100px;">
                                 </div>
                             </div>
-                            <div class="cat-detail-note">S1 and T1 start from the lowest S0 conformer once every S0 conformer is done. Franck-Condon rates unless Herzberg-Teller is ticked; S1→Tn channels within the window use the T1 geometry and Hessian.</div>
+                            <div class="cat-detail-note">S1 and T1 start from the lowest S0 conformer once every S0 conformer is done. Franck-Condon rates unless Herzberg-Teller is ticked; S1→Tn channels within the window use the T1 geometry and Hessian. ISC channels also get cheap FC reruns flagging width-sensitive and soft-mode-dominated rates.</div>
                             <div class="cat-detail-note" id="esdHeaderNote"></div>
                         </div>
                         <div class="cat-detail" data-requires="requestDensities" style="display:none;">
@@ -3101,7 +3101,7 @@
                 var esdWindow = parseFloat(document.getElementById('esdTnWindow').value);
                 var esdTemperature = parseFloat(document.getElementById('esdTemperature').value);
                 commonBody.request_esd_ht = document.getElementById('requestEsdHt').checked;
-                commonBody.esd_tn_window_ev = isFinite(esdWindow) ? esdWindow : 0.2;
+                commonBody.esd_tn_window_ev = isFinite(esdWindow) ? esdWindow : 0.3;
                 commonBody.esd_temperature_k = isFinite(esdTemperature) ? esdTemperature : 298.15;
             }
             if (commonBody.request_densities) {
@@ -4250,7 +4250,8 @@
         }
 
         function ppEsdJobs(r) {
-            if (!r.jobs) return escHtml(r.reason || '');
+            var ht = r.ht_reason ? '<div class="pp-summary">' + (r.ht ? 'FC+HT' : 'FC') + ': ' + escHtml(r.ht_reason) + '</div>' : '';
+            if (!r.jobs) return escHtml(r.reason || '') + ht;
             return r.jobs.map(function (j) {
                 var label = j.triplet ? 'T' + j.triplet : '';
                 if (j.sublevel !== undefined) label += (label ? ' ' : '') + 'sublevel ' + j.sublevel;
@@ -4259,7 +4260,7 @@
                 if (j.socme_cm !== undefined) bits.push('SOCME ' + j.socme_cm.toFixed(2) + ' cm⁻¹');
                 if (j.ht_percent !== null && j.ht_percent !== undefined) bits.push(j.ht_percent.toFixed(0) + '% HT');
                 return escHtml(bits.join(', '));
-            }).join('<br>');
+            }).join('<br>') + ht;
         }
 
         function ppEsd(esd) {

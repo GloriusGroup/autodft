@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Optional
 
 from autodft import categories
 from autodft.qm.orca import blocks, esd_parser
@@ -30,13 +31,55 @@ _HESSIAN_KEYS = {
 SUBLEVELS = (-1, 0, 1)
 # FC rates need no electronic structure: ORCA gets DELE and SOCME from us.
 FC_HEADER = "! ESD(ISC) NOITER\n%maxcore 2000\n"
+# After TDDFT jobs: inherit their %maxcore, which also sizes the SLURM request.
+FC_AFTER_TDDFT = "! ESD(ISC) NOITER\n"
+# Opens the first diagnostic job; the output check needs rates only from the jobs before it.
+DIAGNOSTICS_MARKER = "# autodft: FC diagnostics from here on, not part of the rate\n"
 
 FC_RATES = ("esd_isc", "esd_risc", "esd_isc_t1s0")
+# TDDFT roots of a rate job: ISC types reach this many past the highest root they read.
+ROOTS_ABOVE = 3
+NROOTS = {"esd_fluor": 5, "esd_ic": 5, "esd_phosp": 10}
+# Manual 5.5.4.2: above ~5 cm-1 of SOC the Herzberg-Teller term is negligible.
+HT_SOCME_CM = 5.0
+# Beyond this many kT uphill, k_RISC sits at ESD's numerical floor (M5): FC, and flagged.
+RISC_UPHILL_KT = 10
+KT_CM_PER_K = 0.6950348
+# ISC and IC rates: an explicit Gaussian inhomogeneous width (ORCA's 250 cm-1 is wide).
+LINESHAPE = {"LINES": "GAUSS", "INLINEW": "100"}
+# FC reruns of every ISC-type channel, for the flags only; never part of the rate.
+DIAGNOSTICS = {
+    "inlinew_100": LINESHAPE,
+    "inlinew_25": {"LINES": "GAUSS", "INLINEW": "25"},
+    "inlinew_250": {"LINES": "GAUSS", "INLINEW": "250"},
+    "tcutfreq_300": {**LINESHAPE, "TCUTFREQ": "300"},
+}
 
 
-def is_fc(rate: str, options: dict) -> bool:
-    """Whether *rate* runs as an FC job: no electronic structure, seconds on one core."""
-    return rate in FC_RATES and not categories.esd_settings(options)[categories.ESD_HT]
+def is_fc(rate: str, options: dict, computed: Optional[dict] = None) -> bool:
+    """Whether *rate* runs FC jobs only: no electronic structure, seconds on one core.
+
+    *computed* is the built task's record, whose ``ht`` is the per-channel decision.
+    """
+    ht = (computed or {}).get("ht", categories.esd_settings(options)[categories.ESD_HT])
+    return rate in FC_RATES and not ht
+
+
+def ht_decision(rate: str, socme_cm: float, dele_cm: float, settings: dict) -> tuple[bool, str]:
+    """Whether a channel of *rate* gets Herzberg-Teller, and why (``categories.esd_settings``)."""
+    if not settings[categories.ESD_HT]:
+        return False, "Herzberg-Teller not requested"
+    if rate == "esd_ic":
+        return False, "no Herzberg-Teller for IC"
+    if rate in ("esd_fluor", "esd_phosp"):
+        return True, "always for emission"
+    if rate == "esd_risc":
+        limit = RISC_UPHILL_KT * KT_CM_PER_K * settings["esd_temperature_k"]
+        if -dele_cm > limit:
+            return False, f"{-dele_cm:.0f} cm-1 uphill > {RISC_UPHILL_KT} kT ({limit:.0f} cm-1)"
+    if socme_cm >= HT_SOCME_CM:
+        return False, f"SOCME {socme_cm:.2f} cm-1 >= {HT_SOCME_CM:g}"
+    return True, f"SOCME {socme_cm:.2f} cm-1 < {HT_SOCME_CM:g}"
 
 
 class EsdInputError(ValueError):
@@ -98,84 +141,135 @@ def build(
     *options* is the rate task's state metadata (``categories.esd_settings`` keys).
     """
     settings = categories.esd_settings(options)
-    ht = settings[categories.ESD_HT]
     initial, final, hessians = RATES[rate]
     files = {_HESSIAN_KEYS[name]: f'"{name}"' for name in hessians}
     temperature = {"TEMP": f"{settings['esd_temperature_k']:g}"}
-    doht = {"DOHT": "TRUE"} if ht else {}
     energies = {state: energy(state, data[state]) for state in (initial, final)}
+    sp_header = blocks.rate_header(sp_header)
+    diagnostics: list[dict] = []
 
-    if rate == "esd_isc":
-        channels = [
-            (n, energies["S1"] - data["T1"].triplet(n), data["T1"].socme[(n, 1)])
-            for n in isc_channels(data["S1"], data["T1"], settings["esd_tn_window_ev"])
-        ]
-        jobs, record = _isc(channels, 1, is_fc(rate, options), files, doht, temperature, sp_header)
-        combine = "sum"
-    elif rate in ("esd_risc", "esd_isc_t1s0"):
-        # T -> S: the three initial sublevels are equally populated.
-        if rate == "esd_risc":
-            socme, sroot = data["S1"].socme[(1, 1)], 1
+    if rate in FC_RATES:
+        if rate == "esd_isc":
+            channels = [
+                (n, 1, energies["S1"] - data["T1"].triplet(n), data["T1"].socme[(n, 1)], 1.0)
+                for n in isc_channels(data["S1"], data["T1"], settings["esd_tn_window_ev"])
+            ]
+            combine = "sum"
         else:
-            socme, sroot = data["S0"].socme[(1, 0)], 0
-        gap = energies["T1"] - energies[final]
-        jobs, record = _isc([(1, gap, socme / math.sqrt(3))], sroot, is_fc(rate, options), files,
-                            doht, temperature, sp_header)
-        combine = "mean"
+            # T -> S: the three initial sublevels are equally populated.
+            socme, sroot = (data["S1"].socme[(1, 1)], 1) if rate == "esd_risc" \
+                else (data["S0"].socme[(1, 0)], 0)
+            channels = [(1, sroot, energies["T1"] - energies[final], socme, 1 / math.sqrt(3))]
+            combine = "mean"
+        jobs, record, diagnostics = _isc(rate, channels, settings, files, temperature, sp_header)
+        ht = any(job["ht"] for job in record)
+        reasons = {job["triplet"]: job["ht_reason"] for job in record}
+        ht_reason = next(iter(reasons.values())) if len(set(reasons.values())) == 1 \
+            else "; ".join(f"T{n}: {reason}" for n, reason in sorted(reasons.items()))
     elif rate in ("esd_ic", "esd_fluor"):
         dele = (energies["S1"] - energies["S0"]) * EH_TO_CM
+        ht, ht_reason = ht_decision(rate, 0.0, dele, settings)
+        doht = {"DOHT": "TRUE"} if ht else {}
         if rate == "esd_ic":
-            keyword, tddft, doht = "ESD(IC)", {"nacme": True, "etf": True}, {}
+            # NACMEs: full TDDFT with electron-translation factors, as the manual recommends.
+            keyword, tddft, lineshape = "ESD(IC)", {"nacme": True, "etf": True, "tda": False}, LINESHAPE
         else:
-            keyword, tddft = "ESD(FLUOR)", {}
+            keyword, tddft, lineshape = "ESD(FLUOR)", {"tda": True}, {}
         jobs = [_tddft_job(
             sp_header, keyword,
-            {"nroots": blocks.ESD_NROOTS, "iroot": 1, **tddft, "tda": False},
-            {**files, "DELE": f"{dele:.1f}", "USEJ": "TRUE", **doht, **temperature},
+            {"nroots": NROOTS[rate], "iroot": 1, **tddft},
+            {**files, "DELE": _cm(dele), "USEJ": "TRUE", **doht, **lineshape, **temperature},
         )]
         record = [{"dele_cm": dele}]
         combine = "mean"
     else:  # esd_phosp: one job per T1 sublevel (SOC roots 1-3)
         dele = (energies["T1"] - energies["S0"]) * EH_TO_CM
+        ht, ht_reason = ht_decision(rate, 0.0, dele, settings)
+        doht = {"DOHT": "TRUE"} if ht else {}
         jobs = [
             _tddft_job(
                 sp_header, "ESD(PHOSP)",
-                {"nroots": blocks.ESD_NROOTS, "iroot": k, "triplets": True, "dosoc": True,
-                 "tda": False},
-                {**files, "DELE": f"{dele:.1f}", "USEJ": "TRUE", **doht, **temperature},
+                {"nroots": NROOTS[rate], "iroot": k, "triplets": True, "dosoc": True, "tda": True},
+                {**files, "DELE": _cm(dele), "USEJ": "TRUE", **doht, **temperature},
             )
             for k in (1, 2, 3)
         ]
         record = [{"sublevel": k, "dele_cm": dele} for k in (1, 2, 3)]
         combine = "mean"
 
-    computed = {"combine": combine, "energies_eh": energies, "jobs": record}
+    computed = {"combine": combine, "energies_eh": energies, "jobs": record,
+                "ht": ht, "ht_reason": ht_reason}
+    if diagnostics:
+        computed["diagnostics"] = diagnostics
     return _join(jobs, charge), computed
 
 
-def _isc(channels, sroot, fc, files, doht, temperature, sp_header) -> tuple[list[str], list[dict]]:
-    """ISC-type jobs: FC gets DELE and SOCME; HT computes SOC per triplet sublevel."""
+def _isc(rate, channels, settings, files, temperature, sp_header):
+    """ISC-type jobs per channel, then its FC diagnostics.
+
+    Each channel is ``(triplet, sroot, gap (Eh), SOCME (cm-1), FC SOCME factor)``.
+    FC jobs get DELE and SOCME; HT jobs compute SOC per triplet sublevel. Returns the
+    jobs, a record per main job, and the diagnostics' ORCA job numbers and variants.
+
+    ORCA's ``$new_job`` inherits every setting it does not repeat, so HT jobs come
+    first (no inherited SOCME), FC jobs say DOHT FALSE, and TCUTFREQ comes last.
+    """
     jobs: list[str] = []
     record: list[dict] = []
-    for n, gap, socme in channels:
-        dele = f"{gap * EH_TO_CM:.1f}"
-        if fc:
-            jobs.append(FC_HEADER + esd_block(
-                **files, DELE=dele, SOCME=f"0.0, {socme / EH_TO_CM:.6e}", USEJ="TRUE",
-                **temperature,
-            ))
-            record.append({"triplet": n, "dele_cm": gap * EH_TO_CM, "socme_cm": socme})
+    fc_jobs = {}
+    fc_main = []
+    decided = [(*channel, *ht_decision(rate, channel[3], channel[2] * EH_TO_CM, settings))
+               for channel in channels]
+    fc_header = FC_AFTER_TDDFT if any(d[5] for d in decided) else FC_HEADER
+    for n, sroot, gap, socme, factor, ht, reason in decided:
+        dele = _cm(gap * EH_TO_CM)
+        common = {"triplet": n, "dele_cm": gap * EH_TO_CM, "ht": ht, "ht_reason": reason}
+        fc_jobs[n] = _fc_job(fc_header, files, dele, socme * factor, temperature)
+        if not ht:
+            fc_main.append({**common, "socme_cm": socme * factor})
             continue
         for ms in SUBLEVELS:
             jobs.append(_tddft_job(
                 sp_header, "ESD(ISC)",
-                {"nroots": blocks.ESD_NROOTS, "sroot": sroot, "troot": n, "trootssl": ms,
-                 "triplets": True, "dosoc": True, "tda": False},
-                {**files, "DELE": dele, "USEJ": "TRUE", **doht, **temperature},
+                {"nroots": max(sroot, n) + ROOTS_ABOVE, "sroot": sroot, "troot": n, "trootssl": ms,
+                 "triplets": True, "dosoc": True, "tda": True},
+                {**files, "DELE": dele, "USEJ": "TRUE", "DOHT": "TRUE", **LINESHAPE, **temperature},
             ))
             # ORCA computes each sublevel's SOC itself; the parser reads it back.
-            record.append({"triplet": n, "sublevel": ms, "dele_cm": gap * EH_TO_CM})
-    return jobs, record
+            record.append({**common, "sublevel": ms})
+    main: dict[int, int] = {}
+    for job in fc_main:
+        jobs.append(fc_jobs[job["triplet"]](LINESHAPE))
+        record.append(job)
+        main[job["triplet"]] = len(jobs)
+    diagnostics: list[dict] = []
+    for variants in (("inlinew_100", "inlinew_25", "inlinew_250"), ("tcutfreq_300",)):
+        for n, fc in fc_jobs.items():
+            for variant in variants:
+                if variant == "inlinew_100" and n in main:
+                    job = main[n]  # the FC main job is its own baseline
+                else:
+                    jobs.append(fc(DIAGNOSTICS[variant]))
+                    job = len(jobs)
+                diagnostics.append({"job": job, "triplet": n, "variant": variant})
+    jobs[len(record)] = DIAGNOSTICS_MARKER + jobs[len(record)]
+    return jobs, record, diagnostics
+
+
+def _fc_job(header, files, dele, socme_cm, temperature):
+    """A builder of one channel's FC jobs, given their lineshape settings."""
+    def job(lineshape):
+        return header + esd_block(
+            **files, DELE=dele, SOCME=f"0.0, {socme_cm / EH_TO_CM:.6e}", USEJ="TRUE", DOHT="FALSE",
+            **lineshape, **temperature,
+        )
+    return job
+
+
+def _cm(value: float) -> str:
+    """*value* (cm-1) for a %esd block; a zero gap is 0.0, not -0.0."""
+    text = f"{value:.1f}"
+    return "0.0" if text == "-0.0" else text
 
 
 def _tddft_job(sp_header: str, keyword: str, tddft: dict, esd: dict) -> str:

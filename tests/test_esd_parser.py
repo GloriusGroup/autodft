@@ -49,6 +49,13 @@ class TestEnergies:
         assert sorted(triplets) == list(range(1, 11))
         assert triplets[1] == pytest.approx(0.064920)
 
+    def test_a_tda_s1_optimisation(self):
+        # Formaldehyde, PBE0/def2-SVP, TDA with followiroot and cpcmeq (ORCA 6.1.1).
+        text = _read("s1_opt_tda_tail.out")
+        assert esd_parser.followed_root(text) == 1
+        assert esd_parser.followed_root_energy(text) == pytest.approx(0.116339158)
+        assert esd_parser.excitation_energies(text, "SINGLETS")[1] == pytest.approx(0.116339)
+
     def test_followed_root_of_an_s1_optimisation(self):
         assert esd_parser.followed_root_energy(_read("s1_opt_tail.out")) == pytest.approx(0.087063157)
         assert esd_parser.followed_root_energy("no tddft") is None
@@ -95,6 +102,15 @@ class TestRates:
         )
         assert [r.job for r in esd_parser.rates(text)] == [1, 3]
         assert esd_parser.rates(rate + DONE)[0].job is None
+
+    def test_tda_ht_jobs_and_fc_diagnostics_are_numbered(self):
+        # Formaldehyde: three TDA HT sublevel jobs, one FC channel, seven FC diagnostics.
+        found = esd_parser.rates(_read("isc_tda_diagnostics.out"))
+        assert [r.job for r in found] == list(range(1, 12))
+        assert [r.ht_percent for r in found[:4]] == [100.0, 100.0, 100.0, 0.0]
+        assert found[0].rate == pytest.approx(8.169736e4)
+        assert found[3].socme_cm == pytest.approx(41.49, abs=0.01)
+        assert found[4].fc_percent is None  # "-nan from FC" for a zero SOCME
 
     def test_herzberg_teller_split_without_percent_sign(self):
         [rate] = esd_parser.rates(_read("isc_ht.out"))

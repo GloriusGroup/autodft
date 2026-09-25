@@ -1124,7 +1124,8 @@ def _generate_job_files(
 
     # --- Gap 3 fix: Parse resources from header, fall back to config ---
     nprocs, mem_per_core = _parse_resources_from_header(header_text)
-    stage_config = _get_stage_config(settings, task.task_type, state)
+    computed = json.loads(task.inputs_json or "{}").get("computed") if extra_inputs is not None else None
+    stage_config = _get_stage_config(settings, task.task_type, state, computed)
     if nprocs is None:
         nprocs = stage_config.default_nprocs
     if mem_per_core is None:
@@ -1420,13 +1421,19 @@ def _keeps_nbo_archive(state: MoleculeState, task: ComputationTask) -> bool:
     return bool(metadata.get(categories.NBO))
 
 
-def _get_stage_config(settings: Settings, task_type: TaskType, state: Optional[MoleculeState] = None):
-    """Return the :class:`StageConfig` for a given task type."""
+def _get_stage_config(
+    settings: Settings, task_type: TaskType, state: Optional[MoleculeState] = None,
+    computed: Optional[dict] = None,
+):
+    """Return the :class:`StageConfig` for a given task type.
+
+    *computed* is a built rate task's record, which says whether any channel runs HT.
+    """
     if task_type.value.startswith("esd_"):
         from autodft.qm.orca import esd_inputs
 
         metadata = json.loads(state.metadata_json) if state is not None and state.metadata_json else {}
-        if state is None or esd_inputs.is_fc(task_type.value, metadata):
+        if state is None or esd_inputs.is_fc(task_type.value, metadata, computed):
             return settings.pipeline.esd
         return settings.pipeline.esd_tddft
     elif task_type == TaskType.confsearch:
