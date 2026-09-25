@@ -290,6 +290,9 @@ def test_a_broken_geometry_is_listed_on_the_molecule(project):
                               data_json=json.dumps({**record, "connectivity": broken})))
         session.commit()
         opt_id = opt.id
+    ir = _molecule(project, molecule_id=project["molecule"])["ir"]
+    assert [c.get("connectivity_ok") for c in ir["conformers"]] == [False, None]  # still weighted
+    assert sum(c["weight"] for c in ir["conformers"]) == pytest.approx(1.0)
     assert _molecule(project)["broken_bonds"] == [{
         "state": "S0", "state_id": project["state"], "conformer_index": 1, "opt_task_id": opt_id,
         "detail": broken["detail"],

@@ -78,6 +78,7 @@ class Conformer:
     ir_modes: Optional[list[IRMode]] = None
     energy_pending: bool = False  # its energy singlepoint is still to come
     degeneracy: int = 1  # GOAT's, from the conformer geometry the optimisation started from
+    connectivity_ok: Optional[bool] = None  # the optimisation's stored bond check; None when unchecked
     sp_record: Optional[dict] = None  # the energy singlepoint's own record, read once
 
 
@@ -105,9 +106,11 @@ def conformer_pool(
             )
         ).all()
     } if opts else {}
+    checks = results.connectivity_by_task(session, [o.id for o in opts])
     pool = []
     for index, opt in enumerate(opts, 1):
-        conformer = Conformer(index, opt, degeneracy=starts.get(opt.input_geometry_id) or 1)
+        conformer = Conformer(index, opt, degeneracy=starts.get(opt.input_geometry_id) or 1,
+                              connectivity_ok=checks[opt.id]["ok"] if opt.id in checks else None)
         pool.append(conformer)
         if opt.status != TaskStatus.successful:
             continue
@@ -167,7 +170,7 @@ def ensemble(
     if detail:
         out["conformers"] = [
             {"conformer_index": c.conformer_index, "opt_task_id": c.opt.id, "degeneracy": c.degeneracy,
-             "weight": w, **data}
+             "weight": w, **({"connectivity_ok": False} if c.connectivity_ok is False else {}), **data}
             for c, data, w in weighted
         ]
     return out
