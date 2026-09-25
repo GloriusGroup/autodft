@@ -582,6 +582,15 @@ class OrcaParser(QMEngine):
         with no downstream calculations.
         """
         lowered = content.lower()
+
+        # orca_plot can't build a spin density for a closed-shell reference and
+        # aborts with this banner, but the calculation itself is fine -- only
+        # this module's error termination is ignored.
+        plot_error = "orca finished by error termination in plot"
+        if plot_error in lowered:
+            logger.info("Ignoring a failed orca_plot (PLOT) error termination")
+            lowered = lowered.replace(plot_error, "")
+
         for marker in (
             "goat error",
             "orca finished by error termination",

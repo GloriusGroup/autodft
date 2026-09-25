@@ -277,6 +277,9 @@ class TestConformerEnsemble:
         assert len(conformers) == 2
 
 
+PLOT_ERROR_FIXTURE = Path(__file__).parent / "fixtures" / "orca_plot_error.out"
+
+
 class TestCheckOutput:
     """Integration-level test using check_output via a temporary directory."""
 
@@ -331,4 +334,39 @@ class TestCheckOutput:
         result = parser.check_output(tmp_path, "singlepoint")
 
         # _load_output returns error string, so termination check fails
+        assert result.success is False
+
+
+class TestPlotErrorIsIgnored:
+    """A closed-shell SpinDens plot fails in orca_plot but the job is fine."""
+
+    def test_a_failed_plot_does_not_fail_the_job(self, tmp_path: Path):
+        job_path = tmp_path
+        (job_path / "output.out").write_text(PLOT_ERROR_FIXTURE.read_text())
+        result = OrcaParser().check_output(job_path, "singlepoint")
+
+        assert result.success is True
+        assert result.checks["No Error Banner"] is True
+        assert result.energy == pytest.approx(-575.669666345984)
+
+    def test_a_real_error_termination_still_fails(self, tmp_path: Path):
+        content = PLOT_ERROR_FIXTURE.read_text().replace(
+            "error termination in PLOT", "error termination in SCF"
+        )
+        (tmp_path / "output.out").write_text(content)
+        result = OrcaParser().check_output(tmp_path, "singlepoint")
+
+        assert result.checks["No Error Banner"] is False
+        assert result.success is False
+
+    def test_a_plot_error_plus_a_real_error_still_fails(self, tmp_path: Path):
+        content = PLOT_ERROR_FIXTURE.read_text().replace(
+            "  .... trying to continue anyways",
+            "  .... trying to continue anyways\n"
+            "ORCA finished by error termination in SCF",
+        )
+        (tmp_path / "output.out").write_text(content)
+        result = OrcaParser().check_output(tmp_path, "singlepoint")
+
+        assert result.checks["No Error Banner"] is False
         assert result.success is False
