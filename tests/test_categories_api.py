@@ -349,7 +349,7 @@ class TestPhotophysicsEndpoint:
         from autodft.models.result import JobResult
 
         client, key = api
-        broken = {"ok": False, "fragments": 2, "detail": "dissociated: 2 fragments (C2H5 + H)"}
+        broken = {"ok": False, "lost": True, "fragments": 2, "detail": "dissociated: 2 fragments (C2H5 + H)"}
         with get_session() as session:
             mol = session.exec(select(Molecule).where(Molecule.project_name == "nho/p")).first()
             state = MoleculeState(molecule_id=mol.id, description="T1", multiplicity=3, charge=0)

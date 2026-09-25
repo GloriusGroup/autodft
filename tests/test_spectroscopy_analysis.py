@@ -279,7 +279,7 @@ def test_a_broken_geometry_is_listed_on_the_molecule(project):
     from autodft.models.result import JobResult
 
     assert "broken_bonds" not in _molecule(project)
-    broken = {"ok": False, "fragments": 2, "detail": "dissociated: 2 fragments (C6H5 + H); C-H bonds 6 -> 5"}
+    broken = {"ok": False, "lost": True, "fragments": 2, "detail": "dissociated: 2 fragments (C6H5 + H); C-H bonds 6 -> 5"}
     with get_session() as session:
         opt = session.exec(select(ComputationTask).where(
             ComputationTask.task_type == TaskType.optimization).order_by(ComputationTask.id)).first()

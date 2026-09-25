@@ -193,11 +193,11 @@ def connectivity_by_task(session: Session, task_ids: Iterable[int]) -> dict[int,
 
 
 def broken_bonds(session: Session, task: Optional[ComputationTask]) -> Optional[str]:
-    """Why *task*'s optimised geometry is not its molecule any more, or None."""
+    """How *task*'s optimised geometry lost bonds of its SMILES, or None (extra bonds alone do not count)."""
     if task is None or task.task_type != TaskType.optimization:
         return None
     found = connectivity_by_task(session, [task.id]).get(task.id)
-    return found["detail"] if found is not None and not found["ok"] else None
+    return found["detail"] if connectivity.breaks(found) else None
 
 
 def latest_successful_job(session: Session, task_id: int) -> Optional[ComputationJob]:

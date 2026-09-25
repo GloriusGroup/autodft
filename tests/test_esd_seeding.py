@@ -140,7 +140,7 @@ def _flag_broken(session, task):
     session.commit()
     session.add(JobResult(
         job_id=job.id, task_id=task.id, job_path=job.job_path, parser_version=results.PARSER_VERSION,
-        data_json=json.dumps({"connectivity": {"ok": False, "fragments": 2, "detail": "dissociated: x"}}),
+        data_json=json.dumps({"connectivity": {"ok": False, "lost": True, "fragments": 2, "detail": "dissociated: x"}}),
     ))
     session.commit()
 

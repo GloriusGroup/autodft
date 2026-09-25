@@ -294,7 +294,7 @@ def _flag_broken(session, task, detail="dissociated: 2 fragments (C4H8F + H); C-
         job_id=job.id, task_id=task.id, job_path=job.job_path, finished_at=job.time_end,
         parser_version=results.PARSER_VERSION, data_json=json.dumps({
             "energy": None, "free_energy_correction": None, "imaginary": [], "followed_root": None,
-            "connectivity": {"ok": False, "fragments": 2, "detail": detail},
+            "connectivity": {"ok": False, "lost": True, "fragments": 2, "detail": detail},
         }),
     ))
     session.commit()
@@ -318,14 +318,16 @@ def test_a_broken_t1_geometry_gets_no_rates_and_says_why(session, esd):
     assert out["rates"]["ic"]["status"] == "created"
 
 
-def test_an_intact_geometry_record_changes_nothing(session, esd):
+def test_a_bond_formed_without_one_lost_does_not_block_rates(session, esd):
     from autodft.models.result import JobResult
 
     opt = esd["tasks"]["S1"][0]
     job = results.latest_successful_job(session, opt.id)
     session.add(JobResult(job_id=job.id, task_id=opt.id, job_path=job.job_path, finished_at=job.time_end,
                           parser_version=results.PARSER_VERSION,
-                          data_json=json.dumps({"connectivity": {"ok": True, "fragments": 1, "detail": ""}})))
+                          data_json=json.dumps({"connectivity": {
+                              "ok": False, "lost": False, "fragments": 1, "detail": "bond formed: C-C bonds 3 -> 4",
+                          }})))
     session.commit()
     photophysics.advance_photophysics(session, Settings())
     assert set(_rates(session, esd)) == RATE_TYPES

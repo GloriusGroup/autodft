@@ -784,7 +784,7 @@ class TestExtractorAndStateAnalysisParity:
         picks = payload["molecules"][0]["modes"]["lowest_energy"]["picks"]
         assert "connectivity" not in picks["S0"]
         assert picks["T1"]["connectivity"] == {
-            "ok": False, "fragments": 2, "detail": "dissociated: 2 fragments (CH3 + CHO); C-C bonds 1 -> 0",
+            "ok": False, "lost": True, "fragments": 2, "detail": "dissociated: 2 fragments (CH3 + CHO); C-C bonds 1 -> 0",
         }
 
         wb = load_workbook(io.BytesIO(state_analysis.build_xlsx_bytes(payload)))
@@ -933,7 +933,7 @@ class TestConnectivity:
         results.store(session, task, job, path)
         session.commit()
 
-        expected = {"ok": False, "fragments": 2,
+        expected = {"ok": False, "lost": True, "fragments": 2,
                     "detail": "dissociated: 2 fragments (C4H8F + H); C-H bonds 9 -> 8"}
         assert results.for_task(session, task)["connectivity"] == expected
         assert results.connectivity_by_task(session, [task.id]) == {task.id: expected}

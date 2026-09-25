@@ -2,7 +2,7 @@
 
 Bonds are perceived from covalent radii (RDKit's connect-the-dots) and
 compared, as a graph of elements and bonds, with the SMILES topology --
-bond orders, charges and atom order play no part.
+bond orders, charges, atom order and bonds to metals play no part.
 """
 
 from __future__ import annotations
@@ -11,8 +11,20 @@ from collections import Counter
 from typing import Optional
 
 
+# Bonds to these are ionic or dative and drawn inconsistently in SMILES
+# (Na+ acetate, ionic ferrocene), so neither graph keeps them.
+METALS = frozenset(
+    [3, 4, 11, 12, 13, 19, 20, 31, 37, 38, 49, 50, 55, 56, 81, 82, 83, 87, 88]
+    + list(range(21, 31)) + list(range(39, 49)) + list(range(57, 81)) + list(range(89, 113))
+)
+
+
 def check(smiles: str, xyz: str) -> Optional[dict]:
-    """``{"ok", "fragments", "detail"}`` for *xyz* against *smiles*; None when they cannot be compared."""
+    """``{"ok", "lost", "fragments", "detail"}`` for *xyz* against *smiles*; None when they cannot be compared.
+
+    ``lost`` is True when a SMILES bond is missing (dissociation, H shift); a
+    geometry that only formed extra bonds is not ok but has ``lost`` False.
+    """
     from rdkit import Chem, rdBase
     from rdkit.Chem import rdDetermineBonds
 
@@ -33,26 +45,36 @@ def check(smiles: str, xyz: str) -> Optional[dict]:
         return None
 
     fragments = len(Chem.GetMolFrags(geometry))
-    ok = (
-        reference.GetNumBonds() == geometry.GetNumBonds()
-        and geometry.HasSubstructMatch(reference)
+    before, after = _bond_counts(reference), _bond_counts(geometry)
+    # A pair with fewer bonds lost one for sure; otherwise every SMILES bond
+    # must still map onto the geometry.
+    lost = any(after[pair] < n for pair, n in before.items()) or not geometry.HasSubstructMatch(reference)
+    changes = ", ".join(
+        f"{pair} bonds {before[pair]} -> {after[pair]}"
+        for pair in sorted(set(before) | set(after)) if before[pair] != after[pair]
     )
-    if ok:
-        return {"ok": True, "fragments": fragments, "detail": ""}
+    if not lost and not changes:
+        return {"ok": True, "lost": False, "fragments": fragments, "detail": ""}
 
-    changes = _changed_bonds(reference, geometry) or "bonds rearranged"
-    if fragments > len(Chem.GetMolFrags(reference)):
+    if not lost:
+        detail = f"bond formed: {changes}"
+    elif fragments > len(Chem.GetMolFrags(reference)):
         pieces = " + ".join(
             _formula(geometry, atoms) for atoms in sorted(Chem.GetMolFrags(geometry), key=len, reverse=True)
         )
-        detail = f"dissociated: {fragments} fragments ({pieces}); {changes}"
+        detail = f"dissociated: {fragments} fragments ({pieces}); {changes or 'bonds rearranged'}"
     else:
-        detail = f"bonds changed: {changes}"
-    return {"ok": False, "fragments": fragments, "detail": detail}
+        detail = f"bonds changed: {changes or 'bonds rearranged'}"
+    return {"ok": False, "lost": lost, "fragments": fragments, "detail": detail}
+
+
+def breaks(found: Optional[dict]) -> bool:
+    """Whether a stored check lost bonds of the SMILES -- what ESD refuses to build on."""
+    return found is not None and bool(found.get("lost"))
 
 
 def _graph(mol):
-    """*mol* reduced to elements and single bonds."""
+    """*mol* reduced to elements and single bonds, without bonds to metals."""
     from rdkit import Chem
 
     graph = Chem.RWMol()
@@ -61,6 +83,8 @@ def _graph(mol):
         plain.SetNoImplicit(True)
         graph.AddAtom(plain)
     for bond in mol.GetBonds():
+        if bond.GetBeginAtom().GetAtomicNum() in METALS or bond.GetEndAtom().GetAtomicNum() in METALS:
+            continue
         graph.AddBond(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx(), Chem.BondType.SINGLE)
     graph = graph.GetMol()
     graph.UpdatePropertyCache(strict=False)
@@ -78,15 +102,8 @@ def _formula(mol, atoms=None) -> str:
     return "".join(f"{s}{symbols[s] if symbols[s] > 1 else ''}" for s in order)
 
 
-def _changed_bonds(reference, geometry) -> str:
-    """Bond counts per element pair that differ, e.g. ``C-H bonds 9 -> 8``."""
-    def counts(mol):
-        return Counter(
-            "-".join(sorted((b.GetBeginAtom().GetSymbol(), b.GetEndAtom().GetSymbol()))) for b in mol.GetBonds()
-        )
-
-    before, after = counts(reference), counts(geometry)
-    return ", ".join(
-        f"{pair} bonds {before[pair]} -> {after[pair]}"
-        for pair in sorted(set(before) | set(after)) if before[pair] != after[pair]
+def _bond_counts(mol) -> Counter:
+    """Bonds per element pair, e.g. ``{"C-H": 9}``."""
+    return Counter(
+        "-".join(sorted((b.GetBeginAtom().GetSymbol(), b.GetEndAtom().GetSymbol()))) for b in mol.GetBonds()
     )

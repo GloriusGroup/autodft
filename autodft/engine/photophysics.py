@@ -19,7 +19,7 @@ from sqlmodel import Session, col, select
 
 from autodft.config import Settings
 from autodft.engine.state_machine import _create_singlepoint_task, paused_project_names
-from autodft.extraction import results
+from autodft.extraction import connectivity, results
 from autodft.extraction.extractor import PipelineExtractor
 from autodft.models import (
     ComputationTask, Molecule, MoleculeGeometry, MoleculeState, TaskStatus, TaskType,
@@ -99,7 +99,7 @@ def _seed(
     extractor = PipelineExtractor(molecule.project_name)
     conformers = extractor.extract_state_results(session, molecule, s0)
     broken = results.connectivity_by_task(session, [c.opt_task_id for c in conformers])
-    intact = [c for c in conformers if broken.get(c.opt_task_id, {}).get("ok", True)]
+    intact = [c for c in conformers if not connectivity.breaks(broken.get(c.opt_task_id))]
     pick = extractor._pick_reported_conformer(intact)
     opt = session.get(ComputationTask, pick.opt_task_id) \
         if pick is not None and pick.e_singlepoint is not None else None
