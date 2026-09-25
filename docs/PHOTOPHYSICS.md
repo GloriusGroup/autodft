@@ -78,11 +78,9 @@ per atom, when RDKit cannot perceive bonds from the geometry. Closed-shell
 molecules only.
 
 A reference whose optimisation or NMR job failed shows as `failed`;
-`requeue-failed` revives it only if it failed before using all its
-attempts — otherwise it needs an operator (a pre-existing limitation of
-`requeue-failed`/`reset-task`: the old failed jobs keep counting and the
-task is failed again on the next tick). `method_matches` compares both NMR
-inputs' `!` keywords and `%` blocks, ignoring `%pal`, `%maxcore`, `%scf`
+`requeue-failed` revives it with a fresh set of attempts regardless of how
+many it already used. `method_matches` compares both NMR inputs' `!`
+keywords and `%` blocks, ignoring `%pal`, `%maxcore`, `%scf`
 and SCF-convergence keywords.
 
 An admin export or archive-job on `admin/system_references` pauses that

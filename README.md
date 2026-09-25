@@ -710,6 +710,10 @@ autodft admin requeue-failed --project admin/phenols # bulk requeue
 autodft admin cleanup --days 30                      # purge old completed entrypoints
 ```
 
+A requeued task gets a fresh set of `pipeline.max_attempts` attempts; its
+earlier attempts stay in the job history but no longer count towards failing
+it again.
+
 For an entrypoint that failed before being expanded (e.g. bad SMILES),
 fix the SMILES and resubmit; the original `processing_error` row stays
 in the queue history for auditing.

@@ -28,8 +28,11 @@ from autodft.engine.state_machine import (
     _followups_were_expected,
     _get_job_charge_multiplicity,
     _parse_resources_from_header,
+    create_retry_jobs,
     process_finished_jobs,
+    start_new_tasks,
     submit_pending_jobs,
+    update_task_statuses,
 )
 from autodft.models import (
     ComputationJob,
@@ -1233,6 +1236,143 @@ class TestRetryReplayOrdering:
         assert seen == [str(new_dir)]
 
 
+class TestRequeueFreshAttemptBudget:
+    """A requeue starts a fresh run with a fresh attempt budget; the old
+    run's failed jobs stay in the history but no longer count."""
+
+    def _exhaust(self, session, task) -> None:
+        task.status = TaskStatus.failed
+        session.add(task)
+        for attempt in (1, 2, 3):
+            session.add(ComputationJob(task_id=task.id, attempt=attempt, success=False,
+                                       fail_reason="['Termination']"))
+        session.commit()
+
+    def test_requeued_via_cli_survives_the_next_tick_then_fails_after_a_fresh_budget(
+        self, session, sample_task, tmp_path, monkeypatch,
+    ):
+        import contextlib
+
+        from autodft.cli import admin as cli_admin
+
+        task = sample_task
+        self._exhaust(session, task)
+
+        monkeypatch.setattr(cli_admin, "get_session", lambda *a, **k: contextlib.nullcontext(session))
+        cli_admin.requeue_failed(project=None)
+        session.refresh(task)
+        assert task.status == TaskStatus.created
+        assert task.retry_base == 3
+
+        settings = Settings()
+        settings.storage.comp_data_path = str(tmp_path)
+        start_new_tasks(session, settings, qm_engine=None)
+        session.commit()
+        session.refresh(task)
+        assert task.status == TaskStatus.pending
+
+        jobs = session.exec(select(ComputationJob).where(ComputationJob.task_id == task.id)).all()
+        assert sorted(j.attempt for j in jobs) == [1, 2, 3, 4]
+
+        # the exhausted run's three failures no longer count -- stays pending
+        update_task_statuses(session, max_attempts=3)
+        session.refresh(task)
+        assert task.status == TaskStatus.pending
+
+        # fail attempts 4 and 5, retrying each time within the new run
+        for attempt in (4, 5):
+            job = session.exec(
+                select(ComputationJob).where(ComputationJob.task_id == task.id,
+                                             ComputationJob.attempt == attempt)
+            ).one()
+            job.success, job.fail_reason = False, "['Termination']"
+            session.add(job)
+            session.commit()
+            update_task_statuses(session, max_attempts=3)
+            session.refresh(task)
+            assert task.status == TaskStatus.pending
+            create_retry_jobs(session, settings, qm_engine=None)
+            session.commit()
+
+        jobs = session.exec(select(ComputationJob).where(ComputationJob.task_id == task.id)).all()
+        assert sorted(j.attempt for j in jobs) == [1, 2, 3, 4, 5, 6]
+
+        # the third failure of the new run fails the task, just like a first run
+        last = session.exec(
+            select(ComputationJob).where(ComputationJob.task_id == task.id, ComputationJob.attempt == 6)
+        ).one()
+        last.success, last.fail_reason = False, "['Termination']"
+        session.add(last)
+        session.commit()
+        update_task_statuses(session, max_attempts=3)
+        session.refresh(task)
+        assert task.status == TaskStatus.failed
+
+    def test_reset_task_without_jobs_leaves_retry_base_none(self, session, sample_task, monkeypatch):
+        import contextlib
+
+        from autodft.cli import admin as cli_admin
+
+        monkeypatch.setattr(cli_admin, "get_session", lambda *a, **k: contextlib.nullcontext(session))
+        task = sample_task
+        assert task.retry_base is None
+        cli_admin.reset_task(task.id)
+        session.refresh(task)
+        assert task.status == TaskStatus.created
+        assert task.retry_base is None
+
+    def test_replay_is_run_relative_and_excludes_the_old_run(
+        self, session, sample_task, tmp_path, monkeypatch,
+    ):
+        from autodft.engine import state_machine as sm
+        from autodft.qm.orca import retry as retry_mod
+
+        task = sample_task
+        task.retry_base = 3
+        session.add(task)
+
+        old_dirs = [tmp_path / f"job_old_{i}" for i in (1, 2, 3)]
+        new_dirs = [tmp_path / f"job_new_{i}" for i in (4, 5)]
+        for d in old_dirs + new_dirs:
+            d.mkdir()
+        (tmp_path / "input.inp").write_text("!M062X OPT FREQ\n%pal nprocs 4 end\n*xyzfile 0 1 input.xyz\n")
+        (tmp_path / "submit.cmd").write_text("#SBATCH --ntasks-per-node=4\n")
+
+        for attempt, d in zip((1, 2, 3), old_dirs):
+            session.add(ComputationJob(task_id=task.id, attempt=attempt, success=False,
+                                       fail_reason="['Termination']", job_path=str(d)))
+        job4 = ComputationJob(task_id=task.id, attempt=4, success=False,
+                              fail_reason="['Imaginary Frequencies']", job_path=str(new_dirs[0]))
+        session.add(job4)
+        session.commit()
+
+        seen: list[tuple[str, int]] = []
+
+        class _Probe(retry_mod.RetryStrategy):
+            def applies(self, failure, task_type):
+                seen.append((failure.previous_job_path, failure.attempt))
+                return False
+
+            def modify(self, input_content, submit_content, failure):
+                return input_content, submit_content
+
+        monkeypatch.setattr(retry_mod, "build_strategies", lambda settings=None: [_Probe()])
+
+        sm._apply_retry_modifications(session, tmp_path, task, job4, 5, 0, 1, Settings())
+        assert seen == [(str(new_dirs[0]), 2)]
+
+        seen.clear()
+        job5 = ComputationJob(task_id=task.id, attempt=5, success=False,
+                              fail_reason="['Imaginary Frequencies']", job_path=str(new_dirs[1]))
+        session.add(job5)
+        session.commit()
+
+        sm._apply_retry_modifications(session, tmp_path, task, job5, 6, 0, 1, Settings())
+        # both of the new run's failures replayed, at run-relative attempt 3;
+        # the old run's three failures are never seen
+        assert seen == [(str(new_dirs[0]), 3), (str(new_dirs[1]), 3)]
+
+
 class TestCircuitBreaker:
     """max_attempts bounds retries per task; nothing bounded the campaign.
     A systematic error would fail every molecule in turn, each burning its
@@ -1378,3 +1518,20 @@ class TestExpansionBackpressure:
                 ).one() == 1
         finally:
             reset_engine()
+
+
+class TestRetryBaseMigration:
+    def test_an_existing_database_gets_the_column(self, tmp_path):
+        from sqlalchemy import text
+        from sqlmodel import SQLModel, create_engine
+
+        from autodft.db import _migrate_sqlite_schema
+
+        engine = create_engine(f"sqlite:///{tmp_path / 'old.db'}")
+        SQLModel.metadata.create_all(engine)
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE computation_tasks DROP COLUMN retry_base"))
+        _migrate_sqlite_schema(engine)
+        with engine.connect() as conn:
+            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(computation_tasks)"))}
+        assert "retry_base" in columns

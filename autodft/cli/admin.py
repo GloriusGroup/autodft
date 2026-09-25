@@ -17,6 +17,7 @@ from sqlmodel import col, select
 from autodft.db import get_session, init_db
 from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.models.enums import TaskStatus
+from autodft.models.job import ComputationJob
 from autodft.models.molecule import Molecule
 from autodft.models.state import MoleculeState
 from autodft.models.geometry import MoleculeGeometry
@@ -99,6 +100,13 @@ def rotate_key(
     console.print("[yellow]Shown once. The previous key is now invalid.[/yellow]")
 
 
+def _set_retry_base(session, task: ComputationTask) -> None:
+    """Give a requeued task a fresh attempt budget from its jobs so far."""
+    jobs = session.exec(select(ComputationJob).where(ComputationJob.task_id == task.id)).all()
+    if jobs:
+        task.retry_base = max(job.attempt for job in jobs)
+
+
 @app.command("reset-task")
 def reset_task(
     task_id: int = typer.Argument(..., help="ID of the task to reset"),
@@ -111,6 +119,7 @@ def reset_task(
             raise typer.Exit(code=1)
 
         old_status = task.status
+        _set_retry_base(session, task)
         task.status = TaskStatus.created
         task.updated_at = datetime.now(timezone.utc)
         session.add(task)
@@ -147,6 +156,7 @@ def requeue_failed(
         count = 0
         now = datetime.now(timezone.utc)
         for task in failed_tasks:
+            _set_retry_base(session, task)
             task.status = TaskStatus.created
             task.updated_at = now
             session.add(task)
