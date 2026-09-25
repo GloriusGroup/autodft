@@ -30,7 +30,10 @@ results are extractable as CSV / JSON or as raw ORCA files.
 Parsing a successful job's output (`parse outputs`, above) also stores
 the result once, in `job_results`; readers — analyses, exports, the
 Photophysics page, ESD rate-job inputs — use the stored record and fall
-back to the job's files only when there is none.
+back to the job's files only when there is none. A newly judged
+optimisation's record also says whether its geometry kept the SMILES's
+bonds; a broken one is badged in the dashboard and never used for ESD
+(see [docs/PHOTOPHYSICS.md](docs/PHOTOPHYSICS.md#broken-bonds)).
 
 All persistent state lives in **one directory** — the `data_path`. Per
 the production config (`config/reaction.toml`):

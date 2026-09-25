@@ -262,14 +262,58 @@ nothing about its Densities flag there — the cube files above are its
 only trace outside the job directory. NBO does appear, like any other
 category, and the workbook's `NBO` sheet adds one row per atom per state.
 
+## Broken bonds
+
+Every optimisation judged successful since this check exists (older jobs
+are left unchecked) compares its optimised geometry (`input.xyz`) with the
+molecule's SMILES: bonds are perceived from covalent radii (RDKit's
+`DetermineConnectivity`, cut-off ≈ r₁ + r₂ + 0.45 Å) and the two
+element/bond graphs are compared — bond orders, charges and atom order play
+no part. A geometry that fell apart into more pieces than the SMILES has, or
+whose bonds changed (e.g. an H shift), is flagged. The result is stored in
+the optimisation's `job_results` record as
+`"connectivity": {"ok", "fragments", "detail"}`, e.g.
+`"dissociated: 2 fragments (C4H8F + H); C-H bonds 9 -> 8"` or
+`"bonds changed: C-H bonds 4 -> 3, H-O bonds 0 -> 1"`. A geometry whose
+atoms do not match the SMILES formula is not checked.
+
+It shows as a `⚠ bonds` badge on the Molecules page, next to the picked
+conformer in the State Analysis (JSON `picks.<state>.connectivity`, XLSX
+column `broken_bonds` and `Conformers` column `connectivity` — added only
+when some pick has a check), and as `broken_bonds` on each photophysics
+molecule (the whole state family; XLSX sheet `Broken bonds`). The flag
+changes no energy or conformer pick, and the summary CSV/JSON export is
+unchanged.
+
+ESD never picks a flagged S0 conformer as S0\* (if all are flagged the
+molecule's ESD ends with that reason), and never creates a rate job on a
+flagged S1 or T1 optimisation: the rate is reported `blocked`, e.g. `T1
+geometry dissociated: 2 fragments (C4H8F + H); C-H bonds 9 -> 8
+(optimisation task 37435); no rates on a broken geometry`.
+
+Calibration on real outputs: fluorobutane's T1 (lost an H) and radical
+anion (lost F⁻) are flagged; its S0 and cation, the other test molecules,
+TMS and CFCl₃ are not. Older projects' flags were all real bond changes:
+halide loss and disulfide S–S cleavage on reduction (the ~2.85 Å S∴S
+two-centre three-electron bond of a disulfide radical anion counts as
+broken), thiophene/thiazole C–S ring opening in T1 or the anion.
+
 ## Weighting
 
-Conformers are Boltzmann-weighted at 298.15 K:
+Conformers are Boltzmann-weighted at 298.15 K, each by g·exp(−E/kT):
 
 * on **G** (the singlepoint energy plus the optimisation's G − E(el)
   correction) when any conformer has a thermal correction,
 * otherwise on the bare singlepoint energy (`weighting: "E_sp"`),
-* otherwise equal weights (`weighting: "equal"`).
+* otherwise equal weights (`weighting: "equal"`), i.e. g alone.
+
+g is GOAT's degeneracy of the conformer the optimisation started from (the
+`Degen.` column of the final ensemble table; the confsearch header runs
+`CONFDEGEN AUTO`), stored per conformer geometry. Conformers from before
+this, or not from GOAT (ESD S1/T1 seeds, no confsearch), count g = 1. Each
+detail conformer carries its `degeneracy`. The CSV and State Analysis
+still report the lowest conformer; g changes only these weights (UV/Vis,
+IR, NMR, NBO).
 
 A molecule never mixes scales across its conformers. Conformer numbers in
 the photophysics data are the same 1-based numbering as the Molecules
@@ -308,6 +352,8 @@ when it has rows:
   sublevel or triplet).
 * `NBO` — one row per atom per state: the weighted natural charge, `spin`
   (open-shell states only), and the state's ensemble counts and `weighting`.
+* `Broken bonds` — one row per flagged optimisation (see
+  [Broken bonds](#broken-bonds)).
 
 **JSON.** `<project>_photophysics.json` is `spectroscopy.full_payload` —
 every flagged molecule with full detail, the same shape `?molecule_id=`
@@ -488,6 +534,11 @@ identity no longer matches the job (see **Roll back**). A job without its
 output falls back to the stored record instead: served when it has every
 key the reader needs, else treated as having no results for that reader
 (e.g. an old record read by a reader that needs a key added since).
+
+`PARSER_VERSION` 3 marks records written since the broken-bond check;
+older ones are stale and re-parsed as above. The check itself is made only
+when a job is judged — neither re-parsing nor `backfill-results` adds it,
+so jobs judged before it stay unchecked.
 
 **Deploy.** Once the controller is up on the new code, run
 `autodft admin backfill-results --config <config>` on the controller
