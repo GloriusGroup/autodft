@@ -763,6 +763,48 @@ class TestExtractorAndStateAnalysisParity:
         assert snapshot("after_delete") == before
 
 
+    def test_a_new_jobs_bond_check_reaches_the_state_analysis(self, export_project):
+        import io
+
+        from openpyxl import load_workbook
+
+        split = "7\n\nC 0 0 0\nH 1.09 0 0\nH -0.36 1.03 0\nH -0.36 -0.51 0.89\n" \
+                "C 5 0 0\nO 6.2 0 0\nH 4.4 0.9 0\n"
+        with get_session() as session:
+            t1 = session.exec(select(MoleculeState).where(MoleculeState.description == "T1")).one()
+            opt = session.exec(select(ComputationTask).where(
+                ComputationTask.state_id == t1.id, ComputationTask.task_type == TaskType.optimization,
+            )).one()
+            job = results.latest_successful_job(session, opt.id)
+            (Path(job.job_path) / "input.xyz").write_text(split)
+            results.store(session, opt, job, Path(job.job_path))
+            session.commit()
+
+        payload = state_analysis.analyze_project("nho/p", use_cache=False)
+        picks = payload["molecules"][0]["modes"]["lowest_energy"]["picks"]
+        assert "connectivity" not in picks["S0"]
+        assert picks["T1"]["connectivity"] == {
+            "ok": False, "fragments": 2, "detail": "dissociated: 2 fragments (CH3 + CHO); C-C bonds 1 -> 0",
+        }
+
+        wb = load_workbook(io.BytesIO(state_analysis.build_xlsx_bytes(payload)))
+        sheet = wb["Lowest Energy"]
+        header = [c.value for c in sheet[1]]
+        assert header[-1] == "broken_bonds"
+        assert sheet.cell(row=2, column=len(header)).value.startswith("T1: dissociated: 2 fragments")
+        assert [c.value for c in wb["Conformers"][1]][-1] == "connectivity"
+
+    def test_without_bond_checks_the_workbook_keeps_its_columns(self, export_project):
+        import io
+
+        from openpyxl import load_workbook
+
+        payload = state_analysis.analyze_project("nho/p", use_cache=False)
+        wb = load_workbook(io.BytesIO(state_analysis.build_xlsx_bytes(payload)))
+        assert len(wb["Lowest Energy"][1]) == len(state_analysis._xlsx_mode_columns())
+        assert [c.value for c in wb["Conformers"][1]][-1] == "e_vert_spin_change_Eh"
+
+
 class TestParityGaps:
     """M13: cases the single-conformer, single-job fixture above doesn't cover."""
 

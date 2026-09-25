@@ -287,6 +287,9 @@ def _molecule_entries(
             from autodft.analysis.nbo import molecule_nbo
 
             entry["nbo"] = molecule_nbo(session, extractor, state, detail)
+        broken = broken_geometries(session, state)
+        if broken:
+            entry["broken_bonds"] = broken
         entries.append(entry)
     return entries
 
@@ -378,6 +381,34 @@ def freeze(project_name: str, settings) -> int:
             os.replace(tmp, path)
             written += 1
     return written
+
+
+def broken_geometries(session: Session, s0: MoleculeState) -> list[dict]:
+    """Optimisations in *s0*'s state family whose geometry lost bonds, numbered as on the Molecules page."""
+    states = session.exec(
+        select(MoleculeState).where(
+            MoleculeState.molecule_id == s0.molecule_id,
+            MoleculeState.confsearch_header_id == s0.confsearch_header_id,
+            MoleculeState.optimization_header_id == s0.optimization_header_id,
+            MoleculeState.singlepoint_header_id == s0.singlepoint_header_id,
+        ).order_by(col(MoleculeState.id))
+    ).all()
+    opts = session.exec(
+        select(ComputationTask).where(
+            col(ComputationTask.state_id).in_([s.id for s in states]),
+            ComputationTask.task_type == TaskType.optimization,
+        ).order_by(col(ComputationTask.id))
+    ).all()
+    checks = results.connectivity_by_task(session, [o.id for o in opts])
+    out = []
+    for state in states:
+        mine = [o for o in opts if o.state_id == state.id]
+        for index, opt in enumerate(mine, 1):
+            found = checks.get(opt.id)
+            if found is not None and not found["ok"]:
+                out.append({"state": state.description, "state_id": state.id, "conformer_index": index,
+                            "opt_task_id": opt.id, "detail": found["detail"]})
+    return out
 
 
 def _stage(session: Session, state: MoleculeState) -> str:

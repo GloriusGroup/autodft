@@ -273,3 +273,24 @@ def test_a_state_without_conformers_says_why(project):
         session.commit()
     entry = [m for m in analyze_spectra("nho/p", use_cache=False)["molecules"] if m["smiles"] == "CC#N"][0]
     assert entry["stage"] == "none"
+
+
+def test_a_broken_geometry_is_listed_on_the_molecule(project):
+    from autodft.models.result import JobResult
+
+    assert "broken_bonds" not in _molecule(project)
+    broken = {"ok": False, "fragments": 2, "detail": "dissociated: 2 fragments (C6H5 + H); C-H bonds 6 -> 5"}
+    with get_session() as session:
+        opt = session.exec(select(ComputationTask).where(
+            ComputationTask.task_type == TaskType.optimization).order_by(ComputationTask.id)).first()
+        job = results.latest_successful_job(session, opt.id)
+        record = results.parse_job("optimization", Path(job.job_path), True)
+        session.add(JobResult(job_id=job.id, task_id=opt.id, job_path=job.job_path, finished_at=job.time_end,
+                              parser_version=results.PARSER_VERSION,
+                              data_json=json.dumps({**record, "connectivity": broken})))
+        session.commit()
+        opt_id = opt.id
+    assert _molecule(project)["broken_bonds"] == [{
+        "state": "S0", "state_id": project["state"], "conformer_index": 1, "opt_task_id": opt_id,
+        "detail": broken["detail"],
+    }]

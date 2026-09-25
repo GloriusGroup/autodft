@@ -242,3 +242,10 @@ def test_header_select_preselects_the_stored_package_default():
     assert "function normalizeHeaderText(s) {" in html
     assert "replace(/\\s+/g, ' ')" in html
     assert "normalizeHeaderText(c.text) === defText" in html
+
+
+def test_broken_geometries_are_badged():
+    html = (TEMPLATE / "dashboard.html").read_text()
+    assert "brokenBadge(c.connectivity)" in html
+    assert "p.connectivity && !p.connectivity.ok" in html
+    assert "(m.broken_bonds || []).forEach" in html
