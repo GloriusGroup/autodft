@@ -358,7 +358,7 @@ Every submission path (CLI, REST, Python) ends up writing the same
   — UV/Vis (TDDFT singlepoint on every S0 conformer), IR (from the
   optimisation's frequencies), NMR (¹H/¹³C/¹⁹F shifts referenced to TMS /
   CFCl₃, closed-shell molecules only; computed in the protected
-  `admin/system_references` project — the bare name `system_references`
+  `admin/reference_systems` project — the bare name `reference_systems`
   is reserved for every owner, not just admin), and
   ESD (S1/T1 excited-state dynamics — ISC, RISC, IC, fluorescence,
   phosphorescence — via ORCA's ESD module, closed-shell molecules only,

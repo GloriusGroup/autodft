@@ -194,7 +194,7 @@ package defaults in `autodft/qm/orca/defaults.py`.
 | `uvvis_nroots`                              | int    | `20`          | UV/Vis excited states (1–100). Stored only when UV/Vis is requested.                        |
 | `uvvis_tda`                                 | bool   | `false`       | Tamm–Dancoff approximation for the UV/Vis TDDFT. Stored only when UV/Vis is requested.      |
 | `request_spec_ir`                           | bool   | `false`       | IR: read from the S0 optimisation's frequency calculation — no extra job. Needs `Freq` in the optimisation header. |
-| `request_spec_nmr`                          | bool   | `false`       | NMR: `NMR` is added to the singlepoint header's `!` line for a singlepoint on every optimised S0 conformer. Shifts are referenced to TMS (¹H, ¹³C) and CFCl₃ (¹⁹F), which the pipeline computes itself — once per optimisation/singlepoint header pair — in the protected `admin/system_references` project. Closed-shell molecules only. |
+| `request_spec_nmr`                          | bool   | `false`       | NMR: `NMR` is added to the singlepoint header's `!` line for a singlepoint on every optimised S0 conformer. Shifts are referenced to TMS (¹H, ¹³C) and CFCl₃ (¹⁹F), which the pipeline computes itself — once per optimisation/singlepoint header pair — in the protected `admin/reference_systems` project. Closed-shell molecules only. |
 | `nmr_nuclei`                                | list   | `["H","C","F"]` | Nuclei to report; stored only with NMR.                                                  |
 | `request_esd` | bool | `false` | Excited-state dynamics: S1 and T1 optimised from the lowest S0 conformer, SOC TDDFT, ORCA ESD rates (ISC, RISC, IC, fluorescence, T1→S0 ISC, phosphorescence). Needs a closed-shell singlet, `Freq` in the optimisation header, the energy singlepoint, and a functional whose TDDFT gradients ORCA supports (native B88 functionals such as B3LYP need `LibXC(...)`). |
 | `request_esd_ht` | bool | `false` | Herzberg–Teller for the ESD rates; only with `request_esd`. |
@@ -490,12 +490,12 @@ when atoms are grouped by the symmetry classes of the bonds perceived from
 the first counted conformer's geometry, else `"none"` (one signal per
 atom). `reference` names, per reported nucleus, the reference compound
 (TMS for H and C, CFCl₃ for F) at the molecule's optimisation and
-singlepoint headers in `admin/system_references`: `status` is `"ok"`,
+singlepoint headers in `admin/reference_systems`: `status` is `"ok"`,
 `"pending"`, `"failed"` or `"missing"` (none at this method); `sigma_ppm`
 is its mean isotropic shielding for that element; `method_matches` says
 whether its NMR input's `!` keywords equal the molecule's (SCF convergence
 and `PALn` ignored), `null` if either input is missing. `signals` and
-`reference` stay empty until a conformer is counted. `system_references`
+`reference` stay empty until a conformer is counted. `reference_systems`
 is a reserved project name, refused for every submitter.
 
 A molecule entry with no conformer left to show (every optimisation

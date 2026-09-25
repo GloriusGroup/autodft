@@ -71,7 +71,7 @@ Shifts are δ = σ_ref − σ: σ_ref is the mean isotropic shielding of that
 element in a reference compound (TMS `C[Si](C)(C)C` for ¹H/¹³C, CFCl₃
 `FC(Cl)(Cl)Cl` for ¹⁹F), which the pipeline computes itself once per
 optimisation/singlepoint header pair, in the protected
-`admin/system_references` project. `method_matches` compares the `!`
+`admin/reference_systems` project. `method_matches` compares the `!`
 keywords and `%` blocks of the molecule's and the reference's NMR inputs.
 
 Signals are grouped by topological symmetry from the optimised geometry:
@@ -88,7 +88,7 @@ many it already used. `method_matches` compares both NMR inputs' `!`
 keywords and `%` blocks, ignoring `%pal`, `%maxcore`, `%scf`
 and SCF-convergence keywords.
 
-An admin export or archive-job on `admin/system_references` pauses that
+An admin export or archive-job on `admin/reference_systems` pauses that
 project like any other, which delays every user's pending references for
 the duration — avoid running one while references are outstanding.
 
@@ -326,7 +326,7 @@ ones it actually removes.
    otherwise talk to the old API, which silently drops the new fields.
 2. Back up the database: copy `autodft.db` (and `-wal`/`-shm` if present)
    while the controller is stopped.
-3. Check that no project is already named `system_references`: on the
+3. Check that no project is already named `reference_systems`: on the
    controller host, with the repository's Python, all three of these must
    print `[]` (rename or reassign such a project/entrypoint first):
 
@@ -336,15 +336,15 @@ import sqlite3
 db = sqlite3.connect("/path/to/autodft.db")
 print(db.execute(
     "SELECT project_name, COUNT(*) FROM molecules WHERE project_name LIKE "
-    "'%/system_references' OR project_name = 'system_references' GROUP BY 1"
+    "'%/reference_systems' OR project_name = 'reference_systems' GROUP BY 1"
 ).fetchall())
 print(db.execute(
     "SELECT qualified_name FROM projects WHERE qualified_name LIKE "
-    "'%/system_references' OR name = 'system_references'"
+    "'%/reference_systems' OR name = 'reference_systems'"
 ).fetchall())
 print(db.execute(
     "SELECT id FROM calculation_entrypoints WHERE time_started IS NULL "
-    "AND request_metadata LIKE '%system_references%'"
+    "AND request_metadata LIKE '%reference_systems%'"
 ).fetchall())
 EOF
 ```
@@ -452,7 +452,7 @@ states and their `esd_role` / `esd_seed` / `esd_done` metadata keys;
 category flags in S0 state metadata (including `request_densities` /
 `request_singlepoint_nbo` on every state); `photophysics/` frozen
 directories and `_photophysics.{json,xlsx}` exports; and
-`admin/system_references`, which becomes an ordinary, wipeable project
+`admin/reference_systems`, which becomes an ordinary, wipeable project
 under the old code.
 
 ## Stored results
