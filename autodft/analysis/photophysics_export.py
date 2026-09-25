@@ -30,7 +30,7 @@ def build_xlsx(payload: dict) -> bytes:
     summary.column_dimensions["A"].width = 28
     summary.column_dimensions["B"].width = 40
 
-    uv, uv_sticks, ir, ir_sticks, nmr, esd, esd_jobs = [], [], [], [], [], [], []
+    uv, uv_sticks, ir, ir_sticks, nmr, esd, esd_jobs, nbo = [], [], [], [], [], [], [], []
     for m in payload.get("molecules", []):
         if m.get("uvvis"):
             e, peak = m["uvvis"], m["uvvis"].get("peak") or {}
@@ -70,6 +70,11 @@ def build_xlsx(payload: dict) -> bytes:
                     esd_jobs.append((m["id"], m["state_id"], r, j.get("triplet"), j.get("sublevel"),
                                      j.get("rate_s"), j.get("dele_cm"), j.get("socme_cm"), j.get("fc_percent"),
                                      j.get("ht_percent"), j.get("k_squared"), j.get("e00_cm")))
+        if m.get("nbo"):
+            for s in m["nbo"]["states"]:
+                for a in s.get("atoms", []):
+                    nbo.append((m["id"], m["smiles"], s["state_id"], s["state"], a["index"] + 1,
+                                a["element"], a["charge"], a.get("spin"), s["count"], s["weighting"]))
 
     _sheet(wb, "UV-Vis", ("mol_id", "smiles", "state_id", "count", "pending", "failed", "unavailable",
                           "unweighted", "weighting", "peak_nm", "peak_eV", "peak_fosc", "shortest_nm"), uv)
@@ -87,6 +92,8 @@ def build_xlsx(payload: dict) -> bytes:
                        "flags"), esd)
     _sheet(wb, "ESD jobs", ("mol_id", "state_id", "rate", "triplet", "sublevel", "rate_s", "dele_cm",
                             "socme_cm", "fc_percent", "ht_percent", "k_squared", "e00_cm"), esd_jobs)
+    _sheet(wb, "NBO", ("mol_id", "smiles", "state_id", "state", "atom", "element", "charge", "spin",
+                       "count", "weighting"), nbo)
 
     buffer = BytesIO()
     wb.save(buffer)

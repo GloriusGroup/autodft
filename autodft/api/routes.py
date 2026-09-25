@@ -193,12 +193,20 @@ class SubmitRequest(BaseModel):
     request_spec_uvvis: bool = False
     request_spec_ir: bool = False
     request_spec_nmr: bool = False
+    request_densities: bool = False
+    request_singlepoint_nbo: bool = False
     # Settings of the categories above; recorded only when the category is.
     uvvis_nroots: int = 20
     uvvis_tda: bool = False
     nmr_nuclei: list[str] = Field(default_factory=lambda: ["H", "C", "F"])
     esd_tn_window_ev: float = 0.2
     esd_temperature_k: float = 298.15
+    density_eldens: bool = True
+    density_spindens: bool = True
+    density_grid: int = 75
+    density_eldens_file: str = "ElDens.cube"
+    density_spindens_file: str = "SpinDens.cube"
+    nbo_keywords: str = ""
     # For each slot you can pass either the raw header text OR the integer
     # ID of a stored ComputationHeader. ID takes precedence.
     header_confsearch: Optional[str] = None
@@ -1219,15 +1227,15 @@ def api_headers(
         },
         {
             "id": "default_optimization",
-            "label": "wB97X-D3 / def2-TZVP TightOpt Freq (default)",
-            "description": "Geometry optimisation + frequencies at wB97X-D3/def2-TZVP with RIJCOSX def2/J.",
+            "label": "wB97X-D3 / def2-SVP Opt Freq CPCM(MeCN) (default)",
+            "description": "Geometry optimisation + frequencies at wB97X-D3/def2-SVP with RIJCOSX def2/J and CPCM(MeCN).",
             "kind": "optimization",
             "text": DEFAULT_HEADER_OPTIMIZATION,
         },
         {
             "id": "default_singlepoint",
-            "label": "wB97X-D3 / def2-QZVPD KeepDens Freq (default)",
-            "description": "Single-point at wB97X-D3/def2-QZVPD with RIJCOSX, KeepDens for downstream densities.",
+            "label": "wB97X-D3 / def2-TZVPD KeepDens CPCM(MeCN) (default)",
+            "description": "Single-point at wB97X-D3/def2-TZVPD with RIJCOSX, KeepDens for downstream densities, CPCM(MeCN).",
             "kind": "singlepoint",
             "text": DEFAULT_HEADER_SINGLEPOINT,
         },
@@ -2048,11 +2056,19 @@ def _category_flags(body: SubmitRequest) -> dict:
         categories.UVVIS: body.request_spec_uvvis,
         categories.IR: body.request_spec_ir,
         categories.NMR: body.request_spec_nmr,
+        categories.DENSITIES: body.request_densities,
+        categories.NBO: body.request_singlepoint_nbo,
         "uvvis_nroots": body.uvvis_nroots,
         "uvvis_tda": body.uvvis_tda,
         "nmr_nuclei": body.nmr_nuclei,
         "esd_tn_window_ev": body.esd_tn_window_ev,
         "esd_temperature_k": body.esd_temperature_k,
+        "density_eldens": body.density_eldens,
+        "density_spindens": body.density_spindens,
+        "density_grid": body.density_grid,
+        "density_eldens_file": body.density_eldens_file,
+        "density_spindens_file": body.density_spindens_file,
+        "nbo_keywords": body.nbo_keywords,
         "request_optimization": body.request_optimization,
         "request_singlepoint": body.request_singlepoint,
     }
@@ -2151,8 +2167,14 @@ def api_submit(
             return JSONResponse(
                 status_code=400, content={"detail": detail, "validation": check},
             )
-        project_name, author = _submission_owner(session, identity, body)
         flags = _category_flags(body)
+        if categories.NBO in categories.requested(flags):
+            unavailable = categories.nbo_unavailable(get_active_settings())
+            if unavailable:
+                return JSONResponse(
+                    status_code=400, content={"detail": unavailable, "validation": check},
+                )
+        project_name, author = _submission_owner(session, identity, body)
         conflict = categories.existing_conflict(
             session, project_name, check["canonical"], categories.requested(flags),
             {**categories.options(flags), categories.ESD_HT: bool(flags.get(categories.ESD_HT))},
@@ -2228,6 +2250,10 @@ def api_submit_batch(
             return JSONResponse(status_code=409, content={"detail": str(exc)})
         flags = _category_flags(body)
         wanted = categories.requested(flags)
+        if categories.NBO in wanted:
+            unavailable = categories.nbo_unavailable(get_active_settings())
+            if unavailable:
+                return JSONResponse(status_code=400, content={"detail": unavailable})
         requested_options = {**categories.options(flags), categories.ESD_HT: bool(flags.get(categories.ESD_HT))}
         for smiles in body.smiles_list:
             if len(smiles) > 512:

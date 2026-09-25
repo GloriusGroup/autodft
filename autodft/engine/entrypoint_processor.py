@@ -592,6 +592,11 @@ def _create_state(
     if description == "S0":
         state_metadata.update(categories.snapshot(metadata))
 
+    # Densities and NBO apply to every state's own energy singlepoint, not
+    # only S0's -- harmless for S1, which has none. {} when neither is
+    # requested, so this never contradicts the snapshot above.
+    state_metadata.update(categories.every_state_snapshot(metadata))
+
     if extra_metadata:
         state_metadata.update(extra_metadata)
 

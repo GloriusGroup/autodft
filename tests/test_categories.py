@@ -141,6 +141,35 @@ class TestExistingConflict:
         self._molecule(session, {categories.ESD: True, "esd_temperature_k": 298.15})
         assert categories.existing_conflict(session, "nho/p", "c1ccccc1", {categories.ESD}) is None
 
+    def test_adding_densities_to_an_existing_molecule_is_refused(self, session):
+        self._molecule(session, {"request_singlepoint": True})
+        reason = categories.existing_conflict(session, "nho/p", "c1ccccc1", {categories.DENSITIES})
+        assert "already exists" in reason and "Densities" in reason
+
+    def test_a_different_density_grid_is_refused(self, session):
+        self._molecule(session, {categories.DENSITIES: True, "density_grid": 75})
+        reason = categories.existing_conflict(
+            session, "nho/p", "c1ccccc1", {categories.DENSITIES},
+            categories.options({categories.DENSITIES: True, "density_grid": 100}),
+        )
+        assert reason is not None and "density_grid=75" in reason
+
+    def test_identical_density_options_are_accepted(self, session):
+        self._molecule(session, {categories.DENSITIES: True, "density_grid": 75})
+        reason = categories.existing_conflict(
+            session, "nho/p", "c1ccccc1", {categories.DENSITIES},
+            categories.options({categories.DENSITIES: True, "density_grid": 75}),
+        )
+        assert reason is None
+
+    def test_a_different_nbo_keywords_is_refused(self, session):
+        self._molecule(session, {categories.NBO: True, "nbo_keywords": "BNDIDX"})
+        reason = categories.existing_conflict(
+            session, "nho/p", "c1ccccc1", {categories.NBO},
+            categories.options({categories.NBO: True, "nbo_keywords": "NRT"}),
+        )
+        assert reason is not None and "nbo_keywords='BNDIDX'" in reason
+
 
 class TestOptions:
     def test_no_category_no_options(self):
@@ -202,7 +231,9 @@ class TestExpansion:
             _expand(session, _settings(tmp_path), monkeypatch)
             for state in session.exec(select(MoleculeState)).all():
                 keys = set(json.loads(state.metadata_json))
-                assert not keys & set(categories.CATEGORIES)
+                # request_singlepoint_nbo already reaches every state through
+                # _create_state's own defaults, unrelated to category snapshots.
+                assert not keys & (set(categories.CATEGORIES) - {categories.NBO})
                 if state.description == "S0":
                     assert keys == _LEGACY_S0_KEYS
 
@@ -250,9 +281,155 @@ class TestExpansion:
             meta = json.loads(s0.metadata_json)
         assert (meta["uvvis_nroots"], meta["uvvis_tda"]) == (12, False)
 
+    def test_densities_and_nbo_land_on_every_state(self, engine, tmp_path, monkeypatch):
+        with Session(engine) as session:
+            _queue(session, "CCO", request_T1=True, request_densities=True, density_grid=50,
+                   request_singlepoint_nbo=True, nbo_keywords="BNDIDX")
+            _expand(session, _settings(tmp_path), monkeypatch)
+            by_state = {
+                s.description: json.loads(s.metadata_json)
+                for s in session.exec(select(MoleculeState)).all()
+            }
+        density_nbo_keys = (
+            categories.DENSITIES, "density_eldens", "density_spindens", "density_grid",
+            "density_eldens_file", "density_spindens_file",
+            categories.NBO, "nbo_keywords",
+        )
+        for description in ("S0", "T1"):
+            meta = by_state[description]
+            assert meta[categories.DENSITIES] is True
+            assert meta["density_grid"] == 50
+            assert meta["density_eldens_file"] == "ElDens.cube"
+            assert meta[categories.NBO] is True
+            assert meta["nbo_keywords"] == "BNDIDX"
+        # S0's own snapshot (via categories.snapshot) must not disagree with
+        # what every_state_snapshot puts on every other state.
+        s0_subset = {k: by_state["S0"][k] for k in density_nbo_keys}
+        t1_subset = {k: by_state["T1"][k] for k in density_nbo_keys}
+        assert s0_subset == t1_subset
+
 
 class TestOnS0:
     def test_only_an_s0_state_that_asks(self):
         assert categories.on_s0("S0", {categories.UVVIS: True}, categories.UVVIS)
         assert not categories.on_s0("T1", {categories.UVVIS: True}, categories.UVVIS)
         assert not categories.on_s0("S0", {}, categories.UVVIS)
+
+
+DENSITY_DEFAULTS = {
+    "density_eldens": True, "density_spindens": True, "density_grid": 75,
+    "density_eldens_file": "ElDens.cube", "density_spindens_file": "SpinDens.cube",
+}
+
+
+class TestDensitiesAndNbo:
+    def test_in_categories_and_labels(self):
+        assert categories.DENSITIES in categories.CATEGORIES
+        assert categories.NBO in categories.CATEGORIES
+        assert categories.LABELS[categories.DENSITIES] == "Densities"
+        assert categories.LABELS[categories.NBO] == "NBO"
+
+    def test_option_defaults(self):
+        assert categories.options({categories.DENSITIES: True}) == DENSITY_DEFAULTS
+        assert categories.options({categories.NBO: True}) == {"nbo_keywords": ""}
+
+    def test_snapshot_carries_both(self):
+        meta = {categories.DENSITIES: True, categories.NBO: True, "nbo_keywords": "BNDIDX"}
+        snap = categories.snapshot(meta)
+        assert snap[categories.DENSITIES] is True
+        assert snap[categories.NBO] is True
+        assert snap["nbo_keywords"] == "BNDIDX"
+        assert snap["density_grid"] == 75
+
+    def test_every_state_snapshot_is_empty_when_neither_is_requested(self):
+        assert categories.every_state_snapshot({}) == {}
+        assert categories.every_state_snapshot({"density_grid": 50, "nbo_keywords": "x"}) == {}
+
+    def test_every_state_snapshot_densities(self):
+        meta = {categories.DENSITIES: True, "density_grid": 50}
+        assert categories.every_state_snapshot(meta) == {
+            categories.DENSITIES: True, **{**DENSITY_DEFAULTS, "density_grid": 50},
+        }
+
+    def test_every_state_snapshot_nbo_carries_only_the_keywords(self):
+        # request_singlepoint_nbo itself already reaches every state through
+        # _create_state's own defaults.
+        meta = {categories.NBO: True, "nbo_keywords": "BNDIDX"}
+        assert categories.every_state_snapshot(meta) == {"nbo_keywords": "BNDIDX"}
+
+    def test_both_need_the_singlepoint_stage(self):
+        meta = {categories.DENSITIES: True, "request_singlepoint": False}
+        assert "singlepoint stage" in categories.rejection({}, meta, OPT_NOFREQ, SP)
+        meta = {categories.NBO: True, "request_singlepoint": False}
+        assert "singlepoint stage" in categories.rejection({}, meta, OPT_NOFREQ, SP)
+
+    def test_densities_refuses_an_existing_plots_block(self):
+        header = "!B3LYP\n%plots dim1 40 dim2 40 dim3 40 Format Gaussian_Cube end\n"
+        reason = categories.rejection({}, {categories.DENSITIES: True}, OPT_NOFREQ, header)
+        assert reason is not None and "%plots" in reason
+
+    @pytest.mark.parametrize("header", [
+        "!B3LYP NBO\n",
+        "!B3LYP\n%nbo NBOKEYLIST = \"$NBO $END\" end\n",
+    ])
+    def test_nbo_refuses_an_existing_nbo_block(self, header):
+        reason = categories.rejection({}, {categories.NBO: True}, OPT_NOFREQ, header)
+        assert reason is not None
+
+    def test_densities_needs_at_least_one_cube(self):
+        meta = {categories.DENSITIES: True, "density_eldens": False, "density_spindens": False}
+        assert "at least one" in categories.rejection({}, meta, OPT_NOFREQ, SP)
+
+    @pytest.mark.parametrize("grid", [9, 301, "75", True, 75.5])
+    def test_density_grid_out_of_range(self, grid):
+        meta = {categories.DENSITIES: True, "density_grid": grid}
+        assert "density_grid" in categories.rejection({}, meta, OPT_NOFREQ, SP)
+
+    @pytest.mark.parametrize("grid", [10, 300])
+    def test_density_grid_bounds_are_inclusive(self, grid):
+        meta = {categories.DENSITIES: True, "density_grid": grid}
+        assert categories.rejection({}, meta, OPT_NOFREQ, SP) is None
+
+    @pytest.mark.parametrize("filename", [
+        "bad name.cube", "no_extension", "name.CUBE", "a" * 65 + ".cube", "",
+        "ElDens.cube\n",  # M1: no newlines, even trailing
+        "-x.cube", ".hidden.cube",  # M2: submit.cmd's cp *.cube glob cannot handle these
+    ])
+    def test_bad_cube_filenames_are_refused(self, filename):
+        meta = {categories.DENSITIES: True, "density_eldens_file": filename}
+        assert categories.rejection({}, meta, OPT_NOFREQ, SP) is not None
+
+    def test_cube_filenames_must_differ(self):
+        meta = {
+            categories.DENSITIES: True,
+            "density_eldens_file": "x.cube", "density_spindens_file": "x.cube",
+        }
+        assert "differ" in categories.rejection({}, meta, OPT_NOFREQ, SP)
+
+    def test_densities_has_no_rule_on_radicals(self):
+        meta = {categories.DENSITIES: True}
+        assert categories.rejection({"multiplicity": 3}, meta, OPT_NOFREQ, SP) is None
+
+    @pytest.mark.parametrize("keywords", ["BNDIDX", "E2PERT NRT", ""])
+    def test_nbo_keywords_accepted(self, keywords):
+        meta = {categories.NBO: True, "nbo_keywords": keywords}
+        assert categories.rejection({}, meta, OPT_NOFREQ, SP) is None
+
+    @pytest.mark.parametrize("keywords", ["$NBO BNDIDX", 'quo"te', "a" * 201, "BNDIDX\n"])
+    def test_nbo_keywords_refused(self, keywords):
+        meta = {categories.NBO: True, "nbo_keywords": keywords}
+        assert categories.rejection({}, meta, OPT_NOFREQ, SP) is not None
+
+
+class TestNboUnavailable:
+    def test_unset_exe_is_unavailable(self):
+        from autodft.config import Settings
+
+        assert categories.nbo_unavailable(Settings()) is not None
+
+    def test_configured_exe_is_available(self):
+        from autodft.config import Settings
+
+        settings = Settings()
+        settings.orca.nbo_exe = "/path/to/nbo7.i8.exe"
+        assert categories.nbo_unavailable(settings) is None

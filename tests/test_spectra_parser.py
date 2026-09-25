@@ -124,6 +124,45 @@ class TestShieldings:
         assert [r.element for r in rows] == ["H"]
 
 
+from autodft.qm.orca.spectra_parser import parse_natural_charges
+
+FIXTURES_NBO = Path(__file__).parent / "fixtures" / "nbo"
+
+
+class TestNaturalCharges:
+    def test_closed_shell(self):
+        rows = parse_natural_charges((FIXTURES_NBO / "closed_shell.out").read_text())
+        assert [(r.index, r.element) for r in rows] == [(0, "C"), (1, "O"), (2, "H"), (3, "H")]
+        assert rows[1].charge == pytest.approx(-0.57000)
+        assert all(r.spin is None for r in rows)
+
+    def test_open_shell_reads_only_the_first_summary(self):
+        rows = parse_natural_charges((FIXTURES_NBO / "open_shell.out").read_text())
+        assert len(rows) == 8
+        assert [r.element for r in rows] == ["C", "C", "C", "H", "H", "H", "H", "H"]
+        assert rows[0].charge == pytest.approx(-0.35233)
+        assert rows[0].spin == pytest.approx(0.65677)
+        assert rows[1].spin == pytest.approx(-0.24265)
+
+    def test_no_summary_is_empty(self):
+        assert parse_natural_charges("****ORCA TERMINATED NORMALLY****") == []
+
+    @staticmethod
+    def _block(numbers):
+        """NBO 7's fixed-width row: element and atom number touch from 100 on."""
+        rows = [f"   {' C'}{n:3d}  {0.1:9.5f}    {1.99995:9.5f}   {3.9:9.5f}  {0.02:9.5f}   {5.9:9.5f}"
+                for n in numbers]
+        return "\n".join([" Summary of Natural Population Analysis:", "", *rows, " " + "=" * 68])
+
+    def test_atoms_100_and_above_are_not_dropped(self):
+        rows = parse_natural_charges(self._block([98, 99, 100, 101]))
+        assert [r.index + 1 for r in rows] == [98, 99, 100, 101]
+
+    def test_a_count_mismatch_against_orcas_number_of_atoms_is_empty(self):
+        content = "Number of atoms                             ...      4\n" + self._block([1, 2])
+        assert parse_natural_charges(content) == []
+
+
 class TestNmrCheck:
     def _write(self, tmp_path, body: str):
         (tmp_path / "output.out").write_text(body + "\n****ORCA TERMINATED NORMALLY****\n")

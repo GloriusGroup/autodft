@@ -93,6 +93,7 @@ def generate_submit_script(
     keep_wavefunction: bool = False,
     keep_densities: bool = False,
     keep_hessian: bool = False,
+    keep_cubes: bool = False,
     extra_inputs: Optional[list[str]] = None,
 ) -> Path:
     """Render ``submit.cmd.j2`` and write ``submit.cmd`` into *job_path*.
@@ -119,6 +120,7 @@ def generate_submit_script(
         keep_densities: Copy ``*.densities``/``*.densitiesinfo``/``*.cube``
                         back from scratch when True.
         keep_hessian: Copy ``*.hess`` back from scratch when True.
+        keep_cubes: Copy ``*.cube`` back from scratch when True.
         extra_inputs: Files in *job_path* to stage into scratch next to
                       ``input.inp``.
 
@@ -147,6 +149,7 @@ def generate_submit_script(
         keep_wavefunction=keep_wavefunction,
         keep_densities=keep_densities,
         keep_hessian=keep_hessian,
+        keep_cubes=keep_cubes,
         extra_inputs=extra_inputs or [],
     )
 

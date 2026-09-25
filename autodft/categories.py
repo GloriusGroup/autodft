@@ -18,9 +18,11 @@ ESD_HT = "request_esd_ht"
 UVVIS = "request_spec_uvvis"
 IR = "request_spec_ir"
 NMR = "request_spec_nmr"
+DENSITIES = "request_densities"
+NBO = "request_singlepoint_nbo"
 
-CATEGORIES = (ESD, UVVIS, IR, NMR)
-LABELS = {ESD: "ESD", UVVIS: "UV/Vis", IR: "IR", NMR: "NMR"}
+CATEGORIES = (ESD, UVVIS, IR, NMR, DENSITIES, NBO)
+LABELS = {ESD: "ESD", UVVIS: "UV/Vis", IR: "IR", NMR: "NMR", DENSITIES: "Densities", NBO: "NBO"}
 
 # What the engine can compute today. Anything else is refused at submission
 # rather than accepted and silently never run.
@@ -51,6 +53,18 @@ _SP_CONFLICTS = (
     (_FREQ_RE, "a frequency keyword (Freq, NumFreq, AnFreq)"),
     (re.compile(r"^\s*!.*\b\w*Opt(?:TS|H)?\b", re.IGNORECASE | re.MULTILINE), "an optimisation keyword"),
 )
+# Densities and NBO add their own %plots / %nbo block to the singlepoint
+# header; checked only against the category that would collide with it.
+_DENSITY_CONFLICT = (re.compile(r"%plots\b", re.IGNORECASE), "%plots")
+_NBO_CONFLICTS = (
+    (re.compile(r"^\s*!.*\bNBO\b", re.IGNORECASE | re.MULTILINE), "the NBO keyword"),
+    (re.compile(r"%nbo\b", re.IGNORECASE), "%nbo"),
+)
+# No leading "-" (submit.cmd's `cp *.cube` would read it as an option) or
+# "." (a dotfile the same glob never matches).
+_CUBE_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}\.cube\Z")
+# No $, quotes or newlines: nbo_keywords goes inside NBOKEYLIST = "$NBO ... $END".
+_NBO_KEYWORDS_RE = re.compile(r"^[A-Za-z0-9 =_.,+-]{0,200}\Z")
 
 # Settings each category takes, with defaults. Stored -- defaults filled in --
 # only when the category is requested.
@@ -58,6 +72,14 @@ OPTIONS: dict[str, dict] = {
     ESD: {"esd_tn_window_ev": 0.2, "esd_temperature_k": 298.15},
     UVVIS: {"uvvis_nroots": 20, "uvvis_tda": False},
     NMR: {"nmr_nuclei": ["H", "C", "F"]},
+    DENSITIES: {
+        "density_eldens": True,
+        "density_spindens": True,
+        "density_grid": 75,
+        "density_eldens_file": "ElDens.cube",
+        "density_spindens_file": "SpinDens.cube",
+    },
+    NBO: {"nbo_keywords": ""},
 }
 UVVIS_NROOTS_MAX = 100
 NMR_NUCLEI = ("H", "C", "F")
@@ -84,6 +106,25 @@ def snapshot(metadata: dict) -> dict:
     categories, so an unflagged submission's metadata stays as it was."""
     flags = {key: True for key in (*CATEGORIES, ESD_HT) if metadata.get(key)}
     return {**flags, **options(metadata)}
+
+
+def every_state_snapshot(metadata: dict) -> dict:
+    """Densities and NBO settings for every state's own energy singlepoint,
+    not only S0's -- ``{}`` when neither is requested.
+
+    ``request_singlepoint_nbo`` itself already flows onto every state through
+    ``_create_state``'s defaults, so only its ``nbo_keywords`` option is
+    added here.
+    """
+    out: dict = {}
+    if metadata.get(DENSITIES):
+        out[DENSITIES] = True
+        out.update({name: metadata.get(name, default)
+                    for name, default in OPTIONS[DENSITIES].items()})
+    if metadata.get(NBO):
+        out.update({name: metadata.get(name, default)
+                    for name, default in OPTIONS[NBO].items()})
+    return out
 
 
 def esd_settings(metadata: dict) -> dict:
@@ -180,6 +221,51 @@ def rejection(
             "the frequency calculation."
         )
 
+    if DENSITIES in wanted:
+        if not metadata.get("request_singlepoint", True):
+            return (
+                "Densities needs the energy singlepoint stage; the cube files "
+                "come from that job."
+            )
+        if _DENSITY_CONFLICT[0].search(header_singlepoint or ""):
+            return (
+                f"The singlepoint header already contains {_DENSITY_CONFLICT[1]}. "
+                f"Densities adds its own %plots block; use the tick box instead."
+            )
+        defaults = OPTIONS[DENSITIES]
+        if not (metadata.get("density_eldens", defaults["density_eldens"])
+                or metadata.get("density_spindens", defaults["density_spindens"])):
+            return "Densities needs at least one of density_eldens / density_spindens."
+        grid = metadata.get("density_grid", defaults["density_grid"])
+        if isinstance(grid, bool) or not isinstance(grid, int) or not 10 <= grid <= 300:
+            return "density_grid must be an integer between 10 and 300."
+        eldens_file = metadata.get("density_eldens_file", defaults["density_eldens_file"])
+        spindens_file = metadata.get("density_spindens_file", defaults["density_spindens_file"])
+        if (not isinstance(eldens_file, str) or not isinstance(spindens_file, str)
+                or not _CUBE_NAME_RE.match(eldens_file) or not _CUBE_NAME_RE.match(spindens_file)):
+            return (
+                "density_eldens_file and density_spindens_file must look like "
+                "NAME.cube (letters, digits, _.- only)."
+            )
+        if eldens_file == spindens_file:
+            return "density_eldens_file and density_spindens_file must differ."
+
+    if NBO in wanted:
+        if not metadata.get("request_singlepoint", True):
+            return "NBO needs the energy singlepoint stage; it runs inside that job."
+        for pattern, label in _NBO_CONFLICTS:
+            if pattern.search(header_singlepoint or ""):
+                return (
+                    f"The singlepoint header already contains {label}. NBO adds "
+                    f"its own %nbo block; use the tick box instead."
+                )
+        keywords = metadata.get("nbo_keywords", OPTIONS[NBO]["nbo_keywords"])
+        if not isinstance(keywords, str) or not _NBO_KEYWORDS_RE.match(keywords):
+            return (
+                "nbo_keywords may only contain letters, digits, spaces and "
+                "=_.,+- -- no $, quotes or newlines (nbo_keywords)."
+            )
+
     if wanted & _ON_SP_HEADER:
         for pattern, label in _SP_CONFLICTS:
             if pattern.search(header_singlepoint or ""):
@@ -188,6 +274,17 @@ def rejection(
                     f"NMR and ESD add their own blocks to it; pick a plain "
                     f"singlepoint header."
                 )
+    return None
+
+
+def nbo_unavailable(settings) -> Optional[str]:
+    """Why NBO cannot run given *settings*, or None.
+
+    Kept apart from ``rejection`` (which is settings-free) so the API and CLI
+    can check it once, against the process's own configuration.
+    """
+    if not settings.orca.nbo_exe:
+        return "NBO is not available: [orca].nbo_exe is not configured."
     return None
 
 

@@ -69,11 +69,63 @@ def with_keyword(header: str, keyword: str) -> str:
     return f"! {keyword}\n" + header
 
 
-def compose_header(task_type: str, header: str, options: Optional[dict] = None) -> str:
+def nbo_block(keywords: str) -> str:
+    """A ``%nbo`` block requesting *keywords* on top of the NPA summary."""
+    return f'%nbo\n  NBOKEYLIST = "$NBO {keywords} $END"\nend\n'
+
+
+def with_nbo(header: str, keywords: str) -> str:
+    """*header* with the NBO keyword, plus a keyword-list block when *keywords*."""
+    if has_block(header, "nbo"):
+        raise HeaderConflict(
+            "The header already has a %nbo block; this job adds its own."
+        )
+    header = with_keyword(header, "NBO")
+    if keywords:
+        header = append_block(header, nbo_block(keywords))
+    return header
+
+
+def densities_block(
+    grid, eldens_file: str, spindens_file: str, *, eldens: bool, spindens: bool,
+) -> Optional[str]:
+    """A ``%plots`` block for the requested cubes, or None when neither applies."""
+    if not (eldens or spindens):
+        return None
+    lines = [f"  dim1 {grid}", f"  dim2 {grid}", f"  dim3 {grid}", "  Format Gaussian_Cube"]
+    if eldens:
+        lines.append(f'  ElDens("{eldens_file}");')
+    if spindens:
+        lines.append(f'  SpinDens("{spindens_file}");')
+    return "\n".join(["%plots", *lines, "end"]) + "\n"
+
+
+def with_densities(header: str, options: dict, multiplicity: int) -> str:
+    """*header* with a ``%plots`` block for the requested cubes; unchanged if none apply."""
+    if has_block(header, "plots"):
+        raise HeaderConflict(
+            "The header already has a %plots block; this job adds its own."
+        )
+    defaults = categories.OPTIONS[categories.DENSITIES]
+    eldens = bool(options.get("density_eldens", defaults["density_eldens"]))
+    spindens = bool(options.get("density_spindens", defaults["density_spindens"])) and multiplicity > 1
+    block = densities_block(
+        options.get("density_grid", defaults["density_grid"]),
+        options.get("density_eldens_file", defaults["density_eldens_file"]),
+        options.get("density_spindens_file", defaults["density_spindens_file"]),
+        eldens=eldens, spindens=spindens,
+    )
+    return append_block(header, block) if block else header
+
+
+def compose_header(
+    task_type: str, header: str, options: Optional[dict] = None, multiplicity: int = 1,
+) -> str:
     """The header a job of *task_type* runs with; other types get *header* itself.
 
     *options* is the task's state metadata, where per-submission settings
-    such as ``uvvis_nroots`` live.
+    such as ``uvvis_nroots`` live. *multiplicity* is the job's own, for the
+    singlepoint's spin-density rule (open shell only).
     """
     options = options or {}
     if task_type == "singlepoint_uvvis":
@@ -91,6 +143,13 @@ def compose_header(task_type: str, header: str, options: Optional[dict] = None) 
         )
     if task_type == "optimization" and options.get("esd_role") == "S1":
         return with_tddft(header, nroots=S1_NROOTS, iroot=1, followiroot=True, tda=False)
+    if task_type == "singlepoint":
+        if options.get(categories.NBO):
+            defaults = categories.OPTIONS[categories.NBO]
+            header = with_nbo(header, options.get("nbo_keywords", defaults["nbo_keywords"]))
+        if options.get(categories.DENSITIES):
+            header = with_densities(header, options, multiplicity)
+        return header
     return header
 
 

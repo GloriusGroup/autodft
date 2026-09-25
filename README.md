@@ -179,18 +179,26 @@ subdirectories, the SQLite database, all tables, **and seeds the six
 standard ORCA headers** into the `computation_headers` table on the
 first run:
 
-| # | kind         | description                            |
-| - | ------------ | -------------------------------------- |
-| 1 | confsearch   | GOAT GFN2-xTB conformer ensemble       |
-| 2 | confsearch   | GOAT g-xTB conformer ensemble          |
-| 3 | optimization | wB97X-D3 / def2-TZVP TightOpt + Freq   |
-| 4 | optimization | B3LYP / def2-SVP Opt + Freq            |
-| 5 | singlepoint  | wB97X-D3 / def2-QZVPD KeepDens         |
-| 6 | singlepoint  | B3LYP / def2-TZVP                      |
+| # | kind         | description                                        |
+| - | ------------ | --------------------------------------------------- |
+| 1 | confsearch   | GOAT GFN2-xTB conformer ensemble                     |
+| 2 | confsearch   | GOAT g-xTB conformer ensemble                        |
+| 3 | optimization | wB97X-D3 / def2-TZVP TightOpt + Freq + CPCM(MeCN)    |
+| 4 | singlepoint  | wB97X-D3 / def2-QZVPD KeepDens + CPCM(MeCN)          |
+| 5 | optimization | wB97X-D3 / def2-SVP Opt + Freq + CPCM(MeCN)          |
+| 6 | singlepoint  | wB97X-D3 / def2-TZVPD KeepDens + CPCM(MeCN)          |
+
+Headers 5 and 6 are the package defaults (`autodft/qm/orca/defaults.py`)
+applied when a submission sets neither `header_*` nor `header_*_id`; 3
+and 4 are the same method on the larger def2-TZVP/def2-QZVPD basis pair,
+kept as a seeded alternative. All four DFT headers run in CPCM(MeCN).
 
 The headers can be edited / extended in the dashboard's **Headers** page
 or via the `/api/headers` endpoints. All six belong to `admin`; anyone
-may use them, only their owner or admin may change them.
+may use them, only their owner or admin may change them. When a submission
+form or CLI/API call leaves a header slot on its default, the dashboard's
+header dropdown preselects the stored row whose text equals the package
+default, so what you see selected is what will actually run.
 
 The same first run also **creates the `admin` account and logs its API
 key once**, in a banner. That key is stored only as a hash, so copy it
@@ -358,6 +366,17 @@ Every submission path (CLI, REST, Python) ends up writing the same
   molecules; see [`docs/API.md`](docs/API.md#post-apisubmit). See
   [docs/PHOTOPHYSICS.md](docs/PHOTOPHYSICS.md) for the methods, deployment
   and rollback.
+* `request_densities` (CLI `--densities`, plus `--no-eldens` /
+  `--no-spindens` / `--density-grid` / `--eldens-file` / `--spindens-file`)
+  — Gaussian cube files (electron and/or spin density) from a `%plots`
+  block added to every state's own energy singlepoint; spin density only
+  where the state is open-shell. `request_singlepoint_nbo` (CLI `--nbo`,
+  plus `--nbo-keywords`) — natural population analysis via a `%nbo` block
+  on the same singlepoint, using ORCA's NBO 7. Both need the energy
+  singlepoint stage and apply to **every** state's own singlepoint (S0,
+  T1, ox, red — not ESD's S1, which has none), not only S0's. NBO needs
+  `[orca].nbo_exe` configured; a submission is refused otherwise. See
+  [docs/PHOTOPHYSICS.md](docs/PHOTOPHYSICS.md#densities-and-nbo).
 * `header_confsearch_id / _optimization_id / _singlepoint_id` — pick a
   stored header by ID. Or pass raw `header_*` text. Defaults from
   `autodft/qm/orca/defaults.py` (= seeded DB rows) apply when neither
@@ -478,8 +497,8 @@ curl -X POST http://localhost:8085/api/submit \
            "max_conformers_red": 2,
 
            "header_confsearch_id":   2,
-           "header_optimization_id": 4,
-           "header_singlepoint_id":  6
+           "header_optimization_id": 3,
+           "header_singlepoint_id":  4
          }'
 ```
 
@@ -622,12 +641,12 @@ from autodft.db import get_session, init_db
 from autodft.engine.entrypoint_processor import validate_smiles
 from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.qm.orca.defaults import (
-    DEFAULT_HEADER_CONFSEARCH,    # GOAT GFN2-xTB
-    DEFAULT_HEADER_OPTIMIZATION,  # wB97X-D3 / def2-TZVP
-    DEFAULT_HEADER_SINGLEPOINT,   # wB97X-D3 / def2-QZVPD
-    GXTB_HEADER_CONFSEARCH,       # GOAT g-xTB variant
-    B3LYP_HEADER_OPTIMIZATION,
-    B3LYP_HEADER_SINGLEPOINT,
+    DEFAULT_HEADER_CONFSEARCH,        # GOAT GFN2-xTB
+    DEFAULT_HEADER_OPTIMIZATION,      # wB97X-D3 / def2-SVP + CPCM(MeCN)
+    DEFAULT_HEADER_SINGLEPOINT,       # wB97X-D3 / def2-TZVPD + CPCM(MeCN)
+    GXTB_HEADER_CONFSEARCH,           # GOAT g-xTB variant
+    TZVP_MECN_HEADER_OPTIMIZATION,    # larger-basis alternate
+    QZVPD_MECN_HEADER_SINGLEPOINT,    # larger-basis alternate
 )
 ```
 

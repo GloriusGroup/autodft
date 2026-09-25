@@ -14,7 +14,7 @@ import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 
 from sqlmodel import Session, col, func, select
 
@@ -75,15 +75,19 @@ class Conformer:
     e_combined: Optional[float] = None
     ir_modes: Optional[list[IRMode]] = None
     energy_pending: bool = False  # its energy singlepoint is still to come
+    sp_record: Optional[dict] = None  # the energy singlepoint's own record, read once
 
 
 def conformer_pool(
     session: Session, extractor: PipelineExtractor, state: MoleculeState, ir: bool = False,
+    sp_require: Iterable[str] = (),
 ) -> list[Conformer]:
     """Every optimisation of *state*, numbered as on the Molecules page.
 
     A successful one has its output read once (G - E(el), and the IR modes
-    when *ir*) and its energy singlepoint read once.
+    when *ir*) and its energy singlepoint read once -- *sp_require* lets a
+    caller that needs more than the energy from that same record (e.g. NBO's
+    natural charges) ask for it here instead of reading it again itself.
     """
     opts = session.exec(
         select(ComputationTask).where(
@@ -106,9 +110,10 @@ def conformer_pool(
         sp = _follow_up(session, opt, TaskType.singlepoint)
         conformer.energy_pending = sp.status in _OPEN if sp is not None else opt.has_followups
         sp_record = (
-            results.for_task(session, sp)
+            results.for_task(session, sp, require=sp_require)
             if sp is not None and sp.status == TaskStatus.successful else None
         )
+        conformer.sp_record = sp_record
         if sp_record is not None:
             conformer.e_singlepoint = sp_record["energy"]
         if conformer.e_singlepoint is not None and correction is not None:
@@ -250,7 +255,8 @@ def _molecule_entries(
         wanted = categories.requested(metadata) & {
             categories.UVVIS, categories.IR, categories.NMR, categories.ESD,
         }
-        if not wanted:
+        nbo_wanted = categories.NBO in categories.requested(metadata)
+        if not wanted and not nbo_wanted:
             continue
         needs_pool = bool(wanted & {categories.UVVIS, categories.IR, categories.NMR})
         pool = [
@@ -277,6 +283,10 @@ def _molecule_entries(
             from autodft.analysis.esd import molecule_esd
 
             entry["esd"] = molecule_esd(session, extractor, state, detail)
+        if nbo_wanted:
+            from autodft.analysis.nbo import molecule_nbo
+
+            entry["nbo"] = molecule_nbo(session, extractor, state, detail)
         entries.append(entry)
     return entries
 

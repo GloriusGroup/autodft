@@ -29,12 +29,13 @@ from autodft.qm.base import QMResult
 from autodft.qm.orca import esd_parser
 from autodft.qm.orca.esd_inputs import StateData
 from autodft.qm.orca.parser import OrcaParser
-from autodft.qm.orca.spectra_parser import parse_absorption, parse_ir, parse_shieldings
+from autodft.qm.orca.spectra_parser import parse_absorption, parse_ir, parse_natural_charges, parse_shieldings
 
 from tests.test_admin_ops import project  # noqa: F401 - fixture
 
 FIXTURES_ORCA = Path(__file__).parent / "fixtures" / "orca"
 FIXTURES_ESD = Path(__file__).parent / "fixtures" / "esd"
+FIXTURES_NBO = Path(__file__).parent / "fixtures" / "nbo"
 
 OPT_IR = (FIXTURES_ORCA / "opt_ir.out").read_text()
 _S1_TAIL = (FIXTURES_ESD / "s1_opt_tail.out").read_text()  # DE(CIS) ... (Root 1)
@@ -64,6 +65,7 @@ NMR_OUTPUT = (FIXTURES_ORCA / "nmr_glyoxal.out").read_text()
 NMR_INPUT = "!B3LYP def2-SVP NMR TightSCF\n%pal nprocs 4 end\n%maxcore 2000\n*xyzfile 0 1 input.xyz\n"
 SOC_OUTPUT = (FIXTURES_ESD / "soc_s1.out").read_text()
 RATE_OUTPUT = (FIXTURES_ESD / "isc_two_channels.out").read_text()
+NBO_CLOSED_SHELL_OUTPUT = (FIXTURES_NBO / "closed_shell.out").read_text()
 
 
 def _setup(session, task_type=TaskType.singlepoint, state_metadata=None, project_name="nho/p"):
@@ -144,6 +146,38 @@ class TestExtractUvvis:
     def test_decoder_round_trips(self):
         record = json.loads(json.dumps(results.extract("singlepoint_uvvis", UVVIS_OUTPUT)))
         assert results.transitions(record) == parse_absorption(UVVIS_OUTPUT)
+
+
+class TestExtractNbo:
+    def test_charges(self):
+        assert results.extract("singlepoint", NBO_CLOSED_SHELL_OUTPUT)["npa_charges"] == (
+            [asdict(c) for c in parse_natural_charges(NBO_CLOSED_SHELL_OUTPUT)]
+        )
+
+    def test_none_without_an_npa_block(self):
+        assert results.extract("singlepoint", "FINAL SINGLE POINT ENERGY      -1.0\n")["npa_charges"] is None
+
+    def test_other_singlepoint_types_get_no_npa_charges(self):
+        assert "npa_charges" not in results.extract("singlepoint_vert_ox", NBO_CLOSED_SHELL_OUTPUT)
+
+    def test_decoder_round_trips(self):
+        record = json.loads(json.dumps(results.extract("singlepoint", NBO_CLOSED_SHELL_OUTPUT)))
+        assert results.natural_charges(record) == parse_natural_charges(NBO_CLOSED_SHELL_OUTPUT)
+
+    def test_matches_before_storing_and_after_the_output_is_deleted(self, session, tmp_path):
+        task = _setup(session, task_type=TaskType.singlepoint)
+        path = _job_dir(tmp_path, "nbo", output=NBO_CLOSED_SHELL_OUTPUT)
+        job = _make_job(session, task, path)
+
+        before = results.for_job(session, job, "singlepoint")
+        results.store(session, task, job, path)
+        session.commit()
+        (path / "output.out").unlink()
+
+        after = results.for_job(session, job, "singlepoint")
+        assert after["npa_charges"] == before["npa_charges"] == (
+            [asdict(c) for c in parse_natural_charges(NBO_CLOSED_SHELL_OUTPUT)]
+        )
 
 
 class TestExtractNmr:
@@ -329,6 +363,37 @@ class TestForJob:
 
         record = results.for_job(session, job, "optimization", require=("ir_modes",))
         assert record["ir_modes"] == [asdict(m) for m in parse_ir(OPT_OUTPUT)]
+
+    def test_a_stale_row_with_no_output_is_served_when_nothing_new_is_required(self, session, tmp_path):
+        """I2: an archived project keeps only the row; readers needing no new key still get it."""
+        task = _setup(session, task_type=TaskType.optimization)
+        path = _job_dir(tmp_path, "stale1", output="FINAL SINGLE POINT ENERGY      -1.5\n")
+        job = _make_job(session, task, path)
+        results.store(session, task, job, path)
+        session.commit()
+        row = session.exec(select(JobResult).where(JobResult.job_id == job.id)).one()
+        row.parser_version = results.PARSER_VERSION - 1  # an older parser's record
+        session.add(row)
+        session.commit()
+        (path / "output.out").unlink()  # archived project: comp_data removed
+
+        record = results.for_job(session, job, "optimization")
+        assert record["energy"] == pytest.approx(-1.5)
+
+    def test_a_stale_row_missing_a_required_key_with_no_output_is_none(self, session, tmp_path):
+        """I2: the NBO reader still gets nothing from a pre-feature record."""
+        task = _setup(session, task_type=TaskType.singlepoint)
+        path = _job_dir(tmp_path, "stale2", output="FINAL SINGLE POINT ENERGY      -2.0\n")
+        job = _make_job(session, task, path)
+        session.add(JobResult(
+            job_id=job.id, task_id=task.id, parser_version=1,
+            job_path=job.job_path, finished_at=job.time_end,
+            data_json=json.dumps({"energy": -2.0}),
+        ))
+        session.commit()
+        (path / "output.out").unlink()
+
+        assert results.for_job(session, job, "singlepoint", require=("npa_charges",)) is None
 
 
 class TestSameInstant:
@@ -978,8 +1043,10 @@ def test_extract_output_is_pinned():
     snapshot = json.loads(_SNAPSHOT_PATH.read_text())
     key = str(results.PARSER_VERSION)
     message = (
-        f"extract() changed for PARSER_VERSION {key}. If this parser change is intended, "
-        "bump PARSER_VERSION and regenerate tests/fixtures/extract_snapshot.json."
+        f"extract() changed for PARSER_VERSION {key}. Bump PARSER_VERSION only when this "
+        "changes what an existing key holds -- a new key needs no bump as long as its "
+        "readers `require` it. If a bump is intended, regenerate "
+        "tests/fixtures/extract_snapshot.json under the new key."
     )
     assert key in snapshot, message
     assert cases == snapshot[key], message

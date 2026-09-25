@@ -31,8 +31,6 @@ from autodft.engine.entrypoint_processor import validate_smiles
 from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.models.header import ComputationHeader
 from autodft.qm.orca.defaults import (
-    B3LYP_HEADER_OPTIMIZATION,
-    B3LYP_HEADER_SINGLEPOINT,
     DEFAULT_HEADER_CONFSEARCH,
     DEFAULT_HEADER_OPTIMIZATION,
     DEFAULT_HEADER_SINGLEPOINT,
@@ -227,17 +225,17 @@ if __name__ == "__main__":
     print(f"#{eid}  CC   (skip_confsearch)")
 
     # 4) Pick stored headers from the seeded rows by description.
-    b3lyp_opt = header_by_description("optimization", "B3LYP")
-    b3lyp_sp = header_by_description("singlepoint", "B3LYP")
-    if b3lyp_opt and b3lyp_sp:
+    tzvp_opt = header_by_description("optimization", "TZVP")
+    qzvpd_sp = header_by_description("singlepoint", "QZVPD")
+    if tzvp_opt and qzvpd_sp:
         eid = submit(
             "CCN",
             project="amines",
             request_t1=True,
-            header_optimization=b3lyp_opt.header_text,
-            header_singlepoint=b3lyp_sp.header_text,
+            header_optimization=tzvp_opt.header_text,
+            header_singlepoint=qzvpd_sp.header_text,
         )
-        print(f"#{eid}  CCN  (B3LYP opt #{b3lyp_opt.id} + sp #{b3lyp_sp.id})")
+        print(f"#{eid}  CCN  (wB97X-D3 TZVP opt #{tzvp_opt.id} + QZVPD sp #{qzvpd_sp.id})")
 
     # 5) Pre-flight validation — same check the REST endpoint runs.
     for smi in ["c1ccccc1", "[Fe+2]", "not a smiles"]:

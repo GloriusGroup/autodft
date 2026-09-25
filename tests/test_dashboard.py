@@ -137,9 +137,25 @@ def test_each_category_has_a_settings_panel_shown_only_when_ticked(client):
     c, headers = client
     html = c.get("/", headers=headers).text
     panels = re.findall(r'<div class="cat-detail" data-requires="(\w+)" style="display:none;">', html)
-    assert panels == ["requestUvvis", "requestIr", "requestNmr", "requestEsd"]
+    assert panels == [
+        "requestUvvis", "requestIr", "requestNmr", "requestEsd",
+        "requestDensities", "requestNbo",
+    ]
     for needle in ('id="uvvisNroots"', 'id="uvvisTda"', 'id="irHeaderNote"',
                    'id="uvvisHeaderNote"', "commonBody.uvvis_nroots", "commonBody.uvvis_tda"):
+        assert needle in html, needle
+
+
+def test_the_dashboard_offers_densities_and_nbo(client):
+    c, headers = client
+    html = c.get("/", headers=headers).text
+    for needle in ('id="requestDensities"', 'id="requestNbo"',
+                   'id="densityEldens"', 'id="densitySpindens"',
+                   'id="densityEldensFile"', 'id="densitySpindensFile"', 'id="densityGrid"',
+                   'id="densitiesHeaderNote"', 'id="nboKeywords"', 'id="nboHeaderNote"',
+                   "request_densities", "request_singlepoint_nbo",
+                   "commonBody.density_grid", "commonBody.nbo_keywords",
+                   "var PLOTS_RE", "var NBO_CONFLICT_RE"):
         assert needle in html, needle
 
 
@@ -160,6 +176,22 @@ def test_the_dashboard_offers_esd(client):
                    "'requestEsd'", "var B88_RE", "function ppEsdSummary(", "function ppEsd(",
                    "<th>ESD</th>"):
         assert needle in html, needle
+
+
+def test_the_dashboard_shows_nbo_charges(client):
+    c, headers = client
+    html = c.get("/", headers=headers).text
+    for needle in ("function ppNbo(", "function ppNboSummary(", "NBO · ",
+                   "most negative ", "most positive ", "class=\"pp-nmr\""):
+        assert needle in html, needle
+
+
+def test_the_dashboard_says_why_there_are_no_nbo_charges_yet(client):
+    # M9: distinguish "still running" from "every conformer failed/unavailable".
+    c, headers = client
+    html = c.get("/", headers=headers).text
+    assert "no charges yet (' + s.pending + ' pending)'" in html
+    assert "no charges (' + bits.join(', ') + ')'" in html
 
 
 def test_uvvis_options_are_sent_only_when_ticked():
@@ -197,3 +229,16 @@ def test_category_panels_share_a_row_height():
     html = (TEMPLATE / "dashboard.html").read_text()
     row = html.split('id="categoryDetailsRow"', 1)[1].split(">", 1)[0]
     assert "align-items: stretch" in row
+
+
+def test_header_select_preselects_the_stored_package_default():
+    # When nothing was selected before, populateHeaderSelect picks the
+    # stored header whose text matches the package default for that kind,
+    # comparing with whitespace normalised on both sides (M8) so CRLF or
+    # indentation differences in a hand-entered production row still match.
+    html = (TEMPLATE / "dashboard.html").read_text()
+    assert "function populateHeaderSelect(selectEl, kind, defaults, custom) {" in html
+    assert "var def = defaults.filter(function (d) { return d.kind === kind; })[0];" in html
+    assert "function normalizeHeaderText(s) {" in html
+    assert "replace(/\\s+/g, ' ')" in html
+    assert "normalizeHeaderText(c.text) === defText" in html

@@ -1,9 +1,7 @@
 """Default ORCA input headers for common calculation types.
 
-Copied verbatim from the legacy
-``/mnt/share/dft_calculations/scripts/job_submission/submit_to_db_zmy.py``
-submission script so this package reproduces what's been running in
-production on this cluster.
+Also holds the larger-basis and g-xTB alternates, and the ``SEED_HEADERS``
+rows a fresh database is seeded with.
 """
 
 DEFAULT_HEADER_CONFSEARCH = (
@@ -20,7 +18,7 @@ DEFAULT_HEADER_CONFSEARCH = (
 )
 
 DEFAULT_HEADER_OPTIMIZATION = (
-    "!wB97X-D3 def2-TZVP def2/J RIJCOSX DEFGRID3 TightOpt TightSCF Freq\n"
+    "!wB97X-D3 def2-SVP def2/J RIJCOSX DEFGRID3 Opt TightSCF CPCM(MeCN) Freq\n"
     "%maxcore 1000\n"
     "%pal nprocs 8 end\n"
 )
@@ -29,23 +27,23 @@ DEFAULT_HEADER_SINGLEPOINT = (
     # Singlepoint headers must NEVER include "Opt" or "Freq" — those would
     # turn the supposedly cheap singlepoint into a re-optimization or a
     # full Hessian calculation on the produced geometry.
-    "!wB97X-D3 def2-QZVPD def2/J RIJCOSX DEFGRID3 TightSCF KeepDens\n"
+    "!wB97X-D3 def2-TZVPD def2/J RIJCOSX DEFGRID3 TightSCF CPCM(MeCN) KeepDens\n"
     "%maxcore 1500\n"
     "%pal nprocs 2 end\n"
 )
 
 
-# Secondary B3LYP defaults — cheaper alternative for both optimisation
-# and singlepoint stages.
-B3LYP_HEADER_OPTIMIZATION = (
-    "!B3LYP def2-SVP def2/J RIJCOSX DEFGRID3 Opt TightSCF Freq\n"
-    "%maxcore 500\n"
+# Optional pair for the larger basis sets, kept as the second choice in
+# each slot's seeded rows.
+TZVP_MECN_HEADER_OPTIMIZATION = (
+    "!wB97X-D3 def2-TZVP def2/J RIJCOSX DEFGRID3 TightOpt TightSCF CPCM(MeCN) Freq\n"
+    "%maxcore 1000\n"
     "%pal nprocs 8 end\n"
 )
 
-B3LYP_HEADER_SINGLEPOINT = (
-    "!B3LYP def2-TZVP def2/J RIJCOSX DEFGRID3 TightSCF\n"
-    "%maxcore 500\n"
+QZVPD_MECN_HEADER_SINGLEPOINT = (
+    "!wB97X-D3 def2-QZVPD def2/J RIJCOSX DEFGRID3 TightSCF KeepDens CPCM(MeCN)\n"
+    "%maxcore 1500\n"
     "%pal nprocs 2 end\n"
 )
 
@@ -87,22 +85,22 @@ SEED_HEADERS = [
     },
     {
         "kind": "optimization",
-        "description": "wB97X-D3 / def2-TZVP TightOpt + Freq",
-        "header_text": DEFAULT_HEADER_OPTIMIZATION,
+        "description": "wB97X-D3 / def2-TZVP TightOpt + Freq + CPCM(MeCN)",
+        "header_text": TZVP_MECN_HEADER_OPTIMIZATION,
+    },
+    {
+        "kind": "singlepoint",
+        "description": "wB97X-D3 / def2-QZVPD KeepDens + CPCM(MeCN)",
+        "header_text": QZVPD_MECN_HEADER_SINGLEPOINT,
     },
     {
         "kind": "optimization",
-        "description": "B3LYP / def2-SVP Opt + Freq",
-        "header_text": B3LYP_HEADER_OPTIMIZATION,
+        "description": "wB97X-D3 / def2-SVP Opt + Freq + CPCM(MeCN)",
+        "header_text": DEFAULT_HEADER_OPTIMIZATION,
     },
     {
         "kind": "singlepoint",
-        "description": "wB97X-D3 / def2-QZVPD KeepDens",
+        "description": "wB97X-D3 / def2-TZVPD KeepDens + CPCM(MeCN)",
         "header_text": DEFAULT_HEADER_SINGLEPOINT,
-    },
-    {
-        "kind": "singlepoint",
-        "description": "B3LYP / def2-TZVP",
-        "header_text": B3LYP_HEADER_SINGLEPOINT,
     },
 ]

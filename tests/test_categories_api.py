@@ -31,6 +31,23 @@ def api(tmp_path):
     reset_engine()
 
 
+@pytest.fixture()
+def api_with_nbo(tmp_path):
+    settings = Settings()
+    settings.storage.data_path = str(tmp_path)
+    settings.orca.nbo_exe = "/path/to/nbo7.i8.exe"
+    reset_engine()
+    init_db(settings)
+    with get_session(settings) as session:
+        user, key = accounts.create_user(session, "nho")
+        accounts.get_or_create_project(session, user, "p")
+        session.add(Molecule(smiles="CCO", project_name="nho/p"))
+        session.commit()
+    with TestClient(create_app(settings)) as client:
+        yield client, {"X-AutoDFT-API-Key": key}
+    reset_engine()
+
+
 def _metadata(entry_id: int) -> dict:
     with get_session() as session:
         return json.loads(session.get(CalculationEntrypoint, entry_id).request_metadata)
@@ -48,7 +65,11 @@ class TestSubmit:
         client, key = api
         r = client.post("/api/submit", headers=key, json={"smiles": "c1ccccc1", "project": "p"})
         assert r.status_code == 200
-        assert not set(_metadata(r.json()["id"])) & set(categories.CATEGORIES)
+        meta = _metadata(r.json()["id"])
+        # request_singlepoint_nbo is always present (False by default),
+        # unrelated to category snapshots -- see _new_entrypoint.
+        assert not set(meta) & (set(categories.CATEGORIES) - {categories.NBO})
+        assert meta[categories.NBO] is False
 
     def test_esd_is_accepted(self, api):
         client, key = api
@@ -128,6 +149,101 @@ class TestUvvisOptions:
         })
         assert r.status_code == 200, r.text
         assert "uvvis_nroots" not in _metadata(r.json()["id"])
+
+
+class TestDensityOptions:
+    def test_options_are_recorded_with_the_category(self, api):
+        client, key = api
+        r = client.post("/api/submit", headers=key, json={
+            "smiles": "c1ccccc1", "project": "p", "request_densities": True,
+            "density_grid": 50, "density_eldens_file": "e.cube", "density_spindens_file": "s.cube",
+        })
+        assert r.status_code == 200, r.text
+        meta = _metadata(r.json()["id"])
+        assert meta[categories.DENSITIES] is True
+        assert (meta["density_grid"], meta["density_eldens_file"], meta["density_spindens_file"]) \
+            == (50, "e.cube", "s.cube")
+
+    def test_options_without_the_category_are_not_recorded(self, api):
+        client, key = api
+        r = client.post("/api/submit", headers=key,
+                        json={"smiles": "c1ccccc1", "project": "p", "density_grid": 50})
+        assert r.status_code == 200
+        assert "density_grid" not in _metadata(r.json()["id"])
+
+    def test_out_of_range_grid_is_a_400(self, api):
+        client, key = api
+        r = client.post("/api/submit", headers=key, json={
+            "smiles": "c1ccccc1", "project": "p", "request_densities": True, "density_grid": 5,
+        })
+        assert r.status_code == 400 and "density_grid" in r.json()["detail"]
+
+    def test_a_plots_block_in_the_singlepoint_header_is_a_400(self, api):
+        client, key = api
+        r = client.post("/api/submit", headers=key, json={
+            "smiles": "c1ccccc1", "project": "p", "request_densities": True,
+            "header_singlepoint": "!B3LYP\n%plots dim1 40 end\n",
+        })
+        assert r.status_code == 400 and "%plots" in r.json()["detail"]
+
+
+class TestNboOptions:
+    def test_keywords_are_recorded_with_the_category(self, api_with_nbo):
+        client, key = api_with_nbo
+        r = client.post("/api/submit", headers=key, json={
+            "smiles": "c1ccccc1", "project": "p", "request_singlepoint_nbo": True,
+            "nbo_keywords": "BNDIDX",
+        })
+        assert r.status_code == 200, r.text
+        meta = _metadata(r.json()["id"])
+        assert meta[categories.NBO] is True
+        assert meta["nbo_keywords"] == "BNDIDX"
+
+    def test_keywords_without_the_category_are_not_recorded(self, api_with_nbo):
+        client, key = api_with_nbo
+        r = client.post("/api/submit", headers=key,
+                        json={"smiles": "c1ccccc1", "project": "p", "nbo_keywords": "BNDIDX"})
+        assert r.status_code == 200
+        assert "nbo_keywords" not in _metadata(r.json()["id"])
+
+    def test_bad_keywords_are_a_400(self, api_with_nbo):
+        client, key = api_with_nbo
+        r = client.post("/api/submit", headers=key, json={
+            "smiles": "c1ccccc1", "project": "p", "request_singlepoint_nbo": True,
+            "nbo_keywords": "$NBO",
+        })
+        assert r.status_code == 400 and "nbo_keywords" in r.json()["detail"]
+
+
+class TestNboAvailability:
+    def test_nbo_without_an_executable_is_a_400(self, api):
+        client, key = api
+        r = client.post("/api/submit", headers=key,
+                        json={"smiles": "c1ccccc1", "project": "p", "request_singlepoint_nbo": True})
+        assert r.status_code == 400
+        assert "nbo_exe" in r.json()["detail"]
+
+    def test_nbo_with_a_configured_executable_is_accepted(self, api_with_nbo):
+        client, key = api_with_nbo
+        r = client.post("/api/submit", headers=key,
+                        json={"smiles": "c1ccccc1", "project": "p", "request_singlepoint_nbo": True})
+        assert r.status_code == 200, r.text
+
+    def test_batch_nbo_without_an_executable_is_a_400(self, api):
+        client, key = api
+        r = client.post("/api/submit-batch", headers=key, json={
+            "smiles_list": ["c1ccccc1"], "project": "p", "request_singlepoint_nbo": True,
+        })
+        assert r.status_code == 400
+        assert "nbo_exe" in r.json()["detail"]
+
+    def test_batch_nbo_with_a_configured_executable_is_accepted(self, api_with_nbo):
+        client, key = api_with_nbo
+        r = client.post("/api/submit-batch", headers=key, json={
+            "smiles_list": ["c1ccccc1"], "project": "p", "request_singlepoint_nbo": True,
+        })
+        assert r.status_code == 200, r.text
+        assert r.json()["counts"]["queued"] == 1
 
 
 class TestPhotophysicsEndpoint:

@@ -1039,6 +1039,15 @@ def _generate_job_files(
     if state is None:
         return _fail_task(session, task, job, f"State {task.state_id} not found")
 
+    # --- Gap 2 fix: Adjust charge/multiplicity for vertical excitations ---
+    # A task whose charge/multiplicity can't be resolved must not silently
+    # stall in `created` forever — fail it so it shows up in the dashboard.
+    try:
+        charge, multiplicity = _get_job_charge_multiplicity(task.task_type, state)
+    except ValueError as exc:
+        return _fail_task(session, task, job,
+                          f"Cannot resolve charge/multiplicity: {exc}")
+
     extra_inputs: Optional[list[str]] = None
     if task.task_type.value.startswith("esd_"):
         # Rate jobs are built from other tasks' results and Hessians.
@@ -1055,22 +1064,17 @@ def _generate_job_files(
         # header verbatim.
         from autodft.qm.orca.blocks import HeaderConflict, compose_header
 
+        metadata = json.loads(state.metadata_json) if state.metadata_json else {}
+        if task.task_type == TaskType.singlepoint and metadata.get(categories.NBO):
+            unavailable = categories.nbo_unavailable(settings)
+            if unavailable:
+                return _fail_task(session, task, job, unavailable)
         try:
             header_text = compose_header(
-                task.task_type.value, header_text,
-                json.loads(state.metadata_json) if state.metadata_json else {},
+                task.task_type.value, header_text, metadata, multiplicity=multiplicity,
             )
         except HeaderConflict as exc:
             return _fail_task(session, task, job, str(exc))
-
-    # --- Gap 2 fix: Adjust charge/multiplicity for vertical excitations ---
-    # A task whose charge/multiplicity can't be resolved must not silently
-    # stall in `created` forever — fail it so it shows up in the dashboard.
-    try:
-        charge, multiplicity = _get_job_charge_multiplicity(task.task_type, state)
-    except ValueError as exc:
-        return _fail_task(session, task, job,
-                          f"Cannot resolve charge/multiplicity: {exc}")
 
     # Fetch input geometry
     geom = session.get(MoleculeGeometry, task.input_geometry_id)
@@ -1106,6 +1110,7 @@ def _generate_job_files(
         partition=settings.slurm.partition,
         nice=settings.slurm.nice,
         keep_hessian=_keeps_hessian(state, task),
+        keep_cubes=_keeps_cubes(state, task),
         extra_inputs=extra_inputs,
     )
 
@@ -1354,6 +1359,14 @@ def _keeps_hessian(state: MoleculeState, task: ComputationTask) -> bool:
         return False
     metadata = json.loads(state.metadata_json) if state.metadata_json else {}
     return bool(metadata.get("esd_role") or categories.on_s0(state.description, metadata, categories.ESD))
+
+
+def _keeps_cubes(state: MoleculeState, task: ComputationTask) -> bool:
+    """Whether a singlepoint's density cubes feed the Densities category."""
+    if task.task_type != TaskType.singlepoint:
+        return False
+    metadata = json.loads(state.metadata_json) if state.metadata_json else {}
+    return bool(metadata.get(categories.DENSITIES))
 
 
 def _get_stage_config(settings: Settings, task_type: TaskType, state: Optional[MoleculeState] = None):

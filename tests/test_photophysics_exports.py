@@ -118,6 +118,80 @@ def test_a_dry_run_counts_the_same_files(db):
     assert PipelineExtractor("__all__").cleanup_large_files(dry_run=True) == 1 + 2
 
 
+def test_cleanup_keeps_cubes_for_densities_singlepoints(db):
+    with get_session() as session:
+        kept = _job_dir(session, db, "dens_sp", {"request_densities": True}, task_type=TaskType.singlepoint)
+        (kept / "ElDens.cube").write_text("cube")
+        opt = _job_dir(session, db, "dens_opt", {"request_densities": True}, task_type=TaskType.optimization)
+        (opt / "ElDens.cube").write_text("cube")
+        plain = _job_dir(session, db, "plain_sp", {}, task_type=TaskType.singlepoint)
+        (plain / "ElDens.cube").write_text("cube")
+    deleted = PipelineExtractor("__all__").cleanup_large_files()
+    assert sorted(p.name for p in kept.iterdir()) == ["ElDens.cube", "output.out"]
+    for path in (opt, plain):
+        assert sorted(p.name for p in path.iterdir()) == ["output.out"]
+    assert deleted == 2 + 3 + 3
+
+
+def test_singlepoint_cubes_are_copied_with_the_sp_prefix(tmp_path):
+    job = tmp_path / "job"
+    job.mkdir()
+    for name in ("input.inp", "input.xyz", "output.out", "ElDens.cube", "SpinDens.cube"):
+        (job / name).write_text(name)
+    assert _copy_task_files(job, tmp_path / "out", 2, "singlepoint", cubes=True) == 5
+    assert sorted(p.name for p in (tmp_path / "out").iterdir()) == sorted([
+        "conf2_sp_input.inp", "conf2_sp_geometry.xyz", "conf2_sp_output.out",
+        "conf2_sp_ElDens.cube", "conf2_sp_SpinDens.cube",
+    ])
+
+
+def test_cubes_are_not_copied_unless_requested(tmp_path):
+    job = tmp_path / "job"
+    job.mkdir()
+    for name in ("input.inp", "input.xyz", "output.out", "ElDens.cube"):
+        (job / name).write_text(name)
+    assert _copy_task_files(job, tmp_path / "out", 1, "singlepoint") == 3
+    assert "conf1_sp_ElDens.cube" not in [p.name for p in (tmp_path / "out").iterdir()]
+
+
+def test_export_copies_singlepoint_cubes(db):
+    with get_session() as session:
+        mol = Molecule(smiles="Ccube", project_name="nho/p")
+        session.add(mol)
+        session.commit()
+        state = MoleculeState(molecule_id=mol.id, description="S0", multiplicity=1, charge=0,
+                              metadata_json=json.dumps({"request_densities": True}))
+        session.add(state)
+        session.commit()
+        opt = ComputationTask(task_type=TaskType.optimization, status=TaskStatus.successful,
+                              state_id=state.id, header_id=1, has_followups=True)
+        session.add(opt)
+        session.commit()
+        opt_dir = db / "jobs" / "opt"
+        opt_dir.mkdir(parents=True)
+        (opt_dir / "input.inp").write_text("i")
+        session.add(ComputationJob(task_id=opt.id, attempt=1, job_path=str(opt_dir), success=True))
+        session.commit()
+
+        sp = ComputationTask(task_type=TaskType.singlepoint, status=TaskStatus.successful,
+                             state_id=state.id, header_id=1, depends_on_task_id=opt.id)
+        session.add(sp)
+        session.commit()
+        sp_dir = db / "jobs" / "sp"
+        sp_dir.mkdir(parents=True)
+        (sp_dir / "input.inp").write_text("i")
+        (sp_dir / "output.out").write_text("o")
+        (sp_dir / "ElDens.cube").write_text("cube")
+        session.add(ComputationJob(task_id=sp.id, attempt=1, job_path=str(sp_dir), success=True))
+        session.commit()
+        mol_id = mol.id
+
+    dest = db / "export"
+    PipelineExtractor("nho/p").export_calculation_files(dest)
+    names = sorted(p.name for p in (dest / str(mol_id) / "S0").iterdir())
+    assert "conf1_sp_ElDens.cube" in names
+
+
 # ----------------------------------------------------------------------
 # The photophysics workbook
 # ----------------------------------------------------------------------
@@ -180,6 +254,20 @@ def _full_payload():
                 },
                 "flags": [],
             },
+            "nbo": {
+                "states": [{
+                    "state": "S0", "state_id": 10, "count": 1, "pending": 0, "failed": 0, "unavailable": 0,
+                    "unweighted": 0, "weighting": "G",
+                    "extremes": {
+                        "most_negative": {"index": 1, "element": "O", "charge": -0.5},
+                        "most_positive": {"index": 0, "element": "C", "charge": 0.3},
+                    },
+                    "atoms": [
+                        {"index": 0, "element": "C", "charge": 0.3},
+                        {"index": 1, "element": "O", "charge": -0.5},
+                    ],
+                }],
+            },
         }],
     }
 
@@ -195,7 +283,7 @@ def _col(ws, name, row=1):
 def test_build_xlsx_has_a_sheet_per_category_plus_sticks_and_esd_jobs():
     wb = load_workbook(BytesIO(build_xlsx(_full_payload())))
     assert wb.sheetnames == [
-        "Summary", "UV-Vis", "UV-Vis sticks", "IR", "IR sticks", "NMR", "ESD", "ESD jobs",
+        "Summary", "UV-Vis", "UV-Vis sticks", "IR", "IR sticks", "NMR", "ESD", "ESD jobs", "NBO",
     ]
 
     assert _header(wb["UV-Vis"]) == [
@@ -225,6 +313,9 @@ def test_build_xlsx_has_a_sheet_per_category_plus_sticks_and_esd_jobs():
         "mol_id", "state_id", "rate", "triplet", "sublevel", "rate_s", "dele_cm", "socme_cm",
         "fc_percent", "ht_percent", "k_squared", "e00_cm",
     ]
+    assert _header(wb["NBO"]) == [
+        "mol_id", "smiles", "state_id", "state", "atom", "element", "charge", "spin", "count", "weighting",
+    ]
 
     sticks = wb["UV-Vis sticks"]
     assert sticks.cell(row=2, column=_col(sticks, "state_id")).value == 10
@@ -242,6 +333,35 @@ def test_build_xlsx_has_a_sheet_per_category_plus_sticks_and_esd_jobs():
     assert jobs.cell(row=2, column=_col(jobs, "state_id")).value == 10
     assert jobs.cell(row=2, column=_col(jobs, "rate")).value == "isc"
     assert jobs.cell(row=2, column=_col(jobs, "triplet")).value == 1
+
+    nbo_sheet = wb["NBO"]
+    assert nbo_sheet.cell(row=2, column=_col(nbo_sheet, "state_id")).value == 10
+    assert nbo_sheet.cell(row=2, column=_col(nbo_sheet, "state")).value == "S0"
+    assert nbo_sheet.cell(row=2, column=_col(nbo_sheet, "atom")).value == 1
+    assert nbo_sheet.cell(row=2, column=_col(nbo_sheet, "charge")).value == 0.3
+    assert nbo_sheet.cell(row=3, column=_col(nbo_sheet, "atom")).value == 2
+    assert nbo_sheet.cell(row=3, column=_col(nbo_sheet, "element")).value == "O"
+
+
+def test_nbo_sheet_writes_each_states_own_state_id():
+    """I3: a T1/ox row must not carry the S0 entry's id."""
+    payload = {
+        "project": "nho/p", "temperature_k": 298.15,
+        "molecules": [{
+            "id": 1, "smiles": "c1ccccc1", "state_id": 10, "archived": False,
+            "nbo": {"states": [
+                {"state": "S0", "state_id": 10, "count": 1, "pending": 0, "failed": 0,
+                 "unavailable": 0, "unweighted": 0, "weighting": "G",
+                 "atoms": [{"index": 0, "element": "C", "charge": 0.3}]},
+                {"state": "ox", "state_id": 11, "count": 1, "pending": 0, "failed": 0,
+                 "unavailable": 0, "unweighted": 0, "weighting": "G",
+                 "atoms": [{"index": 0, "element": "C", "charge": 0.5}]},
+            ]},
+        }],
+    }
+    rows = list(load_workbook(BytesIO(build_xlsx(payload)))["NBO"].iter_rows(values_only=True))[1:]
+    assert [r[2] for r in rows if r[3] == "S0"] == [10]
+    assert [r[2] for r in rows if r[3] == "ox"] == [11]
 
 
 def test_build_xlsx_on_an_empty_payload_has_only_the_summary_sheet():

@@ -1168,6 +1168,14 @@
                             <input type="checkbox" id="requestEsd" name="request_esd">
                             <label for="requestEsd">ESD</label>
                         </div>
+                        <div class="checkbox-group" title="Gaussian cube files (electron / spin density) from every state's energy singlepoint.">
+                            <input type="checkbox" id="requestDensities" name="request_densities">
+                            <label for="requestDensities">Densities</label>
+                        </div>
+                        <div class="checkbox-group" title="NBO 7 natural population analysis inside every state's energy singlepoint.">
+                            <input type="checkbox" id="requestNbo" name="request_singlepoint_nbo">
+                            <label for="requestNbo">NBO</label>
+                        </div>
                         <div id="diradicalNote" class="smiles-hint valid" style="display:none;">
                             Diradical detected — calculated in the triplet state only.
                         </div>
@@ -1243,6 +1251,44 @@
                             </div>
                             <div class="cat-detail-note">S1 and T1 start from the lowest S0 conformer once every S0 conformer is done. Franck-Condon rates unless Herzberg-Teller is ticked; S1→Tn channels within the window use the T1 geometry and Hessian.</div>
                             <div class="cat-detail-note" id="esdHeaderNote"></div>
+                        </div>
+                        <div class="cat-detail" data-requires="requestDensities" style="display:none;">
+                            <div class="cat-detail-title">Densities</div>
+                            <div class="cat-detail-body">
+                                <div class="checkbox-group">
+                                    <input type="checkbox" id="densityEldens" checked>
+                                    <label for="densityEldens">Electron density</label>
+                                </div>
+                                <div class="form-group" style="min-width: 150px;">
+                                    <label for="densityEldensFile">Electron density file</label>
+                                    <input type="text" id="densityEldensFile" value="ElDens.cube" style="width: 140px;">
+                                </div>
+                                <div class="checkbox-group" title="ORCA's orca_plot cannot make a spin density for a closed-shell job.">
+                                    <input type="checkbox" id="densitySpindens" checked>
+                                    <label for="densitySpindens">Spin density (open-shell jobs only)</label>
+                                </div>
+                                <div class="form-group" style="min-width: 150px;">
+                                    <label for="densitySpindensFile">Spin density file</label>
+                                    <input type="text" id="densitySpindensFile" value="SpinDens.cube" style="width: 140px;">
+                                </div>
+                                <div class="form-group" style="min-width: 150px;">
+                                    <label for="densityGrid">Grid points per axis</label>
+                                    <input type="number" id="densityGrid" min="10" max="300" value="75" style="width: 100px;">
+                                </div>
+                            </div>
+                            <div class="cat-detail-note">Gaussian cube files from each state's energy singlepoint, kept in its job folder.</div>
+                            <div class="cat-detail-note" id="densitiesHeaderNote"></div>
+                        </div>
+                        <div class="cat-detail" data-requires="requestNbo" style="display:none;">
+                            <div class="cat-detail-title">NBO</div>
+                            <div class="cat-detail-body">
+                                <div class="form-group" style="min-width: 220px;">
+                                    <label for="nboKeywords">Extra $NBO keywords</label>
+                                    <input type="text" id="nboKeywords" placeholder="e.g. BNDIDX" style="width: 200px;">
+                                </div>
+                            </div>
+                            <div class="cat-detail-note">NBO 7 inside each state's energy singlepoint; natural charges are Boltzmann-weighted on the Photophysics page.</div>
+                            <div class="cat-detail-note" id="nboHeaderNote"></div>
                         </div>
                     </div>
 
@@ -2525,6 +2571,9 @@
             // TDDFT gradients (S1 optimisation) and IC need in ORCA 6.1; the
             // same rule as categories._NATIVE_B88_RE.
             var B88_RE = /^\s*!(?:.*\s)?(?:RI-)?(B3LYP|BLYP|BP86|BP|B3P86|B3PW91|BPW91|B1LYP|BHANDHLYP|B2PLYP|B2GP-PLYP|X3LYP)(?![\w(])/im;
+            // Same rules as categories._DENSITY_CONFLICT / _NBO_CONFLICTS.
+            var PLOTS_RE = /%plots\b/i;
+            var NBO_CONFLICT_RE = /^\s*!.*\bNBO\b|%nbo\b/im;
 
             // Text of the header chosen in a slot; headerCache is filled by
             // fetchHeaders, which calls refreshCategoryDetails when done.
@@ -2581,6 +2630,10 @@
                         esdProblems.length
                             ? 'ESD will be refused: ' + esdProblems.join('; ') + '.'
                             : 'The singlepoint header uses a native B88 functional: the IC rate will fail (ORCA 6.1 needs its LibXC version, e.g. !LibXC(B3LYP)); the other rates are unaffected.');
+                setNote('densitiesHeaderNote', !PLOTS_RE.test(spText), '',
+                        'The chosen singlepoint header already has a %plots block — Densities will be refused; use the tick box instead.');
+                setNote('nboHeaderNote', !NBO_CONFLICT_RE.test(spText), '',
+                        'The chosen singlepoint header already has the NBO keyword or a %nbo block — NBO will be refused; use the tick box instead.');
             }
 
             var watched = {};
@@ -2751,6 +2804,10 @@
         // Untagged custom headers do NOT appear in slot dropdowns — assign
         // a kind in the Headers manager to surface them here.
 
+        function normalizeHeaderText(s) {
+            return (s || '').replace(/\s+/g, ' ').trim();
+        }
+
         function populateHeaderSelect(selectEl, kind, defaults, custom) {
             var current = selectEl.value;
             selectEl.innerHTML = '';
@@ -2778,6 +2835,16 @@
             // Preserve selection across reloads where possible
             if (current && [].some.call(selectEl.options, function (o) { return o.value === current; })) {
                 selectEl.value = current;
+                return;
+            }
+
+            // Nothing selected before: preselect the stored header whose text
+            // matches the package default for this kind, else take the first option.
+            var def = defaults.filter(function (d) { return d.kind === kind; })[0];
+            if (def) {
+                var defText = normalizeHeaderText(def.text);
+                var match = relevant.filter(function (c) { return normalizeHeaderText(c.text) === defText; })[0];
+                if (match) selectEl.value = 'id:' + match.id;
             }
         }
 
@@ -3000,6 +3067,8 @@
                 request_spec_ir:    document.getElementById('requestIr').checked,
                 request_spec_nmr:   document.getElementById('requestNmr').checked,
                 request_esd:        document.getElementById('requestEsd').checked,
+                request_densities:  document.getElementById('requestDensities').checked,
+                request_singlepoint_nbo: document.getElementById('requestNbo').checked,
                 max_conformers_S0:  intOrDefault('maxConfS0',  1),
                 max_conformers_T1:  intOrDefault('maxConfT1',  1),
                 max_conformers_ox:  intOrDefault('maxConfOx',  1),
@@ -3028,6 +3097,16 @@
                 commonBody.request_esd_ht = document.getElementById('requestEsdHt').checked;
                 commonBody.esd_tn_window_ev = isFinite(esdWindow) ? esdWindow : 0.2;
                 commonBody.esd_temperature_k = isFinite(esdTemperature) ? esdTemperature : 298.15;
+            }
+            if (commonBody.request_densities) {
+                commonBody.density_eldens = document.getElementById('densityEldens').checked;
+                commonBody.density_spindens = document.getElementById('densitySpindens').checked;
+                commonBody.density_grid = intOrDefault('densityGrid', 75);
+                commonBody.density_eldens_file = document.getElementById('densityEldensFile').value.trim() || 'ElDens.cube';
+                commonBody.density_spindens_file = document.getElementById('densitySpindensFile').value.trim() || 'SpinDens.cube';
+            }
+            if (commonBody.request_singlepoint_nbo) {
+                commonBody.nbo_keywords = document.getElementById('nboKeywords').value.trim();
             }
 
             // ── One request for the whole textarea. ───────────────────
@@ -4199,6 +4278,42 @@
                    (facts.length ? '<div class="pp-summary">' + facts.join(' · ') + '</div>' : '') + flags + '</div>';
         }
 
+        function ppNboCharge(v) { return (v >= 0 ? '+' : '') + v.toFixed(2); }
+
+        function ppNboNoCharges(s) {
+            if (s.pending) return 'no charges yet (' + s.pending + ' pending)';
+            var bits = [];
+            if (s.failed) bits.push(s.failed + ' failed');
+            if (s.unavailable) bits.push(s.unavailable + ' unavailable');
+            return bits.length ? 'no charges (' + bits.join(', ') + ')' : 'no charges';
+        }
+
+        function ppNboSummary(nbo) {
+            var parts = nbo.states.map(function (s) {
+                if (!s.extremes) return escHtml(s.state) + ': ' + ppNboNoCharges(s);
+                var neg = s.extremes.most_negative, pos = s.extremes.most_positive;
+                return escHtml(s.state) + ': most negative ' + escHtml(neg.element) + escHtml(neg.index + 1) +
+                       ' ' + escHtml(ppNboCharge(neg.charge)) + ', most positive ' + escHtml(pos.element) +
+                       escHtml(pos.index + 1) + ' ' + escHtml(ppNboCharge(pos.charge));
+            });
+            return '<div class="pp-summary">NBO · ' + parts.join(' · ') + '</div>';
+        }
+
+        function ppNbo(nbo) {
+            return nbo.states.map(function (s) {
+                var hasSpin = s.atoms.length > 0 && s.atoms[0].spin !== null && s.atoms[0].spin !== undefined;
+                var rows = s.atoms.map(function (a) {
+                    var cells = '<td>' + escHtml(a.element) + escHtml(a.index + 1) + '</td><td class="num">' +
+                                escHtml(a.charge.toFixed(3)) + '</td>';
+                    if (hasSpin) cells += '<td class="num">' + escHtml(a.spin.toFixed(3)) + '</td>';
+                    return '<tr>' + cells + '</tr>';
+                }).join('');
+                return '<div class="pp-plot"><div class="pp-plot-title">NBO ' + escHtml(s.state) + ' · ' +
+                       escHtml(ppCounts(s)) + '</div><table class="pp-nmr"><thead><tr><th>Atom</th><th>Charge</th>' +
+                       (hasSpin ? '<th>Spin</th>' : '') + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+            }).join('');
+        }
+
         function ppSummary(m) {
             var rows = [];
             if (m.stage) {
@@ -4234,6 +4349,7 @@
                           ' · ' + escHtml(ppCounts(m.nmr)) + '</div>');
             }
             if (m.esd) rows.push(ppEsdSummary(m.esd));
+            if (m.nbo) rows.push(ppNboSummary(m.nbo));
             if (m.archived) rows.push('<div class="pp-waiting">Archived: raw outputs removed.</div>');
             return rows.join('');
         }
@@ -4257,6 +4373,7 @@
             }
             if (detail.nmr && detail.nmr.count) parts.push(ppNmr(detail.nmr));
             if (detail.esd && detail.esd.seed_task_id) parts.push(ppEsd(detail.esd));
+            if (detail.nbo && detail.nbo.states.length) parts.push(ppNbo(detail.nbo));
             return parts.join('') || '<div class="pp-waiting">Nothing to plot yet.</div>';
         }
 
@@ -4266,7 +4383,7 @@
             var host = document.getElementById('ppCards');
             if (!payload.molecules.length) {
                 host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">' +
-                                 'No molecule in this project was submitted with UV/Vis, IR, NMR or ESD.</div>';
+                                 'No molecule in this project was submitted with UV/Vis, IR, NMR, ESD or NBO.</div>';
                 return;
             }
             var perMolecule = {};

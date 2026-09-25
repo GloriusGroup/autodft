@@ -200,6 +200,14 @@ package defaults in `autodft/qm/orca/defaults.py`.
 | `request_esd_ht` | bool | `false` | Herzberg–Teller for the ESD rates; only with `request_esd`. |
 | `esd_tn_window_ev` | float | `0.2` | S1→Tn ISC is summed over triplets up to this many eV above S1 (0–1). Stored only with ESD. |
 | `esd_temperature_k` | float | `298.15` | Temperature of the rates (0 < T ≤ 1000). Stored only with ESD. |
+| `request_densities` | bool | `false` | Gaussian cube files (electron and/or spin density) from a `%plots` block added to every state's own energy singlepoint — S0, T1, ox, red, not only S0's (ESD's S1 has no energy singlepoint, so it never gets one). Needs the energy singlepoint stage; the singlepoint header must not already contain `%plots`. |
+| `density_eldens` | bool | `true` | Write the electron density cube. Stored only with Densities; at least one of `density_eldens` / `density_spindens` must be true. |
+| `density_spindens` | bool | `true` | Write the spin density cube — silently skipped on a closed-shell state (multiplicity 1), since ORCA's `orca_plot` cannot produce one there. Stored only with Densities. |
+| `density_grid` | int | `75` | Cube grid points per axis (10–300). Stored only with Densities. |
+| `density_eldens_file` | str | `"ElDens.cube"` | Cube file name: `NAME.cube`, letters/digits/`_.-` only, max 64 characters; must differ from `density_spindens_file`. Stored only with Densities. |
+| `density_spindens_file` | str | `"SpinDens.cube"` | Same rule as `density_eldens_file`, for the spin density cube. Stored only with Densities. |
+| `request_singlepoint_nbo` | bool | `false` | Natural population analysis via ORCA's NBO 7: the `NBO` keyword plus a `%nbo` block on every state's own energy singlepoint (same states as Densities, above). Needs the energy singlepoint stage, a singlepoint header that does not already contain the `NBO` keyword or a `%nbo` block, and `[orca].nbo_exe` configured on the server — refused with `400` otherwise (see [`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md#densities-and-nbo)). |
+| `nbo_keywords` | str | `""` | Extra keywords placed inside `NBOKEYLIST = "$NBO ... $END"`, e.g. `"BNDIDX"`. Letters, digits, spaces and `=_.,+-` only (max 200 characters) — no `$`, quotes or newlines. Stored only with NBO. |
 
 `request_S1` is **not** exposed: the S1 state exists only as part of ESD (`request_esd`).
 
@@ -248,8 +256,8 @@ curl -X POST http://localhost:8085/api/submit \
            "max_conformers_red": 2,
 
            "header_confsearch_id":    2,
-           "header_optimization_id":  4,
-           "header_singlepoint_id":   6
+           "header_optimization_id":  3,
+           "header_singlepoint_id":   4
          }'
 ```
 
@@ -434,10 +442,12 @@ vs SCE.
 
 ### `GET /api/projects/{name}/photophysics` `?molecule_id=`
 
-UV/Vis, IR, NMR and ESD for every molecule submitted with those categories.
-Categories are only added to new molecules: resubmitting an existing
-molecule with a category it does not have, or with different options for
-one it already has, answers 400.
+UV/Vis, IR, NMR, ESD and NBO for every molecule submitted with those
+categories (Densities has no payload of its own — see
+[`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md#densities-and-nbo) for its cube
+files). Categories are only added to new molecules: resubmitting an
+existing molecule with a category it does not have, or with different
+options for one it already has, answers 400.
 
 Without `molecule_id`, one summary per molecule (this view is cached, and
 refreshed when this project or the NMR reference project changes — true
@@ -540,6 +550,30 @@ warnings: a negative rate clamped to 0, a job whose sum of K*K exceeds 7
 channel (see `socme_zero` above), and, when that channel feeds a
 `derived` group, that its lifetime/yields count the rate as 0 too.
 
+An NBO molecule's entry adds `nbo`, one entry per NBO-flagged state that
+has its own energy singlepoint — S0, and T1 / ox / red when requested;
+ESD's S1 never appears, since it has none. This covers only the states
+submitted together with the entry's own S0 (same `confsearch_header_id`,
+`optimization_header_id` and `singlepoint_header_id`); a molecule
+resubmitted with different headers gets a separate entry with its own
+states, never mixed with the first:
+
+    "nbo": {"states": [
+      {"count": 1, "pending": 0, "failed": 0, "unavailable": 0, "unweighted": 0,
+       "weighting": "G", "state": "S0", "state_id": 21,
+       "extremes": {"most_negative": {"index": 3, "element": "O", "charge": -0.612},
+                    "most_positive": {"index": 0, "element": "C", "charge": 0.812}}}]}
+
+Each state's counts and `weighting` mean the same as UV/Vis/IR/NMR, but
+weighted on that state's own conformers rather than only S0's. `extremes`
+is the Boltzmann-weighted most negative / most positive natural charge,
+`null` until at least one conformer's charges are in. `state_id` is that
+state's own id — for T1/ox/red this differs from the entry's `state_id`
+above, which is always the S0 state's. States are ordered S0, T1, ox,
+red. An NBO-only molecule (no UV/Vis, IR, NMR or ESD) never gets `stage`;
+its states' own `pending`/`unweighted` counts show whether conformers are
+still in.
+
 With `?molecule_id=`, each successful rate also adds `jobs` (its
 per-ORCA-job values — `rate_s`, `fc_percent`, `ht_percent`, `k_squared`,
 `e00_cm`, plus whatever went into building it), and `esd` adds
@@ -566,6 +600,19 @@ averaged over them, and `shift_ppm` = `sigma_ppm` − `shielding_ppm`, or
 `null` unless the reference's `status` is `"ok"`. Signals are sorted by
 ascending shielding (descending shift).
 
+Each of `nbo`'s states adds `atoms` (the weighted natural charge, and
+`spin` for an open-shell state, per atom) and its own `conformers`:
+
+    "nbo": {"states": [{..., "atoms": [{"index": 0, "element": "C", "charge": 0.812},
+                        {"index": 1, "element": "O", "charge": -0.612, "spin": 0.034}],
+                        "conformers": [{"conformer_index": 1, "opt_task_id": 90, "weight": 1.0,
+                                        "charges": [{"index": 0, "element": "C", "charge": 0.812,
+                                                     "spin": null}, {"index": 1, ...}]}]}]}
+
+`index` is the 0-based ORCA atom index (NBO's own atom numbering minus
+one). `spin` (Natural Spin Density) is present only on an open-shell
+state's atoms; a closed-shell state's atoms carry no `spin` key.
+
 `conformer_index` is the conformer's 1-based position among the state's
 optimisation tasks by id, the same numbering as the Molecules page.
 
@@ -581,7 +628,7 @@ the filename stem:
 * `files` → `files/` tree with the canonical curated ORCA files
 * `xlsx`  → `<project>_state_analysis.xlsx`
 * `photophysics` → `<project>_photophysics.json` (the full UV/Vis, IR,
-  NMR and ESD detail payload) plus `<project>_photophysics.xlsx`
+  NMR, ESD and NBO detail payload) plus `<project>_photophysics.xlsx`
 
 ```json
 { "project": "admin/phenols",
@@ -621,7 +668,8 @@ why an archived project can no longer be exported. The dashboard's
 ```
 
 Add `.cube`, `.spindens`, `.eldens`, `.gbw`, `.densities`, `.hess`, …
-to keep more.
+to keep more. `.cube` is added automatically, regardless of what you
+pass, when the project has any Densities-flagged molecule.
 
 **Response:**
 
@@ -634,8 +682,8 @@ to keep more.
   "photophysics_frozen": 5 }
 ```
 
-`photophysics_frozen` counts the molecules whose UV/Vis, IR, NMR or ESD
-payload was frozen for later serving (see
+`photophysics_frozen` counts the molecules whose UV/Vis, IR, NMR, ESD or
+NBO payload was frozen for later serving (see
 [`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md)); it is present only when that
 count is greater than 0.
 
