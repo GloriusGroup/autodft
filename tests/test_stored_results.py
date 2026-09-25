@@ -979,6 +979,53 @@ class TestConnectivity:
 
         assert results.connectivity_by_task(session, [task.id]) == {}
 
+    def test_a_failing_check_still_stores_the_record(self, session, tmp_path, monkeypatch, caplog):
+        from autodft.extraction import connectivity
+
+        def boom(smiles, xyz):
+            raise RuntimeError("rdkit exploded")
+
+        monkeypatch.setattr(connectivity, "check", boom)
+        task, path, job = self._opt(session, tmp_path)
+        with caplog.at_level(logging.WARNING):
+            assert results.store(session, task, job, path) is True
+        session.commit()
+        row = session.exec(select(JobResult).where(JobResult.job_id == job.id)).one()
+        assert "connectivity" not in json.loads(row.data_json)
+        assert "Connectivity check failed" in caplog.text
+
+    def test_a_backfill_of_the_same_job_keeps_its_check(self, tmp_path):
+        settings = Settings()
+        settings.storage.data_path = str(tmp_path)
+        reset_engine()
+        init_db(settings)
+        try:
+            with get_session() as session:
+                task, path, job = self._opt(session, tmp_path)
+                results.store(session, task, job, path)
+                row = session.exec(select(JobResult).where(JobResult.job_id == job.id)).one()
+                row.parser_version = results.PARSER_VERSION - 1  # an older parser's record
+                session.add(row)
+                session.commit()
+                job_id = job.id
+            assert results.backfill()["stored"] == 1
+            with get_session() as session:
+                row = session.exec(select(JobResult).where(JobResult.job_id == job_id)).one()
+                assert row.parser_version == results.PARSER_VERSION
+                assert json.loads(row.data_json)["connectivity"]["lost"] is True
+        finally:
+            reset_engine()
+
+    def test_another_jobs_check_is_not_carried_over(self, session, tmp_path):
+        task, path, job = self._opt(session, tmp_path)
+        results.store(session, task, job, path)
+        session.commit()
+        job.job_path = str(tmp_path / "recycled")
+        results._upsert(session, job.id, task.id, job.job_path, job.time_end, {"energy": None})
+        session.commit()
+        row = session.exec(select(JobResult).where(JobResult.job_id == job.id)).one()
+        assert "connectivity" not in json.loads(row.data_json)
+
     def test_the_latest_successful_job_counts(self, session, tmp_path):
         task, path, job = self._opt(session, tmp_path)
         results.store(session, task, job, path)

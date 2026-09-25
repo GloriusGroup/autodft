@@ -120,6 +120,12 @@ def _upsert(
     row = session.exec(select(JobResult).where(JobResult.job_id == job_id)).first()
     if row is None:
         row = JobResult(job_id=job_id, task_id=task_id, parser_version=PARSER_VERSION, data_json="")
+    elif (row.task_id == task_id and row.job_path == job_path and _same_instant(row.finished_at, finished_at)
+          and "connectivity" not in record):
+        # Same job: a re-parse (backfill) must not drop the check made when it was judged.
+        kept = json.loads(row.data_json or "{}").get("connectivity")
+        if kept is not None:
+            record = {**record, "connectivity": kept}
     row.task_id = task_id
     row.job_path = job_path
     row.finished_at = finished_at
@@ -141,7 +147,11 @@ def store(session: Session, task: ComputationTask, job: ComputationJob, job_path
         if record is None:
             return False
         if task_type == "optimization":
-            found = _connectivity(session, task.state_id, job_path)
+            try:
+                found = _connectivity(session, task.state_id, job_path)
+            except Exception:  # noqa: BLE001 - the record matters more than the check
+                logger.warning("Connectivity check failed for job %d; stored without it", job.id, exc_info=True)
+                found = None
             if found is not None:
                 record["connectivity"] = found
         _upsert(session, job.id, task.id, job.job_path, job.time_end, record)
