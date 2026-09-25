@@ -9,7 +9,7 @@ import pytest
 
 from autodft import categories
 from autodft.qm.orca import esd_inputs
-from autodft.qm.orca.esd_inputs import EsdInputError, StateData
+from autodft.qm.orca.esd_inputs import DIAGNOSTICS_MARKER, EsdInputError, StateData
 
 FIXTURES = Path(__file__).parent / "fixtures" / "esd"
 SP = "!B3LYP def2-SVP\n%pal nprocs 4 end\n"
@@ -39,9 +39,9 @@ def test_channels_follow_the_window(data):
     assert esd_inputs.isc_channels(data["S1"], data["T1"], 1.0) == [1, 2]
 
 
-def _fc_job(dele, socme, inlinew="100", extra=""):
+def _fc_job(dele, socme, inlinew="100", extra="", maxcore="%maxcore 2000\n"):
     return (
-        "! ESD(ISC) NOITER\n%maxcore 2000\n%esd\n"
+        f"! ESD(ISC) NOITER\n{maxcore}%esd\n"
         '  ISCISHESS "initial.hess"\n  ISCFSHESS "final.hess"\n'
         f"  DELE {dele}\n  SOCME 0.0, {socme}\n  USEJ TRUE\n  DOHT FALSE\n"
         f"  LINES GAUSS\n  INLINEW {inlinew}\n{extra}  TEMP 298.15\nend\n"
@@ -54,7 +54,7 @@ def test_fc_isc(data):
     geometry = "\n*xyzfile 0 1 input.xyz\n"
     assert jobs == [
         _fc_job("5369.5", "4.009575e-06") + geometry,
-        _fc_job("5369.5", "4.009575e-06", "25") + geometry,
+        DIAGNOSTICS_MARKER + _fc_job("5369.5", "4.009575e-06", "25") + geometry,
         _fc_job("5369.5", "4.009575e-06", "250") + geometry,
         _fc_job("5369.5", "4.009575e-06", extra="  TCUTFREQ 300\n"),
     ]
@@ -151,7 +151,7 @@ def test_ht_isc_runs_each_triplet_sublevel(data):
                 "  tda true\n") in job
         assert "  DOHT TRUE\n  LINES GAUSS\n  INLINEW 100\n" in job and "SOCME" not in job
     # FC diagnostics follow the HT jobs, with their own INLINEW 100 baseline.
-    assert jobs[3].startswith(_fc_job("5369.5", "4.009575e-06"))
+    assert jobs[3].startswith(DIAGNOSTICS_MARKER + _fc_job("5369.5", "4.009575e-06"))
     assert [(d["job"], d["variant"]) for d in computed["diagnostics"]] == [
         (4, "inlinew_100"), (5, "inlinew_25"), (6, "inlinew_250"), (7, "tcutfreq_300"),
     ]
@@ -245,3 +245,4 @@ def test_rates_table():
 @pytest.mark.parametrize("value,text", [(-0.04, "0.0"), (-0.0, "0.0"), (0.0, "0.0"), (-0.06, "-0.1"), (12.34, "12.3")])
 def test_dele_never_reads_minus_zero(value, text):
     assert esd_inputs._cm(value) == text
+

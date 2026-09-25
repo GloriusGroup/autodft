@@ -31,6 +31,8 @@ _HESSIAN_KEYS = {
 SUBLEVELS = (-1, 0, 1)
 # FC rates need no electronic structure: ORCA gets DELE and SOCME from us.
 FC_HEADER = "! ESD(ISC) NOITER\n%maxcore 2000\n"
+# Opens the first diagnostic job; the output check needs rates only from the jobs before it.
+DIAGNOSTICS_MARKER = "# autodft: FC diagnostics from here on, not part of the rate\n"
 
 FC_RATES = ("esd_isc", "esd_risc", "esd_isc_t1s0")
 # TDDFT roots of a rate job: ISC types reach this many past the highest root they read.
@@ -246,6 +248,7 @@ def _isc(rate, channels, settings, files, temperature, sp_header):
                     jobs.append(fc(DIAGNOSTICS[variant]))
                     job = len(jobs)
                 diagnostics.append({"job": job, "triplet": n, "variant": variant})
+    jobs[len(record)] = DIAGNOSTICS_MARKER + jobs[len(record)]
     return jobs, record, diagnostics
 
 

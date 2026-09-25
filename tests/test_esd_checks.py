@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from autodft.engine.state_machine import _check_type, create_retry_jobs
 from autodft.models import (
     ComputationHeader, ComputationJob, ComputationTask, MoleculeState, TaskStatus, TaskType,
 )
+from autodft.qm.orca.esd_inputs import DIAGNOSTICS_MARKER
 from autodft.qm.orca.parser import OrcaParser
 
 FIXTURES = Path(__file__).parent / "fixtures" / "esd"
@@ -25,6 +27,62 @@ def _check(tmp_path, fixture: str, task_type: str, replace: tuple[str, str] = ("
         text = text.replace(*replace)
     (tmp_path / "output.out").write_text(text)
     return OrcaParser().check_output(tmp_path, task_type)
+
+
+def _mixed(tmp_path, text: str):
+    """The real formaldehyde output: 4 main jobs (3 HT sublevels, 1 FC), then 7 FC diagnostics."""
+    job = "! ESD(ISC)\n%esd\nend\n"
+    (tmp_path / "input.inp").write_text(
+        "$new_job\n".join([job] * 4) + "$new_job\n" + DIAGNOSTICS_MARKER + "$new_job\n".join([job] * 7)
+    )
+    (tmp_path / "output.out").write_text(text)
+    return OrcaParser().check_output(tmp_path, "esd_isc")
+
+
+def _abort_in_job(text: str, n: int) -> str:
+    """*text* cut off inside job *n*, as when ORCA aborts the run there."""
+    cut = re.search(rf"JOB NUMBER\s+{n} ", text).start()
+    return text[:text.index("\n", cut) + 1] + (
+        "[file orca_esd/esd_der.cpp, line 999]: Error (ORCA_ESD)\n"
+        "ORCA finished by error termination in ORCA_ESD\n  .... aborting the run\n"
+    )
+
+
+class TestDiagnostics:
+    TEXT = (FIXTURES / "isc_tda_diagnostics.out").read_text()
+
+    def test_a_complete_run_passes(self, tmp_path):
+        assert _mixed(tmp_path, self.TEXT).success
+
+    @pytest.mark.parametrize("job", [5, 9, 11])
+    def test_an_aborted_diagnostic_costs_nothing(self, tmp_path, job):
+        result = _mixed(tmp_path, _abort_in_job(self.TEXT, job))
+        assert result.success, result.checks
+
+    def test_a_nonfinite_diagnostic_rate_costs_nothing(self, tmp_path):
+        text = self.TEXT.replace("-2.949105e-03", "nan")
+        assert "nan s-1" in text
+        assert _mixed(tmp_path, text).success
+
+    @pytest.mark.parametrize("job", [2, 4])
+    def test_an_aborted_main_job_fails(self, tmp_path, job):
+        result = _mixed(tmp_path, _abort_in_job(self.TEXT, job))
+        assert not result.checks["ESD Rate"] and not result.checks["Termination"]
+        assert not result.checks["No Error Banner"]
+
+    def test_a_nonfinite_main_rate_fails(self, tmp_path):
+        text = self.TEXT.replace("5.582226e+00", "nan")
+        assert not _mixed(tmp_path, text).checks["ESD Rate"]
+
+    def test_the_builder_marks_the_first_diagnostic(self):
+        from tests.test_esd_inputs import FC, FIXTURES as INPUT_FIXTURES
+        from autodft.qm.orca.esd_inputs import StateData, build
+
+        data = {s: StateData.parse((INPUT_FIXTURES / f"soc_{s.lower()}.out").read_text()) for s in ("S1", "T1")}
+        text, computed = build("esd_isc", data, FC, "!B3LYP\n", 0)
+        main, _, rest = text.partition(DIAGNOSTICS_MARKER)
+        assert main.count("$new_job") == len(computed["jobs"]) == 1
+        assert rest.startswith("! ESD(ISC) NOITER\n%maxcore 2000\n")
 
 
 class TestChecks:

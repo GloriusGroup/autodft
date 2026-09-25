@@ -29,12 +29,25 @@ IMAGINARY_FREQ_THRESHOLD = -50.0
 STALL_MARKER = "AUTODFT STALLED:"
 
 
-def _esd_job_count(job_path: Path) -> Optional[int]:
-    """ORCA jobs in *job_path*'s input: one plus each ``$new_job``."""
+def _esd_main_jobs(job_path: Path) -> Optional[int]:
+    """ORCA jobs in *job_path*'s input before its FC diagnostics (all of them without any)."""
+    from autodft.qm.orca.esd_inputs import DIAGNOSTICS_MARKER
+
     try:
-        return (Path(job_path) / "input.inp").read_text(encoding="utf-8", errors="replace").count("$new_job") + 1
+        text = (Path(job_path) / "input.inp").read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
+    main, marker, _ = text.partition(DIAGNOSTICS_MARKER)
+    # The $new_job right before the marker closes the last main job.
+    return main.count("$new_job") + (0 if marker else 1)
+
+
+def _before_diagnostics(content: str, main_jobs: Optional[int]) -> Optional[str]:
+    """*content* up to where the first diagnostic job starts; None if none started."""
+    if main_jobs is None:
+        return None
+    start = re.search(rf"^.*JOB NUMBER\s+{main_jobs + 1}\b", content, re.MULTILINE)
+    return content[:start.start()] if start else None
 
 
 class OrcaParser(QMEngine):
@@ -77,8 +90,13 @@ class OrcaParser(QMEngine):
             # Not a failure of the job, but its cube files are missing or empty.
             logger.warning("orca_plot failed in %s; cube files missing or empty", job_path)
 
+        main_jobs = _esd_main_jobs(job_path) if task_type.startswith("esd_") else None
+        main_content = _before_diagnostics(content, main_jobs)
+        if main_content is not None:
+            # FC diagnostics never cost the rate: whatever they do, judge the main jobs only.
+            content = main_content
         checks: dict[str, bool] = {
-            "Termination": self._check_normal_termination(content),
+            "Termination": main_content is not None or self._check_normal_termination(content),
             "Optimization Convergence": self._check_for_optimization_convergence(
                 content, task_type
             ),
@@ -119,10 +137,9 @@ class OrcaParser(QMEngine):
                 checks["LibXC Needed"] = not esd_parser.needs_libxc(content)
             if task_type.startswith("esd_"):
                 found = esd_parser.rates(content)
-                expected = _esd_job_count(job_path)
-                # One rate per ORCA job; a missing sublevel would skew the sum or mean.
+                # One rate per main ORCA job; a missing sublevel would skew the sum or mean.
                 checks["ESD Rate"] = bool(found) and all(math.isfinite(r.rate) for r in found) and (
-                    expected is None or len(found) == expected
+                    main_jobs is None or len(found) == main_jobs
                 )
             if task_type == "optimization_excited":
                 # Below 0.1 eV the followed root has collapsed onto S0.
