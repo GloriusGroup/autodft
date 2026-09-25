@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -370,3 +371,33 @@ class TestPlotErrorIsIgnored:
 
         assert result.checks["No Error Banner"] is False
         assert result.success is False
+
+
+class TestNoSpuriousLogging:
+    """A singlepoint has neither a free-energy correction nor frequencies;
+    check_output must not log about their absence for it."""
+
+    def test_singlepoint_logs_nothing_and_is_unchanged(self, tmp_path: Path, caplog):
+        content = ENERGY_OUTPUT + "\n" + NORMAL_TERMINATION
+        (tmp_path / "output.out").write_text(content)
+
+        with caplog.at_level(logging.WARNING):
+            result = OrcaParser().check_output(tmp_path, "singlepoint")
+
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+        assert result.success is True
+        assert result.energy == pytest.approx(-230.987654321)
+        assert result.free_energy_correction is None
+
+    def test_optimization_with_frequencies_is_unchanged(self, tmp_path: Path):
+        content = (
+            ENERGY_OUTPUT + "\n" + FREE_ENERGY_CORRECTION_OUTPUT + "\n"
+            + VIBRATIONAL_FREQUENCIES_CLEAN + "\n" + OPTIMIZATION_CONVERGED + "\n"
+            + NORMAL_TERMINATION
+        )
+        (tmp_path / "output.out").write_text(content)
+        result = OrcaParser().check_output(tmp_path, "optimization")
+
+        assert result.success is True
+        assert result.checks["Imaginary Frequencies"] is True
+        assert result.free_energy_correction == pytest.approx(0.042567)
