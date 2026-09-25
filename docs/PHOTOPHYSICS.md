@@ -103,12 +103,19 @@ singlet only.
 terminal, the best S0 conformer (S0\*, picked by G like the
 CSV/JSON exporters' reported conformer) seeds an S1 optimisation — the
 optimisation header plus `%tddft nroots 5 iroot 1 followiroot true tda
-false cpcmeq true` — and a T1 (UKS) optimisation. `cpcmeq true` matters
+true cpcmeq true` — and a T1 (UKS) optimisation. All three ESD
+optimisations (S1, T1 and every S0 conformer of an ESD molecule) run with
+a plain `Opt` promoted to `TightOpt`, unless the header already sets
+`TightOpt`, `VeryTightOpt` or `LooseOpt`; other molecules' optimisations
+are untouched. `cpcmeq true` matters
 with CPCM: ORCA solvates the excited state in equilibrium only when
 analytic gradients are requested, and its numerical S1 frequencies
 otherwise mix in non-equilibrium LR-CPCM (benzene: a spurious
 −1900 cm⁻¹ mode that disappears with the flag or without solvent). SOC TDDFT singlepoints (`nroots 10
-iroot 1 triplets true dosoc true tda false`) run on S0\*, S1 and T1. Each
+iroot 1 triplets true dosoc true tda true`, plus `cpcmeq true` when the
+header is solvated, so DELE compares equilibrium-solvated states) run on
+S0\*, S1 and T1. Every ESD TDDFT job uses TDA except IC, whose NACMEs the
+manual computes with full TDDFT; UV/Vis keeps its own `uvvis_tda`. Each
 of the six rate jobs starts as soon as its two states are ready. That T1
 state also gets the normal T1 follow-ups — the energy singlepoint (used
 for ΔE_ST(UKS)) and the vertical spin-change singlepoint — even without
@@ -141,8 +148,48 @@ numerical derivatives: 3N−6 (+)-displaced TDDFT+SOC singlepoints, plus a
 differences). Singlepoints, not gradients: glyoxal/def2-SVP took 715 s for
 its three sublevels; a 30–50-atom molecule on a large basis can take days.
 
+With `request_esd_ht` on, HT runs only where it matters (manual 5.5.4.2:
+above ~5 cm⁻¹ of SOC the HT term is negligible). Fluorescence and
+phosphorescence always get HT; IC never does. An S→T channel (`esd_isc`,
+decided per Tn) gets HT when its SOCME — the channel total, summed over
+the sublevels — is below 5 cm⁻¹, else FC. T→S (`esd_isc_t1s0`,
+`esd_risc`) likewise runs FC at a total SOCME of 5 cm⁻¹ or more, and
+RISC also runs FC when it is more than 10 kT uphill (−DELE > 10 ×
+0.6950348 × T cm⁻¹). Each rate task records the decision in its
+`inputs_json["computed"]` as `ht` (any channel HT) and `ht_reason` (e.g.
+`SOCME 54.20 cm-1 >= 5`, or `T1: …; T2: …` per channel), and per job;
+the API, the dashboard's ESD table and the workbook's *ESD jobs* sheet
+show it. A rate task whose channels all came out FC runs under
+`[pipeline.esd]` like a plain FC job.
+
+**Lineshape.** ISC-type and IC rates set `LINES GAUSS` and `INLINEW 100`
+explicitly (ORCA's default 250 cm⁻¹ is wide; the manual advises varying
+it). Fluorescence and phosphorescence keep ORCA's defaults.
+
+**Diagnostics.** Every ISC-type channel also gets cheap FC reruns
+(`NOITER`, the channel's DELE and SOCME, seconds each) as extra `$new_job`s
+in the same rate input: `INLINEW` 100 (the baseline; an FC main job is its
+own), 25 and 250, and `INLINEW 100` with `TCUTFREQ 300` (modes below
+300 cm⁻¹ removed). They never enter the reported rate; their ORCA job
+numbers are recorded in `computed["diagnostics"]`. A channel is flagged
+*width-sensitive* when the 25 and 250 cm⁻¹ rates differ by more than 3×,
+and *soft-mode dominated* when the TCUTFREQ rate is below a tenth of the
+baseline — harmonic low-frequency modes (e.g. methyl torsions) then carry
+the rate. Channels whose rates all stay below 1 s⁻¹ are not judged. The
+verdicts are in the rate's `diagnostics` list, the flags, the dashboard
+and the workbook's *ESD diagnostics* sheet. IC gets no diagnostics: ORCA
+cannot be handed precomputed NACMEs, so every rerun would repeat the
+TDDFT and NACME calculation. Since `$new_job` inherits whatever a job
+does not repeat, HT jobs come first, FC jobs say `DOHT FALSE`, and the
+TCUTFREQ reruns come last.
+
 **Cost.** The S1 Hessian is always numerical — ORCA 6.1 has no analytic
-TDDFT Hessian, TDA or not. `[pipeline.excited_optimization]` defaults to 4
+TDDFT Hessian, TDA or not. Rate jobs are trimmed: ISC-type TDDFT jobs ask
+for three roots above the highest one they read (`nroots 4` for S1→T1),
+fluorescence and IC for 5, phosphorescence for 10 (the SOC singlepoints
+keep 10); any `DEFGRIDn` on the header's `!` line becomes `DEFGRID2`
+(added when there is none) and `KeepDens` is dropped, since HT would write
+a density per displacement. `[pipeline.excited_optimization]` defaults to 4
 days (`4-00:00:00`); check it against the SLURM partition's `MaxTime`
 before submitting, since `sbatch` refuses a job asking for longer than the
 partition allows. FC ISC-type jobs (DELE and SOCME supplied, no electronic
