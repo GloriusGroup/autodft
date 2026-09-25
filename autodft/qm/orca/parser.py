@@ -180,6 +180,7 @@ class OrcaParser(QMEngine):
         nice: int = 0,
         keep_hessian: bool = False,
         keep_cubes: bool = False,
+        keep_nbo_archive: bool = False,
         keep_esd_files: bool = False,
         extra_inputs: Optional[list[str]] = None,
     ) -> None:
@@ -207,6 +208,7 @@ class OrcaParser(QMEngine):
             keep_densities=self.orca.keep_densities,
             keep_hessian=keep_hessian,
             keep_cubes=keep_cubes,
+            keep_nbo_archive=keep_nbo_archive,
             keep_esd_files=keep_esd_files,
             extra_inputs=extra_inputs,
             stall_minutes=self.orca.stall_minutes,

@@ -100,7 +100,10 @@ def with_basis(header: str, basis: str) -> str:
 
 
 def nbo_block(keywords: str) -> str:
-    """A ``%nbo`` block requesting *keywords* on top of the NPA summary."""
+    """A ``%nbo`` block requesting *keywords* on top of the NPA summary, plus the archive."""
+    # A keyword list replaces ORCA's default one, and with it ARCHIVE (the FILE.47).
+    if not re.search(r"\bARCHIVE\b", keywords, re.IGNORECASE):
+        keywords = f"{keywords} ARCHIVE"
     return f'%nbo\n  NBOKEYLIST = "$NBO {keywords} $END"\nend\n'
 
 

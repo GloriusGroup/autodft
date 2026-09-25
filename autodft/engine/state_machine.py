@@ -1115,6 +1115,7 @@ def _generate_job_files(
         nice=settings.slurm.nice,
         keep_hessian=_keeps_hessian(state, task),
         keep_cubes=_keeps_cubes(state, task),
+        keep_nbo_archive=_keeps_nbo_archive(state, task),
         keep_esd_files=task.task_type.value.startswith("esd_"),
         extra_inputs=extra_inputs,
     )
@@ -1372,6 +1373,14 @@ def _keeps_cubes(state: MoleculeState, task: ComputationTask) -> bool:
         return False
     metadata = json.loads(state.metadata_json) if state.metadata_json else {}
     return bool(metadata.get(categories.DENSITIES))
+
+
+def _keeps_nbo_archive(state: MoleculeState, task: ComputationTask) -> bool:
+    """Whether a singlepoint runs NBO, whose archive (``FILE.47``) is kept."""
+    if task.task_type != TaskType.singlepoint:
+        return False
+    metadata = json.loads(state.metadata_json) if state.metadata_json else {}
+    return bool(metadata.get(categories.NBO))
 
 
 def _get_stage_config(settings: Settings, task_type: TaskType, state: Optional[MoleculeState] = None):

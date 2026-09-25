@@ -226,11 +226,13 @@ a closed-shell state (multiplicity 1) — ORCA's `orca_plot` cannot produce
 one there — rather than refused.
 
 **NBO.** Adds the `NBO` keyword, plus, when `nbo_keywords` is set, a
-`%nbo` block (`NBOKEYLIST = "$NBO <nbo_keywords> $END"`), for ORCA's NBO
-7. Needs `[orca].nbo_exe` configured on the controller (exported as
+`%nbo` block (`NBOKEYLIST = "$NBO <nbo_keywords> ARCHIVE $END"`), for
+ORCA's NBO 7. Needs `[orca].nbo_exe` configured on the controller (exported as
 `NBOEXE` in the job's submit script); a submission requesting NBO without
 it configured is refused, from the dashboard, the REST API and the CLI
-alike.
+alike. NBO's archive, `FILE.47` (ORCA's default keyword list writes it;
+a custom list replaces that list, hence the added `ARCHIVE`), is copied
+back into the job directory, and `cleanup` keeps `*.47` files.
 
 **Natural charges.** Each NBO singlepoint's output is parsed for its
 first "Summary of Natural Population Analysis" table (stopped at that
