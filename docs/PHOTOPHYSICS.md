@@ -56,9 +56,11 @@ frequency calculation, so the optimisation header must set `Freq`,
 `NumFreq`, or `AnFreq` — submitting IR against a header without one of
 those is refused.
 
-Frequencies are harmonic and unscaled wherever the API reports them. The
-dashboard applies whatever scale factor you type on the Photophysics
-page; it never changes what's stored.
+Frequencies are harmonic and unscaled wherever the API reports them
+(`"scaled": false, "scale_factor": 1.0` in the IR payload; the workbook's
+columns are `peak_cm_unscaled` / `frequency_cm_unscaled`). The dashboard
+plot applies the scale factor on the Photophysics page (default 0.95);
+it never changes what's stored.
 
 ## NMR
 
@@ -307,7 +309,7 @@ when it has rows:
   `pending`, `failed`, `unavailable`, `unweighted`), `weighting`, and the
   weighted peak.
 * `UV-Vis sticks` / `IR sticks` — one row per transition or mode, per
-  conformer.
+  conformer. IR frequencies are unscaled harmonic.
 * `NMR` — one row per signal (symmetry class) per requested nucleus.
 * `ESD` — one row per molecule: status, the six rates, ΔE_ST (TDDFT and
   UKS), the derived lifetimes/yields, and flags.

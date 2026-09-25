@@ -140,6 +140,12 @@ def test_a_failed_optimisation_is_not_a_conformer(project):
     assert (ir["count"], ir["pending"], ir["failed"], ir["unavailable"]) == (2, 0, 0, 0)
 
 
+def test_ir_is_labelled_unscaled(project):
+    for molecule_id in (None, project["molecule"]):
+        ir = _molecule(project, molecule_id=molecule_id)["ir"]
+        assert ir["scaled"] is False and ir["scale_factor"] == 1.0
+
+
 def test_the_detail_carries_sticks_and_weights(project):
     uv = _molecule(project, molecule_id=project["molecule"])["uvvis"]
     assert [c["conformer_index"] for c in uv["conformers"]] == [1]

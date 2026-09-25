@@ -461,7 +461,7 @@ below):
                  "unweighted": 0, "weighting": "G", "shortest_nm": 156.5,
                  "peak": {"wavelength_nm": 229.6, "energy_ev": 5.4, "fosc": 0.24}},
        "ir": {"count": 1, "pending": 0, "failed": 0, "unavailable": 0,
-              "unweighted": 0, "weighting": "G",
+              "unweighted": 0, "weighting": "G", "scaled": false, "scale_factor": 1.0,
               "peak": {"frequency_cm": 410.2, "intensity_km_mol": 12.3}}}]}
 
 `count` is conformers with a spectrum and the energy the weights use;
@@ -474,6 +474,9 @@ correction, else `"E_sp"`, else `"equal"`. `peak` is the transition/mode
 with the largest weight × fosc (or × intensity), or `null` when `count`
 is 0; it is present for UV/Vis and IR only. UV/Vis also reports
 `shortest_nm`, the shortest wavelength across every counted transition.
+IR frequencies are unscaled harmonic ones (`"scaled": false`,
+`"scale_factor": 1.0`); the dashboard's scale factor (default 0.95)
+changes only its plot.
 
 An NMR molecule's entry adds `nmr`, with the same counts and no `peak`:
 
