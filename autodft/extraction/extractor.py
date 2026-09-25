@@ -17,6 +17,7 @@ from typing import Any, Optional
 
 from sqlmodel import Session, col, select
 
+from autodft import categories
 from autodft.db import get_session
 from autodft.extraction import results as stored
 from autodft.models.enums import TaskStatus, TaskType
@@ -418,7 +419,7 @@ class PipelineExtractor:
         # SQLite connection pool with the controller (see db.py); holding a
         # pooled connection across minutes of NFS copies would starve the
         # pipeline's own writes.
-        plan: list[tuple[Path, Path, int, str]] = []
+        plan: list[tuple[Path, Path, int, str, bool]] = []
         with get_session() as session:
             molecules = session.exec(
                 select(Molecule).where(Molecule.project_name == self.project_name)
@@ -435,13 +436,14 @@ class PipelineExtractor:
                     )
 
         total_copied = 0
-        for source_job_path, dest_subdir, conf_index, task_type in plan:
+        for source_job_path, dest_subdir, conf_index, task_type, cubes in plan:
             total_copied += _copy_task_files(
                 source_job_path=source_job_path,
                 dest_dir=dest_subdir,
                 conf_index=conf_index,
                 task_type=task_type,
                 additional_extensions=additional_extensions,
+                cubes=cubes,
             )
 
         logger.info("Exported %d files to %s", total_copied, dest)
@@ -454,12 +456,12 @@ class PipelineExtractor:
         state: MoleculeState,
         dest: Path,
         all_conformers: bool,
-    ) -> list[tuple[Path, Path, int, str]]:
+    ) -> list[tuple[Path, Path, int, str, bool]]:
         """Resolve which files to copy for one state.
 
         Returns a list of ``(source_job_path, dest_subdir, conf_index,
-        task_type)`` -- everything the copy needs, gathered while the session
-        is open so the copy itself can run without one.
+        task_type, cubes)`` -- everything the copy needs, gathered while the
+        session is open so the copy itself can run without one.
         """
         # Get all successful tasks for this state
         tasks = session.exec(
@@ -478,7 +480,9 @@ class PipelineExtractor:
             opt_tasks = [opt_tasks[0]]
 
         opt_id_to_conf = {t.id: i + 1 for i, t in enumerate(opt_tasks)}
-        plan: list[tuple[Path, Path, int, str]] = []
+        metadata = json.loads(state.metadata_json) if state.metadata_json else {}
+        densities_flagged = bool(metadata.get(categories.DENSITIES))
+        plan: list[tuple[Path, Path, int, str, bool]] = []
 
         for task in tasks:
             # Determine conformer index
@@ -496,8 +500,10 @@ class PipelineExtractor:
             if job_path is None:
                 continue
 
+            cubes = densities_flagged and task.task_type == TaskType.singlepoint
             plan.append(
-                (job_path, dest / str(mol.id) / state.description, conf_idx, task.task_type.value)
+                (job_path, dest / str(mol.id) / state.description, conf_idx,
+                 task.task_type.value, cubes)
             )
 
         return plan
@@ -630,6 +636,22 @@ class PipelineExtractor:
                 session.add(m)
             session.commit()
 
+    def has_densities_flagged_molecule(self) -> bool:
+        """Whether this project has a molecule with a densities-flagged state."""
+        with get_session() as session:
+            candidates = session.exec(
+                select(MoleculeState.metadata_json)
+                .join(Molecule, Molecule.id == MoleculeState.molecule_id)
+                .where(
+                    Molecule.project_name == self.project_name,
+                    col(MoleculeState.metadata_json).contains(categories.DENSITIES),
+                )
+            ).all()
+        return any(
+            (json.loads(raw) if raw else {}).get(categories.DENSITIES) is True
+            for raw in candidates
+        )
+
     # ------------------------------------------------------------------
     # Cleanup
     # ------------------------------------------------------------------
@@ -654,6 +676,7 @@ class PipelineExtractor:
         with get_session() as session:
             # Rate jobs copy these Hessians whenever they are (re)generated.
             esd_opts = self._esd_optimisations(session)
+            density_sps = self._densities_singlepoints(session)
 
             jobs = session.exec(
                 select(ComputationJob).where(ComputationJob.success == True)  # noqa: E712
@@ -666,6 +689,8 @@ class PipelineExtractor:
                 if not job_dir.is_dir():
                     continue
                 keep = extensions | {".hess"} if job.task_id in esd_opts else extensions
+                if job.task_id in density_sps:
+                    keep = keep | {".cube"}
                 for f in job_dir.iterdir():
                     if f.is_file() and f.suffix not in keep:
                         if dry_run:
@@ -696,6 +721,27 @@ class PipelineExtractor:
         return set(session.exec(
             select(ComputationTask.id).where(
                 ComputationTask.task_type == TaskType.optimization,
+                col(ComputationTask.state_id).in_(states),
+            )
+        ).all())
+
+    @staticmethod
+    def _densities_singlepoints(session: Session) -> set[int]:
+        """Energy singlepoint tasks of densities-flagged states."""
+        candidates = session.exec(
+            select(MoleculeState.id, MoleculeState.metadata_json).where(
+                col(MoleculeState.metadata_json).contains(categories.DENSITIES)
+            )
+        ).all()
+        states = [
+            state_id for state_id, raw in candidates
+            if (json.loads(raw) if raw else {}).get(categories.DENSITIES) is True
+        ]
+        if not states:
+            return set()
+        return set(session.exec(
+            select(ComputationTask.id).where(
+                ComputationTask.task_type == TaskType.singlepoint,
                 col(ComputationTask.state_id).in_(states),
             )
         ).all())
@@ -769,6 +815,7 @@ def _copy_task_files(
     conf_index: int,
     task_type: str,
     additional_extensions: Optional[list[str]] = None,
+    cubes: bool = False,
 ) -> int:
     """Copy ORCA files with standardized naming. Returns files copied."""
     if not source_job_path.exists():
@@ -789,5 +836,10 @@ def _copy_task_files(
             for f in source_job_path.glob(f"*{ext}"):
                 shutil.copy2(f, dest_dir / f"{base}_{f.name}")
                 copied += 1
+
+    if cubes:
+        for f in source_job_path.glob("*.cube"):
+            shutil.copy2(f, dest_dir / f"{base}_sp_{f.name}")
+            copied += 1
 
     return copied

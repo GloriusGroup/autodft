@@ -118,6 +118,80 @@ def test_a_dry_run_counts_the_same_files(db):
     assert PipelineExtractor("__all__").cleanup_large_files(dry_run=True) == 1 + 2
 
 
+def test_cleanup_keeps_cubes_for_densities_singlepoints(db):
+    with get_session() as session:
+        kept = _job_dir(session, db, "dens_sp", {"request_densities": True}, task_type=TaskType.singlepoint)
+        (kept / "ElDens.cube").write_text("cube")
+        opt = _job_dir(session, db, "dens_opt", {"request_densities": True}, task_type=TaskType.optimization)
+        (opt / "ElDens.cube").write_text("cube")
+        plain = _job_dir(session, db, "plain_sp", {}, task_type=TaskType.singlepoint)
+        (plain / "ElDens.cube").write_text("cube")
+    deleted = PipelineExtractor("__all__").cleanup_large_files()
+    assert sorted(p.name for p in kept.iterdir()) == ["ElDens.cube", "output.out"]
+    for path in (opt, plain):
+        assert sorted(p.name for p in path.iterdir()) == ["output.out"]
+    assert deleted == 2 + 3 + 3
+
+
+def test_singlepoint_cubes_are_copied_with_the_sp_prefix(tmp_path):
+    job = tmp_path / "job"
+    job.mkdir()
+    for name in ("input.inp", "input.xyz", "output.out", "ElDens.cube", "SpinDens.cube"):
+        (job / name).write_text(name)
+    assert _copy_task_files(job, tmp_path / "out", 2, "singlepoint", cubes=True) == 5
+    assert sorted(p.name for p in (tmp_path / "out").iterdir()) == sorted([
+        "conf2_sp_input.inp", "conf2_sp_geometry.xyz", "conf2_sp_output.out",
+        "conf2_sp_ElDens.cube", "conf2_sp_SpinDens.cube",
+    ])
+
+
+def test_cubes_are_not_copied_unless_requested(tmp_path):
+    job = tmp_path / "job"
+    job.mkdir()
+    for name in ("input.inp", "input.xyz", "output.out", "ElDens.cube"):
+        (job / name).write_text(name)
+    assert _copy_task_files(job, tmp_path / "out", 1, "singlepoint") == 3
+    assert "conf1_sp_ElDens.cube" not in [p.name for p in (tmp_path / "out").iterdir()]
+
+
+def test_export_copies_singlepoint_cubes(db):
+    with get_session() as session:
+        mol = Molecule(smiles="Ccube", project_name="nho/p")
+        session.add(mol)
+        session.commit()
+        state = MoleculeState(molecule_id=mol.id, description="S0", multiplicity=1, charge=0,
+                              metadata_json=json.dumps({"request_densities": True}))
+        session.add(state)
+        session.commit()
+        opt = ComputationTask(task_type=TaskType.optimization, status=TaskStatus.successful,
+                              state_id=state.id, header_id=1, has_followups=True)
+        session.add(opt)
+        session.commit()
+        opt_dir = db / "jobs" / "opt"
+        opt_dir.mkdir(parents=True)
+        (opt_dir / "input.inp").write_text("i")
+        session.add(ComputationJob(task_id=opt.id, attempt=1, job_path=str(opt_dir), success=True))
+        session.commit()
+
+        sp = ComputationTask(task_type=TaskType.singlepoint, status=TaskStatus.successful,
+                             state_id=state.id, header_id=1, depends_on_task_id=opt.id)
+        session.add(sp)
+        session.commit()
+        sp_dir = db / "jobs" / "sp"
+        sp_dir.mkdir(parents=True)
+        (sp_dir / "input.inp").write_text("i")
+        (sp_dir / "output.out").write_text("o")
+        (sp_dir / "ElDens.cube").write_text("cube")
+        session.add(ComputationJob(task_id=sp.id, attempt=1, job_path=str(sp_dir), success=True))
+        session.commit()
+        mol_id = mol.id
+
+    dest = db / "export"
+    PipelineExtractor("nho/p").export_calculation_files(dest)
+    names = sorted(p.name for p in (dest / str(mol_id) / "S0").iterdir())
+    assert "conf1_sp_ElDens.cube" in names
+
+
 # ----------------------------------------------------------------------
 # The photophysics workbook
 # ----------------------------------------------------------------------

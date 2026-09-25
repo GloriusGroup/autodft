@@ -46,6 +46,15 @@ def test_hessians_are_staged_and_copied_back(tmp_path):
     assert 'cp *.hess' in text
 
 
+def test_cubes_are_copied_back_only_when_requested(tmp_path):
+    without = generate_submit_script(tmp_path / "a", "j", 1, 2000, "1-00:00:00", "CPU").read_text()
+    with_cubes = generate_submit_script(
+        tmp_path / "b", "j", 1, 2000, "1-00:00:00", "CPU", keep_cubes=True,
+    ).read_text()
+    assert 'cp *.cube "$WORK_DIR"/ 2>/dev/null || true' not in without
+    assert 'cp *.cube "$WORK_DIR"/ 2>/dev/null || true' in with_cubes
+
+
 def test_stage_configs():
     settings = Settings()
     assert settings.pipeline.excited_optimization.time_limit == "4-00:00:00"
