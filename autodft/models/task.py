@@ -28,6 +28,8 @@ class ComputationTask(SQLModel, table=True):
     # ESD tasks read other tasks' results: role -> task id, and the values
     # computed from them at job generation (see autodft.qm.orca.esd_inputs).
     inputs_json: Optional[str] = None
+    # Jobs up to this attempt ran before the last requeue and no longer count.
+    retry_base: Optional[int] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

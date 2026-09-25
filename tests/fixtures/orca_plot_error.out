@@ -1,0 +1,55 @@
+================================================================================
+                                       INPUT FILE
+================================================================================
+NAME = input.inp
+|  1> !wB97X-D3 def2-QZVPD def2/J RIJCOSX DEFGRID3 TightSCF KeepDens Freq
+|  2> %plots
+|  3> dim1 75
+|  4> dim2 75
+|  5> dim3 75
+|  6> Format Gaussian_Cube
+|  7> ElDens("eldens.cube");
+|  8> SpinDens("spindens.cube");
+|  9> end
+| 10> %maxcore 2000
+| 11> %pal nprocs 8 end
+| 12>
+| 13> *xyzfile 0 1 input.xyz
+| 14>
+| 15>
+| 16>                          ****END OF INPUT****
+
+               *****************************************************
+               *                     SUCCESS                       *
+               *           SCF CONVERGED AFTER  14 CYCLES          *
+               *****************************************************
+
+-------------------------   --------------------
+FINAL SINGLE POINT ENERGY      -575.669666345984
+-------------------------   --------------------
+
+
+---------------
+PLOT GENERATION
+---------------
+choosing x-range =   -18.001823 ..    17.967250
+choosing y-range =    -8.956741 ..     9.920727
+choosing z-range =   -11.974594 ..    10.800120
+
+GBW-File       ... input.gbw
+PlotType       ... DENSITY-PLOT
+ElDens File    ... input.scfp
+Output file    ... eldens.cube
+Format         ... Gaussian-Cube
+
+GBW-File       ... input.gbw
+PlotType       ... SPIN-DENSITY-PLOT
+SpinDens File  ... input.scfr
+Output file    ... spindens.cube
+Format         ... Gaussian-Cube
+
+ORCA finished by error termination in PLOT
+Calling Command: mpirun -np 8 --bind-to none /mnt/share/public/software/orca-6.1.1-gxtb/orca_plot_mpi input.gbw input.plot.tmp input
+  .... trying to continue anyways
+
+                             ****ORCA TERMINATED NORMALLY****

@@ -124,7 +124,10 @@ class OrcaParser(QMEngine):
         success = all(checks.values())
 
         energy = self.extract_electronic_energy(content)
-        free_energy_correction = self.extract_free_energy_correction(content)
+        # Only optimisations have this block; a singlepoint never did anyway.
+        free_energy_correction = (
+            self.extract_free_energy_correction(content) if "G-E(el)" in content else None
+        )
 
         conformers: Optional[list[str]] = None
         conformer_energies: Optional[list[float]] = None
@@ -546,6 +549,9 @@ class OrcaParser(QMEngine):
         floppy rotors, not saddle points. Failing on those meant a -42 cm^-1
         mode burned the full retry budget exactly like a -230 cm^-1 one.
         """
+        # A singlepoint has no such block at all; nothing to warn about.
+        if "VIBRATIONAL FREQUENCIES" not in content:
+            return True
         significant = [
             f for f in cls.extract_imaginary_frequencies(content)
             if f < IMAGINARY_FREQ_THRESHOLD
@@ -582,6 +588,15 @@ class OrcaParser(QMEngine):
         with no downstream calculations.
         """
         lowered = content.lower()
+
+        # orca_plot can't build a spin density for a closed-shell reference and
+        # aborts with this banner, but the calculation itself is fine -- only
+        # this module's error termination is ignored.
+        plot_error = "orca finished by error termination in plot"
+        if plot_error in lowered:
+            logger.info("Ignoring a failed orca_plot (PLOT) error termination")
+            lowered = lowered.replace(plot_error, "")
+
         for marker in (
             "goat error",
             "orca finished by error termination",

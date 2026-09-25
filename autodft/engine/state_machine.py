@@ -306,8 +306,8 @@ def update_task_statuses(session: Session, max_attempts: int = 3) -> None:
             logger.info("Task %d marked successful", task.id)
             continue
 
-        # All judged (success is not None) and all failed
-        judged = [j for j in jobs if j.success is not None]
+        # All judged (success is not None) and all failed, in the current run
+        judged = [j for j in _current_run(task, jobs) if j.success is not None]
         if len(judged) >= max_attempts and all(j.success is False for j in judged):
             task.status = TaskStatus.failed
             task.updated_at = datetime.now(timezone.utc)
@@ -617,16 +617,17 @@ def create_retry_jobs(
         if any(j.success is None for j in jobs):
             continue
 
-        failed_count = sum(1 for j in jobs if j.success is False)
-        success_count = sum(1 for j in jobs if j.success is True)
+        current_run = _current_run(task, jobs)
+        failed_count = sum(1 for j in current_run if j.success is False)
+        success_count = sum(1 for j in current_run if j.success is True)
 
         # Skip if already succeeded or exhausted
         if success_count > 0 or failed_count >= max_attempts:
             continue
 
-        # Find the most recent failed job to get failure info
+        # Find the most recent failed job (this run) to get failure info
         last_failed = max(
-            (j for j in jobs if j.success is False),
+            (j for j in current_run if j.success is False),
             key=lambda j: j.attempt,
             default=None,
         )
@@ -640,7 +641,7 @@ def create_retry_jobs(
             logger.info("Task %d failed deterministically (%s); not retried", task.id, reason)
             continue
 
-        next_attempt = failed_count + 1
+        next_attempt = (task.retry_base or 0) + failed_count + 1
         # Per task: retry-strategy application reads files from previous job
         # directories, which archive/cleanup may have removed. One raising
         # task must not discard every other task's retry job for the tick.
@@ -711,7 +712,8 @@ def start_new_tasks(
         # Per task, for the same reason as create_retry_jobs: one task that
         # raises here used to discard the whole step for every molecule.
         try:
-            _create_job_for_task(session, task, attempt=1, settings=settings, qm_engine=qm_engine)
+            _create_job_for_task(session, task, attempt=(task.retry_base or 0) + 1,
+                                 settings=settings, qm_engine=qm_engine)
         except Exception:  # noqa: BLE001 - one bad task must not stop the rest
             logger.exception("Failed to create first job for task %d", task.id)
             continue
@@ -908,6 +910,12 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
 # ======================================================================
 # Helpers -- job creation & input file generation
 # ======================================================================
+
+def _current_run(task: ComputationTask, jobs: list[ComputationJob]) -> list[ComputationJob]:
+    """*task*'s jobs since its last requeue; earlier runs no longer count."""
+    base = task.retry_base or 0
+    return [j for j in jobs if j.attempt > base]
+
 
 def _molecule_is_archived(session: Session, task: ComputationTask) -> bool:
     """True when the task's molecule has been archived (raw files removed)."""
@@ -1255,6 +1263,7 @@ def _apply_retry_modifications(
         .where(
             ComputationJob.task_id == task.id,
             col(ComputationJob.success).is_(False),
+            ComputationJob.attempt > (task.retry_base or 0),
         )
         .order_by(col(ComputationJob.attempt).asc())
     ).all()
@@ -1278,7 +1287,7 @@ def _apply_retry_modifications(
         failure = FailureInfo(
             fail_reason=prior.fail_reason or "",
             previous_job_path=prior.job_path or "",
-            attempt=attempt,
+            attempt=attempt - (task.retry_base or 0),
             charge=charge,
             multiplicity=multiplicity,
         )
@@ -1298,7 +1307,7 @@ def _apply_retry_modifications(
             failure=FailureInfo(
                 fail_reason=latest.fail_reason or "",
                 previous_job_path=latest.job_path or "",
-                attempt=attempt,
+                attempt=attempt - (task.retry_base or 0),
                 charge=charge,
                 multiplicity=multiplicity,
             ),
