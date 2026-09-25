@@ -78,7 +78,7 @@ def _check_reference_state(
 def _category_options_to_flags(
     uvvis: bool, ir: bool, esd: bool, esd_ht: bool, nmr: bool,
     uvvis_nroots: int = 20, uvvis_tda: bool = False, nmr_nuclei: Optional[list] = None,
-    esd_tn_window_ev: float = 0.2, esd_temperature_k: float = 298.15,
+    esd_tn_window_ev: float = 0.3, esd_temperature_k: float = 298.15,
     densities: bool = False, density_eldens: bool = True, density_spindens: bool = True,
     density_grid: int = 75, density_eldens_file: str = "ElDens.cube",
     density_spindens_file: str = "SpinDens.cube",
@@ -260,7 +260,7 @@ def submit(
     nmr_nuclei: str = typer.Option(
         "H,C,F", "--nmr-nuclei", help="NMR nuclei to report, comma-separated"
     ),
-    esd_tn_window_ev: float = typer.Option(0.2, "--esd-tn-window", help="Include S1->Tn ISC for Tn up to this many eV above S1"),
+    esd_tn_window_ev: float = typer.Option(0.3, "--esd-tn-window", help="Include S1->Tn ISC for Tn up to this many eV above S1"),
     esd_temperature_k: float = typer.Option(298.15, "--esd-temperature", help="Temperature of the ESD rates (K)"),
     densities: bool = typer.Option(False, "--densities", help="Electron / spin density cube files from every state's energy singlepoint"),
     no_eldens: bool = typer.Option(False, "--no-eldens", help="Skip the electron density cube"),
@@ -380,7 +380,7 @@ def submit_batch(
     nmr_nuclei: str = typer.Option(
         "H,C,F", "--nmr-nuclei", help="NMR nuclei to report, comma-separated"
     ),
-    esd_tn_window_ev: float = typer.Option(0.2, "--esd-tn-window", help="Include S1->Tn ISC for Tn up to this many eV above S1"),
+    esd_tn_window_ev: float = typer.Option(0.3, "--esd-tn-window", help="Include S1->Tn ISC for Tn up to this many eV above S1"),
     esd_temperature_k: float = typer.Option(298.15, "--esd-temperature", help="Temperature of the ESD rates (K)"),
     densities: bool = typer.Option(False, "--densities", help="Electron / spin density cube files from every state's energy singlepoint"),
     no_eldens: bool = typer.Option(False, "--no-eldens", help="Skip the electron density cube"),

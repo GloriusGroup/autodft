@@ -73,7 +73,7 @@ _NBO_KEYWORDS_RE = re.compile(r"^[A-Za-z0-9 =_.,+-]{0,200}\Z")
 # Settings each category takes, with defaults. Stored -- defaults filled in --
 # only when the category is requested.
 OPTIONS: dict[str, dict] = {
-    ESD: {"esd_tn_window_ev": 0.2, "esd_temperature_k": 298.15},
+    ESD: {"esd_tn_window_ev": 0.3, "esd_temperature_k": 298.15},
     UVVIS: {"uvvis_nroots": 20, "uvvis_tda": False},
     NMR: {"nmr_nuclei": ["H", "C", "F"]},
     DENSITIES: {
