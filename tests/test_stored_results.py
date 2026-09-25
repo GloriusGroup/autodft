@@ -372,7 +372,7 @@ class TestForJob:
         results.store(session, task, job, path)
         session.commit()
         row = session.exec(select(JobResult).where(JobResult.job_id == job.id)).one()
-        row.parser_version = 1  # what production holds today
+        row.parser_version = results.PARSER_VERSION - 1  # an older parser's record
         session.add(row)
         session.commit()
         (path / "output.out").unlink()  # archived project: comp_data removed

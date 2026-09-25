@@ -4285,7 +4285,7 @@
             var bits = [];
             if (s.failed) bits.push(s.failed + ' failed');
             if (s.unavailable) bits.push(s.unavailable + ' unavailable');
-            return 'no charges (' + bits.join(', ') + ')';
+            return bits.length ? 'no charges (' + bits.join(', ') + ')' : 'no charges';
         }
 
         function ppNboSummary(nbo) {
