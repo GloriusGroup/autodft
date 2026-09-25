@@ -87,6 +87,10 @@ def test_stage_configs():
     for task_type in (TaskType.esd_ic, TaskType.esd_fluor, TaskType.esd_phosp):
         assert _get_stage_config(settings, task_type, s1) is settings.pipeline.esd_tddft
         assert _get_stage_config(settings, task_type, s1_ht) is settings.pipeline.esd_tddft
+    # Once built, the per-channel decision counts: HT requested but every channel FC.
+    assert _get_stage_config(settings, TaskType.esd_isc, s1_ht, {"ht": False}) is settings.pipeline.esd
+    assert _get_stage_config(settings, TaskType.esd_risc, s1_ht, {"ht": True}) is settings.pipeline.esd_tddft
+    assert _get_stage_config(settings, TaskType.esd_fluor, s1_ht, {"ht": False}) is settings.pipeline.esd_tddft
 
 
 @pytest.mark.parametrize("task_type", [TaskType.singlepoint_soc, TaskType.esd_isc,
@@ -108,6 +112,14 @@ def test_resources_are_escalated_for_tddft_rate_jobs(tmp_path, task_type):
     (tmp_path / "input.inp").write_text("!B3LYP def2-SVP ESD(ISC)\n%tddft nroots 10 end\n")
     failure = FailureInfo(fail_reason="['Termination']", previous_job_path=str(tmp_path), attempt=2)
     assert IncreaseResources().applies(failure, task_type)
+
+
+def test_resources_are_escalated_for_ht_jobs_with_fc_diagnostics(tmp_path):
+    (tmp_path / "input.inp").write_text(
+        "!B3LYP def2-SVP ESD(ISC)\n%tddft nroots 4 end\n\n$new_job\n! ESD(ISC) NOITER\n%maxcore 2000\n"
+    )
+    failure = FailureInfo(fail_reason="['Termination']", previous_job_path=str(tmp_path), attempt=2)
+    assert IncreaseResources().applies(failure, "esd_isc")
 
 
 def test_resources_are_escalated_when_the_fc_input_is_unreadable():

@@ -62,6 +62,24 @@ class TestBlocks:
         )
 
 
+class TestRateHeader:
+    def test_grid_and_keepdens(self):
+        header = "!wB97X-D3 def2-TZVP DEFGRID3 TightSCF KeepDens CPCM(MeCN) # KeepDens\n%pal nprocs 8 end\n"
+        assert blocks.rate_header(header) == (
+            "!wB97X-D3 def2-TZVP DEFGRID2 TightSCF CPCM(MeCN) # KeepDens\n%pal nprocs 8 end\n"
+        )
+
+    def test_a_header_without_a_grid_gets_defgrid2(self):
+        assert blocks.rate_header("!B3LYP def2-SVP\n") == "!B3LYP def2-SVP DEFGRID2\n"
+
+    def test_a_grid_on_a_second_line(self):
+        assert blocks.rate_header("!B3LYP\n! defgrid1 keepdens\n") == "!B3LYP\n! DEFGRID2\n"
+
+    def test_an_existing_block_is_a_conflict(self):
+        with pytest.raises(blocks.HeaderConflict, match="this job adds its own"):
+            blocks.compose_header("optimization", OPT + "%tddft iroot 2 end\n", {"esd_role": "S1"})
+
+
 class TestFollowup:
     def test_s1_gets_only_the_soc_singlepoint(self, session):
         _, opt = _s0_with_opt(session, S1_META, description="S1")

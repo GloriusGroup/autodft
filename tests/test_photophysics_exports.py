@@ -289,9 +289,14 @@ def _full_payload():
                 "status": "done", "temperature_k": 298.15, "herzberg_teller": True,
                 "delta_est_ev": 0.35, "delta_est_uks_ev": 0.30,
                 "rates": {
-                    "isc": {"status": "successful", "rate_s": 1.0e7, "e00_ev": 2.5, "jobs": [
+                    "isc": {"status": "successful", "rate_s": 1.0e7, "e00_ev": 2.5,
+                            "ht": True, "ht_reason": "SOCME 4.50 cm-1 < 5", "jobs": [
                         {"triplet": 1, "dele_cm": 1200.0, "socme_cm": 4.5, "rate_s": 1.0e7,
-                         "fc_percent": 85.0, "ht_percent": 15.0, "k_squared": 1.2, "e00_cm": 20500.0},
+                         "fc_percent": 85.0, "ht_percent": 15.0, "k_squared": 1.2, "e00_cm": 20500.0,
+                         "ht": True, "ht_reason": "SOCME 4.50 cm-1 < 5"},
+                    ], "diagnostics": [
+                        {"triplet": 1, "k_inlinew_100": 2.0e6, "k_inlinew_25": 1.0e5, "k_inlinew_250": 3.0e6,
+                         "k_tcutfreq_300": 1.5e6, "width_sensitive": True, "soft_mode_dominated": False},
                     ]},
                     "risc": {"status": "successful", "rate_s": 2.0e5},
                     "ic": {"status": "successful", "rate_s": 5.0e9},
@@ -334,7 +339,8 @@ def _col(ws, name, row=1):
 def test_build_xlsx_has_a_sheet_per_category_plus_sticks_and_esd_jobs():
     wb = load_workbook(BytesIO(build_xlsx(_full_payload())))
     assert wb.sheetnames == [
-        "Summary", "UV-Vis", "UV-Vis sticks", "IR", "IR sticks", "NMR", "ESD", "ESD jobs", "NBO",
+        "Summary", "UV-Vis", "UV-Vis sticks", "IR", "IR sticks", "NMR", "ESD", "ESD jobs",
+        "ESD diagnostics", "NBO",
     ]
 
     assert _header(wb["UV-Vis"]) == [
@@ -362,7 +368,11 @@ def test_build_xlsx_has_a_sheet_per_category_plus_sticks_and_esd_jobs():
     ]
     assert _header(wb["ESD jobs"]) == [
         "mol_id", "state_id", "rate", "triplet", "sublevel", "rate_s", "dele_cm", "socme_cm",
-        "fc_percent", "ht_percent", "k_squared", "e00_cm",
+        "fc_percent", "ht_percent", "k_squared", "e00_cm", "HT", "HT_reason",
+    ]
+    assert _header(wb["ESD diagnostics"]) == [
+        "mol_id", "state_id", "rate", "triplet", "k_FC_INLINEW100", "k_FC_INLINEW25", "k_FC_INLINEW250",
+        "k_FC_TCUTFREQ300", "width_sensitive", "soft_mode_dominated",
     ]
     assert _header(wb["NBO"]) == [
         "mol_id", "smiles", "state_id", "state", "atom_1based", "element", "charge", "spin", "count", "weighting",
@@ -384,6 +394,9 @@ def test_build_xlsx_has_a_sheet_per_category_plus_sticks_and_esd_jobs():
     assert jobs.cell(row=2, column=_col(jobs, "state_id")).value == 10
     assert jobs.cell(row=2, column=_col(jobs, "rate")).value == "isc"
     assert jobs.cell(row=2, column=_col(jobs, "triplet")).value == 1
+    assert jobs.cell(row=2, column=_col(jobs, "HT_reason")).value == "SOCME 4.50 cm-1 < 5"
+    checks = wb["ESD diagnostics"]
+    assert [c.value for c in checks[2]][1:] == [10, "isc", 1, 2.0e6, 1.0e5, 3.0e6, 1.5e6, True, False]
 
     nbo_sheet = wb["NBO"]
     assert nbo_sheet.cell(row=2, column=_col(nbo_sheet, "state_id")).value == 10

@@ -103,6 +103,15 @@ class TestRates:
         assert [r.job for r in esd_parser.rates(text)] == [1, 3]
         assert esd_parser.rates(rate + DONE)[0].job is None
 
+    def test_tda_ht_jobs_and_fc_diagnostics_are_numbered(self):
+        # Formaldehyde: three TDA HT sublevel jobs, one FC channel, seven FC diagnostics.
+        found = esd_parser.rates(_read("isc_tda_diagnostics.out"))
+        assert [r.job for r in found] == list(range(1, 12))
+        assert [r.ht_percent for r in found[:4]] == [100.0, 100.0, 100.0, 0.0]
+        assert found[0].rate == pytest.approx(8.169736e4)
+        assert found[3].socme_cm == pytest.approx(41.49, abs=0.01)
+        assert found[4].fc_percent is None  # "-nan from FC" for a zero SOCME
+
     def test_herzberg_teller_split_without_percent_sign(self):
         [rate] = esd_parser.rates(_read("isc_ht.out"))
         assert (rate.rate, rate.fc_percent, rate.ht_percent) == (1.691880e4, 25.67, 74.33)
