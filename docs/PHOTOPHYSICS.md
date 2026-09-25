@@ -318,7 +318,7 @@ g is GOAT's degeneracy of the conformer the optimisation started from (the
 `CONFDEGEN AUTO`), stored per conformer geometry. Conformers from before
 this, or not from GOAT (ESD S1/T1 seeds, no confsearch), count g = 1. Each
 detail conformer carries its `degeneracy`. GOAT itself prints g = 1 for its
-high-energy conformers (above a few kcal/mol), so those count once
+high-energy conformers (above ~3 kcal/mol in our outputs), so those count once
 whatever their symmetry — their weight is negligible anyway. The CSV and State Analysis
 still report the lowest conformer; g changes only these weights (UV/Vis,
 IR, NMR, NBO).
