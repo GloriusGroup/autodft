@@ -429,9 +429,10 @@ plus `esd`: one combined status (`failed` > `pending` > `created` >
 dashboard's *Project Overview → Molecules* subpage renders.
 
 A conformer whose optimisation was judged since the broken-bond check
-existed adds `connectivity`: `{"ok": false, "fragments": 2, "detail":
-"dissociated: 2 fragments (C4H8F + H); C-H bonds 9 -> 8"}` (`ok: true`,
-`detail: ""` when intact). Older conformers carry no key. See
+existed adds `connectivity`: `{"ok": false, "lost": true, "fragments": 2,
+"detail": "dissociated: 2 fragments (C4H8F + H); C-H bonds 9 -> 8"}`
+(`ok: true`, `detail: ""` when intact; `lost: false` with `bond formed: ...`
+when only an extra bond appeared). Older conformers carry no key. See
 [`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md#broken-bonds).
 
 ### `GET /api/projects/{name}/state-analysis`
@@ -448,7 +449,8 @@ as in `molecules-detail`).
 The same payload as a multi-sheet XLSX attachment (Summary, Lowest
 Energy, RMSD Matched, Conformers). Energies in Hartree, potentials in V
 vs SCE. When any pick has a broken-bond check, the mode sheets add a last
-column `broken_bonds` (`ok`, or `<state>: <detail>` per flagged pick) and
+column `broken_bonds` (`<state>: ok`, `<state>: <detail>` or
+`<state>: unchecked` per pick, joined by ` | `) and
 Conformers a last column `connectivity`.
 
 ### `GET /api/projects/{name}/photophysics` `?molecule_id=`
@@ -632,7 +634,8 @@ state's atoms; a closed-shell state's atoms carry no `spin` key.
 `conformer_index` is the conformer's 1-based position among the state's
 optimisation tasks by id, the same numbering as the Molecules page.
 `degeneracy` is GOAT's g of the conformer the optimisation started from (1
-without one); `weight` ∝ g·exp(−E/kT), see
+without one); `weight` ∝ g·exp(−E/kT). A conformer whose optimisation was
+flagged by the broken-bond check adds `connectivity_ok: false`; see
 [`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md#weighting).
 
 A molecule any of whose state family's optimisations lost bonds adds

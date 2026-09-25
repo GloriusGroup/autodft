@@ -268,14 +268,18 @@ Every optimisation judged successful since this check exists (older jobs
 are left unchecked) compares its optimised geometry (`input.xyz`) with the
 molecule's SMILES: bonds are perceived from covalent radii (RDKit's
 `DetermineConnectivity`, cut-off ≈ r₁ + r₂ + 0.45 Å) and the two
-element/bond graphs are compared — bond orders, charges and atom order play
-no part. A geometry that fell apart into more pieces than the SMILES has, or
-whose bonds changed (e.g. an H shift), is flagged. The result is stored in
-the optimisation's `job_results` record as
-`"connectivity": {"ok", "fragments", "detail"}`, e.g.
-`"dissociated: 2 fragments (C4H8F + H); C-H bonds 9 -> 8"` or
-`"bonds changed: C-H bonds 4 -> 3, H-O bonds 0 -> 1"`. A geometry whose
-atoms do not match the SMILES formula is not checked.
+element/bond graphs are compared — bond orders, charges, atom order and
+bonds to metals (alkali, alkaline-earth, transition, lanthanide/actinide and
+the heavier main-group metals; drawn ionically or datively in SMILES) play
+no part. A geometry that lost a SMILES bond — fell apart, or an H shift —
+has `lost: true`; one that only formed an extra bond is flagged with
+`lost: false`. The result is stored in the optimisation's `job_results`
+record as `"connectivity": {"ok", "lost", "fragments", "detail"}`, e.g.
+`"dissociated: 2 fragments (C4H8F + H); C-H bonds 9 -> 8"`,
+`"bonds changed: C-H bonds 4 -> 3, H-O bonds 0 -> 1"` or
+`"bond formed: C-C bonds 3 -> 4"`. A geometry whose atoms do not match the
+SMILES formula is not checked; a record without `connectivity` is
+unchecked. A later re-parse of the same job keeps the check.
 
 It shows as a `⚠ bonds` badge on the Molecules page, next to the picked
 conformer in the State Analysis (JSON `picks.<state>.connectivity`, XLSX
@@ -283,11 +287,13 @@ column `broken_bonds` and `Conformers` column `connectivity` — added only
 when some pick has a check), and as `broken_bonds` on each photophysics
 molecule (the whole state family; XLSX sheet `Broken bonds`). The flag
 changes no energy or conformer pick, and the summary CSV/JSON export is
-unchanged.
+unchanged. Spectra/NBO detail conformers of a flagged optimisation carry
+`connectivity_ok: false` and are still weighted.
 
-ESD never picks a flagged S0 conformer as S0\* (if all are flagged the
-molecule's ESD ends with that reason), and never creates a rate job on a
-flagged S1 or T1 optimisation: the rate is reported `blocked`, e.g. `T1
+ESD never picks an S0 conformer that lost bonds as S0\* (if all did, the
+molecule's ESD ends with that reason), and never creates a rate job on an
+S1 or T1 optimisation that lost bonds (`bond formed` alone does not
+block): the rate is reported `blocked`, e.g. `T1
 geometry dissociated: 2 fragments (C4H8F + H); C-H bonds 9 -> 8
 (optimisation task 37435); no rates on a broken geometry`.
 
@@ -311,7 +317,9 @@ g is GOAT's degeneracy of the conformer the optimisation started from (the
 `Degen.` column of the final ensemble table; the confsearch header runs
 `CONFDEGEN AUTO`), stored per conformer geometry. Conformers from before
 this, or not from GOAT (ESD S1/T1 seeds, no confsearch), count g = 1. Each
-detail conformer carries its `degeneracy`. The CSV and State Analysis
+detail conformer carries its `degeneracy`. GOAT itself prints g = 1 for its
+high-energy conformers (above a few kcal/mol), so those count once
+whatever their symmetry — their weight is negligible anyway. The CSV and State Analysis
 still report the lowest conformer; g changes only these weights (UV/Vis,
 IR, NMR, NBO).
 
