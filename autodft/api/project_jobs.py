@@ -331,7 +331,7 @@ def _execute(
 
     if kind == ProjectJobKind.archive:
         extensions = params.get("extensions") or [".inp", ".xyz", ".out"]
-        if extractor.has_densities_flagged_molecule():
+        if not params.get("extensions") and extractor.has_densities_flagged_molecule():
             extensions = [*extensions, ".cube"]
         # Do not rmtree under a job still writing files. The pause has already
         # stopped new jobs for this project; wait for what is left to finish.

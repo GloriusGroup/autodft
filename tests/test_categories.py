@@ -392,6 +392,8 @@ class TestDensitiesAndNbo:
 
     @pytest.mark.parametrize("filename", [
         "bad name.cube", "no_extension", "name.CUBE", "a" * 65 + ".cube", "",
+        "ElDens.cube\n",  # M1: no newlines, even trailing
+        "-x.cube", ".hidden.cube",  # M2: submit.cmd's cp *.cube glob cannot handle these
     ])
     def test_bad_cube_filenames_are_refused(self, filename):
         meta = {categories.DENSITIES: True, "density_eldens_file": filename}
@@ -413,7 +415,7 @@ class TestDensitiesAndNbo:
         meta = {categories.NBO: True, "nbo_keywords": keywords}
         assert categories.rejection({}, meta, OPT_NOFREQ, SP) is None
 
-    @pytest.mark.parametrize("keywords", ["$NBO BNDIDX", 'quo"te', "a" * 201])
+    @pytest.mark.parametrize("keywords", ["$NBO BNDIDX", 'quo"te', "a" * 201, "BNDIDX\n"])
     def test_nbo_keywords_refused(self, keywords):
         meta = {categories.NBO: True, "nbo_keywords": keywords}
         assert categories.rejection({}, meta, OPT_NOFREQ, SP) is not None

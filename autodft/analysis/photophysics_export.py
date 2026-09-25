@@ -73,7 +73,7 @@ def build_xlsx(payload: dict) -> bytes:
         if m.get("nbo"):
             for s in m["nbo"]["states"]:
                 for a in s.get("atoms", []):
-                    nbo.append((m["id"], m["smiles"], m["state_id"], s["state"], a["index"] + 1,
+                    nbo.append((m["id"], m["smiles"], s["state_id"], s["state"], a["index"] + 1,
                                 a["element"], a["charge"], a.get("spin"), s["count"], s["weighting"]))
 
     _sheet(wb, "UV-Vis", ("mol_id", "smiles", "state_id", "count", "pending", "failed", "unavailable",

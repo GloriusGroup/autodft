@@ -30,9 +30,11 @@ from autodft.qm.orca.spectra_parser import (
 
 logger = logging.getLogger(__name__)
 
-# Bump when a parser changes what it returns: older records are then re-parsed.
+# Bump only when a parser changes what an existing key holds -- older records
+# are then re-parsed. A new key needs no bump when its readers `require` it:
+# a record without it is stale for them and falls back to parsing on its own.
 # Pinned by tests/test_stored_results.py::test_extract_output_is_pinned.
-PARSER_VERSION = 2
+PARSER_VERSION = 1
 
 # The task types a reader ever asks for. store() stores nothing else, and the
 # backfill's query skips them outright.
@@ -164,22 +166,25 @@ def for_job(
 
     A row is only served when it still belongs to this job -- same task, same
     job_path, same finished_at -- since SQLite recycles job ids after a wipe.
+    A row that is stale (older version, or missing a key the caller
+    `require`s) but still matches this job's identity is a fallback of last
+    resort once the output is gone too, e.g. an archived project: served
+    when it has every required key, else None.
     """
     row = session.exec(select(JobResult).where(JobResult.job_id == job.id)).first()
-    if (
+    same_identity = (
         row is not None
-        and row.parser_version == PARSER_VERSION
         and row.task_id == job.task_id
         and row.job_path == job.job_path
         and _same_instant(row.finished_at, job.time_end)
-    ):
-        record = json.loads(row.data_json)
-        if all(key in record for key in require):
-            return record
+    )
+    record = json.loads(row.data_json) if same_identity else None
+    if record is not None and row.parser_version == PARSER_VERSION and all(key in record for key in require):
+        return record
     path = Path(job.job_path) if job.job_path else None
     output = _read(path / "output.out") if path is not None else None
     if output is None:
-        return None
+        return record if record is not None and all(key in record for key in require) else None
     input_text = _read(path / "input.inp") if task_type == "singlepoint_nmr" else None
     return extract(task_type, output, input_text, ir="ir_modes" in require)
 

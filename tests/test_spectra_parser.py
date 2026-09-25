@@ -147,6 +147,21 @@ class TestNaturalCharges:
     def test_no_summary_is_empty(self):
         assert parse_natural_charges("****ORCA TERMINATED NORMALLY****") == []
 
+    @staticmethod
+    def _block(numbers):
+        """NBO 7's fixed-width row: element and atom number touch from 100 on."""
+        rows = [f"   {' C'}{n:3d}  {0.1:9.5f}    {1.99995:9.5f}   {3.9:9.5f}  {0.02:9.5f}   {5.9:9.5f}"
+                for n in numbers]
+        return "\n".join([" Summary of Natural Population Analysis:", "", *rows, " " + "=" * 68])
+
+    def test_atoms_100_and_above_are_not_dropped(self):
+        rows = parse_natural_charges(self._block([98, 99, 100, 101]))
+        assert [r.index + 1 for r in rows] == [98, 99, 100, 101]
+
+    def test_a_count_mismatch_against_orcas_number_of_atoms_is_empty(self):
+        content = "Number of atoms                             ...      4\n" + self._block([1, 2])
+        assert parse_natural_charges(content) == []
+
 
 class TestNmrCheck:
     def _write(self, tmp_path, body: str):

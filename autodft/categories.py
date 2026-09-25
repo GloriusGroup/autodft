@@ -60,9 +60,11 @@ _NBO_CONFLICTS = (
     (re.compile(r"^\s*!.*\bNBO\b", re.IGNORECASE | re.MULTILINE), "the NBO keyword"),
     (re.compile(r"%nbo\b", re.IGNORECASE), "%nbo"),
 )
-_CUBE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}\.cube$")
+# No leading "-" (submit.cmd's `cp *.cube` would read it as an option) or
+# "." (a dotfile the same glob never matches).
+_CUBE_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}\.cube\Z")
 # No $, quotes or newlines: nbo_keywords goes inside NBOKEYLIST = "$NBO ... $END".
-_NBO_KEYWORDS_RE = re.compile(r"^[A-Za-z0-9 =_.,+-]{0,200}$")
+_NBO_KEYWORDS_RE = re.compile(r"^[A-Za-z0-9 =_.,+-]{0,200}\Z")
 
 # Settings each category takes, with defaults. Stored -- defaults filled in --
 # only when the category is requested.

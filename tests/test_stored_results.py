@@ -364,6 +364,37 @@ class TestForJob:
         record = results.for_job(session, job, "optimization", require=("ir_modes",))
         assert record["ir_modes"] == [asdict(m) for m in parse_ir(OPT_OUTPUT)]
 
+    def test_a_stale_row_with_no_output_is_served_when_nothing_new_is_required(self, session, tmp_path):
+        """I2: an archived project keeps only the row; readers needing no new key still get it."""
+        task = _setup(session, task_type=TaskType.optimization)
+        path = _job_dir(tmp_path, "stale1", output="FINAL SINGLE POINT ENERGY      -1.5\n")
+        job = _make_job(session, task, path)
+        results.store(session, task, job, path)
+        session.commit()
+        row = session.exec(select(JobResult).where(JobResult.job_id == job.id)).one()
+        row.parser_version = 1  # what production holds today
+        session.add(row)
+        session.commit()
+        (path / "output.out").unlink()  # archived project: comp_data removed
+
+        record = results.for_job(session, job, "optimization")
+        assert record["energy"] == pytest.approx(-1.5)
+
+    def test_a_stale_row_missing_a_required_key_with_no_output_is_none(self, session, tmp_path):
+        """I2: the NBO reader still gets nothing from a pre-feature record."""
+        task = _setup(session, task_type=TaskType.singlepoint)
+        path = _job_dir(tmp_path, "stale2", output="FINAL SINGLE POINT ENERGY      -2.0\n")
+        job = _make_job(session, task, path)
+        session.add(JobResult(
+            job_id=job.id, task_id=task.id, parser_version=1,
+            job_path=job.job_path, finished_at=job.time_end,
+            data_json=json.dumps({"energy": -2.0}),
+        ))
+        session.commit()
+        (path / "output.out").unlink()
+
+        assert results.for_job(session, job, "singlepoint", require=("npa_charges",)) is None
+
 
 class TestSameInstant:
     """The finished_at comparison must survive a SQLite round trip's lost tzinfo."""
@@ -1012,8 +1043,10 @@ def test_extract_output_is_pinned():
     snapshot = json.loads(_SNAPSHOT_PATH.read_text())
     key = str(results.PARSER_VERSION)
     message = (
-        f"extract() changed for PARSER_VERSION {key}. If this parser change is intended, "
-        "bump PARSER_VERSION and regenerate tests/fixtures/extract_snapshot.json."
+        f"extract() changed for PARSER_VERSION {key}. Bump PARSER_VERSION only when this "
+        "changes what an existing key holds -- a new key needs no bump as long as its "
+        "readers `require` it. If a bump is intended, regenerate "
+        "tests/fixtures/extract_snapshot.json under the new key."
     )
     assert key in snapshot, message
     assert cases == snapshot[key], message

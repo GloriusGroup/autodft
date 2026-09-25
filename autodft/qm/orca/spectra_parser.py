@@ -129,10 +129,13 @@ def parse_shieldings(content: str) -> list[Shielding]:
 _NPA_TITLE = "Summary of Natural Population Analysis:"
 # "    C  1    0.30354      1.99995     3.66683    0.02968     5.69646" -- the
 # open-shell total block adds a Natural Spin Density column at the end.
+# NBO 7's fixed-width format (1x,2x,a2,i3,...) runs element and number
+# together from atom 100 on, e.g. "    C100    0.30354 ...".
 _NPA_ROW = re.compile(
-    r"^\s*([A-Z][a-z]?)\s+(\d+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)"
+    r"^\s*([A-Z][a-z]?)\s*(\d+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)"
     r"(?:\s+(-?[\d.]+))?\s*$"
 )
+_ATOM_COUNT_RE = re.compile(r"Number of atoms\s*\.+\s*(\d+)")
 
 
 @dataclass(frozen=True)
@@ -147,7 +150,9 @@ def parse_natural_charges(content: str) -> list[NaturalCharge]:
     """Atoms from the first ``Summary of Natural Population Analysis`` block.
 
     Stops at that block's ``====`` line, so the total row and any later
-    (alpha/beta) summaries are never read.
+    (alpha/beta) summaries are never read. When ORCA's own atom count is
+    printed and disagrees with what was parsed, ``[]`` is returned instead
+    of a silently truncated list.
     """
     lines = content.splitlines()
     start = next((i for i, line in enumerate(lines) if line.strip() == _NPA_TITLE), None)
@@ -164,4 +169,7 @@ def parse_natural_charges(content: str) -> list[NaturalCharge]:
             rows.append(NaturalCharge(
                 int(atom_no) - 1, element, float(charge), float(spin) if spin is not None else None,
             ))
+    count_match = _ATOM_COUNT_RE.search(content)
+    if count_match is not None and len(rows) != int(count_match.group(1)):
+        return []
     return rows

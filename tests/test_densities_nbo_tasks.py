@@ -49,6 +49,11 @@ class TestDensities:
         assert blocks.compose_header("singlepoint", SP) is SP
         assert blocks.compose_header("singlepoint", SP, {}) is SP
 
+    def test_an_existing_plots_block_is_a_conflict(self):
+        edited = SP + "%plots\n  dim1 40\n  Format Gaussian_Cube\n  ElDens(\"mine.cube\");\nend\n"
+        with pytest.raises(blocks.HeaderConflict, match="%plots"):
+            blocks.compose_header("singlepoint", edited, {categories.DENSITIES: True})
+
 
 class TestNbo:
     def test_bare_keyword(self):
@@ -65,6 +70,11 @@ class TestNbo:
     def test_an_existing_nbo_keyword_is_a_conflict(self):
         with pytest.raises(blocks.HeaderConflict):
             blocks.compose_header("singlepoint", "!B3LYP NBO\n", {categories.NBO: True})
+
+    def test_an_existing_nbo_block_is_a_conflict(self):
+        edited = SP + '%nbo\n  NBOKEYLIST = "$NBO NRT $END"\nend\n'
+        with pytest.raises(blocks.HeaderConflict, match="%nbo"):
+            blocks.compose_header("singlepoint", edited, {categories.NBO: True, "nbo_keywords": "BNDIDX"})
 
 
 class TestBoth:
@@ -97,7 +107,9 @@ def test_singlepoint_job_input_has_both_blocks(session, tmp_path):
     )
     session.add(task)
     session.commit()
-    job = _create_job_for_task(session, task, 1, Settings(), qm_engine=OrcaParser())
+    settings = Settings()
+    settings.orca.nbo_exe = "/path/to/nbo7.i8.exe"
+    job = _create_job_for_task(session, task, 1, settings, qm_engine=OrcaParser())
     job_dir = tmp_path / "sp" / f"job_{job.id}"
     text = (job_dir / "input.inp").read_text()
     assert "NBO" in text.splitlines()[0]
@@ -144,3 +156,18 @@ def test_unflagged_singlepoint_job_has_no_new_blocks_and_no_keep_cubes(session, 
     assert "NBO" not in text.splitlines()[0]
     submit = (job_dir / "submit.cmd").read_text()
     assert 'cp *.cube "$WORK_DIR"/ 2>/dev/null || true' not in submit
+
+
+def test_nbo_without_a_configured_executable_fails_the_job(session, tmp_path):
+    """M4: caught at job generation, not only at submission time."""
+    state, opt = _s0_with_opt(session, {categories.NBO: True, "nbo_keywords": "BNDIDX"})
+    task = ComputationTask(
+        task_type=TaskType.singlepoint, status=TaskStatus.created, state_id=state.id,
+        header_id=state.singlepoint_header_id, input_geometry_id=opt.output_geometry_id,
+        task_path=str(tmp_path / "sp"),
+    )
+    session.add(task)
+    session.commit()
+    job = _create_job_for_task(session, task, 1, Settings(), qm_engine=OrcaParser())
+    assert job.success is False
+    assert "nbo_exe" in job.fail_reason

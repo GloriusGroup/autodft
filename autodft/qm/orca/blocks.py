@@ -76,6 +76,10 @@ def nbo_block(keywords: str) -> str:
 
 def with_nbo(header: str, keywords: str) -> str:
     """*header* with the NBO keyword, plus a keyword-list block when *keywords*."""
+    if has_block(header, "nbo"):
+        raise HeaderConflict(
+            "The header already has a %nbo block; this job adds its own."
+        )
     header = with_keyword(header, "NBO")
     if keywords:
         header = append_block(header, nbo_block(keywords))
@@ -98,6 +102,10 @@ def densities_block(
 
 def with_densities(header: str, options: dict, multiplicity: int) -> str:
     """*header* with a ``%plots`` block for the requested cubes; unchanged if none apply."""
+    if has_block(header, "plots"):
+        raise HeaderConflict(
+            "The header already has a %plots block; this job adds its own."
+        )
     defaults = categories.OPTIONS[categories.DENSITIES]
     eldens = bool(options.get("density_eldens", defaults["density_eldens"]))
     spindens = bool(options.get("density_spindens", defaults["density_spindens"])) and multiplicity > 1

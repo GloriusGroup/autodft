@@ -256,7 +256,7 @@ def _full_payload():
             },
             "nbo": {
                 "states": [{
-                    "state": "S0", "count": 1, "pending": 0, "failed": 0, "unavailable": 0,
+                    "state": "S0", "state_id": 10, "count": 1, "pending": 0, "failed": 0, "unavailable": 0,
                     "unweighted": 0, "weighting": "G",
                     "extremes": {
                         "most_negative": {"index": 1, "element": "O", "charge": -0.5},
@@ -341,6 +341,27 @@ def test_build_xlsx_has_a_sheet_per_category_plus_sticks_and_esd_jobs():
     assert nbo_sheet.cell(row=2, column=_col(nbo_sheet, "charge")).value == 0.3
     assert nbo_sheet.cell(row=3, column=_col(nbo_sheet, "atom")).value == 2
     assert nbo_sheet.cell(row=3, column=_col(nbo_sheet, "element")).value == "O"
+
+
+def test_nbo_sheet_writes_each_states_own_state_id():
+    """I3: a T1/ox row must not carry the S0 entry's id."""
+    payload = {
+        "project": "nho/p", "temperature_k": 298.15,
+        "molecules": [{
+            "id": 1, "smiles": "c1ccccc1", "state_id": 10, "archived": False,
+            "nbo": {"states": [
+                {"state": "S0", "state_id": 10, "count": 1, "pending": 0, "failed": 0,
+                 "unavailable": 0, "unweighted": 0, "weighting": "G",
+                 "atoms": [{"index": 0, "element": "C", "charge": 0.3}]},
+                {"state": "ox", "state_id": 11, "count": 1, "pending": 0, "failed": 0,
+                 "unavailable": 0, "unweighted": 0, "weighting": "G",
+                 "atoms": [{"index": 0, "element": "C", "charge": 0.5}]},
+            ]},
+        }],
+    }
+    rows = list(load_workbook(BytesIO(build_xlsx(payload)))["NBO"].iter_rows(values_only=True))[1:]
+    assert [r[2] for r in rows if r[3] == "S0"] == [10]
+    assert [r[2] for r in rows if r[3] == "ox"] == [11]
 
 
 def test_build_xlsx_on_an_empty_payload_has_only_the_summary_sheet():

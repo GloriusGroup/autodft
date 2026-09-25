@@ -92,6 +92,20 @@ def test_archive_adds_cube_for_a_densities_flagged_molecule(project, settings, m
     assert ".cube" in _archive(settings, monkeypatch)["extensions"]
 
 
+def test_archive_keeps_explicit_extensions_even_with_densities(project, settings, monkeypatch):
+    """M6: .cube is only added on top of the default, not an explicit list."""
+    with get_session() as session:
+        mol = Molecule(smiles="CC(=O)C", project_name="nho/p")
+        session.add(mol)
+        session.commit()
+        session.add(MoleculeState(molecule_id=mol.id, description="S0", multiplicity=1, charge=0,
+                                  metadata_json=json.dumps({categories.DENSITIES: True})))
+        session.commit()
+    monkeypatch.setattr(project_jobs, "_wait_for_quiescence", lambda name: None)
+    result = project_jobs._execute(ProjectJobKind.archive, "nho/p", {"extensions": [".out"]}, settings)
+    assert result["extensions"] == [".out"]
+
+
 def test_a_project_without_categories_freezes_nothing(project, settings, monkeypatch):
     with get_session() as session:
         mol = session.get(Molecule, project["molecule"])

@@ -13,23 +13,32 @@ from typing import Optional
 from sqlmodel import Session, select
 
 from autodft import categories
-from autodft.analysis.spectroscopy import Conformer, conformer_pool, ensemble
+from autodft.analysis.spectroscopy import Conformer, _OPEN, _follow_up, conformer_pool, ensemble
 from autodft.extraction import results
 from autodft.extraction.extractor import PipelineExtractor
-from autodft.models import ComputationTask, Molecule, MoleculeState, TaskStatus, TaskType
+from autodft.models import MoleculeState, TaskStatus, TaskType
 
-_OPEN = (TaskStatus.created, TaskStatus.pending)
 _STATE_ORDER = {"S0": 0, "S1": 1, "T1": 2, "ox": 3, "red": 4}
 
 
-def molecule_nbo(session: Session, extractor: PipelineExtractor, mol: Molecule, detail: bool) -> dict:
-    """Natural charges of every NBO-flagged state of *mol*, in state order.
+def molecule_nbo(session: Session, extractor: PipelineExtractor, s0: MoleculeState, detail: bool) -> dict:
+    """Natural charges of every NBO-flagged state in *s0*'s family, in state order.
+
+    A family is *s0*'s molecule's states sharing its confsearch,
+    optimization and singlepoint headers -- the same rule
+    ``photophysics.partner`` uses, so a molecule resubmitted with other
+    headers gets its own, separate set of states here too.
 
     A state without its own energy singlepoint (ESD's S1) never has charges
     to weigh, so it is left out even when NBO's flag reached its metadata.
     """
     states = session.exec(
-        select(MoleculeState).where(MoleculeState.molecule_id == mol.id)
+        select(MoleculeState).where(
+            MoleculeState.molecule_id == s0.molecule_id,
+            MoleculeState.confsearch_header_id == s0.confsearch_header_id,
+            MoleculeState.optimization_header_id == s0.optimization_header_id,
+            MoleculeState.singlepoint_header_id == s0.singlepoint_header_id,
+        )
     ).all()
     states = sorted(states, key=lambda s: (_STATE_ORDER.get(s.description, 99), s.description))
 
@@ -43,23 +52,17 @@ def molecule_nbo(session: Session, extractor: PipelineExtractor, mol: Molecule, 
 
 
 def _npa(session: Session, conformer: Conformer) -> tuple[str, Optional[dict]]:
-    """(status, data) for one conformer's natural charges."""
+    """(status, data) for one conformer's natural charges, from the pool's own read."""
     if conformer.opt.status in _OPEN:
         return "pending", None
-    task = session.exec(
-        select(ComputationTask).where(
-            ComputationTask.depends_on_task_id == conformer.opt.id,
-            ComputationTask.task_type == TaskType.singlepoint,
-        )
-    ).first()
+    task = _follow_up(session, conformer.opt, TaskType.singlepoint)
     if task is None:
         return ("pending" if conformer.opt.has_followups else "failed"), None
     if task.status in _OPEN:
         return "pending", None
     if task.status == TaskStatus.failed:
         return "failed", None
-    record = results.for_task(session, task, require=("npa_charges",))
-    charges = results.natural_charges(record) if record else None
+    charges = results.natural_charges(conformer.sp_record) if conformer.sp_record else None
     if not charges:
         return "unavailable", None
     return "ok", {"charges": [asdict(c) for c in charges]}
@@ -111,7 +114,8 @@ def _extremes(atoms: list[dict]) -> dict:
 
 
 def _state_nbo(session: Session, extractor: PipelineExtractor, state: MoleculeState, detail: bool) -> dict:
-    pool = [c for c in conformer_pool(session, extractor, state) if c.opt.status != TaskStatus.failed]
+    pool = [c for c in conformer_pool(session, extractor, state, sp_require=("npa_charges",))
+            if c.opt.status != TaskStatus.failed]
     items = _drop_inconsistent([(c, *_npa(session, c)) for c in pool])
 
     out = ensemble(items, True)
@@ -119,6 +123,7 @@ def _state_nbo(session: Session, extractor: PipelineExtractor, state: MoleculeSt
     if not detail:
         del out["conformers"]
     out["state"] = state.description
+    out["state_id"] = state.id
     out["extremes"] = None
     if detail:
         out["atoms"] = []

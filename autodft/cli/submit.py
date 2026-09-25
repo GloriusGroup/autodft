@@ -11,7 +11,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 
-from autodft.db import get_session
+from autodft.db import get_session, init_db
 from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.qm.orca.defaults import (
     DEFAULT_HEADER_CONFSEARCH,
@@ -275,6 +275,9 @@ def submit(
     """Submit a single molecule by SMILES string."""
     from autodft.config import load_settings
 
+    settings = load_settings(config)
+    init_db(settings)
+
     _check_reference_state(smiles, request_t1, request_ox, request_red)
     flags = _category_options_to_flags(
         uvvis, ir, esd, esd_ht, nmr, uvvis_nroots, uvvis_tda,
@@ -290,7 +293,7 @@ def submit(
     h_cs = _read_header_file(header_confsearch) if header_confsearch else (None if skip_confsearch else DEFAULT_HEADER_CONFSEARCH)
     h_opt = _read_header_file(header_opt) if header_opt else DEFAULT_HEADER_OPTIMIZATION
     h_sp = _read_header_file(header_sp) if header_sp else DEFAULT_HEADER_SINGLEPOINT
-    _check_categories(smiles, flags, h_opt, h_sp, load_settings(config))
+    _check_categories(smiles, flags, h_opt, h_sp, settings)
 
     request_metadata = _build_request_metadata(
         project_name=qualified,
@@ -392,6 +395,9 @@ def submit_batch(
     """Submit molecules from a CSV file."""
     from autodft.config import load_settings
 
+    settings = load_settings(config)
+    init_db(settings)
+
     if not file.exists():
         console.print(f"[red]File not found:[/red] {file}")
         raise typer.Exit(code=1)
@@ -404,7 +410,6 @@ def submit_batch(
         density_grid=density_grid, density_eldens_file=eldens_file, density_spindens_file=spindens_file,
         nbo=nbo, nbo_keywords=nbo_keywords,
     )
-    settings = load_settings(config)
 
     request_metadata = _build_request_metadata(
         project_name=qualified,

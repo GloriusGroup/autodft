@@ -2804,6 +2804,10 @@
         // Untagged custom headers do NOT appear in slot dropdowns — assign
         // a kind in the Headers manager to surface them here.
 
+        function normalizeHeaderText(s) {
+            return (s || '').replace(/\s+/g, ' ').trim();
+        }
+
         function populateHeaderSelect(selectEl, kind, defaults, custom) {
             var current = selectEl.value;
             selectEl.innerHTML = '';
@@ -2838,8 +2842,8 @@
             // matches the package default for this kind, else take the first option.
             var def = defaults.filter(function (d) { return d.kind === kind; })[0];
             if (def) {
-                var defText = (def.text || '').trim();
-                var match = relevant.filter(function (c) { return (c.text || '').trim() === defText; })[0];
+                var defText = normalizeHeaderText(def.text);
+                var match = relevant.filter(function (c) { return normalizeHeaderText(c.text) === defText; })[0];
                 if (match) selectEl.value = 'id:' + match.id;
             }
         }
@@ -4276,9 +4280,17 @@
 
         function ppNboCharge(v) { return (v >= 0 ? '+' : '') + v.toFixed(2); }
 
+        function ppNboNoCharges(s) {
+            if (s.pending) return 'no charges yet (' + s.pending + ' pending)';
+            var bits = [];
+            if (s.failed) bits.push(s.failed + ' failed');
+            if (s.unavailable) bits.push(s.unavailable + ' unavailable');
+            return 'no charges (' + bits.join(', ') + ')';
+        }
+
         function ppNboSummary(nbo) {
             var parts = nbo.states.map(function (s) {
-                if (!s.extremes) return escHtml(s.state) + ': no charges yet';
+                if (!s.extremes) return escHtml(s.state) + ': ' + ppNboNoCharges(s);
                 var neg = s.extremes.most_negative, pos = s.extremes.most_positive;
                 return escHtml(s.state) + ': most negative ' + escHtml(neg.element) + escHtml(neg.index + 1) +
                        ' ' + escHtml(ppNboCharge(neg.charge)) + ', most positive ' + escHtml(pos.element) +

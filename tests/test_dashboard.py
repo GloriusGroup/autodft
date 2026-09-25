@@ -186,6 +186,14 @@ def test_the_dashboard_shows_nbo_charges(client):
         assert needle in html, needle
 
 
+def test_the_dashboard_says_why_there_are_no_nbo_charges_yet(client):
+    # M9: distinguish "still running" from "every conformer failed/unavailable".
+    c, headers = client
+    html = c.get("/", headers=headers).text
+    assert "no charges yet (' + s.pending + ' pending)'" in html
+    assert "no charges (' + bits.join(', ') + ')'" in html
+
+
 def test_uvvis_options_are_sent_only_when_ticked():
     html = (TEMPLATE / "dashboard.html").read_text()
     assert "uvvis_nroots:       intOrDefault" not in html
@@ -225,8 +233,12 @@ def test_category_panels_share_a_row_height():
 
 def test_header_select_preselects_the_stored_package_default():
     # When nothing was selected before, populateHeaderSelect picks the
-    # stored header whose text matches the package default for that kind.
+    # stored header whose text matches the package default for that kind,
+    # comparing with whitespace normalised on both sides (M8) so CRLF or
+    # indentation differences in a hand-entered production row still match.
     html = (TEMPLATE / "dashboard.html").read_text()
     assert "function populateHeaderSelect(selectEl, kind, defaults, custom) {" in html
     assert "var def = defaults.filter(function (d) { return d.kind === kind; })[0];" in html
-    assert "(c.text || '').trim() === defText" in html
+    assert "function normalizeHeaderText(s) {" in html
+    assert "replace(/\\s+/g, ' ')" in html
+    assert "normalizeHeaderText(c.text) === defText" in html

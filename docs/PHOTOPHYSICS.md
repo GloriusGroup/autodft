@@ -208,13 +208,21 @@ alike.
 first "Summary of Natural Population Analysis" table (stopped at that
 block's `====` line, so the total row and any later alpha/beta summary
 are never read) and stored as `npa_charges` alongside the job's other
-results (parser version bumped to 2 — run `backfill-results` to parse it
-into singlepoints judged before this feature). Charges are
-Boltzmann-weighted the same way UV/Vis and IR are: per state, on that
+results. Adding this key needed no `PARSER_VERSION` bump: the NBO reader
+`require`s `npa_charges`, so a record stored before this feature — which
+lacks the key — is re-parsed from the output on read, same as a job with
+no stored record at all; run `backfill-results` afterwards on the
+controller host to store it once and stop paying that re-parse. Charges
+are Boltzmann-weighted the same way UV/Vis and IR are: per state, on that
 state's own conformers and energies. `GET /api/projects/{name}/photophysics`
 reports each state's weighted charge per atom plus the most negative /
 most positive atom (`extremes`); an open-shell state's atoms also report
-`spin` (Natural Spin Density). See
+`spin` (Natural Spin Density). Each entry's `nbo` covers only the states
+submitted together with that entry's S0 — same `confsearch_header_id`,
+`optimization_header_id` and `singlepoint_header_id`, the rule
+`photophysics.partner` uses — so a molecule resubmitted with other
+headers gets its own entry and its own states, never mixed with the
+first; every state also carries its own `state_id`. See
 [`docs/API.md`](API.md#get-apiprojectsnamephotophysics-molecule_id) for
 the payload shape.
 
@@ -224,8 +232,8 @@ singlepoint's usual input, geometry and output. `cleanup-files` keeps
 `.cube` (with `.out`/`.xyz`/`.inp`) in the job directory of a
 Densities-flagged state's **singlepoint** task only, not its optimisation.
 Archiving a project with any Densities-flagged molecule adds `.cube` to
-the kept extensions automatically, on top of whatever the request body
-listed.
+the kept extensions automatically, but only when the request body left
+`extensions` unset; an explicit list is kept exactly as given.
 
 **Photophysics page and export.** Densities has no summary or detail of
 its own anywhere in this payload: it never gets a molecule into the
@@ -452,10 +460,12 @@ under the old code.
 Each successful job's parsed output is stored once, in `job_results`.
 Analyses, exports, the Photophysics page and ESD rate-job inputs read the
 stored record and fall back to parsing the job's files when there is none
-— on a job judged before records existed, on an older parser version, or
-on a record whose identity no longer matches the job (see **Roll back**).
-A job without its output (deleted, or the record predates it existing)
-reads as having no results, same as before this feature.
+— on a job judged before records existed, on an older parser version, on
+a record missing a key the reader `require`s, or on a record whose
+identity no longer matches the job (see **Roll back**). A job without its
+output falls back to the stored record instead: served when it has every
+key the reader needs, else treated as having no results for that reader
+(e.g. an old record read by a reader that needs a key added since).
 
 **Deploy.** Once the controller is up on the new code, run
 `autodft admin backfill-results --config <config>` on the controller

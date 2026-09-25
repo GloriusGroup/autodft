@@ -1064,11 +1064,14 @@ def _generate_job_files(
         # header verbatim.
         from autodft.qm.orca.blocks import HeaderConflict, compose_header
 
+        metadata = json.loads(state.metadata_json) if state.metadata_json else {}
+        if task.task_type == TaskType.singlepoint and metadata.get(categories.NBO):
+            unavailable = categories.nbo_unavailable(settings)
+            if unavailable:
+                return _fail_task(session, task, job, unavailable)
         try:
             header_text = compose_header(
-                task.task_type.value, header_text,
-                json.loads(state.metadata_json) if state.metadata_json else {},
-                multiplicity=multiplicity,
+                task.task_type.value, header_text, metadata, multiplicity=multiplicity,
             )
         except HeaderConflict as exc:
             return _fail_task(session, task, job, str(exc))

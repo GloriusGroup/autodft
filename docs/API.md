@@ -552,21 +552,27 @@ channel (see `socme_zero` above), and, when that channel feeds a
 
 An NBO molecule's entry adds `nbo`, one entry per NBO-flagged state that
 has its own energy singlepoint — S0, and T1 / ox / red when requested;
-ESD's S1 never appears, since it has none:
+ESD's S1 never appears, since it has none. This covers only the states
+submitted together with the entry's own S0 (same `confsearch_header_id`,
+`optimization_header_id` and `singlepoint_header_id`); a molecule
+resubmitted with different headers gets a separate entry with its own
+states, never mixed with the first:
 
     "nbo": {"states": [
       {"count": 1, "pending": 0, "failed": 0, "unavailable": 0, "unweighted": 0,
-       "weighting": "G", "state": "S0",
+       "weighting": "G", "state": "S0", "state_id": 21,
        "extremes": {"most_negative": {"index": 3, "element": "O", "charge": -0.612},
                     "most_positive": {"index": 0, "element": "C", "charge": 0.812}}}]}
 
 Each state's counts and `weighting` mean the same as UV/Vis/IR/NMR, but
 weighted on that state's own conformers rather than only S0's. `extremes`
 is the Boltzmann-weighted most negative / most positive natural charge,
-`null` until at least one conformer's charges are in. States are ordered
-S0, T1, ox, red. An NBO-only molecule (no UV/Vis, IR, NMR or ESD) never
-gets `stage`; its states' own `pending`/`unweighted` counts show whether
-conformers are still in.
+`null` until at least one conformer's charges are in. `state_id` is that
+state's own id — for T1/ox/red this differs from the entry's `state_id`
+above, which is always the S0 state's. States are ordered S0, T1, ox,
+red. An NBO-only molecule (no UV/Vis, IR, NMR or ESD) never gets `stage`;
+its states' own `pending`/`unweighted` counts show whether conformers are
+still in.
 
 With `?molecule_id=`, each successful rate also adds `jobs` (its
 per-ORCA-job values — `rate_s`, `fc_percent`, `ht_percent`, `k_squared`,

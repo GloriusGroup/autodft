@@ -18,7 +18,10 @@ runner = CliRunner()
 
 
 @pytest.fixture()
-def db(tmp_path):
+def db(tmp_path, monkeypatch):
+    # submit's own init_db(load_settings(config)) must land on this same
+    # database even without --config, since AUTODFT_DATA_PATH outranks it.
+    monkeypatch.setenv("AUTODFT_DATA_PATH", str(tmp_path))
     settings = Settings()
     settings.storage.data_path = str(tmp_path)
     reset_engine()
@@ -68,6 +71,23 @@ def test_nbo_flag_reaches_the_entrypoint_when_configured(db, tmp_path):
         meta = json.loads(session.exec(select(CalculationEntrypoint)).one().request_metadata)
     assert meta["request_singlepoint_nbo"] is True
     assert meta["nbo_keywords"] == "BNDIDX"
+
+
+def test_config_selects_the_database_too(tmp_path):
+    """M4: --config must not leave get_session() resolving the default DB."""
+    reset_engine()
+    other_data = tmp_path / "otherdb"
+    config = tmp_path / "config.toml"
+    config.write_text(f'[storage]\ndata_path = "{other_data}"\n')
+    result = runner.invoke(app, [
+        "submit", "--smiles", "CCO", "--project", "p", "--config", str(config),
+    ])
+    assert result.exit_code == 0, result.output
+    assert (other_data / "autodft.db").exists()
+    with get_session() as session:
+        entry = session.exec(select(CalculationEntrypoint)).one()
+    assert entry.smiles == "CCO"
+    reset_engine()
 
 
 def test_submit_batch_densities_and_nbo_flags(db, tmp_path):
