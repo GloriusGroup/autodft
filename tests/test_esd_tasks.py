@@ -21,27 +21,45 @@ OPT = "!B3LYP def2-SVP Opt Freq\n"
 class TestBlocks:
     def test_soc_singlepoint(self):
         assert blocks.compose_header("singlepoint_soc", SP) == SP + (
-            "%tddft\n  nroots 10\n  iroot 1\n  triplets true\n  dosoc true\n  tda false\nend\n"
+            "%tddft\n  nroots 10\n  iroot 1\n  triplets true\n  dosoc true\n  tda true\nend\n"
         )
 
+    def test_a_solvated_soc_singlepoint_is_in_equilibrium(self):
+        sp = "!wB97X-D3 def2-TZVP CPCM(MeCN)\n"
+        assert blocks.compose_header("singlepoint_soc", sp).endswith("  tda true\n  cpcmeq true\nend\n")
+
     def test_the_esd_s1_optimisation_follows_its_root(self):
-        assert blocks.compose_header("optimization", OPT, {"esd_role": "S1"}) == OPT + (
-            "%tddft\n  nroots 5\n  iroot 1\n  followiroot true\n  tda false\nend\n"
+        assert blocks.compose_header("optimization", OPT, {"esd_role": "S1"}) == (
+            "!B3LYP def2-SVP TightOpt Freq\n"
+            "%tddft\n  nroots 5\n  iroot 1\n  followiroot true\n  tda true\nend\n"
         )
 
     def test_a_solvated_s1_optimisation_is_in_equilibrium(self):
         opt = "!wB97X-D3 def2-SVP Opt Freq CPCM(MeCN)\n"
         assert blocks.compose_header("optimization", opt, {"esd_role": "S1"}).endswith(
-            "  tda false\n  cpcmeq true\nend\n"
+            "  tda true\n  cpcmeq true\nend\n"
         )
 
-    @pytest.mark.parametrize("options", [None, {}, {"esd_role": "T1"}, {"request_esd": True}])
+    @pytest.mark.parametrize("options", [{"esd_role": "T1"}, {"request_esd": True}])
+    def test_esd_t1_and_s0_optimisations_are_tight(self, options):
+        assert blocks.compose_header("optimization", OPT, options) == "!B3LYP def2-SVP TightOpt Freq\n"
+
+    @pytest.mark.parametrize("header", [
+        "!B3LYP def2-SVP LooseOpt Freq\n", "!B3LYP def2-SVP VeryTightOpt Freq\n",
+        "!B3LYP def2-SVP Opt TightOpt Freq\n", "!B3LYP def2-SVP OptTS Freq # Opt\n",
+    ])
+    def test_an_explicit_opt_level_is_kept(self, header):
+        assert blocks.compose_header("optimization", header, {"esd_role": "T1"}) == header
+
+    @pytest.mark.parametrize("options", [None, {}, {"request_uvvis": True}])
     def test_other_optimisations_are_verbatim(self, options):
         assert blocks.compose_header("optimization", OPT, options) is OPT
 
-    def test_an_existing_block_is_a_conflict(self):
-        with pytest.raises(blocks.HeaderConflict, match="this job adds its own"):
-            blocks.compose_header("optimization", OPT + "%tddft iroot 2 end\n", {"esd_role": "S1"})
+    def test_a_second_keyword_line_is_tightened_too(self):
+        header = "!B3LYP def2-SVP\n! Opt Freq # plain Opt\n"
+        assert blocks.compose_header("optimization", header, {"request_esd": True}) == (
+            "!B3LYP def2-SVP\n! TightOpt Freq # plain Opt\n"
+        )
 
 
 class TestFollowup:

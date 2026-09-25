@@ -16,6 +16,8 @@ ESD_NROOTS = 10
 # The S1 optimisation follows root 1; a few roots above keep the tracking stable.
 S1_NROOTS = 5
 _SOLVATION_RE = re.compile(r"^\s*!.*\b(?:CPCM|SMD|CPCMC)\b|%cpcm\b", re.IGNORECASE | re.MULTILINE)
+_OPT_RE = re.compile(r"\bOpt\b", re.IGNORECASE)
+_OPT_LEVEL_RE = re.compile(r"\b(?:Tight|VeryTight|Loose)Opt\b", re.IGNORECASE)
 
 
 class HeaderConflict(ValueError):
@@ -68,6 +70,28 @@ def with_keyword(header: str, keyword: str) -> str:
             lines[i] = body.rstrip() + f" {keyword}" + (f" {hash_}{comment}" if hash_ else "") + ending
             return "".join(lines)
     return f"! {keyword}\n" + header
+
+
+def _on_keyword_lines(header: str, change) -> str:
+    """*header* with *change* applied to each ``!`` line, comments left alone."""
+    lines = header.splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("!"):
+            ending = "\n" if line.endswith("\n") else ""
+            body, hash_, comment = line.rstrip("\n").partition("#")
+            lines[i] = change(body) + hash_ + comment + ending
+    return "".join(lines)
+
+
+def with_tight_opt(header: str) -> str:
+    """*header* with a plain ``Opt`` made ``TightOpt``, unless it sets an opt level already."""
+    if any(_OPT_LEVEL_RE.search(line) for line in _keyword_lines(header)):
+        return header
+    return _on_keyword_lines(header, lambda body: _OPT_RE.sub("TightOpt", body))
+
+
+def _keyword_lines(header: str) -> list[str]:
+    return [line.partition("#")[0] for line in header.splitlines() if line.lstrip().startswith("!")]
 
 
 def nbo_block(keywords: str) -> str:
@@ -139,15 +163,20 @@ def compose_header(
     if task_type == "singlepoint_nmr":
         return with_keyword(header, "NMR")
     if task_type == "singlepoint_soc":
+        # Equilibrium solvation, as in the S1 optimisation, keeps DELE consistent.
+        solvated = {"cpcmeq": True} if _SOLVATION_RE.search(header) else {}
         return with_tddft(
-            header, nroots=ESD_NROOTS, iroot=1, triplets=True, dosoc=True, tda=False,
+            header, nroots=ESD_NROOTS, iroot=1, triplets=True, dosoc=True, tda=True, **solvated,
         )
     if task_type == "optimization" and options.get("esd_role") == "S1":
         # ORCA solvates the excited state in equilibrium only for analytic gradients;
         # its numerical frequencies otherwise mix in non-equilibrium LR-CPCM.
         solvated = {"cpcmeq": True} if _SOLVATION_RE.search(header) else {}
-        return with_tddft(header, nroots=S1_NROOTS, iroot=1, followiroot=True, tda=False,
-                          **solvated)
+        return with_tddft(with_tight_opt(header), nroots=S1_NROOTS, iroot=1, followiroot=True,
+                          tda=True, **solvated)
+    if task_type == "optimization" and (options.get("esd_role") == "T1" or options.get(categories.ESD)):
+        # ESD Hessians of T1 and of the S0 conformers (request_esd sits on S0 only).
+        return with_tight_opt(header)
     if task_type == "singlepoint":
         if options.get(categories.NBO):
             defaults = categories.OPTIONS[categories.NBO]

@@ -49,6 +49,13 @@ class TestEnergies:
         assert sorted(triplets) == list(range(1, 11))
         assert triplets[1] == pytest.approx(0.064920)
 
+    def test_a_tda_s1_optimisation(self):
+        # Formaldehyde, PBE0/def2-SVP, TDA with followiroot and cpcmeq (ORCA 6.1.1).
+        text = _read("s1_opt_tda_tail.out")
+        assert esd_parser.followed_root(text) == 1
+        assert esd_parser.followed_root_energy(text) == pytest.approx(0.116339158)
+        assert esd_parser.excitation_energies(text, "SINGLETS")[1] == pytest.approx(0.116339)
+
     def test_followed_root_of_an_s1_optimisation(self):
         assert esd_parser.followed_root_energy(_read("s1_opt_tail.out")) == pytest.approx(0.087063157)
         assert esd_parser.followed_root_energy("no tddft") is None
