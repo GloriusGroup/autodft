@@ -240,3 +240,8 @@ def test_rates_table():
         "esd_isc", "esd_risc", "esd_ic", "esd_fluor", "esd_isc_t1s0", "esd_phosp",
     }
     assert esd_inputs.RATES["esd_isc"] == ("S1", "T1", {"initial.hess": "S1", "final.hess": "T1"})
+
+
+@pytest.mark.parametrize("value,text", [(-0.04, "0.0"), (-0.0, "0.0"), (0.0, "0.0"), (-0.06, "-0.1"), (12.34, "12.3")])
+def test_dele_never_reads_minus_zero(value, text):
+    assert esd_inputs._cm(value) == text

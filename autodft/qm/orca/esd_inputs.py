@@ -174,7 +174,7 @@ def build(
         jobs = [_tddft_job(
             sp_header, keyword,
             {"nroots": NROOTS[rate], "iroot": 1, **tddft},
-            {**files, "DELE": f"{dele:.1f}", "USEJ": "TRUE", **doht, **lineshape, **temperature},
+            {**files, "DELE": _cm(dele), "USEJ": "TRUE", **doht, **lineshape, **temperature},
         )]
         record = [{"dele_cm": dele}]
         combine = "mean"
@@ -186,7 +186,7 @@ def build(
             _tddft_job(
                 sp_header, "ESD(PHOSP)",
                 {"nroots": NROOTS[rate], "iroot": k, "triplets": True, "dosoc": True, "tda": True},
-                {**files, "DELE": f"{dele:.1f}", "USEJ": "TRUE", **doht, **temperature},
+                {**files, "DELE": _cm(dele), "USEJ": "TRUE", **doht, **temperature},
             )
             for k in (1, 2, 3)
         ]
@@ -215,7 +215,7 @@ def _isc(rate, channels, settings, files, temperature, sp_header):
     fc_jobs = {}
     fc_main = []
     for n, sroot, gap, socme, factor in channels:
-        dele = f"{gap * EH_TO_CM:.1f}"
+        dele = _cm(gap * EH_TO_CM)
         ht, reason = ht_decision(rate, socme, gap * EH_TO_CM, settings)
         common = {"triplet": n, "dele_cm": gap * EH_TO_CM, "ht": ht, "ht_reason": reason}
         fc_jobs[n] = _fc_job(files, dele, socme * factor, temperature)
@@ -257,6 +257,12 @@ def _fc_job(files, dele, socme_cm, temperature):
             **lineshape, **temperature,
         )
     return job
+
+
+def _cm(value: float) -> str:
+    """*value* (cm-1) for a %esd block; a zero gap is 0.0, not -0.0."""
+    text = f"{value:.1f}"
+    return "0.0" if text == "-0.0" else text
 
 
 def _tddft_job(sp_header: str, keyword: str, tddft: dict, esd: dict) -> str:
