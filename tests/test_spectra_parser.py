@@ -124,6 +124,30 @@ class TestShieldings:
         assert [r.element for r in rows] == ["H"]
 
 
+from autodft.qm.orca.spectra_parser import parse_natural_charges
+
+FIXTURES_NBO = Path(__file__).parent / "fixtures" / "nbo"
+
+
+class TestNaturalCharges:
+    def test_closed_shell(self):
+        rows = parse_natural_charges((FIXTURES_NBO / "closed_shell.out").read_text())
+        assert [(r.index, r.element) for r in rows] == [(0, "C"), (1, "O"), (2, "H"), (3, "H")]
+        assert rows[1].charge == pytest.approx(-0.57000)
+        assert all(r.spin is None for r in rows)
+
+    def test_open_shell_reads_only_the_first_summary(self):
+        rows = parse_natural_charges((FIXTURES_NBO / "open_shell.out").read_text())
+        assert len(rows) == 8
+        assert [r.element for r in rows] == ["C", "C", "C", "H", "H", "H", "H", "H"]
+        assert rows[0].charge == pytest.approx(-0.35233)
+        assert rows[0].spin == pytest.approx(0.65677)
+        assert rows[1].spin == pytest.approx(-0.24265)
+
+    def test_no_summary_is_empty(self):
+        assert parse_natural_charges("****ORCA TERMINATED NORMALLY****") == []
+
+
 class TestNmrCheck:
     def _write(self, tmp_path, body: str):
         (tmp_path / "output.out").write_text(body + "\n****ORCA TERMINATED NORMALLY****\n")

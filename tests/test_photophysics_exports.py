@@ -254,6 +254,20 @@ def _full_payload():
                 },
                 "flags": [],
             },
+            "nbo": {
+                "states": [{
+                    "state": "S0", "count": 1, "pending": 0, "failed": 0, "unavailable": 0,
+                    "unweighted": 0, "weighting": "G",
+                    "extremes": {
+                        "most_negative": {"index": 1, "element": "O", "charge": -0.5},
+                        "most_positive": {"index": 0, "element": "C", "charge": 0.3},
+                    },
+                    "atoms": [
+                        {"index": 0, "element": "C", "charge": 0.3},
+                        {"index": 1, "element": "O", "charge": -0.5},
+                    ],
+                }],
+            },
         }],
     }
 
@@ -269,7 +283,7 @@ def _col(ws, name, row=1):
 def test_build_xlsx_has_a_sheet_per_category_plus_sticks_and_esd_jobs():
     wb = load_workbook(BytesIO(build_xlsx(_full_payload())))
     assert wb.sheetnames == [
-        "Summary", "UV-Vis", "UV-Vis sticks", "IR", "IR sticks", "NMR", "ESD", "ESD jobs",
+        "Summary", "UV-Vis", "UV-Vis sticks", "IR", "IR sticks", "NMR", "ESD", "ESD jobs", "NBO",
     ]
 
     assert _header(wb["UV-Vis"]) == [
@@ -299,6 +313,9 @@ def test_build_xlsx_has_a_sheet_per_category_plus_sticks_and_esd_jobs():
         "mol_id", "state_id", "rate", "triplet", "sublevel", "rate_s", "dele_cm", "socme_cm",
         "fc_percent", "ht_percent", "k_squared", "e00_cm",
     ]
+    assert _header(wb["NBO"]) == [
+        "mol_id", "smiles", "state_id", "state", "atom", "element", "charge", "spin", "count", "weighting",
+    ]
 
     sticks = wb["UV-Vis sticks"]
     assert sticks.cell(row=2, column=_col(sticks, "state_id")).value == 10
@@ -316,6 +333,14 @@ def test_build_xlsx_has_a_sheet_per_category_plus_sticks_and_esd_jobs():
     assert jobs.cell(row=2, column=_col(jobs, "state_id")).value == 10
     assert jobs.cell(row=2, column=_col(jobs, "rate")).value == "isc"
     assert jobs.cell(row=2, column=_col(jobs, "triplet")).value == 1
+
+    nbo_sheet = wb["NBO"]
+    assert nbo_sheet.cell(row=2, column=_col(nbo_sheet, "state_id")).value == 10
+    assert nbo_sheet.cell(row=2, column=_col(nbo_sheet, "state")).value == "S0"
+    assert nbo_sheet.cell(row=2, column=_col(nbo_sheet, "atom")).value == 1
+    assert nbo_sheet.cell(row=2, column=_col(nbo_sheet, "charge")).value == 0.3
+    assert nbo_sheet.cell(row=3, column=_col(nbo_sheet, "atom")).value == 2
+    assert nbo_sheet.cell(row=3, column=_col(nbo_sheet, "element")).value == "O"
 
 
 def test_build_xlsx_on_an_empty_payload_has_only_the_summary_sheet():

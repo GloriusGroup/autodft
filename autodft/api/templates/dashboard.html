@@ -4274,6 +4274,34 @@
                    (facts.length ? '<div class="pp-summary">' + facts.join(' · ') + '</div>' : '') + flags + '</div>';
         }
 
+        function ppNboCharge(v) { return (v >= 0 ? '+' : '') + v.toFixed(2); }
+
+        function ppNboSummary(nbo) {
+            var parts = nbo.states.map(function (s) {
+                if (!s.extremes) return escHtml(s.state) + ': no charges yet';
+                var neg = s.extremes.most_negative, pos = s.extremes.most_positive;
+                return escHtml(s.state) + ': most negative ' + escHtml(neg.element) + escHtml(neg.index + 1) +
+                       ' ' + escHtml(ppNboCharge(neg.charge)) + ', most positive ' + escHtml(pos.element) +
+                       escHtml(pos.index + 1) + ' ' + escHtml(ppNboCharge(pos.charge));
+            });
+            return '<div class="pp-summary">NBO · ' + parts.join(' · ') + '</div>';
+        }
+
+        function ppNbo(nbo) {
+            return nbo.states.map(function (s) {
+                var hasSpin = s.atoms.length > 0 && s.atoms[0].spin !== null && s.atoms[0].spin !== undefined;
+                var rows = s.atoms.map(function (a) {
+                    var cells = '<td>' + escHtml(a.element) + escHtml(a.index + 1) + '</td><td class="num">' +
+                                escHtml(a.charge.toFixed(3)) + '</td>';
+                    if (hasSpin) cells += '<td class="num">' + escHtml(a.spin.toFixed(3)) + '</td>';
+                    return '<tr>' + cells + '</tr>';
+                }).join('');
+                return '<div class="pp-plot"><div class="pp-plot-title">NBO ' + escHtml(s.state) + ' · ' +
+                       escHtml(ppCounts(s)) + '</div><table class="pp-nmr"><thead><tr><th>Atom</th><th>Charge</th>' +
+                       (hasSpin ? '<th>Spin</th>' : '') + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+            }).join('');
+        }
+
         function ppSummary(m) {
             var rows = [];
             if (m.stage) {
@@ -4309,6 +4337,7 @@
                           ' · ' + escHtml(ppCounts(m.nmr)) + '</div>');
             }
             if (m.esd) rows.push(ppEsdSummary(m.esd));
+            if (m.nbo) rows.push(ppNboSummary(m.nbo));
             if (m.archived) rows.push('<div class="pp-waiting">Archived: raw outputs removed.</div>');
             return rows.join('');
         }
@@ -4332,6 +4361,7 @@
             }
             if (detail.nmr && detail.nmr.count) parts.push(ppNmr(detail.nmr));
             if (detail.esd && detail.esd.seed_task_id) parts.push(ppEsd(detail.esd));
+            if (detail.nbo && detail.nbo.states.length) parts.push(ppNbo(detail.nbo));
             return parts.join('') || '<div class="pp-waiting">Nothing to plot yet.</div>';
         }
 
@@ -4341,7 +4371,7 @@
             var host = document.getElementById('ppCards');
             if (!payload.molecules.length) {
                 host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">' +
-                                 'No molecule in this project was submitted with UV/Vis, IR, NMR or ESD.</div>';
+                                 'No molecule in this project was submitted with UV/Vis, IR, NMR, ESD or NBO.</div>';
                 return;
             }
             var perMolecule = {};

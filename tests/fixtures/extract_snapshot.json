@@ -1,5 +1,5 @@
 {
-  "1": {
+  "2": {
     "esd_fluor": {
       "energy": null,
       "free_energy_correction": null,
@@ -255,7 +255,8 @@
     },
     "singlepoint": {
       "energy": null,
-      "free_energy_correction": null
+      "free_energy_correction": null,
+      "npa_charges": null
     },
     "singlepoint_nmr": {
       "energy": null,

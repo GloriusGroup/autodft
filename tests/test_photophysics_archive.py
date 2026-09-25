@@ -15,6 +15,7 @@ from autodft.config import Settings
 from autodft.db import get_session, init_db, reset_engine
 from autodft.engine import nmr_references
 from autodft.models import ComputationTask, Molecule, MoleculeState, ProjectJobKind, TaskStatus, TaskType
+from tests.test_nbo_analysis import _conformer as _nbo_conformer, _state as _nbo_state  # noqa: F401 - helpers
 from tests.test_nmr_analysis import _glyoxal, _state, _tms  # noqa: F401 - helpers
 from tests.test_spectroscopy_analysis import project  # noqa: F401 - fixture
 
@@ -100,6 +101,20 @@ def test_a_project_without_categories_freezes_nothing(project, settings, monkeyp
     result = _archive(settings, monkeypatch)
     assert "photophysics_frozen" not in result
     assert not spectroscopy.frozen_dir("nho/p", settings).exists()
+
+
+def test_nbo_entry_survives_archiving(project, settings, monkeypatch):
+    with get_session() as session:
+        mol, state = _nbo_state(session, "nho/p", metadata={categories.NBO: True})
+        _nbo_conformer(session, project["tmp_path"], state, 11, -100.0, [("C", -0.30, None), ("O", 0.10, None)])
+        mol_id = mol.id
+
+    before = spectroscopy.analyze_spectra("nho/p", molecule_id=mol_id, use_cache=False)
+    _archive(settings, monkeypatch)
+    shutil.rmtree(project["tmp_path"] / "jobs")
+    after = spectroscopy.analyze_spectra("nho/p", molecule_id=mol_id)
+    assert after["molecules"][0]["nbo"] == before["molecules"][0]["nbo"]
+    assert after["molecules"][0]["nbo"]["states"][0]["extremes"]["most_negative"]["element"] == "C"
 
 
 def test_the_full_payload_carries_every_detail(project, settings):

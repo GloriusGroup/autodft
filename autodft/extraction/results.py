@@ -24,14 +24,15 @@ from autodft.qm.orca import esd_parser
 from autodft.qm.orca.esd_parser import Rate
 from autodft.qm.orca.parser import OrcaParser
 from autodft.qm.orca.spectra_parser import (
-    IRMode, Shielding, Transition, parse_absorption, parse_ir, parse_shieldings,
+    IRMode, NaturalCharge, Shielding, Transition, parse_absorption, parse_ir, parse_natural_charges,
+    parse_shieldings,
 )
 
 logger = logging.getLogger(__name__)
 
 # Bump when a parser changes what it returns: older records are then re-parsed.
 # Pinned by tests/test_stored_results.py::test_extract_output_is_pinned.
-PARSER_VERSION = 1
+PARSER_VERSION = 2
 
 # The task types a reader ever asks for. store() stores nothing else, and the
 # backfill's query skips them outright.
@@ -63,6 +64,9 @@ def extract(task_type: str, output: str, input_text: Optional[str] = None, ir: b
         record["followed_root"] = esd_parser.followed_root(output)
         if ir:
             record["ir_modes"] = [asdict(m) for m in parse_ir(output)]
+    elif task_type == "singlepoint":
+        charges = parse_natural_charges(output)
+        record["npa_charges"] = [asdict(c) for c in charges] if charges else None
     elif task_type == "singlepoint_uvvis":
         record["transitions"] = [asdict(t) for t in parse_absorption(output)]
     elif task_type == "singlepoint_nmr":
@@ -196,6 +200,11 @@ def transitions(record: dict) -> list[Transition]:
 
 def shieldings(record: dict) -> list[Shielding]:
     return [Shielding(**s) for s in record.get("shieldings", [])]
+
+
+def natural_charges(record: dict) -> Optional[list[NaturalCharge]]:
+    charges = record.get("npa_charges")
+    return [NaturalCharge(**c) for c in charges] if charges is not None else None
 
 
 def fingerprint(record: dict) -> Optional[tuple[frozenset[str], str]]:

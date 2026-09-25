@@ -250,7 +250,8 @@ def _molecule_entries(
         wanted = categories.requested(metadata) & {
             categories.UVVIS, categories.IR, categories.NMR, categories.ESD,
         }
-        if not wanted:
+        nbo_wanted = categories.NBO in categories.requested(metadata)
+        if not wanted and not nbo_wanted:
             continue
         needs_pool = bool(wanted & {categories.UVVIS, categories.IR, categories.NMR})
         pool = [
@@ -277,6 +278,10 @@ def _molecule_entries(
             from autodft.analysis.esd import molecule_esd
 
             entry["esd"] = molecule_esd(session, extractor, state, detail)
+        if nbo_wanted:
+            from autodft.analysis.nbo import molecule_nbo
+
+            entry["nbo"] = molecule_nbo(session, extractor, mol, detail)
         entries.append(entry)
     return entries
 

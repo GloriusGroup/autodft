@@ -178,6 +178,14 @@ def test_the_dashboard_offers_esd(client):
         assert needle in html, needle
 
 
+def test_the_dashboard_shows_nbo_charges(client):
+    c, headers = client
+    html = c.get("/", headers=headers).text
+    for needle in ("function ppNbo(", "function ppNboSummary(", "NBO · ",
+                   "most negative ", "most positive ", "class=\"pp-nmr\""):
+        assert needle in html, needle
+
+
 def test_uvvis_options_are_sent_only_when_ticked():
     html = (TEMPLATE / "dashboard.html").read_text()
     assert "uvvis_nroots:       intOrDefault" not in html
