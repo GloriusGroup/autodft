@@ -137,9 +137,25 @@ def test_each_category_has_a_settings_panel_shown_only_when_ticked(client):
     c, headers = client
     html = c.get("/", headers=headers).text
     panels = re.findall(r'<div class="cat-detail" data-requires="(\w+)" style="display:none;">', html)
-    assert panels == ["requestUvvis", "requestIr", "requestNmr", "requestEsd"]
+    assert panels == [
+        "requestUvvis", "requestIr", "requestNmr", "requestEsd",
+        "requestDensities", "requestNbo",
+    ]
     for needle in ('id="uvvisNroots"', 'id="uvvisTda"', 'id="irHeaderNote"',
                    'id="uvvisHeaderNote"', "commonBody.uvvis_nroots", "commonBody.uvvis_tda"):
+        assert needle in html, needle
+
+
+def test_the_dashboard_offers_densities_and_nbo(client):
+    c, headers = client
+    html = c.get("/", headers=headers).text
+    for needle in ('id="requestDensities"', 'id="requestNbo"',
+                   'id="densityEldens"', 'id="densitySpindens"',
+                   'id="densityEldensFile"', 'id="densitySpindensFile"', 'id="densityGrid"',
+                   'id="densitiesHeaderNote"', 'id="nboKeywords"', 'id="nboHeaderNote"',
+                   "request_densities", "request_singlepoint_nbo",
+                   "commonBody.density_grid", "commonBody.nbo_keywords",
+                   "var PLOTS_RE", "var NBO_CONFLICT_RE"):
         assert needle in html, needle
 
 

@@ -79,6 +79,10 @@ def _category_options_to_flags(
     uvvis: bool, ir: bool, esd: bool, esd_ht: bool, nmr: bool,
     uvvis_nroots: int = 20, uvvis_tda: bool = False, nmr_nuclei: Optional[list] = None,
     esd_tn_window_ev: float = 0.2, esd_temperature_k: float = 298.15,
+    densities: bool = False, density_eldens: bool = True, density_spindens: bool = True,
+    density_grid: int = 75, density_eldens_file: str = "ElDens.cube",
+    density_spindens_file: str = "SpinDens.cube",
+    nbo: bool = False, nbo_keywords: str = "",
 ) -> dict:
     """CLI options as ``request_metadata`` category keys and settings."""
     from autodft import categories
@@ -89,17 +93,26 @@ def _category_options_to_flags(
         categories.ESD: esd,
         categories.ESD_HT: esd_ht,
         categories.NMR: nmr,
+        categories.DENSITIES: densities,
+        categories.NBO: nbo,
         "uvvis_nroots": uvvis_nroots,
         "uvvis_tda": uvvis_tda,
         "nmr_nuclei": nmr_nuclei if nmr_nuclei is not None else ["H", "C", "F"],
         "esd_tn_window_ev": esd_tn_window_ev,
         "esd_temperature_k": esd_temperature_k,
+        "density_eldens": density_eldens,
+        "density_spindens": density_spindens,
+        "density_grid": density_grid,
+        "density_eldens_file": density_eldens_file,
+        "density_spindens_file": density_spindens_file,
+        "nbo_keywords": nbo_keywords,
     }
 
 
 def _check_categories(
     smiles: str, flags: dict,
     header_optimization: Optional[str], header_singlepoint: Optional[str],
+    settings,
 ) -> None:
     """Refuse categories this molecule or these headers cannot run.
 
@@ -120,6 +133,11 @@ def _check_categories(
     if reason:
         console.print(f"[red]{reason}[/red] — {smiles}")
         raise typer.Exit(code=1)
+    if categories.NBO in categories.requested(flags):
+        unavailable = categories.nbo_unavailable(settings)
+        if unavailable:
+            console.print(f"[red]{unavailable}[/red] — {smiles}")
+            raise typer.Exit(code=1)
 
 
 def _qualified_project(project: str, user: str) -> tuple[str, str]:
@@ -244,13 +262,27 @@ def submit(
     ),
     esd_tn_window_ev: float = typer.Option(0.2, "--esd-tn-window", help="Include S1->Tn ISC for Tn up to this many eV above S1"),
     esd_temperature_k: float = typer.Option(298.15, "--esd-temperature", help="Temperature of the ESD rates (K)"),
+    densities: bool = typer.Option(False, "--densities", help="Electron / spin density cube files from every state's energy singlepoint"),
+    no_eldens: bool = typer.Option(False, "--no-eldens", help="Skip the electron density cube"),
+    no_spindens: bool = typer.Option(False, "--no-spindens", help="Skip the spin density cube (open-shell jobs only)"),
+    density_grid: int = typer.Option(75, "--density-grid", help="Cube grid points per axis (10-300)"),
+    eldens_file: str = typer.Option("ElDens.cube", "--eldens-file", help="Electron density cube file name"),
+    spindens_file: str = typer.Option("SpinDens.cube", "--spindens-file", help="Spin density cube file name"),
+    nbo: bool = typer.Option(False, "--nbo", help="NBO 7 inside every state's energy singlepoint"),
+    nbo_keywords: str = typer.Option("", "--nbo-keywords", help='Extra $NBO keywords, e.g. "BNDIDX"'),
+    config: Optional[str] = typer.Option(None, "--config", help="Path to config TOML file"),
 ) -> None:
     """Submit a single molecule by SMILES string."""
+    from autodft.config import load_settings
+
     _check_reference_state(smiles, request_t1, request_ox, request_red)
     flags = _category_options_to_flags(
         uvvis, ir, esd, esd_ht, nmr, uvvis_nroots, uvvis_tda,
         nmr_nuclei=[n.strip() for n in nmr_nuclei.split(",") if n.strip()],
         esd_tn_window_ev=esd_tn_window_ev, esd_temperature_k=esd_temperature_k,
+        densities=densities, density_eldens=not no_eldens, density_spindens=not no_spindens,
+        density_grid=density_grid, density_eldens_file=eldens_file, density_spindens_file=spindens_file,
+        nbo=nbo, nbo_keywords=nbo_keywords,
     )
     qualified, author = _qualified_project(project, user)
 
@@ -258,7 +290,7 @@ def submit(
     h_cs = _read_header_file(header_confsearch) if header_confsearch else (None if skip_confsearch else DEFAULT_HEADER_CONFSEARCH)
     h_opt = _read_header_file(header_opt) if header_opt else DEFAULT_HEADER_OPTIMIZATION
     h_sp = _read_header_file(header_sp) if header_sp else DEFAULT_HEADER_SINGLEPOINT
-    _check_categories(smiles, flags, h_opt, h_sp)
+    _check_categories(smiles, flags, h_opt, h_sp, load_settings(config))
 
     request_metadata = _build_request_metadata(
         project_name=qualified,
@@ -347,8 +379,19 @@ def submit_batch(
     ),
     esd_tn_window_ev: float = typer.Option(0.2, "--esd-tn-window", help="Include S1->Tn ISC for Tn up to this many eV above S1"),
     esd_temperature_k: float = typer.Option(298.15, "--esd-temperature", help="Temperature of the ESD rates (K)"),
+    densities: bool = typer.Option(False, "--densities", help="Electron / spin density cube files from every state's energy singlepoint"),
+    no_eldens: bool = typer.Option(False, "--no-eldens", help="Skip the electron density cube"),
+    no_spindens: bool = typer.Option(False, "--no-spindens", help="Skip the spin density cube (open-shell jobs only)"),
+    density_grid: int = typer.Option(75, "--density-grid", help="Cube grid points per axis (10-300)"),
+    eldens_file: str = typer.Option("ElDens.cube", "--eldens-file", help="Electron density cube file name"),
+    spindens_file: str = typer.Option("SpinDens.cube", "--spindens-file", help="Spin density cube file name"),
+    nbo: bool = typer.Option(False, "--nbo", help="NBO 7 inside every state's energy singlepoint"),
+    nbo_keywords: str = typer.Option("", "--nbo-keywords", help='Extra $NBO keywords, e.g. "BNDIDX"'),
+    config: Optional[str] = typer.Option(None, "--config", help="Path to config TOML file"),
 ) -> None:
     """Submit molecules from a CSV file."""
+    from autodft.config import load_settings
+
     if not file.exists():
         console.print(f"[red]File not found:[/red] {file}")
         raise typer.Exit(code=1)
@@ -357,7 +400,11 @@ def submit_batch(
         uvvis, ir, esd, esd_ht, nmr, uvvis_nroots, uvvis_tda,
         nmr_nuclei=[n.strip() for n in nmr_nuclei.split(",") if n.strip()],
         esd_tn_window_ev=esd_tn_window_ev, esd_temperature_k=esd_temperature_k,
+        densities=densities, density_eldens=not no_eldens, density_spindens=not no_spindens,
+        density_grid=density_grid, density_eldens_file=eldens_file, density_spindens_file=spindens_file,
+        nbo=nbo, nbo_keywords=nbo_keywords,
     )
+    settings = load_settings(config)
 
     request_metadata = _build_request_metadata(
         project_name=qualified,
@@ -412,7 +459,7 @@ def submit_batch(
     # whole or not at all.
     for smi in smiles_list:
         _check_reference_state(smi, request_t1, request_ox, request_red)
-        _check_categories(smi, flags, h_opt, h_sp)
+        _check_categories(smi, flags, h_opt, h_sp, settings)
 
     submitted = 0
     with get_session() as session:

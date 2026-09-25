@@ -9,6 +9,7 @@ import typer
 
 from autodft import categories
 from autodft.cli import submit as cli
+from autodft.config import Settings
 from tests.test_categories import OPT_FREQ, SP
 from tests.test_categories_api import _metadata, api  # noqa: F401 - fixture
 
@@ -79,4 +80,4 @@ class TestCli:
     def test_a_radical_exits(self):
         flags = cli._category_options_to_flags(uvvis=False, ir=False, esd=False, esd_ht=False, nmr=True)
         with pytest.raises(typer.Exit):
-            cli._check_categories("C[CH2]", flags, OPT_FREQ, SP)
+            cli._check_categories("C[CH2]", flags, OPT_FREQ, SP, Settings())
