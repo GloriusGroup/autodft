@@ -68,6 +68,16 @@ def test_esd_by_products_are_copied_back_only_when_requested(tmp_path):
     assert without == with_esd.replace(ESD_COPY + "\n", "").replace(str(tmp_path / "b"), str(tmp_path / "a"))
 
 
+def test_nbo_archive_is_copied_back_only_when_requested(tmp_path):
+    copy = 'cp *.47 "$WORK_DIR"/ 2>/dev/null || true'
+    without = generate_submit_script(tmp_path / "a", "j", 1, 2000, "1-00:00:00", "CPU").read_text()
+    with_nbo = generate_submit_script(
+        tmp_path / "b", "j", 1, 2000, "1-00:00:00", "CPU", keep_nbo_archive=True,
+    ).read_text()
+    assert copy not in without
+    assert without == with_nbo.replace(copy + "\n", "").replace(str(tmp_path / "b"), str(tmp_path / "a"))
+
+
 def test_stage_configs():
     settings = Settings()
     assert settings.pipeline.excited_optimization.time_limit == "4-00:00:00"

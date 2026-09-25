@@ -56,16 +56,25 @@ frequency calculation, so the optimisation header must set `Freq`,
 `NumFreq`, or `AnFreq` — submitting IR against a header without one of
 those is refused.
 
-Frequencies are harmonic and unscaled wherever the API reports them. The
-dashboard applies whatever scale factor you type on the Photophysics
-page; it never changes what's stored.
+Frequencies are harmonic and unscaled wherever the API reports them
+(`"scaled": false, "scale_factor": 1.0` in the IR payload; the workbook's
+columns are `peak_cm_unscaled` / `frequency_cm_unscaled`). The dashboard
+plot applies the scale factor on the Photophysics page (default 0.95);
+it never changes what's stored.
 
 ## NMR
 
 Each optimised S0 conformer gets one `singlepoint_nmr` task. Its header
-is the state's singlepoint header with the `NMR` keyword appended to the
-first `!` line. NMR needs a closed-shell singlet reference (multiplicity
-1) — doublets and diradicals are refused.
+is the state's singlepoint header with the orbital basis on its `!` lines
+(`def2-*`, `cc-pV*`, `6-31G*`, `pcseg-*`, `x2c-*`, …) replaced by Jensen's
+shielding basis `pcSseg-2` (added if the header names none) and the `NMR`
+keyword appended to the first `!` line. Functional, grid, solvent and RI
+settings stay as they are, auxiliary bases included (`def2/J` works with
+`pcSseg-2` under RIJCOSX; shieldings within 0.2 ppm of `AutoAux`). ORCA
+has `pcSseg-2` for H–Kr only, so NMR for a molecule with a heavier
+element is refused. The reference compounds run through the same rule, so
+references and molecules share one NMR method. NMR needs a closed-shell
+singlet reference (multiplicity 1) — doublets and diradicals are refused.
 
 Shifts are δ = σ_ref − σ: σ_ref is the mean isotropic shielding of that
 element in a reference compound (TMS `C[Si](C)(C)C` for ¹H/¹³C, CFCl₃
@@ -216,12 +225,22 @@ points per axis (default 75, 10–300). Spin density is silently skipped on
 a closed-shell state (multiplicity 1) — ORCA's `orca_plot` cannot produce
 one there — rather than refused.
 
+A densities singlepoint also has to pass a `Density Cubes` check: every
+cube its `%plots` block names must be in the job directory and non-empty
+(`orca_plot` can crash after a good SCF, leaving a 0-byte cube). The
+first such failure reruns the job unchanged — no retry strategy applies,
+so no extra cores, memory or SCF settings. If the rerun misses its cubes
+too, the job is accepted anyway for its energy, with a WARNING naming the
+job directory and the missing cubes.
+
 **NBO.** Adds the `NBO` keyword, plus, when `nbo_keywords` is set, a
-`%nbo` block (`NBOKEYLIST = "$NBO <nbo_keywords> $END"`), for ORCA's NBO
-7. Needs `[orca].nbo_exe` configured on the controller (exported as
+`%nbo` block (`NBOKEYLIST = "$NBO <nbo_keywords> ARCHIVE $END"`), for
+ORCA's NBO 7. Needs `[orca].nbo_exe` configured on the controller (exported as
 `NBOEXE` in the job's submit script); a submission requesting NBO without
 it configured is refused, from the dashboard, the REST API and the CLI
-alike.
+alike. NBO's archive, `FILE.47` (ORCA's default keyword list writes it;
+a custom list replaces that list, hence the added `ARCHIVE`), is copied
+back into the job directory, and `cleanup` keeps `*.47` files.
 
 **Natural charges.** Each NBO singlepoint's output is parsed for its
 first "Summary of Natural Population Analysis" table (stopped at that
@@ -300,7 +319,7 @@ when it has rows:
   `pending`, `failed`, `unavailable`, `unweighted`), `weighting`, and the
   weighted peak.
 * `UV-Vis sticks` / `IR sticks` — one row per transition or mode, per
-  conformer.
+  conformer. IR frequencies are unscaled harmonic.
 * `NMR` — one row per signal (symmetry class) per requested nucleus.
 * `ESD` — one row per molecule: status, the six rates, ΔE_ST (TDDFT and
   UKS), the derived lifetimes/yields, and flags.

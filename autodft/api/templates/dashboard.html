@@ -1911,9 +1911,9 @@
                 <input type="number" id="ppIrFwhm" value="15" min="1" max="200" step="1" style="width: 80px;">
             </label>
             <label for="ppIrScale" style="font-size: 0.82rem; color: var(--text-secondary); display: flex; align-items: center; gap: 8px;"
-                   title="Harmonic frequencies are usually scaled; the factor depends on the functional and basis.">
-                IR scale factor
-                <input type="number" id="ppIrScale" value="1.000" min="0.8" max="1.1" step="0.001" style="width: 90px;">
+                   title="Plot only: stored IR frequencies are unscaled harmonic ones. The right factor depends on the functional and basis.">
+                IR scale factor (plot)
+                <input type="number" id="ppIrScale" value="0.950" min="0.8" max="1.1" step="0.001" style="width: 90px;">
             </label>
             <button type="button" class="btn" id="ppExportBtn" style="padding: 8px 16px; font-size: 0.85rem;"
                     title="Download the photophysics workbook (XLSX); the full JSON is written next to it in the project's export directory.">
@@ -4357,7 +4357,7 @@
         function ppPlots(m, detail) {
             var uvFwhm  = parseFloat(document.getElementById('ppUvFwhm').value)  || 0.3;
             var irFwhm  = parseFloat(document.getElementById('ppIrFwhm').value)  || 15;
-            var irScale = parseFloat(document.getElementById('ppIrScale').value) || 1;
+            var irScale = parseFloat(document.getElementById('ppIrScale').value) || 0.95;
             var parts = [];
             if (detail.uvvis && detail.uvvis.conformers.length) {
                 var uv = ppUvCurve(detail.uvvis, uvFwhm);
@@ -4368,7 +4368,8 @@
             if (detail.ir && detail.ir.conformers.length) {
                 var ir = ppIrCurve(detail.ir, irFwhm, irScale);
                 parts.push('<div class="pp-plot"><div class="pp-plot-title">IR · strongest band ≈ ' +
-                           escHtml(ppPeak(ir)[0]) + ' cm⁻¹ (scaled, broadened)</div>' +
+                           escHtml(ppPeak(ir)[0]) + ' cm⁻¹ (unscaled harmonic × ' + escHtml(irScale.toFixed(3)) +
+                           ', broadened)</div>' +
                            ppSvg(ir, 'Wavenumber (cm⁻¹)', true) + '</div>');
             }
             if (detail.nmr && detail.nmr.count) parts.push(ppNmr(detail.nmr));

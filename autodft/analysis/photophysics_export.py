@@ -81,8 +81,9 @@ def build_xlsx(payload: dict) -> bytes:
     _sheet(wb, "UV-Vis sticks", ("mol_id", "state_id", "conformer", "weight", "root", "energy_eV",
                                  "wavelength_nm", "fosc"), uv_sticks)
     _sheet(wb, "IR", ("mol_id", "smiles", "state_id", "count", "pending", "failed", "unavailable",
-                      "unweighted", "weighting", "peak_cm", "peak_intensity_km_mol"), ir)
-    _sheet(wb, "IR sticks", ("mol_id", "state_id", "conformer", "weight", "frequency_cm",
+                      "unweighted", "weighting", "peak_cm_unscaled", "peak_intensity_km_mol"), ir)
+    # Harmonic frequencies as ORCA prints them; no scale factor applied.
+    _sheet(wb, "IR sticks", ("mol_id", "state_id", "conformer", "weight", "frequency_cm_unscaled",
                              "intensity_km_mol"), ir_sticks)
     _sheet(wb, "NMR", ("mol_id", "smiles", "state_id", "nucleus", "shift_ppm", "shielding_ppm", "count",
                        "atoms_1based", "reference", "reference_status", "method_matches", "equivalence"), nmr)

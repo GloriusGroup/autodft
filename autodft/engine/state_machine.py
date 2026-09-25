@@ -35,6 +35,7 @@ from autodft.models.project_job import ProjectJob
 from autodft.models.state import MoleculeState
 from autodft.models.task import ComputationTask
 from autodft.qm.base import QMEngine
+from autodft.qm.orca.parser import DENSITY_CUBES, OrcaParser
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,7 @@ def update_running_jobs(session: Session, scheduler: Scheduler) -> None:
 # Step 2 -- Process finished jobs (check QM output)
 # ======================================================================
 
-def process_finished_jobs(session: Session, qm_engine: QMEngine) -> None:
+def process_finished_jobs(session: Session, qm_engine: QMEngine, max_attempts: int = 3) -> None:
     """For jobs with a terminal slurm_status but ``success IS NULL``:
     check the QM output, set ``success`` / ``fail_reason``, and extract
     geometries for successful confsearch/optimization jobs.
@@ -169,11 +170,19 @@ def process_finished_jobs(session: Session, qm_engine: QMEngine) -> None:
             # memory (the one failure mode where that is the right response).
             if job.slurm_status == "OUT_OF_MEMORY":
                 failed_checks.append("OUT_OF_MEMORY")
-            job.fail_reason = str(failed_checks)
+            if failed_checks == [DENSITY_CUBES] and _accept_cube_miss(session, job, max_attempts):
+                # Retried once already, or no retry left; the energy is fine.
+                logger.warning(
+                    "Job %d: density cubes still missing or empty after a retry in %s (%s); "
+                    "accepting the job", job.id, job_path, ", ".join(OrcaParser.missing_cubes(job_path)),
+                )
+                job.success = True
+            else:
+                job.fail_reason = str(failed_checks)
         job.time_end = job.time_end or datetime.now(timezone.utc)
         session.add(job)
 
-        if not result.success:
+        if not job.success:
             continue
 
         # -- Extract geometries for successful jobs -----------------------
@@ -285,6 +294,22 @@ def _create_optimization_geometry(
 # ======================================================================
 # Step 3 -- Update task statuses based on job results
 # ======================================================================
+
+def _accept_cube_miss(session: Session, job: ComputationJob, max_attempts: int) -> bool:
+    """Whether a cubes-only failure of *job* is accepted: its run's previous attempt
+    failed on the cubes alone, or it was the run's last attempt."""
+    task = session.get(ComputationTask, job.task_id)
+    base = (task.retry_base or 0) if task is not None else 0
+    if job.attempt - base >= max_attempts:
+        return True
+    previous = session.exec(
+        select(ComputationJob)
+        .where(ComputationJob.task_id == job.task_id,
+               ComputationJob.attempt < job.attempt, ComputationJob.attempt > base)
+        .order_by(col(ComputationJob.attempt).desc())
+    ).first()
+    return previous is not None and previous.fail_reason == str([DENSITY_CUBES])
+
 
 def update_task_statuses(session: Session, max_attempts: int = 3) -> None:
     """Mark tasks successful if any job succeeded, failed if all attempts
@@ -1115,6 +1140,7 @@ def _generate_job_files(
         nice=settings.slurm.nice,
         keep_hessian=_keeps_hessian(state, task),
         keep_cubes=_keeps_cubes(state, task),
+        keep_nbo_archive=_keeps_nbo_archive(state, task),
         keep_esd_files=task.task_type.value.startswith("esd_"),
         extra_inputs=extra_inputs,
     )
@@ -1288,6 +1314,10 @@ def _apply_retry_modifications(
     ).all()
     if not prior_failures:
         prior_failures = [failed_job]
+    # Missing cubes are a plotting hiccup: rerun unchanged, never escalate.
+    prior_failures = [p for p in prior_failures if p.fail_reason != str([DENSITY_CUBES])]
+    if not prior_failures:
+        return
 
     all_strategies = build_strategies(settings)
     # Geometry perturbation is NOT replayable: it rewrites *xyzfile into an
@@ -1350,11 +1380,16 @@ def _esd_role(state: MoleculeState) -> Optional[str]:
 
 
 def _check_type(session: Session, task: ComputationTask) -> str:
-    """The task type whose output checks apply; an ESD S1 optimisation gets the excited-state ones."""
+    """The task type whose output checks apply; an ESD S1 optimisation gets the
+    excited-state ones, a densities singlepoint the cube check."""
     if task.task_type == TaskType.optimization:
         state = session.get(MoleculeState, task.state_id)
         if state is not None and _esd_role(state) == "S1":
             return "optimization_excited"
+    if task.task_type == TaskType.singlepoint:
+        state = session.get(MoleculeState, task.state_id)
+        if state is not None and _keeps_cubes(state, task):
+            return "singlepoint_densities"
     return task.task_type.value
 
 
@@ -1372,6 +1407,14 @@ def _keeps_cubes(state: MoleculeState, task: ComputationTask) -> bool:
         return False
     metadata = json.loads(state.metadata_json) if state.metadata_json else {}
     return bool(metadata.get(categories.DENSITIES))
+
+
+def _keeps_nbo_archive(state: MoleculeState, task: ComputationTask) -> bool:
+    """Whether a singlepoint runs NBO, whose archive (``FILE.47``) is kept."""
+    if task.task_type != TaskType.singlepoint:
+        return False
+    metadata = json.loads(state.metadata_json) if state.metadata_json else {}
+    return bool(metadata.get(categories.NBO))
 
 
 def _get_stage_config(settings: Settings, task_type: TaskType, state: Optional[MoleculeState] = None):

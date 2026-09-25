@@ -274,7 +274,9 @@ def _molecule_entries(
                            if status == "ok" for t in data["transitions"]]
             entry["uvvis"]["shortest_nm"] = min(wavelengths) if wavelengths else None
         if categories.IR in wanted:
-            entry["ir"] = ensemble([(c, *_ir(c)) for c in pool], detail, _ir_peak)
+            # Harmonic frequencies as ORCA prints them.
+            entry["ir"] = {**ensemble([(c, *_ir(c)) for c in pool], detail, _ir_peak),
+                           "scaled": False, "scale_factor": 1.0}
         if categories.NMR in wanted:
             from autodft.analysis.nmr import molecule_nmr
 

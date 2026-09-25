@@ -346,10 +346,10 @@ def test_build_xlsx_has_a_sheet_per_category_plus_sticks_and_esd_jobs():
     ]
     assert _header(wb["IR"]) == [
         "mol_id", "smiles", "state_id", "count", "pending", "failed", "unavailable", "unweighted",
-        "weighting", "peak_cm", "peak_intensity_km_mol",
+        "weighting", "peak_cm_unscaled", "peak_intensity_km_mol",
     ]
     assert _header(wb["IR sticks"]) == [
-        "mol_id", "state_id", "conformer", "weight", "frequency_cm", "intensity_km_mol",
+        "mol_id", "state_id", "conformer", "weight", "frequency_cm_unscaled", "intensity_km_mol",
     ]
     assert _header(wb["NMR"]) == [
         "mol_id", "smiles", "state_id", "nucleus", "shift_ppm", "shielding_ppm", "count", "atoms_1based",

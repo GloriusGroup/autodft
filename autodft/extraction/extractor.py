@@ -670,7 +670,7 @@ class PipelineExtractor:
         Returns:
             Number of files deleted.
         """
-        extensions = {".out", ".xyz", ".inp"}
+        extensions = {".out", ".xyz", ".inp", ".47"}
         if keep_extensions:
             extensions.update(keep_extensions)
 

@@ -194,7 +194,7 @@ package defaults in `autodft/qm/orca/defaults.py`.
 | `uvvis_nroots`                              | int    | `20`          | UV/Vis excited states (1–100). Stored only when UV/Vis is requested.                        |
 | `uvvis_tda`                                 | bool   | `false`       | Tamm–Dancoff approximation for the UV/Vis TDDFT. Stored only when UV/Vis is requested.      |
 | `request_spec_ir`                           | bool   | `false`       | IR: read from the S0 optimisation's frequency calculation — no extra job. Needs `Freq` in the optimisation header. |
-| `request_spec_nmr`                          | bool   | `false`       | NMR: `NMR` is added to the singlepoint header's `!` line for a singlepoint on every optimised S0 conformer. Shifts are referenced to TMS (¹H, ¹³C) and CFCl₃ (¹⁹F), which the pipeline computes itself — once per optimisation/singlepoint header pair — in the protected `admin/reference_systems` project. Closed-shell molecules only. |
+| `request_spec_nmr`                          | bool   | `false`       | NMR: a singlepoint on every optimised S0 conformer with the singlepoint header's orbital basis replaced by `pcSseg-2` and `NMR` added to its `!` line; refused for elements past Kr (no `pcSseg-2`). Shifts are referenced to TMS (¹H, ¹³C) and CFCl₃ (¹⁹F), which the pipeline computes itself — once per optimisation/singlepoint header pair — in the protected `admin/reference_systems` project. Closed-shell molecules only. |
 | `nmr_nuclei`                                | list   | `["H","C","F"]` | Nuclei to report; stored only with NMR.                                                  |
 | `request_esd` | bool | `false` | Excited-state dynamics: S1 and T1 optimised from the lowest S0 conformer, SOC TDDFT, ORCA ESD rates (ISC, RISC, IC, fluorescence, T1→S0 ISC, phosphorescence). Needs a closed-shell singlet, `Freq` in the optimisation header, the energy singlepoint, and a functional whose TDDFT gradients ORCA supports (native B88 functionals such as B3LYP need `LibXC(...)`). Molecules with an element past Kr (ECP in def2, e.g. I) need `ZORA`/`DKH`/`X2C` in the singlepoint header. |
 | `request_esd_ht` | bool | `false` | Herzberg–Teller for the ESD rates; only with `request_esd`. |
@@ -207,7 +207,7 @@ package defaults in `autodft/qm/orca/defaults.py`.
 | `density_eldens_file` | str | `"ElDens.cube"` | Cube file name: `NAME.cube`, letters/digits/`_.-` only, max 64 characters; must differ from `density_spindens_file`. Stored only with Densities. |
 | `density_spindens_file` | str | `"SpinDens.cube"` | Same rule as `density_eldens_file`, for the spin density cube. Stored only with Densities. |
 | `request_singlepoint_nbo` | bool | `false` | Natural population analysis via ORCA's NBO 7: the `NBO` keyword plus a `%nbo` block on every state's own energy singlepoint (same states as Densities, above). Needs the energy singlepoint stage, a singlepoint header that does not already contain the `NBO` keyword or a `%nbo` block, and `[orca].nbo_exe` configured on the server — refused with `400` otherwise (see [`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md#densities-and-nbo)). |
-| `nbo_keywords` | str | `""` | Extra keywords placed inside `NBOKEYLIST = "$NBO ... $END"`, e.g. `"BNDIDX"`. Letters, digits, spaces and `=_.,+-` only (max 200 characters) — no `$`, quotes or newlines. Stored only with NBO. |
+| `nbo_keywords` | str | `""` | Extra keywords placed inside `NBOKEYLIST = "$NBO ... $END"`, e.g. `"BNDIDX"`; `ARCHIVE` is added so NBO's `FILE.47` is still written (copied back to the job directory). Letters, digits, spaces and `=_.,+-` only (max 200 characters) — no `$`, quotes or newlines. Stored only with NBO. |
 
 `request_S1` is **not** exposed: the S1 state exists only as part of ESD (`request_esd`).
 
@@ -461,7 +461,7 @@ below):
                  "unweighted": 0, "weighting": "G", "shortest_nm": 156.5,
                  "peak": {"wavelength_nm": 229.6, "energy_ev": 5.4, "fosc": 0.24}},
        "ir": {"count": 1, "pending": 0, "failed": 0, "unavailable": 0,
-              "unweighted": 0, "weighting": "G",
+              "unweighted": 0, "weighting": "G", "scaled": false, "scale_factor": 1.0,
               "peak": {"frequency_cm": 410.2, "intensity_km_mol": 12.3}}}]}
 
 `count` is conformers with a spectrum and the energy the weights use;
@@ -474,6 +474,9 @@ correction, else `"E_sp"`, else `"equal"`. `peak` is the transition/mode
 with the largest weight × fosc (or × intensity), or `null` when `count`
 is 0; it is present for UV/Vis and IR only. UV/Vis also reports
 `shortest_nm`, the shortest wavelength across every counted transition.
+IR frequencies are unscaled harmonic ones (`"scaled": false`,
+`"scale_factor": 1.0`); the dashboard's scale factor (default 0.95)
+changes only its plot.
 
 An NMR molecule's entry adds `nmr`, with the same counts and no `peak`:
 
