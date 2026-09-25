@@ -684,13 +684,13 @@ def _check_text(found: Optional[dict]) -> Optional[str]:
 
 
 def _broken_bonds(ana: Optional[dict]) -> Optional[str]:
-    """The picked states whose geometry lost bonds, e.g. ``T1: dissociated: ...``."""
+    """Each pick's bond check, e.g. ``S0: ok | T1: dissociated: ... | red: unchecked``; None if none has one."""
     picks = (ana or {}).get("picks") or {}
-    checks = {st: p["connectivity"] for st, p in picks.items() if "connectivity" in p}
-    if not checks:
+    if not any("connectivity" in p for p in picks.values()):
         return None
-    broken = [f"{st}: {c['detail']}" for st, c in checks.items() if not c["ok"]]
-    return " | ".join(broken) if broken else "ok"
+    return " | ".join(
+        f"{st}: {_check_text(p.get('connectivity')) or 'unchecked'}" for st, p in picks.items()
+    )
 
 
 def build_xlsx_bytes(payload: dict) -> bytes:

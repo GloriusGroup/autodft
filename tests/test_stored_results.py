@@ -791,7 +791,9 @@ class TestExtractorAndStateAnalysisParity:
         sheet = wb["Lowest Energy"]
         header = [c.value for c in sheet[1]]
         assert header[-1] == "broken_bonds"
-        assert sheet.cell(row=2, column=len(header)).value.startswith("T1: dissociated: 2 fragments")
+        assert sheet.cell(row=2, column=len(header)).value == (
+            "S0: unchecked | T1: dissociated: 2 fragments (CH3 + CHO); C-C bonds 1 -> 0"
+        )
         assert [c.value for c in wb["Conformers"][1]][-1] == "connectivity"
 
     def test_without_bond_checks_the_workbook_keeps_its_columns(self, export_project):
