@@ -175,7 +175,10 @@ def connectivity_by_task(session: Session, task_ids: Iterable[int]) -> dict[int,
             latest[job.task_id] = job
     rows = {
         row.job_id: row for row in session.exec(
-            select(JobResult).where(col(JobResult.job_id).in_([j.id for j in latest.values()]))
+            select(JobResult).where(
+                col(JobResult.job_id).in_([j.id for j in latest.values()]),
+                col(JobResult.data_json).contains('"connectivity"'),
+            )
         ).all()
     } if latest else {}
     out = {}
