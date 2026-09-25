@@ -20,11 +20,11 @@ from sqlmodel import Session, col, func, select
 
 from autodft import categories
 from autodft.db import get_session
+from autodft.extraction import results
 from autodft.extraction.extractor import PipelineExtractor
 from autodft.models import ComputationTask, Molecule, MoleculeState, TaskStatus, TaskType
 from autodft.paths import safe_subdirectory
-from autodft.qm.orca.parser import OrcaParser
-from autodft.qm.orca.spectra_parser import IRMode, parse_absorption, parse_ir
+from autodft.qm.orca.spectra_parser import IRMode
 
 logger = logging.getLogger(__name__)
 
@@ -97,20 +97,20 @@ def conformer_pool(
         pool.append(conformer)
         if opt.status != TaskStatus.successful:
             continue
-        content = extractor.successful_output(session, opt.id)
-        if content is None:
+        record = results.for_task(session, opt, require=("ir_modes",) if ir else ())
+        if record is None:
             continue
         if ir:
-            conformer.ir_modes = parse_ir(content)
-        correction = OrcaParser.extract_free_energy_correction(content)
+            conformer.ir_modes = results.ir_modes(record)
+        correction = record["free_energy_correction"]
         sp = _follow_up(session, opt, TaskType.singlepoint)
         conformer.energy_pending = sp.status in _OPEN if sp is not None else opt.has_followups
-        sp_content = (
-            extractor.successful_output(session, sp.id)
+        sp_record = (
+            results.for_task(session, sp)
             if sp is not None and sp.status == TaskStatus.successful else None
         )
-        if sp_content is not None:
-            conformer.e_singlepoint = OrcaParser.extract_electronic_energy(sp_content)
+        if sp_record is not None:
+            conformer.e_singlepoint = sp_record["energy"]
         if conformer.e_singlepoint is not None and correction is not None:
             conformer.e_combined = conformer.e_singlepoint + correction
     return pool
@@ -402,8 +402,8 @@ def _uvvis(
         return "pending", None
     if task.status == TaskStatus.failed:
         return "failed", None
-    content = extractor.successful_output(session, task.id)
-    transitions = parse_absorption(content) if content else []
+    record = results.for_task(session, task)
+    transitions = results.transitions(record) if record else []
     if not transitions:
         return "unavailable", None
     return "ok", {"transitions": [

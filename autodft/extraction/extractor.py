@@ -18,6 +18,7 @@ from typing import Any, Optional
 from sqlmodel import Session, col, select
 
 from autodft.db import get_session
+from autodft.extraction import results as stored
 from autodft.models.enums import TaskStatus, TaskType
 from autodft.models.geometry import MoleculeGeometry
 from autodft.models.job import ComputationJob
@@ -243,11 +244,6 @@ class PipelineExtractor:
         """Every conformer of one state, in conformer order."""
         return self._extract_state_results(session, mol, state, all_conformers=True)
 
-    def successful_output(self, session: Session, task_id: int) -> Optional[str]:
-        """``output.out`` of the task's latest successful job, or None."""
-        job_path = self.successful_job_path(session, task_id)
-        return self._load_output(job_path) if job_path is not None else None
-
     def successful_job_path(self, session: Session, task_id: int) -> Optional[Path]:
         """Directory of the task's latest successful job, or None."""
         return self._get_successful_job_path(session, task_id)
@@ -261,14 +257,14 @@ class PipelineExtractor:
         conf_idx: int,
     ) -> Optional[ConformerResult]:
         """Extract all energies for a single conformer."""
-        # Get the successful job path for optimization
-        opt_job_path = self._get_successful_job_path(session, opt_task.id)
-        if opt_job_path is None:
+        # Get the successful job for optimization
+        job = stored.latest_successful_job(session, opt_task.id)
+        if job is None or not job.job_path:
             return None
 
-        # Free energy correction from optimization output
-        opt_content = self._load_output(opt_job_path)
-        e_correction = OrcaParser.extract_free_energy_correction(opt_content) if opt_content else None
+        # Free energy correction from the optimization's record
+        record = stored.for_job(session, job, opt_task.task_type.value)
+        e_correction = record["free_energy_correction"] if record else None
 
         # Get dependent tasks
         dep_tasks = session.exec(
@@ -311,13 +307,8 @@ class PipelineExtractor:
         task = next((t for t in dep_tasks if t.task_type == task_type), None)
         if task is None:
             return None
-        job_path = self._get_successful_job_path(session, task.id)
-        if job_path is None:
-            return None
-        content = self._load_output(job_path)
-        if content is None:
-            return None
-        return OrcaParser.extract_electronic_energy(content)
+        record = stored.for_task(session, task)
+        return record["energy"] if record else None
 
     def _get_successful_job_path(
         self, session: Session, task_id: int,
@@ -336,14 +327,6 @@ class PipelineExtractor:
         ).first()
         if job and job.job_path:
             return Path(job.job_path)
-        return None
-
-    @staticmethod
-    def _load_output(job_path: Path) -> Optional[str]:
-        """Read output.out from a job directory."""
-        output_file = job_path / "output.out"
-        if output_file.exists():
-            return output_file.read_text(encoding="utf-8", errors="replace")
         return None
 
     # ------------------------------------------------------------------

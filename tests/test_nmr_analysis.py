@@ -14,6 +14,7 @@ from autodft.analysis.spectroscopy import analyze_spectra
 from autodft.config import Settings
 from autodft.db import get_session, init_db, reset_engine
 from autodft.engine import nmr_references
+from autodft.extraction import results
 from autodft.models import (
     ComputationJob,
     ComputationTask,
@@ -256,6 +257,24 @@ def test_references_are_looked_up_once_per_method(db, monkeypatch):
         _tms(session, db)
     analyze_spectra("nho/p", use_cache=False)
     assert len(calls) <= 2
+
+
+def test_stored_records_give_the_same_payload(db):
+    with get_session() as session:
+        _glyoxal(session, db)
+        _tms(session, db)
+    before_summary = analyze_spectra("nho/p", use_cache=False)
+    before_detail = _detail()
+
+    results.backfill()
+    assert analyze_spectra("nho/p", use_cache=False) == before_summary
+    assert _detail() == before_detail
+
+    for name in ("output.out", "input.inp"):
+        for f in db.rglob(name):
+            f.unlink()
+    assert analyze_spectra("nho/p", use_cache=False) == before_summary
+    assert _detail() == before_detail
 
 
 def test_the_cache_notices_a_reference_finishing(db):

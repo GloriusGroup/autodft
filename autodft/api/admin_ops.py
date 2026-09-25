@@ -19,7 +19,8 @@ deleted. SQLite runs with ``PRAGMA foreign_keys=ON`` (see ``db.py``), which
 would otherwise reject the delete.
 
 ``computation_headers`` are never touched: they are shared across projects
-and referenced by rows that may survive.
+and referenced by rows that may survive. ``job_results`` has no foreign key
+and is deleted with its job, not by the cascade above.
 
 Deleting the files is the slow half -- ~65 ms per file on this deployment's
 network mount, so minutes for a real project. A project wipe and a database
@@ -50,6 +51,7 @@ from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.models.geometry import MoleculeGeometry
 from autodft.models.job import ComputationJob
 from autodft.models.molecule import Molecule
+from autodft.models.result import JobResult
 from autodft.models.state import MoleculeState
 from autodft.models.task import ComputationTask
 
@@ -703,11 +705,22 @@ def _descendants(session: Session, molecule_ids: list[int]) -> tuple[list[int], 
     return state_ids, task_ids, geometry_ids, job_ids
 
 
+def _job_result_count(session: Session, job_ids: list[int]) -> int:
+    """How many ``job_results`` rows belong to *job_ids*."""
+    if not job_ids:
+        return 0
+    return session.exec(
+        select(func.count()).select_from(JobResult).where(col(JobResult.job_id).in_(job_ids))
+    ).one()
+
+
 def _delete_molecule_rows(session: Session, molecule_ids: list[int]) -> dict[str, int]:
     """Delete molecules and everything hanging off them. Returns row counts."""
     state_ids, task_ids, geometry_ids, job_ids = _descendants(session, molecule_ids)
+    result_count = _job_result_count(session, job_ids)
 
     if job_ids:
+        session.exec(delete(JobResult).where(col(JobResult.job_id).in_(job_ids)))
         session.exec(delete(ComputationJob).where(col(ComputationJob.id).in_(job_ids)))
 
     # Break the task <-> geometry cycle before deleting either side.
@@ -739,6 +752,7 @@ def _delete_molecule_rows(session: Session, molecule_ids: list[int]) -> dict[str
         "tasks": len(task_ids),
         "geometries": len(geometry_ids),
         "jobs": len(job_ids),
+        "job_results": result_count,
     }
 
 
@@ -754,6 +768,7 @@ def preview_project_wipe(
     molecule_ids = _project_molecule_ids(session, name)
     state_ids, task_ids, geometry_ids, job_ids = _descendants(session, molecule_ids)
     entrypoint_ids = _queued_entrypoint_ids(session, name)
+    result_count = _job_result_count(session, job_ids)
 
     comp_dirs = [comp_root / f"mol_{mid}" for mid in molecule_ids]
     # Never build this by concatenation: `name` comes straight from the URL
@@ -776,6 +791,7 @@ def preview_project_wipe(
             "tasks": len(task_ids),
             "geometries": len(geometry_ids),
             "jobs": len(job_ids),
+            "job_results": result_count,
             "queued_entrypoints": len(entrypoint_ids),
         },
         "files": {
@@ -908,6 +924,7 @@ def preview_molecule_wipe(session: Session, molecule_id: int, comp_root: Path) -
             "tasks": len(task_ids),
             "geometries": len(geometry_ids),
             "jobs": len(job_ids),
+            "job_results": _job_result_count(session, job_ids),
         },
         "files": {
             "comp_data_dir": str(comp_dir),
@@ -988,7 +1005,7 @@ def preview_database_reset(session: Session) -> dict:
     """
     def _count(model) -> int:
         # COUNT(*) in SQLite, not len() over every id fetched into Python.
-        # Six tables, ~23k rows, 2.3 s per render of the admin page.
+        # Seven tables, ~23k rows, 2.3 s per render of the admin page.
         return session.exec(select(func.count()).select_from(model)).one()
 
     projects = session.exec(select(Molecule.project_name).distinct()).all()
@@ -1002,6 +1019,7 @@ def preview_database_reset(session: Session) -> dict:
             "geometries": _count(MoleculeGeometry),
             "jobs": _count(ComputationJob),
             "entrypoints": _count(CalculationEntrypoint),
+            "job_results": _count(JobResult),
         },
         "confirmation_required": RESET_CONFIRMATION,
     }
@@ -1036,6 +1054,7 @@ def reset_database(
         "states": len(session.exec(select(MoleculeState.id)).all()),
         "molecules": len(session.exec(select(Molecule.id)).all()),
         "entrypoints": len(session.exec(select(CalculationEntrypoint.id)).all()),
+        "job_results": len(session.exec(select(JobResult.id)).all()),
     }
 
     # Stop the cluster before the directories it is writing into disappear.
@@ -1046,6 +1065,7 @@ def reset_database(
     )
 
     # Same cycle-breaking order as the per-project wipe.
+    session.exec(delete(JobResult))
     session.exec(delete(ComputationJob))
     session.exec(update(ComputationTask).values(
         input_geometry_id=None, output_geometry_id=None, depends_on_task_id=None))

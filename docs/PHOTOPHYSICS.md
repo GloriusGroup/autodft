@@ -278,6 +278,8 @@ EOF
 4. Merge the branch into `main` in `/mnt/share/dft_calculations/autodft`.
 5. Start the controller again; reload the dashboard.
 
+See **Stored results** below for the backfill step.
+
 ## Roll back
 
 Code from before this feature raises `LookupError` on any query that
@@ -349,6 +351,10 @@ with db:
     if NEW_JOB_KINDS:
         kinds = ",".join("?" * len(NEW_JOB_KINDS))
         db.execute(f"DELETE FROM project_jobs WHERE kind IN ({kinds})", NEW_JOB_KINDS)
+    # Mandatory, not optional: computation_jobs.id has no AUTOINCREMENT, so
+    # the old code's ids are reused, and a job_results row left behind would
+    # be served as that new job's results once this feature is redeployed.
+    db.execute("DROP TABLE IF EXISTS job_results")
 db.close()
 EOF
 ```
@@ -363,3 +369,30 @@ states and their `esd_role` / `esd_seed` / `esd_done` metadata keys;
 category flags in S0 state metadata; `photophysics/` frozen directories
 and `_photophysics.{json,xlsx}` exports; and `admin/system_references`,
 which becomes an ordinary, wipeable project under the old code.
+
+## Stored results
+
+Each successful job's parsed output is stored once, in `job_results`.
+Analyses, exports, the Photophysics page and ESD rate-job inputs read the
+stored record and fall back to parsing the job's files when there is none
+— on a job judged before records existed, on an older parser version, or
+on a record whose identity no longer matches the job (see **Roll back**).
+A job without its output (deleted, or the record predates it existing)
+reads as having no results, same as before this feature.
+
+**Deploy.** Once the controller is up on the new code, run
+`autodft admin backfill-results --config <config>` on the controller
+host. It reads and parses each chunk before writing it, in a short
+transaction, so it is safe to run while the controller keeps going.
+
+**Archive.** Records outlive an archive: once a job has one, exporting an
+archived project returns the stored numbers instead of the blanks main
+returned once the files were gone. The photophysics page and state
+analysis read frozen payloads/archive CSVs for archived molecules, so
+those views are unaffected.
+
+**Roll back.** `DROP TABLE job_results` is a required step before running
+code from before this feature, not an optional cleanup — `computation_jobs.id`
+has no AUTOINCREMENT, so the old code reuses ids, and a row left behind
+would be served as a *different* job's results once this feature is
+redeployed. The rollback script above does this.

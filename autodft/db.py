@@ -92,6 +92,12 @@ def init_db(settings: Settings | None = None) -> None:
     # after the initial release. Adding NULL-default columns is safe.
     _migrate_sqlite_schema(engine)
 
+    # A job_results row that outlived its job (a pre-records wipe or reset
+    # that never touched the table) would otherwise be served for whatever
+    # new job later reuses that recycled rowid. Cheap backstop; the real
+    # guard is the identity check in extraction.results.for_job.
+    _purge_orphaned_job_results(engine)
+
     # Seed standard headers if the table is empty.
     _seed_default_headers(engine)
 
@@ -201,6 +207,23 @@ def _migrate_sqlite_schema(engine) -> None:
 
         for name, definition in indexes:
             conn.execute(text(f"CREATE INDEX IF NOT EXISTS {name} ON {definition}"))
+        conn.commit()
+
+
+def _purge_orphaned_job_results(engine) -> None:
+    """Delete ``job_results`` rows whose job no longer exists."""
+    if not str(engine.url).startswith("sqlite"):
+        return
+
+    from sqlalchemy import text
+
+    with engine.connect() as conn:
+        tables = {row[0] for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))}
+        if "job_results" not in tables or "computation_jobs" not in tables:
+            return
+        conn.execute(text(
+            "DELETE FROM job_results WHERE job_id NOT IN (SELECT id FROM computation_jobs)"
+        ))
         conn.commit()
 
 

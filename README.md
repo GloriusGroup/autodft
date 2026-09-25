@@ -27,6 +27,11 @@ results are extractable as CSV / JSON or as raw ORCA files.
                                                    └─ export raw files
 ```
 
+Parsing a successful job's output (`parse outputs`, above) also stores
+the result once, in `job_results`; readers — analyses, exports, the
+Photophysics page, ESD rate-job inputs — use the stored record and fall
+back to the job's files only when there is none.
+
 All persistent state lives in **one directory** — the `data_path`. Per
 the production config (`config/reaction.toml`):
 
@@ -193,6 +198,14 @@ out of the log — if you miss it, run
 `autodft admin rotate-key admin --config config/reaction.toml`. See
 [`docs/UPGRADE-user-accounts.md`](docs/UPGRADE-user-accounts.md) when the
 database predates accounts.
+
+After upgrading to a build that stores job results, run
+`autodft admin backfill-results --config config/reaction.toml [--project P]`
+once to store records for jobs judged earlier, on an older parser version,
+or without a matching identity. Readers fall back to the files without a
+record, but they never save what they parse — so until the backfill runs,
+every read of an old job re-parses its files again. Safe to run on the
+controller host while the controller keeps going, and safe to repeat.
 
 ---
 

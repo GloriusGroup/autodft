@@ -15,6 +15,7 @@ from autodft.analysis import spectroscopy
 from autodft.analysis.spectroscopy import analyze_spectra, boltzmann_weights, ranking_energies
 from autodft.config import Settings
 from autodft.db import get_session, init_db, reset_engine
+from autodft.extraction import results
 from autodft.extraction.extractor import ConformerResult, PipelineExtractor
 from autodft.models import (
     ComputationJob,
@@ -181,14 +182,15 @@ def test_equal_weights_are_reported(project):
 
 
 def test_each_output_is_read_once(project, monkeypatch):
-    reads: list[int] = []
-    original = PipelineExtractor.successful_output
+    """M11: successful_output/_load_output are gone; the real path is stored.for_task."""
+    reads: list[Path] = []
+    original = results._read
 
-    def counting(self, session, task_id):
-        reads.append(task_id)
-        return original(self, session, task_id)
+    def counting(path):
+        reads.append(path)
+        return original(path)
 
-    monkeypatch.setattr(PipelineExtractor, "successful_output", counting)
+    monkeypatch.setattr(results, "_read", counting)
     _molecule(project)
     assert len(reads) == len(set(reads))
 
@@ -234,6 +236,21 @@ def test_the_summary_cache_notices_archiving(project):
         session.commit()
     assert analyze_spectra("nho/p")["molecules"][0]["archived"] is True
     spectroscopy._CACHE.clear()
+
+
+def test_stored_records_give_the_same_payload(project):
+    before_summary = analyze_spectra("nho/p", use_cache=False)
+    before_detail = analyze_spectra("nho/p", molecule_id=project["molecule"], use_cache=False)
+
+    results.backfill()
+    assert analyze_spectra("nho/p", use_cache=False) == before_summary
+    assert analyze_spectra("nho/p", molecule_id=project["molecule"], use_cache=False) == before_detail
+
+    for name in ("output.out", "input.inp"):
+        for f in project["tmp_path"].rglob(name):
+            f.unlink()
+    assert analyze_spectra("nho/p", use_cache=False) == before_summary
+    assert analyze_spectra("nho/p", molecule_id=project["molecule"], use_cache=False) == before_detail
 
 
 def test_a_state_without_conformers_says_why(project):

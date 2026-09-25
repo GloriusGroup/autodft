@@ -18,6 +18,7 @@ from sqlmodel import Session, col, select
 from autodft import categories
 from autodft.config import Settings
 from autodft.engine.scheduler import Scheduler
+from autodft.extraction import results
 from autodft.models.enums import (
     TERMINAL_SLURM_STATES,
     TRANSIENT_SLURM_STATES,
@@ -127,6 +128,7 @@ def process_finished_jobs(session: Session, qm_engine: QMEngine) -> None:
 
     for processed, job in enumerate(jobs):
         _commit_batch(session, processed)
+        job_id = job.id
         task = session.get(ComputationTask, job.task_id)
         if task is None:
             logger.error("Job %d references missing task %d", job.id, job.task_id)
@@ -197,6 +199,13 @@ def process_finished_jobs(session: Session, qm_engine: QMEngine) -> None:
                 select(MoleculeGeometry).where(MoleculeGeometry.origin_task_id == task.id)
             ).all():
                 session.delete(partial)
+
+        if job.success:
+            # Parsed once here; analyses and exports read it from the database.
+            try:
+                results.store(session, task, job, job_path)
+            except Exception:  # noqa: BLE001 - readers re-parse a job without a record
+                logger.exception("Could not store the parsed results of job %d", job_id)
 
     session.flush()
 
