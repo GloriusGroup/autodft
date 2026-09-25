@@ -185,3 +185,15 @@ def test_the_photophysics_page_has_an_export_button():
     html = (TEMPLATE / "dashboard.html").read_text()
     assert 'id="ppExportBtn"' in html
     assert "format=photophysics" in html
+
+
+def test_the_submit_form_is_never_clipped():
+    # Nothing collapses these panels; a fixed height hid the Submit button once every category was ticked.
+    css = (TEMPLATE / "dashboard.html").read_text().split(".collapsible-body {", 1)[1].split("}", 1)[0]
+    assert "max-height: none" in css
+
+
+def test_category_panels_share_a_row_height():
+    html = (TEMPLATE / "dashboard.html").read_text()
+    row = html.split('id="categoryDetailsRow"', 1)[1].split(">", 1)[0]
+    assert "align-items: stretch" in row
