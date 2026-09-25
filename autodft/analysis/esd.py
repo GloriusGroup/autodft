@@ -184,9 +184,15 @@ def _rate(session, extractor, rate, task, inputs, states, flags, detail, herzber
                 f"0; the channel is symmetry- or El-Sayed-forbidden and needs Herzberg–Teller."
             )
         values.append(value)
-        rows.append({**job, "rate_s": value, "fc_percent": found_rate.fc_percent,
-                     "ht_percent": found_rate.ht_percent, "k_squared": found_rate.k_squared,
-                     "e00_cm": found_rate.e00_cm})
+        row = {**job, "rate_s": value, "fc_percent": found_rate.fc_percent,
+               "ht_percent": found_rate.ht_percent, "k_squared": found_rate.k_squared,
+               "e00_cm": found_rate.e00_cm}
+        if not fc_mode:
+            # HT: ORCA's own per-sublevel SOC, not the channel's total from the builder.
+            row.pop("socme_cm", None)
+            if found_rate.socme_cm is not None:
+                row["socme_cm"] = found_rate.socme_cm
+        rows.append(row)
     total = sum(values) if computed.get("combine") == "sum" else sum(values) / len(values)
     entry: dict = {"status": "successful", "rate_s": total}
     if fc_mode and jobs and zero_socme == len(jobs):

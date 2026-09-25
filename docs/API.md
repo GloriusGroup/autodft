@@ -576,7 +576,8 @@ still in.
 
 With `?molecule_id=`, each successful rate also adds `jobs` (its
 per-ORCA-job values — `rate_s`, `fc_percent`, `ht_percent`, `k_squared`,
-`e00_cm`, plus whatever went into building it), and `esd` adds
+`e00_cm`, plus whatever went into building it; an HT job's `socme_cm` is
+its own sublevel's |SOC| as ORCA printed it), and `esd` adds
 `energies_eh` (E(S0), E(S1), E(T1)), `socme_cm` (`S1_T1_at_T1`,
 `S1_T1_at_S1`, `T1_S0_at_S0`) and a flag for any state whose optimisation
 still shows a soft imaginary mode.

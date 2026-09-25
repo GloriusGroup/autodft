@@ -25,6 +25,7 @@ _RATE = re.compile(r"^The calculated (.+?) rate constant is\s+(\S+) s-1", re.MUL
 _SPLIT = re.compile(r"^with\s+(-?[\d.]+)%? from FC and\s+(-?[\d.]+)%? from HT", re.MULTILINE)
 _K_SQUARED = re.compile(r"^The sum of K\*K is:\s+(\S+)", re.MULTILINE)
 _E00 = re.compile(r"^0-0 energy difference:\s+(-?[\d.]+) cm-1", re.MULTILINE)
+_REFERENCE_SOC = re.compile(r"^Reference SOC \(Re and Im\):\s+(\S+),\s*(\S+)", re.MULTILINE)
 _LIBXC = re.compile(r"Third functional derivative of a B88|Native implementation of 3d derivative")
 
 
@@ -38,6 +39,8 @@ class Rate:
     ht_percent: Optional[float] = None
     k_squared: Optional[float] = None
     e00_cm: Optional[float] = None
+    # |SOC| (cm-1) of this job's own sublevel pair, from ORCA's "Reference SOC" line.
+    socme_cm: Optional[float] = None
 
 
 def ground_energy(content: str) -> Optional[float]:
@@ -117,6 +120,7 @@ def rates(content: str) -> list[Rate]:
         split = _SPLIT.findall(job)
         k_squared = _K_SQUARED.findall(job)
         e00 = _E00.findall(job)
+        soc = _REFERENCE_SOC.findall(job)
         found.append(Rate(
             process=rate[-1][0],
             rate=float(rate[-1][1]),
@@ -124,6 +128,7 @@ def rates(content: str) -> list[Rate]:
             ht_percent=float(split[-1][1]) if split else None,
             k_squared=float(k_squared[-1]) if k_squared else None,
             e00_cm=float(e00[-1]) if e00 else None,
+            socme_cm=math.hypot(float(soc[-1][0]), float(soc[-1][1])) * EH_TO_CM if soc else None,
         ))
     return found
 

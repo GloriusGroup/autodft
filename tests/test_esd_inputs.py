@@ -111,6 +111,7 @@ def test_ht_isc_runs_each_triplet_sublevel(data):
         assert f"  sroot 1\n  troot 1\n  trootssl {ms}\n  triplets true\n  dosoc true\n" in job
         assert "  DOHT TRUE\n" in job and "SOCME" not in job
     assert computed["combine"] == "sum"
+    assert all("socme_cm" not in j for j in computed["jobs"])
 
 
 def test_ht_t1_to_s0_uses_the_ground_state_root(data):

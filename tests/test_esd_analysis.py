@@ -296,3 +296,45 @@ class TestZeroSocme:
         result = _analyse(session, done)
         assert "socme_zero" not in result["rates"]["isc_t1_s0"]
         assert not any("SOCME below" in f for f in result["flags"])
+
+
+# ----------------------------------------------------------------------
+# A1: an HT sublevel row shows ORCA's own per-sublevel SOC.
+# ----------------------------------------------------------------------
+
+# Acetone T1->S0 (FC+HT): ORCA's "Reference SOC" of the Ms = -1, 0, +1 jobs.
+ACETONE_SOC = ("-6.326655e-05, -5.262007e-07", "0.000000e+00, 2.303857e-04", "-6.326690e-05, 5.261551e-07")
+
+
+def _ht_t1s0(session, esd, n_outputs=3):
+    s1 = esd["states"]["S1"]
+    s1.metadata_json = json.dumps({**json.loads(s1.metadata_json), categories.ESD_HT: True})
+    task = _rates(session, esd)[TaskType.esd_isc_t1s0]
+    payload = json.loads(task.inputs_json)
+    # An older builder's record: the channel's SOCME repeated on every sublevel.
+    payload["computed"]["jobs"] = [
+        {"triplet": 1, "sublevel": ms, "dele_cm": 14444.5, "socme_cm": 31.0} for ms in (-1, 0, 1)
+    ]
+    task.inputs_json = json.dumps(payload)
+    session.add_all([s1, task])
+    job = session.exec(select(ComputationJob).where(ComputationJob.task_id == task.id)).one()
+    one = (FIXTURES / "t1s0.out").read_text()
+    Path(job.job_path, "output.out").write_text("".join(
+        one.replace("0.000000e+00, 5.261203e-08", soc) for soc in ACETONE_SOC[:n_outputs]
+    ))
+    session.commit()
+
+
+def test_ht_sublevel_rows_carry_the_parsed_soc(session, done):
+    _ht_t1s0(session, done)
+    jobs = _analyse(session, done)["rates"]["isc_t1_s0"]["jobs"]
+    assert [j["sublevel"] for j in jobs] == [-1, 0, 1]
+    assert [j["socme_cm"] for j in jobs] == [
+        pytest.approx(13.886, abs=1e-3), pytest.approx(50.564, abs=1e-3), pytest.approx(13.886, abs=1e-3),
+    ]
+
+
+def test_fc_rows_keep_the_builders_socme(session, done):
+    [job] = _analyse(session, done)["rates"]["isc_t1_s0"]["jobs"]
+    task = _rates(session, done)[TaskType.esd_isc_t1s0]
+    assert job["socme_cm"] == json.loads(task.inputs_json)["computed"]["jobs"][0]["socme_cm"]

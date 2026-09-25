@@ -173,8 +173,8 @@ def _isc(channels, sroot, fc, files, doht, temperature, sp_header) -> tuple[list
                  "triplets": True, "dosoc": True, "tda": False},
                 {**files, "DELE": dele, "USEJ": "TRUE", **doht, **temperature},
             ))
-            record.append({"triplet": n, "sublevel": ms, "dele_cm": gap * EH_TO_CM,
-                           "socme_cm": socme})
+            # ORCA computes each sublevel's SOC itself; the parser reads it back.
+            record.append({"triplet": n, "sublevel": ms, "dele_cm": gap * EH_TO_CM})
     return jobs, record
 
 

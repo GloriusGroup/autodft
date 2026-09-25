@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 # are then re-parsed. A new key needs no bump when its readers `require` it:
 # a record without it is stale for them and falls back to parsing on its own.
 # Pinned by tests/test_stored_results.py::test_extract_output_is_pinned.
-PARSER_VERSION = 1
+PARSER_VERSION = 2
 
 # The task types a reader ever asks for. store() stores nothing else, and the
 # backfill's query skips them outright.

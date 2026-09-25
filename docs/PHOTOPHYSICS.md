@@ -120,6 +120,8 @@ never used in a rate.
 **SOCMEs.** |⟨T|H_SO|S⟩| is summed over the three triplet sublevels for a
 singlet→triplet transition, and that sum divided by √3 for triplet→singlet;
 each rate reads the SOC table computed at its final state's geometry.
+An HT job computes its own SOC instead; its `socme_cm` is that sublevel's
+|SOC| from ORCA's `Reference SOC` line.
 
 **S1→Tn.** Every Tn (n ≥ 2) up to `esd_tn_window_ev` eV above S1 shares the
 T1 Hessian and geometry — the shifted-T1 proxy, no extra Hessian per
