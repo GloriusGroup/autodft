@@ -235,6 +235,11 @@ def rejection(
                 f"NMR runs in the {NMR_BASIS} basis, which ORCA only has for "
                 f"H to Kr; this molecule has an element past Kr (Z = {max_z})."
             )
+        if re.search(r"%basis\b", header_singlepoint or "", re.IGNORECASE):
+            return (
+                f"The singlepoint header has a %basis block, which would override "
+                f"the {NMR_BASIS} basis NMR runs in; pick a header without one."
+            )
 
     if IR in wanted and not _FREQ_RE.search(header_optimization or ""):
         return (

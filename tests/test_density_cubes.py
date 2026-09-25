@@ -159,3 +159,27 @@ def test_a_cube_failure_after_another_failure_is_retried(session, tmp_path):
     second = _finished(session, task, _job_dir(tmp_path / "job_2"), 2)
     process_finished_jobs(session, OrcaParser())
     assert second.success is False and second.fail_reason == "['Density Cubes']"
+
+
+def test_a_cube_miss_on_the_last_attempt_is_accepted(session, tmp_path):
+    task = _task(session)
+    for attempt in (1, 2):
+        job = _finished(session, task, _job_dir(tmp_path / f"job_{attempt}"), attempt)
+        job.success, job.fail_reason = False, "['SCF Convergence']"
+        session.add(job)
+    session.commit()
+    last = _finished(session, task, _job_dir(tmp_path / "job_3"), 3)
+    process_finished_jobs(session, OrcaParser(), max_attempts=3)
+    assert last.success is True
+
+
+def test_a_cube_miss_before_a_requeue_does_not_count(session, tmp_path):
+    task = _task(session)
+    old = _finished(session, task, _job_dir(tmp_path / "job_1"), 1)
+    old.success, old.fail_reason = False, "['Density Cubes']"
+    task.retry_base = 1
+    session.add_all([old, task])
+    session.commit()
+    fresh = _finished(session, task, _job_dir(tmp_path / "job_2"), 2)
+    process_finished_jobs(session, OrcaParser(), max_attempts=3)
+    assert fresh.success is False and fresh.fail_reason == "['Density Cubes']"

@@ -19,7 +19,7 @@ S1_NROOTS = 5
 _ORBITAL_BASIS_RE = re.compile(
     r"(?:(?:ma|old|ZORA|DKH|SARC)-)*def2?-\S+|SARC-\S+|(?:[a-z]+-)?cc-p\S+|\d-\d+\+*G\S*"
     r"|STO-\dG|(?:aug-)?pc(?:S?seg|[JHX])?-\d\S*|x2c-\S+|ANO-\S+|IGLO-\S+|EPR-\S+"
-    r"|SV\(P\)|SVP|TZVPP?|QZVPP?",
+    r"|SV\(P\)|SVP|TZVPP?|QZVPP?|vDZP",
     re.IGNORECASE,
 )
 _SOLVATION_RE = re.compile(r"^\s*!.*\b(?:CPCM|SMD|CPCMC)\b|%cpcm\b", re.IGNORECASE | re.MULTILINE)

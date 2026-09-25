@@ -106,7 +106,8 @@ class PipelineWorker:
                            lambda: update_running_jobs(session, self.scheduler))
 
             self._run_step(session, "2: process finished jobs",
-                           lambda: process_finished_jobs(session, self.qm_engine))
+                           lambda: process_finished_jobs(
+                               session, self.qm_engine, self.settings.pipeline.max_attempts))
 
             self._run_step(session, "3: update task statuses",
                            lambda: update_task_statuses(

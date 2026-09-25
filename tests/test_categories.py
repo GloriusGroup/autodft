@@ -454,3 +454,9 @@ class TestNboUnavailable:
         settings = Settings()
         settings.orca.nbo_exe = "/path/to/nbo7.i8.exe"
         assert categories.nbo_unavailable(settings) is None
+
+
+def test_nmr_refuses_a_singlepoint_header_with_a_basis_block():
+    header = "!wB97X-D3 def2-TZVP\n%basis NewGTO C \"def2-QZVP\" end end\n"
+    reason = categories.rejection({"multiplicity": 1}, {categories.NMR: True}, OPT_FREQ, header)
+    assert "%basis" in reason

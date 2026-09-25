@@ -104,7 +104,7 @@ def update_running_jobs(session: Session, scheduler: Scheduler) -> None:
 # Step 2 -- Process finished jobs (check QM output)
 # ======================================================================
 
-def process_finished_jobs(session: Session, qm_engine: QMEngine) -> None:
+def process_finished_jobs(session: Session, qm_engine: QMEngine, max_attempts: int = 3) -> None:
     """For jobs with a terminal slurm_status but ``success IS NULL``:
     check the QM output, set ``success`` / ``fail_reason``, and extract
     geometries for successful confsearch/optimization jobs.
@@ -170,8 +170,8 @@ def process_finished_jobs(session: Session, qm_engine: QMEngine) -> None:
             # memory (the one failure mode where that is the right response).
             if job.slurm_status == "OUT_OF_MEMORY":
                 failed_checks.append("OUT_OF_MEMORY")
-            if failed_checks == [DENSITY_CUBES] and _cubes_failed_before(session, job):
-                # Retried once already; the energy is fine.
+            if failed_checks == [DENSITY_CUBES] and _accept_cube_miss(session, job, max_attempts):
+                # Retried once already, or no retry left; the energy is fine.
                 logger.warning(
                     "Job %d: density cubes still missing or empty after a retry in %s (%s); "
                     "accepting the job", job.id, job_path, ", ".join(OrcaParser.missing_cubes(job_path)),
@@ -295,11 +295,17 @@ def _create_optimization_geometry(
 # Step 3 -- Update task statuses based on job results
 # ======================================================================
 
-def _cubes_failed_before(session: Session, job: ComputationJob) -> bool:
-    """Whether *job*'s task's previous attempt failed on its density cubes alone."""
+def _accept_cube_miss(session: Session, job: ComputationJob, max_attempts: int) -> bool:
+    """Whether a cubes-only failure of *job* is accepted: its run's previous attempt
+    failed on the cubes alone, or it was the run's last attempt."""
+    task = session.get(ComputationTask, job.task_id)
+    base = (task.retry_base or 0) if task is not None else 0
+    if job.attempt - base >= max_attempts:
+        return True
     previous = session.exec(
         select(ComputationJob)
-        .where(ComputationJob.task_id == job.task_id, ComputationJob.attempt < job.attempt)
+        .where(ComputationJob.task_id == job.task_id,
+               ComputationJob.attempt < job.attempt, ComputationJob.attempt > base)
         .order_by(col(ComputationJob.attempt).desc())
     ).first()
     return previous is not None and previous.fail_reason == str([DENSITY_CUBES])
