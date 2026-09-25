@@ -186,7 +186,7 @@ first run:
 | 3 | optimization | wB97X-D3 / def2-TZVP TightOpt + Freq + CPCM(MeCN)    |
 | 4 | singlepoint  | wB97X-D3 / def2-QZVPD KeepDens + CPCM(MeCN)          |
 | 5 | optimization | wB97X-D3 / def2-SVP Opt + Freq + CPCM(MeCN)          |
-| 6 | singlepoint  | wB97X-D3 / def2-TZVPD KeepDens + CPCM(MeCN)          |
+| 6 | singlepoint  | wB97X-D3 / def2-TZVP KeepDens + CPCM(MeCN)           |
 
 Headers 5 and 6 are the package defaults (`autodft/qm/orca/defaults.py`)
 applied when a submission sets neither `header_*` nor `header_*_id`; 3
@@ -643,7 +643,7 @@ from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.qm.orca.defaults import (
     DEFAULT_HEADER_CONFSEARCH,        # GOAT GFN2-xTB
     DEFAULT_HEADER_OPTIMIZATION,      # wB97X-D3 / def2-SVP + CPCM(MeCN)
-    DEFAULT_HEADER_SINGLEPOINT,       # wB97X-D3 / def2-TZVPD + CPCM(MeCN)
+    DEFAULT_HEADER_SINGLEPOINT,       # wB97X-D3 / def2-TZVP + CPCM(MeCN)
     GXTB_HEADER_CONFSEARCH,           # GOAT g-xTB variant
     TZVP_MECN_HEADER_OPTIMIZATION,    # larger-basis alternate
     QZVPD_MECN_HEADER_SINGLEPOINT,    # larger-basis alternate

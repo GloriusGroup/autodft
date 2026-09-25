@@ -237,7 +237,7 @@ def submit(
         None, "--header-opt", help="ORCA header file for optimization (default: wB97X-D3 / def2-SVP CPCM(MeCN))"
     ),
     header_sp: Optional[Path] = typer.Option(
-        None, "--header-sp", help="ORCA header file for singlepoint (default: wB97X-D3 / def2-TZVPD CPCM(MeCN))"
+        None, "--header-sp", help="ORCA header file for singlepoint (default: wB97X-D3 / def2-TZVP CPCM(MeCN))"
     ),
     max_conformers_s0: int = typer.Option(1, "--max-conformers-s0", help="Max conformers kept for S0"),
     max_conformers_t1: int = typer.Option(1, "--max-conformers-t1", help="Max conformers kept for T1"),
@@ -357,7 +357,7 @@ def submit_batch(
         None, "--header-opt", help="ORCA header file for optimization (default: wB97X-D3 / def2-SVP CPCM(MeCN))"
     ),
     header_sp: Optional[Path] = typer.Option(
-        None, "--header-sp", help="ORCA header file for singlepoint (default: wB97X-D3 / def2-TZVPD CPCM(MeCN))"
+        None, "--header-sp", help="ORCA header file for singlepoint (default: wB97X-D3 / def2-TZVP CPCM(MeCN))"
     ),
     max_conformers_s0: int = typer.Option(1, "--max-conformers-s0", help="Max conformers kept for S0"),
     max_conformers_t1: int = typer.Option(1, "--max-conformers-t1", help="Max conformers kept for T1"),

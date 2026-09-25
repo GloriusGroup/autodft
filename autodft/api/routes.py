@@ -1234,8 +1234,8 @@ def api_headers(
         },
         {
             "id": "default_singlepoint",
-            "label": "wB97X-D3 / def2-TZVPD KeepDens CPCM(MeCN) (default)",
-            "description": "Single-point at wB97X-D3/def2-TZVPD with RIJCOSX, KeepDens for downstream densities, CPCM(MeCN).",
+            "label": "wB97X-D3 / def2-TZVP KeepDens CPCM(MeCN) (default)",
+            "description": "Single-point at wB97X-D3/def2-TZVP with RIJCOSX, KeepDens for downstream densities, CPCM(MeCN).",
             "kind": "singlepoint",
             "text": DEFAULT_HEADER_SINGLEPOINT,
         },
