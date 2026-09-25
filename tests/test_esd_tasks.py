@@ -47,6 +47,8 @@ class TestBlocks:
     @pytest.mark.parametrize("header", [
         "!B3LYP def2-SVP LooseOpt Freq\n", "!B3LYP def2-SVP VeryTightOpt Freq\n",
         "!B3LYP def2-SVP Opt TightOpt Freq\n", "!B3LYP def2-SVP OptTS Freq # Opt\n",
+        "!B3LYP def2-SVP NormalOpt Freq\n", "!B3LYP def2-SVP SloppyOpt Freq\n",
+        "!B3LYP def2-SVP L-Opt Freq\n", "!B3LYP def2-SVP COpt Freq\n",
     ])
     def test_an_explicit_opt_level_is_kept(self, header):
         assert blocks.compose_header("optimization", header, {"esd_role": "T1"}) == header

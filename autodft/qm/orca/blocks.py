@@ -16,8 +16,9 @@ ESD_NROOTS = 10
 # The S1 optimisation follows root 1; a few roots above keep the tracking stable.
 S1_NROOTS = 5
 _SOLVATION_RE = re.compile(r"^\s*!.*\b(?:CPCM|SMD|CPCMC)\b|%cpcm\b", re.IGNORECASE | re.MULTILINE)
-_OPT_RE = re.compile(r"\bOpt\b", re.IGNORECASE)
-_OPT_LEVEL_RE = re.compile(r"\b(?:Tight|VeryTight|Loose)Opt\b", re.IGNORECASE)
+# A standalone Opt: not L-Opt, COpt or the like.
+_OPT_RE = re.compile(r"(?<![\w-])Opt(?![\w-])", re.IGNORECASE)
+_OPT_LEVEL_RE = re.compile(r"\b(?:Tight|VeryTight|Loose|Normal|Sloppy)Opt\b", re.IGNORECASE)
 _GRID_RE = re.compile(r"\bDEFGRID\d\b", re.IGNORECASE)
 _KEEPDENS_RE = re.compile(r"\s*\bKeepDens\b", re.IGNORECASE)
 
