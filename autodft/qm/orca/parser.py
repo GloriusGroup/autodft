@@ -142,9 +142,11 @@ class OrcaParser(QMEngine):
 
         conformers: Optional[list[str]] = None
         conformer_energies: Optional[list[float]] = None
+        conformer_degeneracies: Optional[list[int]] = None
         if task_type == "confsearch":
             conformers = self.extract_conformer_ensemble(job_path, content)
             conformer_energies = self.extract_conformer_ensemble_energies(content)
+            conformer_degeneracies = self.extract_conformer_ensemble_degeneracies(content)
 
         return QMResult(
             success=success,
@@ -153,6 +155,7 @@ class OrcaParser(QMEngine):
             free_energy_correction=free_energy_correction,
             conformers=conformers,
             conformer_energies=conformer_energies,
+            conformer_degeneracies=conformer_degeneracies,
         )
 
     def generate_input(
@@ -481,9 +484,21 @@ class OrcaParser(QMEngine):
             return None
         return [c[2] for c in contributions if c[1] > 0.1][:max_conformers]
 
+    @classmethod
+    def extract_conformer_ensemble_degeneracies(
+        cls,
+        content: str,
+        max_conformers: int = 20,
+    ) -> Optional[list[Optional[int]]]:
+        """GOAT's per-conformer degeneracy (``Degen.``), index-aligned like the energies."""
+        contributions = cls._parse_ensemble_table(content)
+        if not contributions:
+            return None
+        return [c[3] if c[3] >= 1 else None for c in contributions if c[1] > 0.1][:max_conformers]
+
     @staticmethod
     def _parse_ensemble_table(content: str) -> list[list]:
-        """Parse the ``# Final ensemble info #`` table into [index, %total, energy].
+        """Parse the ``# Final ensemble info #`` table into [index, %total, energy, degeneracy].
 
         Sorted by energy ascending. Shared by the geometry and energy
         extractors so the two can never drift out of alignment.
@@ -501,7 +516,7 @@ class OrcaParser(QMEngine):
                 parts = line.strip().split()
                 if len(parts) == 5 and parts[0].isdigit():
                     contributions.append(
-                        [int(parts[0]), float(parts[3]), float(parts[1])]
+                        [int(parts[0]), float(parts[3]), float(parts[1]), int(float(parts[2]))]
                     )
 
         contributions.sort(key=lambda x: x[2])

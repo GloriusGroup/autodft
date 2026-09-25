@@ -26,6 +26,8 @@ class QMResult:
                     with ``conformers``. Without these every conformer
                     geometry is stored with the same scalar energy, which
                     makes the "keep the N lowest" ORDER BY an arbitrary tie.
+        conformer_degeneracies: GOAT's degeneracy per conformer, index-aligned
+                    with ``conformers``.
     """
 
     success: bool
@@ -34,6 +36,7 @@ class QMResult:
     free_energy_correction: Optional[float] = None
     conformers: Optional[list[str]] = None
     conformer_energies: Optional[list[float]] = None
+    conformer_degeneracies: Optional[list[Optional[int]]] = None
 
 
 class QMEngine(ABC):

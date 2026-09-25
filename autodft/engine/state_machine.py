@@ -182,7 +182,7 @@ def process_finished_jobs(session: Session, qm_engine: QMEngine) -> None:
             if task.task_type == TaskType.confsearch and result.conformers:
                 _create_conformer_geometries(
                     session, task, result.conformers, result.energy,
-                    result.conformer_energies,
+                    result.conformer_energies, result.conformer_degeneracies,
                 )
 
             elif task.task_type == TaskType.optimization:
@@ -219,6 +219,7 @@ def _create_conformer_geometries(
     conformers: list[str],
     energy: Optional[float],
     conformer_energies: Optional[list[float]] = None,
+    conformer_degeneracies: Optional[list[Optional[int]]] = None,
 ) -> None:
     """Store each conformer XYZ as a :class:`MoleculeGeometry`.
 
@@ -247,6 +248,8 @@ def _create_conformer_geometries(
             energy=geom_energy,
             origin_task_id=task.id,
             label=f"conformer_{i}",
+            degeneracy=conformer_degeneracies[i]
+            if conformer_degeneracies is not None and i < len(conformer_degeneracies) else None,
         )
         session.add(geom)
         logger.debug(

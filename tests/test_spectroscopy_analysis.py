@@ -294,3 +294,22 @@ def test_a_broken_geometry_is_listed_on_the_molecule(project):
         "state": "S0", "state_id": project["state"], "conformer_index": 1, "opt_task_id": opt_id,
         "detail": broken["detail"],
     }]
+
+
+def test_goat_degeneracy_enters_the_weights(project):
+    from autodft.models import MoleculeGeometry
+
+    with get_session() as session:
+        opts = session.exec(select(ComputationTask).where(
+            ComputationTask.task_type == TaskType.optimization).order_by(ComputationTask.id)).all()
+        for opt, g in zip(opts[:2], (2, None)):  # None: a pre-degeneracy row counts as 1
+            geom = MoleculeGeometry(state_id=project["state"], xyz_data="1\n\nH 0 0 0\n", degeneracy=g)
+            session.add(geom)
+            session.commit()
+            opt.input_geometry_id = geom.id
+            session.add(opt)
+        session.commit()
+    ir = _molecule(project, molecule_id=project["molecule"])["ir"]
+    assert [c["degeneracy"] for c in ir["conformers"]] == [2, 1]
+    weights = [c["weight"] for c in ir["conformers"]]
+    assert weights[1] / weights[0] == pytest.approx(math.exp(-1 / (0.0019872043 * 298.15)) / 2, rel=1e-3)
