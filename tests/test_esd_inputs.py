@@ -150,8 +150,9 @@ def test_ht_isc_runs_each_triplet_sublevel(data):
         assert (f"  nroots 4\n  sroot 1\n  troot 1\n  trootssl {ms}\n  triplets true\n  dosoc true\n"
                 "  tda true\n") in job
         assert "  DOHT TRUE\n  LINES GAUSS\n  INLINEW 100\n" in job and "SOCME" not in job
-    # FC diagnostics follow the HT jobs, with their own INLINEW 100 baseline.
-    assert jobs[3].startswith(DIAGNOSTICS_MARKER + _fc_job("5369.5", "4.009575e-06"))
+    # FC diagnostics follow the HT jobs, with their own INLINEW 100 baseline and the header's %maxcore.
+    assert jobs[3].startswith(DIAGNOSTICS_MARKER + _fc_job("5369.5", "4.009575e-06", maxcore=""))
+    assert text.count("%maxcore") == 0 and all("NOITER\n%esd" in job for job in jobs[3:])
     assert [(d["job"], d["variant"]) for d in computed["diagnostics"]] == [
         (4, "inlinew_100"), (5, "inlinew_25"), (6, "inlinew_250"), (7, "tcutfreq_300"),
     ]
@@ -246,3 +247,12 @@ def test_rates_table():
 def test_dele_never_reads_minus_zero(value, text):
     assert esd_inputs._cm(value) == text
 
+
+def test_the_slurm_request_follows_the_header_not_the_fc_jobs(data):
+    from autodft.engine.state_machine import _parse_resources_from_header
+
+    header = "!B3LYP def2-SVP\n%maxcore 1500\n%pal nprocs 4 end\n"
+    text, _ = esd_inputs.build("esd_isc", data, HT, header, 0)
+    assert _parse_resources_from_header(text) == (4, 1500)
+    text, _ = esd_inputs.build("esd_isc", data, HT, SP, 0)
+    assert _parse_resources_from_header(text) == (4, None)  # the stage default, not 2000

@@ -31,6 +31,8 @@ _HESSIAN_KEYS = {
 SUBLEVELS = (-1, 0, 1)
 # FC rates need no electronic structure: ORCA gets DELE and SOCME from us.
 FC_HEADER = "! ESD(ISC) NOITER\n%maxcore 2000\n"
+# After TDDFT jobs: inherit their %maxcore, which also sizes the SLURM request.
+FC_AFTER_TDDFT = "! ESD(ISC) NOITER\n"
 # Opens the first diagnostic job; the output check needs rates only from the jobs before it.
 DIAGNOSTICS_MARKER = "# autodft: FC diagnostics from here on, not part of the rate\n"
 
@@ -216,11 +218,13 @@ def _isc(rate, channels, settings, files, temperature, sp_header):
     record: list[dict] = []
     fc_jobs = {}
     fc_main = []
-    for n, sroot, gap, socme, factor in channels:
+    decided = [(*channel, *ht_decision(rate, channel[3], channel[2] * EH_TO_CM, settings))
+               for channel in channels]
+    fc_header = FC_AFTER_TDDFT if any(d[5] for d in decided) else FC_HEADER
+    for n, sroot, gap, socme, factor, ht, reason in decided:
         dele = _cm(gap * EH_TO_CM)
-        ht, reason = ht_decision(rate, socme, gap * EH_TO_CM, settings)
         common = {"triplet": n, "dele_cm": gap * EH_TO_CM, "ht": ht, "ht_reason": reason}
-        fc_jobs[n] = _fc_job(files, dele, socme * factor, temperature)
+        fc_jobs[n] = _fc_job(fc_header, files, dele, socme * factor, temperature)
         if not ht:
             fc_main.append({**common, "socme_cm": socme * factor})
             continue
@@ -252,10 +256,10 @@ def _isc(rate, channels, settings, files, temperature, sp_header):
     return jobs, record, diagnostics
 
 
-def _fc_job(files, dele, socme_cm, temperature):
+def _fc_job(header, files, dele, socme_cm, temperature):
     """A builder of one channel's FC jobs, given their lineshape settings."""
     def job(lineshape):
-        return FC_HEADER + esd_block(
+        return header + esd_block(
             **files, DELE=dele, SOCME=f"0.0, {socme_cm / EH_TO_CM:.6e}", USEJ="TRUE", DOHT="FALSE",
             **lineshape, **temperature,
         )
