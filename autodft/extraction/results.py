@@ -18,6 +18,7 @@ from sqlmodel import Session, col, select
 
 from autodft import categories
 from autodft.db import get_session
+from autodft.extraction import connectivity
 from autodft.models import ComputationJob, ComputationTask, Molecule, MoleculeState, TaskType
 from autodft.models.result import JobResult
 from autodft.qm.orca import esd_parser
@@ -34,7 +35,8 @@ logger = logging.getLogger(__name__)
 # are then re-parsed. A new key needs no bump when its readers `require` it:
 # a record without it is stale for them and falls back to parsing on its own.
 # Pinned by tests/test_stored_results.py::test_extract_output_is_pinned.
-PARSER_VERSION = 2
+# 3: optimisations judged since carry "connectivity" (see store()).
+PARSER_VERSION = 3
 
 # The task types a reader ever asks for. store() stores nothing else, and the
 # backfill's query skips them outright.
@@ -139,8 +141,61 @@ def store(session: Session, task: ComputationTask, job: ComputationJob, job_path
         record = parse_job(task_type, job_path, _wants_ir(session, task_type, task.state_id))
         if record is None:
             return False
+        if task_type == "optimization":
+            found = _connectivity(session, task.state_id, job_path)
+            if found is not None:
+                record["connectivity"] = found
         _upsert(session, job.id, task.id, job.job_path, job.time_end, record)
     return True
+
+
+def _connectivity(session: Session, state_id: int, job_path: Path) -> Optional[dict]:
+    """The optimised geometry's bonds against the molecule's SMILES; only new jobs get one."""
+    state = session.get(MoleculeState, state_id)
+    molecule = session.get(Molecule, state.molecule_id) if state is not None else None
+    xyz = _read(job_path / "input.xyz")
+    if molecule is None or xyz is None:
+        return None
+    return connectivity.check(molecule.smiles, xyz)
+
+
+def connectivity_by_task(session: Session, task_ids: Iterable[int]) -> dict[int, dict]:
+    """Stored connectivity checks of these optimisations' latest successful jobs, by task id."""
+    ids = sorted(set(task_ids))
+    if not ids:
+        return {}
+    latest: dict[int, ComputationJob] = {}
+    for job in session.exec(
+        select(ComputationJob).where(
+            col(ComputationJob.task_id).in_(ids), ComputationJob.success == True,  # noqa: E712
+        )
+    ).all():
+        best = latest.get(job.task_id)
+        if best is None or (job.attempt, job.id) > (best.attempt, best.id):
+            latest[job.task_id] = job
+    rows = {
+        row.job_id: row for row in session.exec(
+            select(JobResult).where(col(JobResult.job_id).in_([j.id for j in latest.values()]))
+        ).all()
+    } if latest else {}
+    out = {}
+    for task_id, job in latest.items():
+        row = rows.get(job.id)
+        if (row is None or row.task_id != job.task_id or row.job_path != job.job_path
+                or not _same_instant(row.finished_at, job.time_end)):
+            continue
+        found = json.loads(row.data_json).get("connectivity")
+        if found is not None:
+            out[task_id] = found
+    return out
+
+
+def broken_bonds(session: Session, task: Optional[ComputationTask]) -> Optional[str]:
+    """Why *task*'s optimised geometry is not its molecule any more, or None."""
+    if task is None or task.task_type != TaskType.optimization:
+        return None
+    found = connectivity_by_task(session, [task.id]).get(task.id)
+    return found["detail"] if found is not None and not found["ok"] else None
 
 
 def latest_successful_job(session: Session, task_id: int) -> Optional[ComputationJob]:

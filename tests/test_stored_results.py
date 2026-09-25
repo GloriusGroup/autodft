@@ -873,6 +873,84 @@ class TestParityGaps:
         assert extractor.extract_results() == []
 
 
+FIXTURES_CONNECTIVITY = Path(__file__).parent / "fixtures" / "connectivity"
+
+
+class TestConnectivity:
+    def _opt(self, session, tmp_path, geometry="fluorobutane_t1", name="opt"):
+        task = _setup(session, TaskType.optimization)
+        session.get(Molecule, session.get(MoleculeState, task.state_id).molecule_id).smiles = "CCCCF"
+        session.commit()
+        path = _job_dir(tmp_path, name, output=OPT_OUTPUT)
+        if geometry is not None:
+            (path / "input.xyz").write_text((FIXTURES_CONNECTIVITY / f"{geometry}.xyz").read_text())
+        return task, path, _make_job(session, task, path)
+
+    def test_a_new_optimisation_stores_its_check(self, session, tmp_path):
+        task, path, job = self._opt(session, tmp_path)
+        results.store(session, task, job, path)
+        session.commit()
+
+        expected = {"ok": False, "fragments": 2,
+                    "detail": "dissociated: 2 fragments (C4H8F + H); C-H bonds 9 -> 8"}
+        assert results.for_task(session, task)["connectivity"] == expected
+        assert results.connectivity_by_task(session, [task.id]) == {task.id: expected}
+        assert results.broken_bonds(session, task) == expected["detail"]
+
+    def test_an_intact_geometry_is_not_broken(self, session, tmp_path):
+        task, path, job = self._opt(session, tmp_path, geometry="fluorobutane_s0")
+        results.store(session, task, job, path)
+        session.commit()
+
+        assert results.connectivity_by_task(session, [task.id])[task.id]["ok"] is True
+        assert results.broken_bonds(session, task) is None
+
+    def test_no_geometry_no_check(self, session, tmp_path):
+        task, path, job = self._opt(session, tmp_path, geometry=None)
+        results.store(session, task, job, path)
+        session.commit()
+
+        assert "connectivity" not in results.for_task(session, task)
+        assert results.connectivity_by_task(session, [task.id]) == {}
+
+    def test_backfilled_and_reparsed_jobs_are_left_unchecked(self, tmp_path):
+        settings = Settings()
+        settings.storage.data_path = str(tmp_path)
+        reset_engine()
+        init_db(settings)
+        try:
+            with get_session() as session:
+                task, _, _ = self._opt(session, tmp_path)
+                assert "connectivity" not in results.for_task(session, task)  # no record: parsed
+            assert results.backfill()["stored"] == 1
+            with get_session() as session:
+                assert results.connectivity_by_task(session, [task.id]) == {}
+        finally:
+            reset_engine()
+
+    def test_a_record_of_another_job_is_not_served(self, session, tmp_path):
+        task, path, job = self._opt(session, tmp_path)
+        results.store(session, task, job, path)
+        job.job_path = str(tmp_path / "elsewhere")
+        session.add(job)
+        session.commit()
+
+        assert results.connectivity_by_task(session, [task.id]) == {}
+
+    def test_the_latest_successful_job_counts(self, session, tmp_path):
+        task, path, job = self._opt(session, tmp_path)
+        results.store(session, task, job, path)
+        retry_path = _job_dir(tmp_path, "retry", output=OPT_OUTPUT)
+        (retry_path / "input.xyz").write_text((FIXTURES_CONNECTIVITY / "fluorobutane_s0.xyz").read_text())
+        retry = ComputationJob(task_id=task.id, attempt=2, job_path=str(retry_path), success=True)
+        session.add(retry)
+        session.commit()
+        results.store(session, task, retry, retry_path)
+        session.commit()
+
+        assert results.broken_bonds(session, task) is None
+
+
 class _StubEngine:
     """QM engine that returns a canned result, per tests/test_engine.py."""
 
