@@ -554,8 +554,10 @@ FC reruns' rates (`k_inlinew_100`, `k_inlinew_25`, `k_inlinew_250`,
 `k_tcutfreq_300`; null for a rerun that printed no rate) and the verdicts
 `width_sensitive` (25 vs 250 cm⁻¹ more than 3× apart) and
 `soft_mode_dominated` (TCUTFREQ 300 below a tenth of the baseline);
-channels whose rates stay below 1 s⁻¹ are never flagged. These reruns
-never enter `rate_s`. `delta_est_ev` is the TDDFT ΔE(S1-T1);
+channels whose rates stay below 1 s⁻¹ are never flagged. The verdicts
+describe the FC lineshape only — an HT channel's rerun uses its total
+SOCME, often ~0, and is then not judged. These reruns never enter
+`rate_s`, and a failed rerun never fails the rate. `delta_est_ev` is the TDDFT ΔE(S1-T1);
 `delta_est_uks_ev` instead compares the TDDFT S1 against the T1 state's
 own (UKS) energy singlepoint at the T1 geometry. `derived` reports
 `tau_s1_ns` / `phi_fluorescence` / `phi_isc` / `phi_ic` once

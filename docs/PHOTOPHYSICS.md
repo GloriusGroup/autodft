@@ -176,8 +176,16 @@ numbers are recorded in `computed["diagnostics"]`. A channel is flagged
 and *soft-mode dominated* when the TCUTFREQ rate is below a tenth of the
 baseline — harmonic low-frequency modes (e.g. methyl torsions) then carry
 the rate. Channels whose rates all stay below 1 s⁻¹ are not judged. The
+verdicts describe the FC lineshape only: for an HT channel the rerun uses
+the channel's total SOCME, which may be ~0 (that is why it runs HT), so
+its FC rates then stay below the cut-off and it is not judged at all. The
 verdicts are in the rate's `diagnostics` list, the flags, the dashboard
-and the workbook's *ESD diagnostics* sheet. IC gets no diagnostics: ORCA
+and the workbook's *ESD diagnostics* sheet. The reruns never cost the
+rate: the first one opens with an `# autodft: FC diagnostics …` comment,
+and the output check reads only the jobs before it — a rerun that aborts
+or prints a non-finite rate neither fails the task nor escalates its
+resources; its entry is then null. After TDDFT jobs they carry no
+`%maxcore` of their own and inherit the header's. IC gets no diagnostics: ORCA
 cannot be handed precomputed NACMEs, so every rerun would repeat the
 TDDFT and NACME calculation. Since `$new_job` inherits whatever a job
 does not repeat, HT jobs come first, FC jobs say `DOHT FALSE`, and the
