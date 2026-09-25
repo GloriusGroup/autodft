@@ -225,6 +225,14 @@ points per axis (default 75, 10–300). Spin density is silently skipped on
 a closed-shell state (multiplicity 1) — ORCA's `orca_plot` cannot produce
 one there — rather than refused.
 
+A densities singlepoint also has to pass a `Density Cubes` check: every
+cube its `%plots` block names must be in the job directory and non-empty
+(`orca_plot` can crash after a good SCF, leaving a 0-byte cube). The
+first such failure reruns the job unchanged — no retry strategy applies,
+so no extra cores, memory or SCF settings. If the rerun misses its cubes
+too, the job is accepted anyway for its energy, with a WARNING naming the
+job directory and the missing cubes.
+
 **NBO.** Adds the `NBO` keyword, plus, when `nbo_keywords` is set, a
 `%nbo` block (`NBOKEYLIST = "$NBO <nbo_keywords> ARCHIVE $END"`), for
 ORCA's NBO 7. Needs `[orca].nbo_exe` configured on the controller (exported as

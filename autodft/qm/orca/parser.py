@@ -27,6 +27,10 @@ logger = logging.getLogger(__name__)
 IMAGINARY_FREQ_THRESHOLD = -50.0
 # Written into output.out by submit.cmd when its watchdog kills a hung ORCA.
 STALL_MARKER = "AUTODFT STALLED:"
+# A densities singlepoint's requested cubes are missing or empty.
+DENSITY_CUBES = "Density Cubes"
+_PLOTS_RE = re.compile(r"^\s*%plots\b(.*?)^\s*end\b", re.IGNORECASE | re.MULTILINE | re.DOTALL)
+_CUBE_FILE_RE = re.compile(r'\(\s*"([^"]+\.cube)"\s*\)', re.IGNORECASE)
 
 
 def _esd_job_count(job_path: Path) -> Optional[int]:
@@ -100,6 +104,8 @@ class OrcaParser(QMEngine):
             from autodft.qm.orca.spectra_parser import parse_absorption
 
             checks["Absorption Spectrum"] = bool(parse_absorption(content))
+        if task_type == "singlepoint_densities":
+            checks[DENSITY_CUBES] = not self.missing_cubes(job_path)
         if task_type == "singlepoint_nmr":
             from autodft.qm.orca.spectra_parser import parse_shieldings
 
@@ -214,6 +220,21 @@ class OrcaParser(QMEngine):
             stall_minutes=self.orca.stall_minutes,
             sync_minutes=self.orca.sync_output_minutes,
         )
+
+    @staticmethod
+    def missing_cubes(job_path: Path) -> list[str]:
+        """The cube files input.inp's ``%plots`` block asks for that are missing or empty."""
+        try:
+            text = (Path(job_path) / "input.inp").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return []
+        names = [name for block in _PLOTS_RE.findall(text) for name in _CUBE_FILE_RE.findall(block)]
+        missing = []
+        for name in names:
+            path = Path(job_path) / name
+            if not path.is_file() or path.stat().st_size == 0:
+                missing.append(name)
+        return missing
 
     # ------------------------------------------------------------------
     # File loading
