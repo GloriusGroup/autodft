@@ -13,7 +13,7 @@ from autodft import categories
 
 # ESD TDDFT jobs: ten singlets and triplets reach past the S1 -> Tn window.
 ESD_NROOTS = 10
-# The S1 optimisation follows root 1; a few roots above keep the tracking stable.
+# The S1 optimisation takes root 1; a few roots above keep it converged.
 S1_NROOTS = 5
 # An orbital basis token of a route line; aux bases (def2/J, AutoAux) never match.
 _ORBITAL_BASIS_RE = re.compile(
@@ -212,11 +212,11 @@ def compose_header(
             header, nroots=ESD_NROOTS, iroot=1, triplets=True, dosoc=True, tda=True, **solvated,
         )
     if task_type == "optimization" and options.get("esd_role") == "S1":
-        # ORCA solvates the excited state in equilibrium only for analytic gradients;
-        # its numerical frequencies otherwise mix in non-equilibrium LR-CPCM.
+        # The lowest root (Kasha), not a followed one: root following also runs during
+        # the numerical frequencies and corrupts the Hessian. ORCA solvates the excited
+        # state in equilibrium only for analytic gradients, so cpcmeq is explicit.
         solvated = {"cpcmeq": True} if _SOLVATION_RE.search(header) else {}
-        return with_tddft(with_tight_opt(header), nroots=S1_NROOTS, iroot=1, followiroot=True,
-                          tda=True, **solvated)
+        return with_tddft(with_tight_opt(header), nroots=S1_NROOTS, iroot=1, tda=True, **solvated)
     if task_type == "optimization" and (options.get("esd_role") == "T1" or options.get(categories.ESD)):
         # ESD Hessians of T1 and of the S0 conformers (request_esd sits on S0 only).
         return with_tight_opt(header)

@@ -111,8 +111,8 @@ singlet only.
 **Flow.** Once every S0 confsearch/optimisation/energy-singlepoint task is
 terminal, the best S0 conformer (S0\*, picked by G like the
 CSV/JSON exporters' reported conformer) seeds an S1 optimisation — the
-optimisation header plus `%tddft nroots 5 iroot 1 followiroot true tda
-true cpcmeq true` — and a T1 (UKS) optimisation. All three ESD
+optimisation header plus `%tddft nroots 5 iroot 1 tda true cpcmeq true`
+— and a T1 (UKS) optimisation. All three ESD
 optimisations (S1, T1 and every S0 conformer of an ESD molecule) run with
 a plain `Opt` promoted to `TightOpt`, unless the header already sets
 `TightOpt`, `VeryTightOpt` or `LooseOpt`; other molecules' optimisations
@@ -120,7 +120,12 @@ are untouched. `cpcmeq true` matters
 with CPCM: ORCA solvates the excited state in equilibrium only when
 analytic gradients are requested, and its numerical S1 frequencies
 otherwise mix in non-equilibrium LR-CPCM (benzene: a spurious
-−1900 cm⁻¹ mode that disappears with the flag or without solvent). SOC TDDFT singlepoints (`nroots 10
+−1900 cm⁻¹ mode that disappears with the flag or without solvent). The S1
+optimisation takes the lowest root rather than following one: ORCA also
+follows roots during the numerical frequency displacements, which gave
+benzene a spurious −952 cm⁻¹ mode even in equilibrium (lowest mode
++266 cm⁻¹ without following). A collapse onto S0 is still caught by the
+`Excited Root` and `S1 Stays Bound` checks. SOC TDDFT singlepoints (`nroots 10
 iroot 1 triplets true dosoc true tda true`, plus `cpcmeq true` when the
 header is solvated, so DELE compares equilibrium-solvated states) run on
 S0\*, S1 and T1. Every ESD TDDFT job uses TDA except IC, whose NACMEs the

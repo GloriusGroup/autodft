@@ -31,7 +31,7 @@ class TestBlocks:
     def test_the_esd_s1_optimisation_follows_its_root(self):
         assert blocks.compose_header("optimization", OPT, {"esd_role": "S1"}) == (
             "!B3LYP def2-SVP TightOpt Freq\n"
-            "%tddft\n  nroots 5\n  iroot 1\n  followiroot true\n  tda true\nend\n"
+            "%tddft\n  nroots 5\n  iroot 1\n  tda true\nend\n"
         )
 
     def test_a_solvated_s1_optimisation_is_in_equilibrium(self):
@@ -127,7 +127,7 @@ class TestJobInput:
 
     def test_s1_optimisation_input(self, session, tmp_path):
         text = self._input(session, tmp_path, TaskType.optimization, S1_META, "S1")
-        assert "  followiroot true\n" in text
+        assert "  iroot 1\n" in text and "followiroot" not in text
 
     def test_t1_optimisation_input_is_the_plain_header(self, session, tmp_path):
         assert "%tddft" not in self._input(session, tmp_path, TaskType.optimization, T1_META, "T1")
