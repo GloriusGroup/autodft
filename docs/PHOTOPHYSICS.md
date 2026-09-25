@@ -103,7 +103,11 @@ singlet only.
 terminal, the best S0 conformer (S0\*, picked by G like the
 CSV/JSON exporters' reported conformer) seeds an S1 optimisation — the
 optimisation header plus `%tddft nroots 5 iroot 1 followiroot true tda
-false` — and a T1 (UKS) optimisation. SOC TDDFT singlepoints (`nroots 10
+false cpcmeq true` — and a T1 (UKS) optimisation. `cpcmeq true` matters
+with CPCM: ORCA solvates the excited state in equilibrium only when
+analytic gradients are requested, and its numerical S1 frequencies
+otherwise mix in non-equilibrium LR-CPCM (benzene: a spurious
+−1900 cm⁻¹ mode that disappears with the flag or without solvent). SOC TDDFT singlepoints (`nroots 10
 iroot 1 triplets true dosoc true tda false`) run on S0\*, S1 and T1. Each
 of the six rate jobs starts as soon as its two states are ready. That T1
 state also gets the normal T1 follow-ups — the energy singlepoint (used

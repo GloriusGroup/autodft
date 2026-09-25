@@ -142,7 +142,10 @@ def compose_header(
             header, nroots=ESD_NROOTS, iroot=1, triplets=True, dosoc=True, tda=False,
         )
     if task_type == "optimization" and options.get("esd_role") == "S1":
-        return with_tddft(header, nroots=S1_NROOTS, iroot=1, followiroot=True, tda=False)
+        # ORCA solvates the excited state in equilibrium only for analytic gradients;
+        # its numerical frequencies otherwise mix in non-equilibrium LR-CPCM.
+        return with_tddft(header, nroots=S1_NROOTS, iroot=1, followiroot=True, tda=False,
+                          cpcmeq=True)
     if task_type == "singlepoint":
         if options.get(categories.NBO):
             defaults = categories.OPTIONS[categories.NBO]
