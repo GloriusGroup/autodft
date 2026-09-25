@@ -535,10 +535,9 @@ output falls back to the stored record instead: served when it has every
 key the reader needs, else treated as having no results for that reader
 (e.g. an old record read by a reader that needs a key added since).
 
-`PARSER_VERSION` 3 marks records written since the broken-bond check;
-older ones are stale and re-parsed as above. The check itself is made only
-when a job is judged — neither re-parsing nor `backfill-results` adds it,
-so jobs judged before it stay unchecked.
+The broken-bond check is made only when a job is judged — neither
+re-parsing nor `backfill-results` adds it, so jobs judged before it stay
+unchecked; a record without `connectivity` means unchecked.
 
 **Deploy.** Once the controller is up on the new code, run
 `autodft admin backfill-results --config <config>` on the controller
