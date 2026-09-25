@@ -28,12 +28,22 @@ from typing import Optional
 
 from sqlmodel import Session, col, select
 
-from autodft.models.enums import TaskStatus
+from autodft.models.enums import TaskStatus, TaskType
 from autodft.models.task import ComputationTask
 
 logger = logging.getLogger(__name__)
 
 MARKER_FILENAME = "circuit_breaker.json"
+
+# Category task types (UV/Vis, NMR, SOC, ESD rate jobs): their failures are
+# bounded per task already, and a category misconfiguration must not halt
+# every user's submissions. ESD S1/T1 optimisations still count, like every
+# optimisation.
+_CATEGORY_TASK_TYPES = tuple(
+    v.value for v in TaskType
+    if v.value in ("singlepoint_uvvis", "singlepoint_nmr", "singlepoint_soc")
+    or v.value.startswith("esd_")
+)
 
 
 def marker_path(data_path: Path) -> Path:
@@ -44,11 +54,15 @@ def recent_failure_ratio(session: Session, window: int) -> tuple[float, int, int
     """Return ``(ratio, failed, judged)`` over the most recently judged tasks.
 
     Only ``successful`` / ``failed`` tasks count as judged -- tasks still
-    running say nothing about whether the campaign is healthy.
+    running say nothing about whether the campaign is healthy. Category
+    tasks are excluded; see ``_CATEGORY_TASK_TYPES``.
     """
     tasks = session.exec(
         select(ComputationTask.status)
-        .where(col(ComputationTask.status).in_([TaskStatus.successful, TaskStatus.failed]))
+        .where(
+            col(ComputationTask.status).in_([TaskStatus.successful, TaskStatus.failed]),
+            col(ComputationTask.task_type).notin_(_CATEGORY_TASK_TYPES),
+        )
         .order_by(col(ComputationTask.updated_at).desc())
         .limit(window)
     ).all()

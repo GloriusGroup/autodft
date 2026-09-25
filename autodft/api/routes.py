@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, field_validator
@@ -186,6 +186,19 @@ class SubmitRequest(BaseModel):
     # used as the per-state default if the more specific fields are
     # left at their default of 1.
     max_conformers: Optional[int] = None
+    # Opt-in categories (autodft.categories). Only submissions that set one
+    # ever take its code path.
+    request_esd: bool = False
+    request_esd_ht: bool = False
+    request_spec_uvvis: bool = False
+    request_spec_ir: bool = False
+    request_spec_nmr: bool = False
+    # Settings of the categories above; recorded only when the category is.
+    uvvis_nroots: int = 20
+    uvvis_tda: bool = False
+    nmr_nuclei: list[str] = Field(default_factory=lambda: ["H", "C", "F"])
+    esd_tn_window_ev: float = 0.2
+    esd_temperature_k: float = 298.15
     # For each slot you can pass either the raw header text OR the integer
     # ID of a stored ComputationHeader. ID takes precedence.
     header_confsearch: Optional[str] = None
@@ -748,6 +761,12 @@ def api_project_molecules_detail(
                     "singlepoint_vert_ox":           _status_of(deps.get(TaskType.singlepoint_vert_ox)),
                     "singlepoint_vert_red":          _status_of(deps.get(TaskType.singlepoint_vert_red)),
                     "singlepoint_vert_spin_change":  _status_of(deps.get(TaskType.singlepoint_vert_spin_change)),
+                    "singlepoint_uvvis":             _status_of(deps.get(TaskType.singlepoint_uvvis)),
+                    "singlepoint_nmr":                _status_of(deps.get(TaskType.singlepoint_nmr)),
+                    "esd": _combined_status([
+                        d for t, d in deps.items()
+                        if t == TaskType.singlepoint_soc or t.value.startswith("esd_")
+                    ]),
                 })
             # Confsearch status for the state — useful when no opt tasks exist yet.
             cs = next((t for t in tasks_by_state.get(st.id, [])
@@ -842,8 +861,40 @@ def api_project_state_analysis_export(
         )
 
 
+@router.get("/api/projects/{name}/photophysics")
+def api_project_photophysics(
+    name: str, molecule_id: Optional[int] = None,
+    identity: Identity = Depends(current_identity),
+):
+    """UV/Vis, IR and NMR for every molecule submitted with those categories.
+
+    Without ``molecule_id``: one summary per molecule (counts, weighting,
+    strongest band). With it: that molecule's sticks and Boltzmann weights
+    (298.15 K); the dashboard broadens them.
+    """
+    bad = _reject_bad_project(name)
+    if bad is not None:
+        return bad
+    with get_session() as session:
+        name = resolve_project(session, identity, name)
+    from autodft.analysis import spectroscopy
+
+    return spectroscopy.analyze_spectra(name, molecule_id=molecule_id)
+
+
 def _status_of(task: Optional[ComputationTask]) -> Optional[str]:
     return task.status.value if task is not None else None
+
+
+def _combined_status(tasks: list[ComputationTask]) -> Optional[str]:
+    """One status for several tasks: failed, else pending, else created, else successful."""
+    if not tasks:
+        return None
+    statuses = {t.status for t in tasks}
+    for status in (TaskStatus.failed, TaskStatus.pending, TaskStatus.created):
+        if status in statuses:
+            return status.value
+    return TaskStatus.successful.value
 
 
 _STATE_ORDER = {"S0": 0, "S1": 1, "T1": 2, "ox": 3, "red": 4}
@@ -899,6 +950,8 @@ def api_project_archive(
     * the project doesn't exist (404)
     * the project is already archived (409)
     * the project already has a background job in flight (409)
+    * an NMR molecule's reference is still pending (409) -- the frozen shift
+      would stay null forever
     """
     bad = _reject_bad_project(name)
     if bad is not None:
@@ -924,6 +977,16 @@ def api_project_archive(
                 return JSONResponse(status_code=409, content={"detail": f"Project {name!r} is already archived."})
             project_jobs.assert_no_active_job(session, name)
 
+        from autodft.analysis import spectroscopy
+
+        # Frozen NMR shifts are final; their reference must be in first.
+        waiting = spectroscopy.pending_nmr_references(name)
+        if waiting:
+            return JSONResponse(status_code=409, content={"detail": (
+                f"Project {name!r} has NMR molecules still waiting for their reference "
+                f"({', '.join(waiting)}); archive it once the references have finished."
+            )})
+
         job = project_jobs.start_job(
             owner_id=identity.user_id,
             qualified_name=name,
@@ -945,12 +1008,14 @@ def api_project_archive(
 
 
 # Export format -> the background-job kind that produces it. `xlsx` is the
-# state-analysis workbook; the rest come off the PipelineExtractor.
+# state-analysis workbook; `photophysics` is the photophysics workbook + JSON;
+# the rest come off the PipelineExtractor.
 _EXPORT_KINDS = {
     "csv": ProjectJobKind.export_csv,
     "json": ProjectJobKind.export_json,
     "files": ProjectJobKind.export_files,
     "xlsx": ProjectJobKind.export_xlsx,
+    "photophysics": ProjectJobKind.export_photophysics,
 }
 
 
@@ -973,8 +1038,9 @@ def api_project_export(
 
     ``csv`` / ``json`` / ``files`` need the on-disk ORCA outputs, so an
     archived project is refused (409); ``xlsx`` is built from the frozen
-    archive CSV and is allowed. A project with a job already in flight is
-    refused (409).
+    archive CSV and is allowed. ``photophysics`` -> the photophysics workbook
+    plus JSON, allowed for archived projects (served from the frozen
+    payload). A project with a job already in flight is refused (409).
     """
     bad = _reject_bad_project(name)
     if bad is not None:
@@ -994,7 +1060,7 @@ def api_project_export(
             state = _project_is_archived(session, name)
             if state is None:
                 return JSONResponse(status_code=404, content={"detail": f"Project {name!r} has no molecules"})
-            if state is True and kind is not ProjectJobKind.export_xlsx:
+            if state is True and kind not in (ProjectJobKind.export_xlsx, ProjectJobKind.export_photophysics):
                 return JSONResponse(
                     status_code=409,
                     content={"detail": f"Project {name!r} is archived — source files are no longer on disk."},
@@ -1589,10 +1655,11 @@ def api_cluster_status():
     is halted" without asking an administrator. It exposes no one else's
     data: a queue depth and a breaker flag.
     """
-    from autodft.engine import circuit_breaker
+    from autodft.engine import circuit_breaker, submission_hold
 
     settings = get_active_settings()
     state = circuit_breaker.read_state(settings.data_path)
+    held = submission_hold.read_state(settings.data_path)
     with get_session() as session:
         waiting = session.exec(
             select(func.count())
@@ -1601,6 +1668,7 @@ def api_cluster_status():
         ).one()
     return {
         "breaker_tripped": state is not None,
+        "submissions_held": held is not None,
         "queued_entrypoints": waiting,
     }
 
@@ -1769,6 +1837,13 @@ def api_reassign_project(
 
     with get_session() as session:
         name = resolve_project(session, identity, name)
+        from autodft.engine import nmr_references
+
+        if nmr_references.is_reference_project(name):
+            return JSONResponse(
+                status_code=409,
+                content={"detail": "The NMR reference project is managed by the pipeline and cannot be reassigned."},
+            )
         new_owner = accounts.get_user_by_username(session, body.owner)
         if new_owner is None:
             return JSONResponse(
@@ -1816,6 +1891,44 @@ def api_circuit_breaker_reset(identity: Identity = Depends(current_identity)):
     settings = get_active_settings()
     was_tripped = circuit_breaker.reset(settings.data_path)
     return {"reset": was_tripped, "tripped": False}
+
+
+class SubmissionHoldRequest(BaseModel):
+    reason: str = Field(default="", max_length=500)
+
+
+@router.get("/api/admin/submission-hold")
+def api_submission_hold_status(identity: Identity = Depends(current_identity)):
+    """Whether an admin has paused sbatch submission."""
+    require_admin(identity)
+    from autodft.engine import submission_hold
+
+    state = submission_hold.read_state(get_active_settings().data_path)
+    return {"held": state is not None, "state": state}
+
+
+@router.post("/api/admin/submission-hold")
+def api_submission_hold_set(
+    body: SubmissionHoldRequest, identity: Identity = Depends(current_identity),
+):
+    """Stop submitting jobs; results are still processed and followups prepared."""
+    require_admin(identity)
+    from autodft.engine import submission_hold
+
+    state = submission_hold.hold(
+        get_active_settings().data_path, identity.username, body.reason.strip(),
+    )
+    return {"held": True, "state": state}
+
+
+@router.post("/api/admin/submission-hold/release")
+def api_submission_hold_release(identity: Identity = Depends(current_identity)):
+    """Resume submission on the next tick."""
+    require_admin(identity)
+    from autodft.engine import submission_hold
+
+    was_held = submission_hold.release(get_active_settings().data_path)
+    return {"released": was_held, "held": False}
 
 
 @router.get("/api/admin/reset-preview")
@@ -1925,13 +2038,81 @@ def api_validate_smiles(body: ValidateSmilesRequest):
     return validate_smiles(body.smiles)
 
 
-def _reject_reason(body: SubmitRequest, smiles: str) -> Optional[tuple[str, dict]]:
-    """Why *smiles* cannot be queued under *body*'s options, or None."""
+def _category_flags(body: SubmitRequest) -> dict:
+    """The category part of *body*, keyed as in ``request_metadata``."""
+    from autodft import categories
+
+    return {
+        categories.ESD: body.request_esd,
+        categories.ESD_HT: body.request_esd_ht,
+        categories.UVVIS: body.request_spec_uvvis,
+        categories.IR: body.request_spec_ir,
+        categories.NMR: body.request_spec_nmr,
+        "uvvis_nroots": body.uvvis_nroots,
+        "uvvis_tda": body.uvvis_tda,
+        "nmr_nuclei": body.nmr_nuclei,
+        "esd_tn_window_ev": body.esd_tn_window_ev,
+        "esd_temperature_k": body.esd_temperature_k,
+        "request_optimization": body.request_optimization,
+        "request_singlepoint": body.request_singlepoint,
+    }
+
+
+def _resolved_headers(session, body: SubmitRequest) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """(confsearch, optimization, singlepoint) header text for *body*.
+
+    A stored header's id wins over raw text, which wins over the default.
+    """
+    from autodft.qm.orca.defaults import (
+        DEFAULT_HEADER_CONFSEARCH,
+        DEFAULT_HEADER_OPTIMIZATION,
+        DEFAULT_HEADER_SINGLEPOINT,
+    )
+
+    def _resolve(text_in: Optional[str], id_in: Optional[int], default: Optional[str]) -> Optional[str]:
+        if id_in is not None:
+            row = session.get(ComputationHeader, id_in)
+            if row is not None:
+                return row.header_text
+        if text_in:
+            return text_in
+        return default
+
+    return (
+        _resolve(body.header_confsearch, body.header_confsearch_id,
+                 None if body.skip_confsearch else DEFAULT_HEADER_CONFSEARCH),
+        _resolve(body.header_optimization, body.header_optimization_id,
+                 DEFAULT_HEADER_OPTIMIZATION),
+        _resolve(body.header_singlepoint, body.header_singlepoint_id,
+                 DEFAULT_HEADER_SINGLEPOINT),
+    )
+
+
+def _reject_reason(body: SubmitRequest, smiles: str, headers) -> tuple[Optional[str], dict]:
+    """Why *smiles* cannot be queued under *body*'s options (None if it can),
+    with the validation result."""
+    from autodft import categories
     from autodft.engine.entrypoint_processor import validate_smiles
 
     check = validate_smiles(smiles)
     if not check["valid"]:
-        return (check["error"] or "Invalid SMILES.", check)
+        return check["error"] or "Invalid SMILES.", check
+
+    # A diradical is only ever calculated as a triplet -- see the matching
+    # rule in the entrypoint processor. Refuse here so the caller gets a 400
+    # instead of a molecule that fails later in the worker.
+    if check["diradical"]:
+        extra = [name for name, on in (
+            ("request_t1", body.request_t1),
+            ("request_ox", body.request_ox),
+            ("request_red", body.request_red),
+        ) if on]
+        if extra:
+            return (
+                f"{smiles!r} is a diradical and is only calculated in the "
+                f"triplet state. Resubmit without {', '.join(extra)}.",
+                check,
+            )
 
     # The S0 -> T1 spin change is only defined from a closed-shell reference.
     # Refuse here rather than letting the controller build a state that is
@@ -1945,7 +2126,8 @@ def _reject_reason(body: SubmitRequest, smiles: str) -> Optional[tuple[str, dict
             f"references.",
             check,
         )
-    return None
+
+    return categories.rejection(check, _category_flags(body), headers[1], headers[2]), check
 
 
 @router.post("/api/submit")
@@ -1959,22 +2141,31 @@ def api_submit(
     is doing. Whether the work can start now is the controller's problem, not
     the caller's.
     """
-    rejection = _reject_reason(body, body.smiles)
-    if rejection is not None:
-        detail, check = rejection
-        return JSONResponse(
-            status_code=400, content={"detail": detail, "validation": check},
-        )
-
+    from autodft import categories
     from autodft.api import project_jobs
 
     with get_session() as session:
+        headers = _resolved_headers(session, body)
+        detail, check = _reject_reason(body, body.smiles, headers)
+        if detail is not None:
+            return JSONResponse(
+                status_code=400, content={"detail": detail, "validation": check},
+            )
         project_name, author = _submission_owner(session, identity, body)
+        flags = _category_flags(body)
+        conflict = categories.existing_conflict(
+            session, project_name, check["canonical"], categories.requested(flags),
+            {**categories.options(flags), categories.ESD_HT: bool(flags.get(categories.ESD_HT))},
+        )
+        if conflict:
+            return JSONResponse(
+                status_code=400, content={"detail": conflict, "validation": check},
+            )
         try:
             project_jobs.assert_no_active_job(session, project_name)
         except project_jobs.JobInProgress as exc:
             return JSONResponse(status_code=409, content={"detail": str(exc)})
-        entry = _new_entrypoint(session, body, body.smiles, project_name, author)
+        entry = _new_entrypoint(session, body, body.smiles, project_name, author, headers)
         session.add(entry)
         session.commit()
         session.refresh(entry)
@@ -2025,14 +2216,19 @@ def api_submit_batch(
     accepted: list[tuple[str, CalculationEntrypoint]] = []
     rejected: list[dict] = []
 
+    from autodft import categories
     from autodft.api import project_jobs
 
     with get_session() as session:
+        headers = _resolved_headers(session, body)
         project_name, author = _submission_owner(session, identity, body)
         try:
             project_jobs.assert_no_active_job(session, project_name)
         except project_jobs.JobInProgress as exc:
             return JSONResponse(status_code=409, content={"detail": str(exc)})
+        flags = _category_flags(body)
+        wanted = categories.requested(flags)
+        requested_options = {**categories.options(flags), categories.ESD_HT: bool(flags.get(categories.ESD_HT))}
         for smiles in body.smiles_list:
             if len(smiles) > 512:
                 # Matches the bound on SubmitRequest.smiles: RDKit's parser
@@ -2040,11 +2236,15 @@ def api_submit_batch(
                 # thread of the controller process.
                 rejected.append({"smiles": smiles[:120], "detail": "SMILES too long (>512)."})
                 continue
-            rejection = _reject_reason(body, smiles)
-            if rejection is not None:
-                rejected.append({"smiles": smiles, "detail": rejection[0]})
+            detail, check = _reject_reason(body, smiles, headers)
+            if detail is None:
+                detail = categories.existing_conflict(
+                    session, project_name, check["canonical"], wanted, requested_options,
+                )
+            if detail is not None:
+                rejected.append({"smiles": smiles, "detail": detail})
                 continue
-            entry = _new_entrypoint(session, body, smiles, project_name, author)
+            entry = _new_entrypoint(session, body, smiles, project_name, author, headers)
             session.add(entry)
             accepted.append((smiles, entry))
 
@@ -2076,6 +2276,12 @@ def _submission_owner(session, identity: Identity, body: SubmitRequest) -> tuple
     and a name someone else already uses is simply the caller's own
     project of that name.
     """
+    from autodft.engine import nmr_references
+
+    reserved = nmr_references.reserved_name_error(body.project)
+    if reserved:
+        raise HTTPException(status_code=400, detail=reserved)
+
     from autodft import accounts
 
     user = accounts.get_user_by_username(session, identity.username)
@@ -2083,6 +2289,9 @@ def _submission_owner(session, identity: Identity, body: SubmitRequest) -> tuple
         # No account row: the shared-password admin on a database that has
         # not been bootstrapped. The project name cannot be qualified, but
         # the author is still the caller and not the body.
+        if nmr_references.is_reference_project(body.project):
+            raise HTTPException(status_code=400,
+                                detail=nmr_references.reserved_name_error(nmr_references.REFERENCE_PROJECT))
         return body.project, identity.username
 
     project = accounts.get_or_create_project(session, user, body.project)
@@ -2092,13 +2301,10 @@ def _submission_owner(session, identity: Identity, body: SubmitRequest) -> tuple
 def _new_entrypoint(
     session, body: SubmitRequest, smiles: str,
     project_name: Optional[str] = None, author: Optional[str] = None,
+    headers: Optional[tuple] = None,
 ) -> CalculationEntrypoint:
     """Build (but do not add) the entrypoint row for one SMILES."""
-    from autodft.qm.orca.defaults import (
-        DEFAULT_HEADER_CONFSEARCH,
-        DEFAULT_HEADER_OPTIMIZATION,
-        DEFAULT_HEADER_SINGLEPOINT,
-    )
+    from autodft import categories
 
     # If only the legacy `max_conformers` was supplied, apply it as a
     # blanket override to every state — preserves the old contract.
@@ -2125,32 +2331,16 @@ def _new_entrypoint(
         "max_conformers_ox": n_ox,
         "max_conformers_red": n_red,
     }
+    # Only set categories are written, so an unflagged submission's row is
+    # exactly what it always was.
+    request_metadata.update(categories.snapshot(_category_flags(body)))
 
-    # Resolve header IDs -> raw text (IDs win over raw text). Falls back
-    # to the package defaults when neither is provided.
-    def _resolve(text_in: Optional[str], id_in: Optional[int], default: Optional[str]) -> Optional[str]:
-        if id_in is not None:
-            row = session.get(ComputationHeader, id_in)
-            if row is not None:
-                return row.header_text
-        if text_in:
-            return text_in
-        return default
-
+    h_cs, h_opt, h_sp = headers if headers is not None else _resolved_headers(session, body)
     return CalculationEntrypoint(
         smiles=smiles,
         request_metadata=json.dumps(request_metadata),
         priority=body.priority,
-        header_confsearch=_resolve(
-            body.header_confsearch, body.header_confsearch_id,
-            None if body.skip_confsearch else DEFAULT_HEADER_CONFSEARCH,
-        ),
-        header_optimization=_resolve(
-            body.header_optimization, body.header_optimization_id,
-            DEFAULT_HEADER_OPTIMIZATION,
-        ),
-        header_singlepoint=_resolve(
-            body.header_singlepoint, body.header_singlepoint_id,
-            DEFAULT_HEADER_SINGLEPOINT,
-        ),
+        header_confsearch=h_cs,
+        header_optimization=h_opt,
+        header_singlepoint=h_sp,
     )

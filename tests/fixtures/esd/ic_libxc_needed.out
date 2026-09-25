@@ -1,0 +1,18 @@
+
+Building densities                     ... done
+Calculating rho(r) on the grid         ... done
+Building xc-kernel on the grid         ... done
+Building xc 3rd derivative on the grid ... ERROR: Native implementation of 3d derivative B88 exchange requested. 
+[file orca_tools/Tool-Numint/qcgxc.cpp, line 9355]:         This is a bug which should have been caught earlier! As a workaround, use LibXC instead
+
+[file orca_tools/Tool-Numint/qcgxc.cpp, line 9355]:         This is a bug which should have been caught earlier! As a workaround, use LibXC instead
+
+
+ORCA finished by error termination in CIS
+Calling Command: /mnt/share/public/software/orca-6.1.1-gxtb/orca_cis ic.cisinp.tmp 
+[file orca_tools/qcmsg.cpp, line 394]: 
+  .... aborting the run
+
+[file orca_tools/qcmsg.cpp, line 394]: 
+  .... aborting the run
+

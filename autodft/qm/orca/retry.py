@@ -118,6 +118,15 @@ class RetryStrategy(ABC):
 # ---------------------------------------------------------------------------
 
 
+def _fc_rate_job(job_path: str) -> bool:
+    """An FC ESD input (``! ESD(ISC) NOITER``); unreadable counts as FC."""
+    try:
+        text = (Path(job_path) / "input.inp").read_text(encoding="utf-8", errors="replace")
+    except (OSError, TypeError):
+        return True
+    return re.search(r"^\s*!\s*ESD\(ISC\)\s+NOITER\b", text, re.IGNORECASE | re.MULTILINE) is not None
+
+
 class IncreaseResources(RetryStrategy):
     """Increase CPU cores and wall-time, and -- only for an explicit memory
     failure -- per-rank memory.
@@ -169,6 +178,9 @@ class IncreaseResources(RetryStrategy):
         return any(sig in out for sig in _ORCA_MEMORY_SIGNATURES)
 
     def applies(self, failure: FailureInfo, task_type: str) -> bool:
+        if task_type.startswith("esd_") and _fc_rate_job(failure.previous_job_path):
+            # An FC rate job takes seconds; it fails on its inputs, not on resources.
+            return False
         return "Termination" in (failure.fail_reason or "") or self.is_memory_failure(failure)
 
     def modify(

@@ -12,6 +12,17 @@ class TaskType(str, Enum):
     singlepoint_vert_spin_change = "singlepoint_vert_spin_change"
     singlepoint_nbo = "singlepoint_nbo"
 
+    # Opt-in categories (autodft.categories).
+    singlepoint_uvvis = "singlepoint_uvvis"
+    singlepoint_nmr = "singlepoint_nmr"
+    singlepoint_soc = "singlepoint_soc"
+    esd_isc = "esd_isc"
+    esd_risc = "esd_risc"
+    esd_ic = "esd_ic"
+    esd_fluor = "esd_fluor"
+    esd_isc_t1s0 = "esd_isc_t1s0"
+    esd_phosp = "esd_phosp"
+
 
 class TaskStatus(str, Enum):
     created = "created"
@@ -29,6 +40,7 @@ class ProjectJobKind(str, Enum):
     export_json = "export_json"
     export_files = "export_files"
     export_xlsx = "export_xlsx"
+    export_photophysics = "export_photophysics"
 
 
 class ProjectJobStatus(str, Enum):

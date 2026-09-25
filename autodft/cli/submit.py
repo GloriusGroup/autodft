@@ -35,26 +35,91 @@ def _read_header_file(path: Optional[Path]) -> Optional[str]:
     return path.read_text(encoding="utf-8")
 
 
-def _check_t1_reference(smiles: str, request_t1: bool) -> None:
-    """Refuse a T1 request on an open-shell reference.
+def _check_reference_state(
+    smiles: str, request_t1: bool, request_ox: bool = False,
+    request_red: bool = False,
+) -> None:
+    """Refuse extra states the reference cannot support.
 
-    The S0 -> T1 spin change is only defined from a closed-shell singlet.
-    Mirrors the guard in POST /api/submit so both entry paths behave the same.
+    A diradical is only calculated as a triplet; the S0 -> T1 spin change is
+    only defined from a closed-shell singlet. Mirrors the guards in
+    POST /api/submit so both entry paths behave the same.
     """
-    if not request_t1:
-        return
     from autodft.engine.entrypoint_processor import validate_smiles
 
     check = validate_smiles(smiles)
-    if check["valid"] and check["multiplicity"] != 1:
+    if not check["valid"]:
+        return
+
+    if check["diradical"]:
+        extra = [flag for flag, on in (
+            ("--request-t1", request_t1),
+            ("--request-ox", request_ox),
+            ("--request-red", request_red),
+        ) if on]
+        if extra:
+            console.print(
+                f"[red]Diradicals are only calculated in the triplet state[/red] "
+                f"— {smiles}. Drop {', '.join(extra)}."
+            )
+            raise typer.Exit(code=1)
+    elif request_t1 and check["multiplicity"] != 1:
         console.print(
             f"[red]T1 requires a closed-shell reference[/red] — {smiles} has "
             f"multiplicity {check['multiplicity']}. Drop --request-t1; "
             f"ox / red still work for open-shell references."
         )
         raise typer.Exit(code=1)
+
     if check.get("warning"):
         console.print(f"[yellow]{check['warning']}[/yellow]")
+
+
+def _category_options_to_flags(
+    uvvis: bool, ir: bool, esd: bool, esd_ht: bool, nmr: bool,
+    uvvis_nroots: int = 20, uvvis_tda: bool = False, nmr_nuclei: Optional[list] = None,
+    esd_tn_window_ev: float = 0.2, esd_temperature_k: float = 298.15,
+) -> dict:
+    """CLI options as ``request_metadata`` category keys and settings."""
+    from autodft import categories
+
+    return {
+        categories.UVVIS: uvvis,
+        categories.IR: ir,
+        categories.ESD: esd,
+        categories.ESD_HT: esd_ht,
+        categories.NMR: nmr,
+        "uvvis_nroots": uvvis_nroots,
+        "uvvis_tda": uvvis_tda,
+        "nmr_nuclei": nmr_nuclei if nmr_nuclei is not None else ["H", "C", "F"],
+        "esd_tn_window_ev": esd_tn_window_ev,
+        "esd_temperature_k": esd_temperature_k,
+    }
+
+
+def _check_categories(
+    smiles: str, flags: dict,
+    header_optimization: Optional[str], header_singlepoint: Optional[str],
+) -> None:
+    """Refuse categories this molecule or these headers cannot run.
+
+    Mirrors POST /api/submit. Adding categories to an existing molecule is
+    refused at expansion, where the entrypoint then shows the reason.
+    """
+    from autodft import categories
+
+    if not categories.requested(flags) and not flags.get(categories.ESD_HT):
+        return
+
+    from autodft.engine.entrypoint_processor import validate_smiles
+
+    check = validate_smiles(smiles)
+    if not check["valid"]:
+        return
+    reason = categories.rejection(check, flags, header_optimization, header_singlepoint)
+    if reason:
+        console.print(f"[red]{reason}[/red] — {smiles}")
+        raise typer.Exit(code=1)
 
 
 def _qualified_project(project: str, user: str) -> tuple[str, str]:
@@ -66,6 +131,13 @@ def _qualified_project(project: str, user: str) -> tuple[str, str]:
     leaving the work visible only to admin. The project is created if it
     does not exist, exactly as an API submission would.
     """
+    from autodft.engine import nmr_references
+
+    reserved = nmr_references.reserved_name_error(project)
+    if reserved:
+        console.print(f"[red]{reserved}[/red]")
+        raise typer.Exit(code=1)
+
     from autodft import accounts
     from autodft.db import get_session
 
@@ -92,6 +164,7 @@ def _build_request_metadata(
     max_conformers_t1: int,
     max_conformers_ox: int,
     max_conformers_red: int,
+    category_flags: Optional[dict] = None,
 ) -> str:
     """Build the request_metadata JSON string."""
     metadata = {
@@ -111,6 +184,11 @@ def _build_request_metadata(
         "max_conformers_ox": max_conformers_ox,
         "max_conformers_red": max_conformers_red,
     }
+
+    from autodft import categories
+
+    metadata.update(categories.snapshot(category_flags or {}))
+
     return json.dumps(metadata)
 
 
@@ -147,10 +225,40 @@ def submit(
     max_conformers_t1: int = typer.Option(1, "--max-conformers-t1", help="Max conformers kept for T1"),
     max_conformers_ox: int = typer.Option(1, "--max-conformers-ox", help="Max conformers kept for ox"),
     max_conformers_red: int = typer.Option(1, "--max-conformers-red", help="Max conformers kept for red"),
+    uvvis: bool = typer.Option(False, "--uvvis", help="UV/Vis absorption (TDDFT) on every S0 conformer"),
+    ir: bool = typer.Option(False, "--ir", help="IR spectrum from the optimisation's frequencies"),
+    esd: bool = typer.Option(
+        False, "--esd",
+        help="Excited-state dynamics: ISC/RISC/IC/fluorescence/phosphorescence rates from S1 and T1 seeded at the lowest S0",
+    ),
+    esd_ht: bool = typer.Option(
+        False, "--esd-ht", help="Herzberg-Teller for the ESD rates (much more expensive: 6N TDDFT gradients per triplet sublevel; hours to days)"
+    ),
+    nmr: bool = typer.Option(
+        False, "--nmr", help="NMR shifts (1H/13C/19F) vs automatically computed TMS / CFCl3"
+    ),
+    uvvis_nroots: int = typer.Option(20, "--uvvis-nroots", help="UV/Vis excited states (1-100)"),
+    uvvis_tda: bool = typer.Option(False, "--uvvis-tda", help="Tamm-Dancoff approximation for UV/Vis"),
+    nmr_nuclei: str = typer.Option(
+        "H,C,F", "--nmr-nuclei", help="NMR nuclei to report, comma-separated"
+    ),
+    esd_tn_window_ev: float = typer.Option(0.2, "--esd-tn-window", help="Include S1->Tn ISC for Tn up to this many eV above S1"),
+    esd_temperature_k: float = typer.Option(298.15, "--esd-temperature", help="Temperature of the ESD rates (K)"),
 ) -> None:
     """Submit a single molecule by SMILES string."""
-    _check_t1_reference(smiles, request_t1)
+    _check_reference_state(smiles, request_t1, request_ox, request_red)
+    flags = _category_options_to_flags(
+        uvvis, ir, esd, esd_ht, nmr, uvvis_nroots, uvvis_tda,
+        nmr_nuclei=[n.strip() for n in nmr_nuclei.split(",") if n.strip()],
+        esd_tn_window_ev=esd_tn_window_ev, esd_temperature_k=esd_temperature_k,
+    )
     qualified, author = _qualified_project(project, user)
+
+    # Use custom headers if provided, otherwise use defaults
+    h_cs = _read_header_file(header_confsearch) if header_confsearch else (None if skip_confsearch else DEFAULT_HEADER_CONFSEARCH)
+    h_opt = _read_header_file(header_opt) if header_opt else DEFAULT_HEADER_OPTIMIZATION
+    h_sp = _read_header_file(header_sp) if header_sp else DEFAULT_HEADER_SINGLEPOINT
+    _check_categories(smiles, flags, h_opt, h_sp)
 
     request_metadata = _build_request_metadata(
         project_name=qualified,
@@ -164,12 +272,8 @@ def submit(
         max_conformers_t1=max_conformers_t1,
         max_conformers_ox=max_conformers_ox,
         max_conformers_red=max_conformers_red,
+        category_flags=flags,
     )
-
-    # Use custom headers if provided, otherwise use defaults
-    h_cs = _read_header_file(header_confsearch) if header_confsearch else (None if skip_confsearch else DEFAULT_HEADER_CONFSEARCH)
-    h_opt = _read_header_file(header_opt) if header_opt else DEFAULT_HEADER_OPTIMIZATION
-    h_sp = _read_header_file(header_sp) if header_sp else DEFAULT_HEADER_SINGLEPOINT
 
     entry = CalculationEntrypoint(
         smiles=smiles,
@@ -224,12 +328,36 @@ def submit_batch(
     max_conformers_t1: int = typer.Option(1, "--max-conformers-t1", help="Max conformers kept for T1"),
     max_conformers_ox: int = typer.Option(1, "--max-conformers-ox", help="Max conformers kept for ox"),
     max_conformers_red: int = typer.Option(1, "--max-conformers-red", help="Max conformers kept for red"),
+    uvvis: bool = typer.Option(False, "--uvvis", help="UV/Vis absorption (TDDFT) on every S0 conformer"),
+    ir: bool = typer.Option(False, "--ir", help="IR spectrum from the optimisation's frequencies"),
+    esd: bool = typer.Option(
+        False, "--esd",
+        help="Excited-state dynamics: ISC/RISC/IC/fluorescence/phosphorescence rates from S1 and T1 seeded at the lowest S0",
+    ),
+    esd_ht: bool = typer.Option(
+        False, "--esd-ht", help="Herzberg-Teller for the ESD rates (much more expensive: 6N TDDFT gradients per triplet sublevel; hours to days)"
+    ),
+    nmr: bool = typer.Option(
+        False, "--nmr", help="NMR shifts (1H/13C/19F) vs automatically computed TMS / CFCl3"
+    ),
+    uvvis_nroots: int = typer.Option(20, "--uvvis-nroots", help="UV/Vis excited states (1-100)"),
+    uvvis_tda: bool = typer.Option(False, "--uvvis-tda", help="Tamm-Dancoff approximation for UV/Vis"),
+    nmr_nuclei: str = typer.Option(
+        "H,C,F", "--nmr-nuclei", help="NMR nuclei to report, comma-separated"
+    ),
+    esd_tn_window_ev: float = typer.Option(0.2, "--esd-tn-window", help="Include S1->Tn ISC for Tn up to this many eV above S1"),
+    esd_temperature_k: float = typer.Option(298.15, "--esd-temperature", help="Temperature of the ESD rates (K)"),
 ) -> None:
     """Submit molecules from a CSV file."""
     if not file.exists():
         console.print(f"[red]File not found:[/red] {file}")
         raise typer.Exit(code=1)
     qualified, author = _qualified_project(project, user)
+    flags = _category_options_to_flags(
+        uvvis, ir, esd, esd_ht, nmr, uvvis_nroots, uvvis_tda,
+        nmr_nuclei=[n.strip() for n in nmr_nuclei.split(",") if n.strip()],
+        esd_tn_window_ev=esd_tn_window_ev, esd_temperature_k=esd_temperature_k,
+    )
 
     request_metadata = _build_request_metadata(
         project_name=qualified,
@@ -243,6 +371,7 @@ def submit_batch(
         max_conformers_t1=max_conformers_t1,
         max_conformers_ox=max_conformers_ox,
         max_conformers_red=max_conformers_red,
+        category_flags=flags,
     )
 
     h_cs = _read_header_file(header_confsearch) if header_confsearch else (None if skip_confsearch else DEFAULT_HEADER_CONFSEARCH)
@@ -282,7 +411,8 @@ def submit_batch(
     # Check every row before writing any of them, so a batch either goes in
     # whole or not at all.
     for smi in smiles_list:
-        _check_t1_reference(smi, request_t1)
+        _check_reference_state(smi, request_t1, request_ox, request_red)
+        _check_categories(smi, flags, h_opt, h_sp)
 
     submitted = 0
     with get_session() as session:

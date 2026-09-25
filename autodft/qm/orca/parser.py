@@ -7,6 +7,7 @@ original ``orca_output_processor.py``.
 """
 
 import logging
+import math
 import re
 from pathlib import Path
 from typing import Optional
@@ -24,6 +25,14 @@ logger = logging.getLogger(__name__)
 # routinely produce -20 to -50 cm^-1 modes that no amount of re-optimisation
 # removes; failing on them burns the whole retry budget for nothing.
 IMAGINARY_FREQ_THRESHOLD = -50.0
+
+
+def _esd_job_count(job_path: Path) -> Optional[int]:
+    """ORCA jobs in *job_path*'s input: one plus each ``$new_job``."""
+    try:
+        return (Path(job_path) / "input.inp").read_text(encoding="utf-8", errors="replace").count("$new_job") + 1
+    except OSError:
+        return None
 
 
 class OrcaParser(QMEngine):
@@ -78,6 +87,39 @@ class OrcaParser(QMEngine):
             # the state with zero optimizations and no error recorded
             # anywhere -- the calculation simply stopped.
             checks["Conformer Ensemble"] = bool(self._parse_ensemble_table(content))
+        if task_type == "singlepoint_uvvis":
+            # A TDDFT that died after the SCF still terminates normally.
+            from autodft.qm.orca.spectra_parser import parse_absorption
+
+            checks["Absorption Spectrum"] = bool(parse_absorption(content))
+        if task_type == "singlepoint_nmr":
+            from autodft.qm.orca.spectra_parser import parse_shieldings
+
+            checks["Shieldings"] = bool(parse_shieldings(content))
+        if task_type == "singlepoint_soc" or task_type.startswith("esd_") \
+                or task_type == "optimization_excited":
+            from autodft.qm.orca import esd_parser
+
+            if task_type == "singlepoint_soc":
+                # An unstable reference shows up as negative roots.
+                roots = [*esd_parser.excitation_energies(content, "SINGLETS").values(),
+                         *esd_parser.excitation_energies(content, "TRIPLETS").values()]
+                checks["Excited States"] = bool(roots) and min(roots) > 0
+                checks["SOC Matrix"] = bool(esd_parser.socme(content))
+            else:
+                # A native B88 functional fails the same way on every retry.
+                checks["LibXC Needed"] = not esd_parser.needs_libxc(content)
+            if task_type.startswith("esd_"):
+                found = esd_parser.rates(content)
+                expected = _esd_job_count(job_path)
+                # One rate per ORCA job; a missing sublevel would skew the sum or mean.
+                checks["ESD Rate"] = bool(found) and all(math.isfinite(r.rate) for r in found) and (
+                    expected is None or len(found) == expected
+                )
+            if task_type == "optimization_excited":
+                # Below 0.1 eV the followed root has collapsed onto S0.
+                gap = esd_parser.followed_root_energy(content)
+                checks["Excited Root"] = gap is not None and gap >= 0.1 * esd_parser.EV_TO_EH
 
         success = all(checks.values())
 
@@ -122,6 +164,8 @@ class OrcaParser(QMEngine):
         time_limit: str,
         partition: str,
         nice: int = 0,
+        keep_hessian: bool = False,
+        extra_inputs: Optional[list[str]] = None,
     ) -> None:
         """Delegated to :func:`input_generator.generate_submit_script`.
 
@@ -145,6 +189,8 @@ class OrcaParser(QMEngine):
             tmp_dir=self.orca.tmp_dir,
             keep_wavefunction=self.orca.keep_wavefunction,
             keep_densities=self.orca.keep_densities,
+            keep_hessian=keep_hessian,
+            extra_inputs=extra_inputs,
         )
 
     # ------------------------------------------------------------------

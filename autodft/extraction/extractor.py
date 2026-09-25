@@ -237,6 +237,21 @@ class PipelineExtractor:
             return min(bare, key=lambda r: r.e_singlepoint)
         return results[0]
 
+    def extract_state_results(
+        self, session: Session, mol: Molecule, state: MoleculeState,
+    ) -> list[ConformerResult]:
+        """Every conformer of one state, in conformer order."""
+        return self._extract_state_results(session, mol, state, all_conformers=True)
+
+    def successful_output(self, session: Session, task_id: int) -> Optional[str]:
+        """``output.out`` of the task's latest successful job, or None."""
+        job_path = self.successful_job_path(session, task_id)
+        return self._load_output(job_path) if job_path is not None else None
+
+    def successful_job_path(self, session: Session, task_id: int) -> Optional[Path]:
+        """Directory of the task's latest successful job, or None."""
+        return self._get_successful_job_path(session, task_id)
+
     def _extract_conformer_energies(
         self,
         session: Session,
@@ -654,6 +669,9 @@ class PipelineExtractor:
 
         deleted = 0
         with get_session() as session:
+            # Rate jobs copy these Hessians whenever they are (re)generated.
+            esd_opts = self._esd_optimisations(session)
+
             jobs = session.exec(
                 select(ComputationJob).where(ComputationJob.success == True)  # noqa: E712
             ).all()
@@ -664,16 +682,40 @@ class PipelineExtractor:
                 job_dir = Path(job.job_path)
                 if not job_dir.is_dir():
                     continue
+                keep = extensions | {".hess"} if job.task_id in esd_opts else extensions
                 for f in job_dir.iterdir():
-                    if f.is_file() and f.suffix not in extensions:
+                    if f.is_file() and f.suffix not in keep:
                         if dry_run:
                             logger.info("Would delete: %s", f)
                         else:
                             f.unlink()
-                            deleted += 1
+                        deleted += 1
 
         logger.info("Cleanup: deleted %d files (dry_run=%s)", deleted, dry_run)
         return deleted
+
+    @staticmethod
+    def _esd_optimisations(session: Session) -> set[int]:
+        """Optimisation tasks of ESD states: S0 with ``request_esd`` and every ``esd_role`` state."""
+        candidates = session.exec(
+            select(MoleculeState.id, MoleculeState.metadata_json).where(
+                col(MoleculeState.metadata_json).contains("request_esd")
+                | col(MoleculeState.metadata_json).contains("esd_role")
+            )
+        ).all()
+        states = []
+        for state_id, raw in candidates:
+            metadata = json.loads(raw) if raw else {}
+            if metadata.get("esd_role") or metadata.get("request_esd") is True:
+                states.append(state_id)
+        if not states:
+            return set()
+        return set(session.exec(
+            select(ComputationTask.id).where(
+                ComputationTask.task_type == TaskType.optimization,
+                col(ComputationTask.state_id).in_(states),
+            )
+        ).all())
 
 
 # ======================================================================
@@ -707,12 +749,35 @@ _FILE_MAP: dict[str, list[tuple[str, str]]] = {
         ("input.xyz", "sp_vert_red_geometry.xyz"),
         ("output.out", "sp_vert_red_output.out"),
     ],
+    "singlepoint_uvvis": [
+        ("input.inp", "sp_uvvis_input.inp"),
+        ("input.xyz", "sp_uvvis_geometry.xyz"),
+        ("output.out", "sp_uvvis_output.out"),
+    ],
+    "singlepoint_nmr": [
+        ("input.inp", "sp_nmr_input.inp"),
+        ("input.xyz", "sp_nmr_geometry.xyz"),
+        ("output.out", "sp_nmr_output.out"),
+    ],
+    "singlepoint_soc": [
+        ("input.inp", "sp_soc_input.inp"),
+        ("input.xyz", "sp_soc_geometry.xyz"),
+        ("output.out", "sp_soc_output.out"),
+    ],
     "confsearch": [
         ("input.inp", "confsearch_input.inp"),
         ("output.out", "confsearch_output.out"),
         ("input.finalensemble.xyz", "confsearch_ensemble.xyz"),
     ],
 }
+
+# ESD rate jobs: the rate input, the final-state geometry and ORCA's output.
+for _rate in ("esd_isc", "esd_risc", "esd_ic", "esd_fluor", "esd_isc_t1s0", "esd_phosp"):
+    _FILE_MAP[_rate] = [
+        ("input.inp", f"{_rate}_input.inp"),
+        ("input.xyz", f"{_rate}_geometry.xyz"),
+        ("output.out", f"{_rate}_output.out"),
+    ]
 
 
 def _copy_task_files(

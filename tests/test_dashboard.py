@@ -120,3 +120,68 @@ def test_disk_usage_is_measured_on_request(client):
     assert usage["total_bytes"] >= 0
     assert usage["measured_at"] is not None
     admin_ops._reset_disk_usage()
+
+
+def test_the_dashboard_offers_the_spectra_categories(client):
+    c, headers = client
+    html = c.get("/", headers=headers).text
+    for needle in ('id="requestUvvis"', 'id="requestIr"',
+                   'data-page="projects.photophysics"', 'id="projectSelectPP"',
+                   "request_spec_uvvis", "request_spec_ir"):
+        assert needle in html, needle
+
+
+def test_each_category_has_a_settings_panel_shown_only_when_ticked(client):
+    import re
+
+    c, headers = client
+    html = c.get("/", headers=headers).text
+    panels = re.findall(r'<div class="cat-detail" data-requires="(\w+)" style="display:none;">', html)
+    assert panels == ["requestUvvis", "requestIr", "requestNmr", "requestEsd"]
+    for needle in ('id="uvvisNroots"', 'id="uvvisTda"', 'id="irHeaderNote"',
+                   'id="uvvisHeaderNote"', "commonBody.uvvis_nroots", "commonBody.uvvis_tda"):
+        assert needle in html, needle
+
+
+def test_the_dashboard_offers_nmr(client):
+    c, headers = client
+    html = c.get("/", headers=headers).text
+    for needle in ('id="requestNmr"', 'id="nmrNucH"', 'id="nmrNucC"', 'id="nmrNucF"',
+                   'id="nmrHeaderNote"', "request_spec_nmr:", "commonBody.nmr_nuclei =",
+                   "'requestNmr'", "function ppNmr"):
+        assert needle in html, needle
+
+
+def test_the_dashboard_offers_esd(client):
+    c, headers = client
+    html = c.get("/", headers=headers).text
+    for needle in ('id="requestEsd"', 'id="requestEsdHt"', 'id="esdTnWindow"', 'id="esdTemperature"',
+                   'id="esdHeaderNote"', "request_esd:", "commonBody.request_esd_ht =",
+                   "'requestEsd'", "var B88_RE", "function ppEsdSummary(", "function ppEsd(",
+                   "<th>ESD</th>"):
+        assert needle in html, needle
+
+
+def test_uvvis_options_are_sent_only_when_ticked():
+    html = (TEMPLATE / "dashboard.html").read_text()
+    assert "uvvis_nroots:       intOrDefault" not in html
+    assert "if (commonBody.request_spec_uvvis) {" in html
+
+
+def test_spectra_load_per_molecule():
+    html = (TEMPLATE / "dashboard.html").read_text()
+    assert "'/photophysics?molecule_id=' + molId" in html
+    assert "function ppToggle(molId)" in html
+
+
+def test_photophysics_empty_states_and_energy_counts():
+    html = (TEMPLATE / "dashboard.html").read_text()
+    assert "ens.unweighted + ' without energy'" in html
+    assert "if (m.stage) {" in html
+    assert "if (ppState.project !== name) ppState.details = {};" not in html
+
+
+def test_the_photophysics_page_has_an_export_button():
+    html = (TEMPLATE / "dashboard.html").read_text()
+    assert 'id="ppExportBtn"' in html
+    assert "format=photophysics" in html

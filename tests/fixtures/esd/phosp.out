@@ -1,0 +1,100 @@
+Converting to internal coordinates:		...done
+Calculating rotation matrix J:			...done
+Calculating displacement vector K:		...done
+The sum of K*K is:				0.870030
+
+Checking for transition data:			...done
+
+          ***Everything is set, now computing the correlation function***
+
+Homogeneous linewidth is:			50.00 cm-1
+Number of points:				131072
+Maximum time:					1592.65 fs
+Spectral resolution:				3.33 cm-1
+Temperature used:				298.15 K
+Z value:					1.653068e-16
+Cutoff for the correlation function:		1.00e-06
+Adiabatic energy difference:			14444.50 cm-1
+0-0 energy difference:				13990.18 cm-1
+Reference transition dipole (x,y,z):		(1.03508e-04 -5.56711e-05),
+                                    		(4.22538e-04 -2.27259e-04),
+                                    		(4.39555e-08 -2.36411e-08) 
+Calculating correlation function:		...done
+Last element of the correlation function:	0.000000,0.000000
+Computing the Fourier Transform:		...done
+
+The calculated phosphorescence rate constant is	1.187214e+00 s-1
+with 100.00% from FC and 0.00% from HT
+
+The phosphorescence spectrum was saved in		phosp.spectrum
+
+Total run time: 0 days 0 hours 0 minutes 1 seconds
+
+                      ****ORCA ESD FINISHED WITHOUT ERROR****
+Converting to internal coordinates:		...done
+Calculating rotation matrix J:			...done
+Calculating displacement vector K:		...done
+The sum of K*K is:				0.870030
+
+Checking for transition data:			...done
+
+          ***Everything is set, now computing the correlation function***
+
+Homogeneous linewidth is:			50.00 cm-1
+Number of points:				131072
+Maximum time:					1592.65 fs
+Spectral resolution:				3.33 cm-1
+Temperature used:				298.15 K
+Z value:					1.653068e-16
+Cutoff for the correlation function:		1.00e-06
+Adiabatic energy difference:			14444.50 cm-1
+0-0 energy difference:				13990.18 cm-1
+Reference transition dipole (x,y,z):		(1.55233e-15 9.58886e-06),
+                                    		(2.67957e-15 1.07792e-05),
+                                    		(-1.78655e-17 -1.40569e-04) 
+Calculating correlation function:		...done
+Last element of the correlation function:	0.000000,0.000000
+Computing the Fourier Transform:		...done
+
+The calculated phosphorescence rate constant is	9.715617e-02 s-1
+with 100.00% from FC and 0.00% from HT
+
+The phosphorescence spectrum was saved in		phosp_job2.spectrum
+
+Total run time: 0 days 0 hours 0 minutes 1 seconds
+
+                      ****ORCA ESD FINISHED WITHOUT ERROR****
+Converting to internal coordinates:		...done
+Calculating rotation matrix J:			...done
+Calculating displacement vector K:		...done
+The sum of K*K is:				0.870030
+
+Checking for transition data:			...done
+
+          ***Everything is set, now computing the correlation function***
+
+Homogeneous linewidth is:			50.00 cm-1
+Number of points:				131072
+Maximum time:					1592.65 fs
+Spectral resolution:				3.33 cm-1
+Temperature used:				298.15 K
+Z value:					1.653068e-16
+Cutoff for the correlation function:		1.00e-06
+Adiabatic energy difference:			14444.50 cm-1
+0-0 energy difference:				13990.18 cm-1
+Reference transition dipole (x,y,z):		(1.59498e-03 2.96552e-03),
+                                    		(1.89319e-03 3.51997e-03),
+                                    		(-3.92734e-06 -7.30202e-06) 
+Calculating correlation function:		...done
+Last element of the correlation function:	0.000000,0.000000
+Computing the Fourier Transform:		...done
+
+The calculated phosphorescence rate constant is	1.328943e+02 s-1
+with 100.00% from FC and 0.00% from HT
+
+The phosphorescence spectrum was saved in		phosp_job3.spectrum
+
+Total run time: 0 days 0 hours 0 minutes 1 seconds
+
+                      ****ORCA ESD FINISHED WITHOUT ERROR****
+                             ****ORCA TERMINATED NORMALLY****

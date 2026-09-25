@@ -190,8 +190,18 @@ package defaults in `autodft/qm/orca/defaults.py`.
 | `header_confsearch_id`                      | int?   | `null`        | ID of a stored `ComputationHeader`. Wins over the raw text version.                         |
 | `header_optimization_id`                    | int?   | `null`        | Same.                                                                                       |
 | `header_singlepoint_id`                     | int?   | `null`        | Same.                                                                                       |
+| `request_spec_uvvis`                        | bool   | `false`       | UV/Vis: a TDDFT singlepoint (`%tddft nroots <uvvis_nroots> tda <uvvis_tda>`, appended to the singlepoint header) on every optimised S0 conformer. The singlepoint header must not already contain `%tddft`, `%cis`, `%eprnmr`, `%esd`, the `NMR` or `ESD` keyword, a frequency keyword (`Freq`/`NumFreq`/`AnFreq`) or an optimisation keyword (`Opt`/`OptTS`/`OptH`/…) — the same rule applies to NMR and ESD. |
+| `uvvis_nroots`                              | int    | `20`          | UV/Vis excited states (1–100). Stored only when UV/Vis is requested.                        |
+| `uvvis_tda`                                 | bool   | `false`       | Tamm–Dancoff approximation for the UV/Vis TDDFT. Stored only when UV/Vis is requested.      |
+| `request_spec_ir`                           | bool   | `false`       | IR: read from the S0 optimisation's frequency calculation — no extra job. Needs `Freq` in the optimisation header. |
+| `request_spec_nmr`                          | bool   | `false`       | NMR: `NMR` is added to the singlepoint header's `!` line for a singlepoint on every optimised S0 conformer. Shifts are referenced to TMS (¹H, ¹³C) and CFCl₃ (¹⁹F), which the pipeline computes itself — once per optimisation/singlepoint header pair — in the protected `admin/system_references` project. Closed-shell molecules only. |
+| `nmr_nuclei`                                | list   | `["H","C","F"]` | Nuclei to report; stored only with NMR.                                                  |
+| `request_esd` | bool | `false` | Excited-state dynamics: S1 and T1 optimised from the lowest S0 conformer, SOC TDDFT, ORCA ESD rates (ISC, RISC, IC, fluorescence, T1→S0 ISC, phosphorescence). Needs a closed-shell singlet, `Freq` in the optimisation header, the energy singlepoint, and a functional whose TDDFT gradients ORCA supports (native B88 functionals such as B3LYP need `LibXC(...)`). |
+| `request_esd_ht` | bool | `false` | Herzberg–Teller for the ESD rates; only with `request_esd`. |
+| `esd_tn_window_ev` | float | `0.2` | S1→Tn ISC is summed over triplets up to this many eV above S1 (0–1). Stored only with ESD. |
+| `esd_temperature_k` | float | `298.15` | Temperature of the rates (0 < T ≤ 1000). Stored only with ESD. |
 
-`request_S1` is **not** exposed: the S1 state is not yet supported.
+`request_S1` is **not** exposed: the S1 state exists only as part of ESD (`request_esd`).
 
 **Responses:**
 
@@ -403,9 +413,11 @@ every one succeeded.
 
 The same molecules, one level deeper: each state (S0 / T1 / ox / red)
 with its confsearch status and one row per conformer carrying the status
-of that conformer's optimization and of every singlepoint hanging off it.
-This is what the dashboard's *Project Overview → Molecules* subpage
-renders.
+of that conformer's optimization and of every singlepoint hanging off it,
+plus `esd`: one combined status (`failed` > `pending` > `created` >
+`successful`, `null` when there are none) over that conformer's
+`singlepoint_soc` and every `esd_*` rate task. This is what the
+dashboard's *Project Overview → Molecules* subpage renders.
 
 ### `GET /api/projects/{name}/state-analysis`
 
@@ -420,21 +432,177 @@ The same payload as a multi-sheet XLSX attachment (Summary, Lowest
 Energy, RMSD Matched, Conformers). Energies in Hartree, potentials in V
 vs SCE.
 
-### `POST /api/projects/{name}/export` `?format=csv|json|files&all_conformers=true|false`
+### `GET /api/projects/{name}/photophysics` `?molecule_id=`
 
-Non-destructive export. Writes into `<export_data>/<owner>/<project>/`,
-with the **bare** project name as the filename stem:
+UV/Vis, IR, NMR and ESD for every molecule submitted with those categories.
+Categories are only added to new molecules: resubmitting an existing
+molecule with a category it does not have, or with different options for
+one it already has, answers 400.
+
+Without `molecule_id`, one summary per molecule (this view is cached, and
+refreshed when this project or the NMR reference project changes — true
+for live molecules only; an archived molecule is served from its frozen
+payload and does not pick up a reference that finishes afterwards, see
+below):
+
+    {"project": "nho/p", "temperature_k": 298.15, "molecules": [
+      {"id": 7, "smiles": "c1ccccc1", "state_id": 21, "archived": false,
+       "uvvis": {"count": 1, "pending": 0, "failed": 0, "unavailable": 0,
+                 "unweighted": 0, "weighting": "G", "shortest_nm": 156.5,
+                 "peak": {"wavelength_nm": 229.6, "energy_ev": 5.4, "fosc": 0.24}},
+       "ir": {"count": 1, "pending": 0, "failed": 0, "unavailable": 0,
+              "unweighted": 0, "weighting": "G",
+              "peak": {"frequency_cm": 410.2, "intensity_km_mol": 12.3}}}]}
+
+`count` is conformers with a spectrum and the energy the weights use;
+`pending`, `failed`, `unavailable`, `unweighted` account for the rest
+(job still running or its energy singlepoint still running, job failed,
+output missing/unparsable, or the spectrum is in but not the energy the
+weights use and none is coming). `weighting` names the energy scale
+behind the Boltzmann weights: `"G"` when a conformer has a thermal
+correction, else `"E_sp"`, else `"equal"`. `peak` is the transition/mode
+with the largest weight × fosc (or × intensity), or `null` when `count`
+is 0; it is present for UV/Vis and IR only. UV/Vis also reports
+`shortest_nm`, the shortest wavelength across every counted transition.
+
+An NMR molecule's entry adds `nmr`, with the same counts and no `peak`:
+
+    "nmr": {"count": 1, "pending": 0, "failed": 0, "unavailable": 0,
+            "unweighted": 0, "weighting": "G", "equivalence": "topological",
+            "signals": {"H": 1, "C": 1},
+            "reference": {"H": {"compound": "C[Si](C)(C)C", "status": "ok",
+                                "molecule_id": 12, "sigma_ppm": 31.354,
+                                "method_matches": true}, "C": {...}}}
+
+`signals` is the number of distinct signals per requested nucleus
+(`nmr_nuclei`) present in the molecule. `equivalence` is `"topological"`
+when atoms are grouped by the symmetry classes of the bonds perceived from
+the first counted conformer's geometry, else `"none"` (one signal per
+atom). `reference` names, per reported nucleus, the reference compound
+(TMS for H and C, CFCl₃ for F) at the molecule's optimisation and
+singlepoint headers in `admin/system_references`: `status` is `"ok"`,
+`"pending"`, `"failed"` or `"missing"` (none at this method); `sigma_ppm`
+is its mean isotropic shielding for that element; `method_matches` says
+whether its NMR input's `!` keywords equal the molecule's (SCF convergence
+and `PALn` ignored), `null` if either input is missing. `signals` and
+`reference` stay empty until a conformer is counted. `system_references`
+is a reserved project name, refused for every submitter.
+
+A molecule entry with no conformer left to show (every optimisation
+failed, or none has run yet) adds `stage`: `"searching"` while work is
+still open for that state, else `"none"`. ESD needs no conformer pool
+(it works from S1/T1, not S0 conformers), so an ESD-only molecule never
+gets `stage`.
+
+An ESD molecule's entry adds `esd`:
+
+    "esd": {"status": "done", "temperature_k": 298.15, "herzberg_teller": false,
+            "tn_window_ev": 0.2, "seed_task_id": 118,
+            "rates": {"isc": {"status": "successful", "rate_s": 9521.34},
+                      "risc": {"status": "successful", "rate_s": 1.236e-05},
+                      "ic": {"status": "successful", "rate_s": 26472.1},
+                      "fluorescence": {"status": "successful", "rate_s": 13386.15, "e00_ev": 2.3955},
+                      "isc_t1_s0": {"status": "successful", "rate_s": 0.1599},
+                      "phosphorescence": {"status": "successful", "rate_s": 42.84}},
+            "delta_est_ev": 0.6657, "delta_est_uks_ev": 0.5078,
+            "derived": {"tau_s1_ns": 20251.3, "phi_fluorescence": 0.2711,
+                        "phi_isc": 0.1928, "phi_ic": 0.5361,
+                        "tau_t1_us": 23255.6, "phi_phosphorescence": 0.9963,
+                        "phi_isc_t1_s0": 0.0037, "phi_risc": 0.0000002874},
+            "flags": ["isc T2: a negative rate (-1.54e-09 s⁻¹) was set to 0."]}
+
+`status` is `"waiting"` before the S1/T1 states are seeded (or while
+seeding waits for every S0 conformer to finish), `"running"` while any
+rate is still open, `"done"` once all six have settled, or `"failed"`
+(with `reason`) if seeding itself failed. Each entry of `rates` is one of
+`isc`, `risc`, `ic`, `fluorescence`, `isc_t1_s0`, `phosphorescence`, with
+its own `status`: `"successful"`, `"created"`, `"pending"`, `"failed"`
+(with `reason`), `"waiting"`, `"blocked"` (with `reason` — an upstream
+optimisation or SOC singlepoint failure, named with the `!LibXC(<functional>)`
+fix when that is the cause), or `"unavailable"` (the output has no rate
+to parse). A successful rate's `rate_s` sums its jobs for `isc` (one job
+per T_n channel within `tn_window_ev` of S1) and averages them for every
+other rate; `fluorescence` also reports `e00_ev`, its 0-0 energy. An
+FC-mode `isc`, `isc_t1_s0` or `risc` rate whose SOCME printed as
+`0.00` cm⁻¹ (below ORCA's print precision) adds `socme_zero: true` —
+its rate is 0 because the channel is symmetry- or El-Sayed-forbidden,
+not because it is truly closed; `request_esd_ht` is the remedy.
+`herzberg_teller` reports whether the rates are the FC-only default or
+were requested with HT. `delta_est_ev` is the TDDFT ΔE(S1-T1);
+`delta_est_uks_ev` instead compares the TDDFT S1 against the T1 state's
+own (UKS) energy singlepoint at the T1 geometry. `derived` reports
+`tau_s1_ns` / `phi_fluorescence` / `phi_isc` / `phi_ic` once
+`fluorescence`, `isc` and `ic` are all in, and `tau_t1_us` /
+`phi_phosphorescence` / `phi_isc_t1_s0` / `phi_risc` once
+`phosphorescence`, `isc_t1_s0` and `risc` are all in. `flags` lists
+warnings: a negative rate clamped to 0, a job whose sum of K*K exceeds 7
+(geometries too far apart for a reliable harmonic rate), a zero-SOCME FC
+channel (see `socme_zero` above), and, when that channel feeds a
+`derived` group, that its lifetime/yields count the rate as 0 too.
+
+With `?molecule_id=`, each successful rate also adds `jobs` (its
+per-ORCA-job values — `rate_s`, `fc_percent`, `ht_percent`, `k_squared`,
+`e00_cm`, plus whatever went into building it), and `esd` adds
+`energies_eh` (E(S0), E(S1), E(T1)), `socme_cm` (`S1_T1_at_T1`,
+`S1_T1_at_S1`, `T1_S0_at_S0`) and a flag for any state whose optimisation
+still shows a soft imaginary mode.
+
+With `?molecule_id=`, that molecule's entries add `conformers` (read on
+request, not cached) and drop nothing:
+
+    "uvvis": {..., "conformers": [{"conformer_index": 1, "opt_task_id": 90,
+              "weight": 1.0, "transitions": [{"root": 1, "energy_ev": 5.4,
+              "wavelength_nm": 229.6, "fosc": 0.24}]}]}
+
+    "nmr": {..., "conformers": [{"conformer_index": 1, "opt_task_id": 90,
+            "weight": 1.0}],
+            "nuclei": {"H": [{"atoms": [4, 5], "count": 2,
+                              "shielding_ppm": 22.614, "shift_ppm": 8.74}],
+                       "C": [...]}}
+
+Each NMR signal is one symmetry class: `atoms` are 0-based ORCA atom
+indices, `shielding_ppm` is the Boltzmann-weighted isotropic shielding
+averaged over them, and `shift_ppm` = `sigma_ppm` − `shielding_ppm`, or
+`null` unless the reference's `status` is `"ok"`. Signals are sorted by
+ascending shielding (descending shift).
+
+`conformer_index` is the conformer's 1-based position among the state's
+optimisation tasks by id, the same numbering as the Molecules page.
+
+### `POST /api/projects/{name}/export` `?format=csv|json|files|xlsx|photophysics&all_conformers=true|false`
+
+Starts an export as a background job and answers **202** for every
+format — none of them block the request. Writes into
+`<export_data>/<owner>/<project>/`, with the **bare** project name as
+the filename stem:
 
 * `csv`   → `<project>.csv` (summary table of energies)
 * `json`  → `<project>.json`
 * `files` → `files/` tree with the canonical curated ORCA files
+* `xlsx`  → `<project>_state_analysis.xlsx`
+* `photophysics` → `<project>_photophysics.json` (the full UV/Vis, IR,
+  NMR and ESD detail payload) plus `<project>_photophysics.xlsx`
 
 ```json
-{ "format": "csv", "path": "/.../export_data/admin/phenols/phenols.csv" }
+{ "project": "admin/phenols",
+  "job": { "id": 42, "qualified_name": "admin/phenols", "owner_id": 3,
+           "kind": "export_csv", "status": "running",
+           "params": {"all_conformers": false},
+           "result": null, "error": null,
+           "created_at": "2026-09-24T10:00:00+00:00",
+           "started_at": "2026-09-24T10:00:00+00:00", "finished_at": null } }
 ```
 
-`404` when the project holds no molecules, `409` when it has been
-archived — its source files are no longer on disk.
+Poll `GET /api/projects/{name}/jobs` for the job's `status` and, once
+`successful`, its `result` (the written path); download the file via
+`GET /api/jobs/{id}/download`.
+
+`404` when the project holds no molecules; `409` when a job is already
+in flight for the project. `csv` / `json` / `files` also answer `409`
+for an archived project — their source files are no longer on disk.
+`xlsx` and `photophysics` are allowed on an archived project: `xlsx` is
+built from the archive's CSV, and `photophysics` is served from the
+payload archiving froze — see [`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md).
 
 ### `POST /api/projects/{name}/archive`
 
@@ -462,14 +630,23 @@ to keep more.
   "molecules": 12, "files_copied": 96, "files_dropped": 184,
   "csv_path":   "/.../export_data/admin/phenols/phenols.csv",
   "files_root": "/.../export_data/admin/phenols/raw",
-  "extensions": [".inp", ".out", ".xyz"] }
+  "extensions": [".inp", ".out", ".xyz"],
+  "photophysics_frozen": 5 }
 ```
 
-Refused with `409` for the protected `admin/default` project and for one
-that is already archived; `404` when the project holds no molecules.
-Tasks still in flight do **not** block it — archiving a project whose
-jobs are still running deletes the directories they are writing into, so
-check the project's `in_flight_tasks` first.
+`photophysics_frozen` counts the molecules whose UV/Vis, IR, NMR or ESD
+payload was frozen for later serving (see
+[`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md)); it is present only when that
+count is greater than 0.
+
+Refused with `409` for the protected `admin/default` project, for one
+that is already archived, and for one with a flagged NMR molecule whose
+reference compound is still `pending` — a frozen molecule is never
+re-analysed, so the shift would stay `null` forever (a `failed`
+reference does not block it: the frozen detail keeps the shieldings, the
+shift stays `null`); `404` when the project holds no molecules. The
+archive job waits up to 300 s for the project's in-flight SLURM jobs to
+finish and aborts, deleting nothing, if any are still running.
 
 ---
 

@@ -1,0 +1,45 @@
+Calculating Wilson`s B Matrix:			...done
+Converting to internal coordinates:		...done
+Calculating rotation matrix J:			...done
+Calculating displacement vector K:		...done
+The sum of K*K is:				0.739141
+
+Converting NACMEs:				...done
+
+NACMEs over normal modes (a.u. and cm-1)
+
+   0  -0.000141 -30.858438
+   1  -0.000004  -0.794194
+   2   0.000001   0.181367
+   3  -0.007983 -1752.096281
+   4   0.000001   0.165583
+   5   0.000000   0.014178
+   6  -0.000002  -0.411891
+   7  -0.000001  -0.128884
+   8   0.000003   0.672483
+   9   0.000001   0.243877
+   10  -0.000003  -0.661326
+   11   0.000001   0.229762
+
+Checking for transition data:			...done
+
+          ***Everything is set, now computing the correlation function***
+
+Homogeneous linewidth is:			50.00 cm-1
+Inhomogeneous linewidth is:			250.00 cm-1
+Number of points:				65536
+Maximum time:					157.86 fs
+Temperature used:				298.15 K
+Z value:					2.034506e-16
+Cutoff for the correlation function:		1.00e-12
+Adiabatic energy difference:			19814.00 cm-1
+0-0 energy difference:				19321.27 cm-1
+Calculating correlation function:		...done
+Last element of the correlation function:	-0.000000,-0.000000
+
+The calculated internal conversion rate constant is	2.646887e+04 s-1
+
+Total run time: 0 days 0 hours 0 minutes 5 seconds
+
+                      ****ORCA ESD FINISHED WITHOUT ERROR****
+                             ****ORCA TERMINATED NORMALLY****

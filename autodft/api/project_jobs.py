@@ -318,11 +318,28 @@ def _execute(
         target.write_bytes(build_xlsx_bytes(payload))
         return {"format": "xlsx", "path": str(target), "downloadable": True}
 
+    if kind == ProjectJobKind.export_photophysics:
+        from autodft.analysis import spectroscopy
+        from autodft.analysis.photophysics_export import build_xlsx
+
+        payload = spectroscopy.full_payload(qualified_name)
+        data = out_root / f"{stem}_photophysics.json"
+        data.write_text(json.dumps(payload, indent=1))
+        target = out_root / f"{stem}_photophysics.xlsx"
+        target.write_bytes(build_xlsx(payload))
+        return {"format": "photophysics", "path": str(target), "json_path": str(data), "downloadable": True}
+
     if kind == ProjectJobKind.archive:
         extensions = params.get("extensions") or [".inp", ".xyz", ".out"]
         # Do not rmtree under a job still writing files. The pause has already
         # stopped new jobs for this project; wait for what is left to finish.
         _wait_for_quiescence(qualified_name)
+
+        from autodft.analysis import spectroscopy
+
+        # The archive deletes the outputs the photophysics results are read from.
+        frozen = spectroscopy.freeze(qualified_name, settings)
+
         summary = extractor.archive_project(
             export_root=settings.export_data_path,
             comp_root=settings.comp_data_path,
@@ -330,6 +347,8 @@ def _execute(
             all_conformers=all_conformers,
         )
         summary["downloadable"] = False
+        if frozen:
+            summary["photophysics_frozen"] = frozen
         return summary
 
     raise ValueError(f"Unknown project-job kind {kind!r}")

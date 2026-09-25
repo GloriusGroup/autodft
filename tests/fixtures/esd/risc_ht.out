@@ -1,0 +1,47 @@
+Converting to internal coordinates:		...done
+Calculating rotation matrix J:			...done
+Calculating displacement vector K:		...done
+The sum of K*K is:				0.011517
+
+Checking for transition data:			...done
+Computing transition dipole derivatives		... (12 modes)
+
+	  (will need at least 12 displacements)
+		<<Displacing mode 1 (+)>>
+		<<Displacing mode 2 (+)>>
+		<<Displacing mode 3 (+)>>
+		<<Displacing mode 4 (+)>>
+		<<Displacing mode 5 (+)>>
+		<<Displacing mode 6 (+)>>
+		<<Displacing mode 7 (+)>>
+		<<Displacing mode 8 (+)>>
+		<<Displacing mode 9 (+)>>
+		<<Displacing mode 10 (+)>>
+		<<Displacing mode 11 (+)>>
+		<<Displacing mode 12 (+)>>
+
+Final check on derivatives:			...done
+Writting FS hessian to:				input.FS.hess
+
+          ***Everything is set, now computing the correlation function***
+
+Homogeneous linewidth is:			50.00 cm-1
+Inhomogeneous linewidth is:			250.00 cm-1
+Number of points:				32768
+Maximum time:					157.86 fs
+Temperature used:				298.15 K
+Z value:					1.653068e-16
+Cutoff for the correlation function:		1.00e-12
+Adiabatic energy difference:			-5369.50 cm-1
+0-0 energy difference:				-5331.09 cm-1
+Reference SOC (Re and Im):			0.000000e+00, -4.038716e-06
+Calculating correlation function:		...done
+Last element of the correlation function:	0.000000,-0.000000
+
+The calculated ISC rate constant is		3.577340e-05 s-1
+with 102.52 from FC and -2.52 from HT
+
+Total run time: 0 days 0 hours 1 minutes 49 seconds
+
+                      ****ORCA ESD FINISHED WITHOUT ERROR****
+                             ****ORCA TERMINATED NORMALLY****

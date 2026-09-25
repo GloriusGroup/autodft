@@ -15,6 +15,7 @@ from typing import Optional
 
 from sqlmodel import Session, col, select
 
+from autodft import categories
 from autodft.config import Settings
 from autodft.engine.scheduler import Scheduler
 from autodft.models.enums import (
@@ -145,7 +146,7 @@ def process_finished_jobs(session: Session, qm_engine: QMEngine) -> None:
         # pipeline tick, discarding every other molecule's progress and
         # re-raising on the same job forever.
         try:
-            result = qm_engine.check_output(job_path, task.task_type.value)
+            result = qm_engine.check_output(job_path, _check_type(session, task))
         except Exception as exc:  # noqa: BLE001 - deliberately broad
             logger.exception("Failed to parse output for job %d", job.id)
             job.success = False
@@ -363,6 +364,7 @@ def start_followup_tasks(session: Session, settings: Settings) -> None:
             _followup_confsearch(session, task, state, metadata)
         elif task.task_type == TaskType.optimization:
             _followup_optimization(session, task, state, metadata)
+            _followup_categories(session, task, state, metadata)
 
         session.flush()
         created = _count_tasks_depending_on(session, task.id) - before
@@ -376,7 +378,7 @@ def start_followup_tasks(session: Session, settings: Settings) -> None:
         # state just stops with everything looking green. Fail it instead so
         # it is visible in the dashboard. Zero is only legitimate when the
         # downstream stage was not requested.
-        if created == 0 and _followups_were_expected(task, metadata):
+        if created == 0 and _followups_were_expected(task, metadata, state.description):
             logger.error(
                 "Task %d (%s) completed but produced no follow-up tasks; "
                 "marking it failed so the dead end is visible",
@@ -396,7 +398,9 @@ def _count_tasks_depending_on(session: Session, task_id: int) -> int:
     ).all())
 
 
-def _followups_were_expected(task: ComputationTask, metadata: dict) -> bool:
+def _followups_were_expected(
+    task: ComputationTask, metadata: dict, description: str = "S0",
+) -> bool:
     """Whether this task should have produced downstream work.
 
     False when the user explicitly turned the next stage off, in which case
@@ -411,7 +415,7 @@ def _followups_were_expected(task: ComputationTask, metadata: dict) -> bool:
                 return False
         return True
     if task.task_type == TaskType.optimization:
-        return bool(metadata.get("request_singlepoint", True))
+        return bool(metadata.get("request_singlepoint", True) or _category_followups(description, metadata))
     return False
 
 
@@ -524,6 +528,38 @@ def _followup_optimization(
         _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, task.id, TaskType.singlepoint_vert_ox)
 
 
+def _category_followups(description: str, metadata: dict) -> list[TaskType]:
+    """The category tasks a successful optimisation of this state gets, in creation order."""
+    followups = []
+    if categories.on_s0(description, metadata, categories.UVVIS):
+        followups.append(TaskType.singlepoint_uvvis)
+    if categories.on_s0(description, metadata, categories.NMR):
+        followups.append(TaskType.singlepoint_nmr)
+    # ESD states run a TDDFT/SOC singlepoint at their optimised geometry.
+    if metadata.get("esd_role"):
+        followups.append(TaskType.singlepoint_soc)
+    return followups
+
+
+def _followup_categories(
+    session: Session,
+    task: ComputationTask,
+    state: MoleculeState,
+    metadata: dict,
+) -> None:
+    """Opt-in category tasks of a successful optimisation.
+
+    Created after the energy singlepoints, so they queue behind them.
+    """
+    if task.output_geometry_id is None or state.singlepoint_header_id is None:
+        return
+    for task_type in _category_followups(state.description, metadata):
+        _create_singlepoint_task(
+            session, state.id, state.singlepoint_header_id, task.output_geometry_id,
+            task.id, task_type,
+        )
+
+
 def _create_singlepoint_task(
     session: Session,
     state_id: int,
@@ -594,6 +630,15 @@ def create_retry_jobs(
             key=lambda j: j.attempt,
             default=None,
         )
+
+        reason = (last_failed.fail_reason or "") if last_failed is not None else ""
+        # A functional without third derivatives, or a collapsed S1 root, fails identically every time.
+        if "LibXC Needed" in reason or reason == "['Excited Root']":
+            task.status = TaskStatus.failed
+            task.updated_at = datetime.now(timezone.utc)
+            session.add(task)
+            logger.info("Task %d failed deterministically (%s); not retried", task.id, reason)
+            continue
 
         next_attempt = failed_count + 1
         # Per task: retry-strategy application reads files from previous job
@@ -724,6 +769,14 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
     submission run cannot starve status polling -- it yields and resumes on
     the next tick with the queue state it left behind.
     """
+
+    from autodft.engine import submission_hold
+
+    held = submission_hold.read_state(settings.data_path)
+    if held is not None:
+        logger.info("Submission hold active (%s) -- not submitting jobs",
+                    held.get("reason") or "no reason given")
+        return
 
     # squeue counts our own waiting (PD) jobs only, so running work never
     # counts against the cap -- the limit controls how deep the backlog is
@@ -969,6 +1022,30 @@ def _generate_job_files(
     if state is None:
         return _fail_task(session, task, job, f"State {task.state_id} not found")
 
+    extra_inputs: Optional[list[str]] = None
+    if task.task_type.value.startswith("esd_"):
+        # Rate jobs are built from other tasks' results and Hessians.
+        from autodft.engine.photophysics import prepare_rate_job
+        from autodft.qm.orca.esd_inputs import EsdInputError
+
+        try:
+            header_text, extra_inputs = prepare_rate_job(session, task, state, header_text, job_path)
+        except (OSError, KeyError, ValueError) as exc:  # EsdInputError is a ValueError
+            detail = str(exc) if isinstance(exc, EsdInputError) else f"{type(exc).__name__}: {exc}"
+            return _fail_task(session, task, job, f"ESD inputs: {detail}")
+    else:
+        # Category tasks add their own blocks; every other type runs the
+        # header verbatim.
+        from autodft.qm.orca.blocks import HeaderConflict, compose_header
+
+        try:
+            header_text = compose_header(
+                task.task_type.value, header_text,
+                json.loads(state.metadata_json) if state.metadata_json else {},
+            )
+        except HeaderConflict as exc:
+            return _fail_task(session, task, job, str(exc))
+
     # --- Gap 2 fix: Adjust charge/multiplicity for vertical excitations ---
     # A task whose charge/multiplicity can't be resolved must not silently
     # stall in `created` forever — fail it so it shows up in the dashboard.
@@ -994,7 +1071,7 @@ def _generate_job_files(
 
     # --- Gap 3 fix: Parse resources from header, fall back to config ---
     nprocs, mem_per_core = _parse_resources_from_header(header_text)
-    stage_config = _get_stage_config(settings, task.task_type)
+    stage_config = _get_stage_config(settings, task.task_type, state)
     if nprocs is None:
         nprocs = stage_config.default_nprocs
     if mem_per_core is None:
@@ -1011,6 +1088,8 @@ def _generate_job_files(
         time_limit=time_limit,
         partition=settings.slurm.partition,
         nice=settings.slurm.nice,
+        keep_hessian=_keeps_hessian(state, task),
+        extra_inputs=extra_inputs,
     )
 
     # --- Gap 1 fix: Apply failure-specific retry strategies on retries ---
@@ -1081,6 +1160,11 @@ def _get_job_charge_multiplicity(
             f"vert_spin_change is only defined for a singlet or triplet state; "
             f"state {state.id} has multiplicity {multiplicity}"
         )
+
+    # SOC TDDFT and every ESD rate job run from the closed-shell singlet
+    # reference, also on the T1 state.
+    if task_type == TaskType.singlepoint_soc or task_type.value.startswith("esd_"):
+        return charge, 1
 
     return charge, multiplicity
 
@@ -1231,11 +1315,43 @@ def _apply_retry_modifications(
     )
 
 
-def _get_stage_config(settings: Settings, task_type: TaskType):
+def _esd_role(state: MoleculeState) -> Optional[str]:
+    """``"S1"`` / ``"T1"`` for an ESD state, else None."""
+    metadata = json.loads(state.metadata_json) if state.metadata_json else {}
+    return metadata.get("esd_role")
+
+
+def _check_type(session: Session, task: ComputationTask) -> str:
+    """The task type whose output checks apply; an ESD S1 optimisation gets the excited-state ones."""
+    if task.task_type == TaskType.optimization:
+        state = session.get(MoleculeState, task.state_id)
+        if state is not None and _esd_role(state) == "S1":
+            return "optimization_excited"
+    return task.task_type.value
+
+
+def _keeps_hessian(state: MoleculeState, task: ComputationTask) -> bool:
+    """Whether an optimisation's Hessian feeds ESD rates."""
+    if task.task_type != TaskType.optimization:
+        return False
+    metadata = json.loads(state.metadata_json) if state.metadata_json else {}
+    return bool(metadata.get("esd_role") or categories.on_s0(state.description, metadata, categories.ESD))
+
+
+def _get_stage_config(settings: Settings, task_type: TaskType, state: Optional[MoleculeState] = None):
     """Return the :class:`StageConfig` for a given task type."""
-    if task_type == TaskType.confsearch:
+    if task_type.value.startswith("esd_"):
+        from autodft.qm.orca import esd_inputs
+
+        metadata = json.loads(state.metadata_json) if state is not None and state.metadata_json else {}
+        if state is None or esd_inputs.is_fc(task_type.value, metadata):
+            return settings.pipeline.esd
+        return settings.pipeline.esd_tddft
+    elif task_type == TaskType.confsearch:
         return settings.pipeline.confsearch
     elif task_type == TaskType.optimization:
+        if state is not None and _esd_role(state) == "S1":
+            return settings.pipeline.excited_optimization
         return settings.pipeline.optimization
     else:
         # All singlepoint variants share the singlepoint config

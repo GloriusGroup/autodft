@@ -6,6 +6,7 @@ All paths are handled via :class:`pathlib.Path`.  Templates live in
 
 import logging
 from pathlib import Path
+from typing import Optional
 
 from jinja2 import Environment, FileSystemLoader
 
@@ -91,6 +92,8 @@ def generate_submit_script(
     tmp_dir: str = "/tmp",
     keep_wavefunction: bool = False,
     keep_densities: bool = False,
+    keep_hessian: bool = False,
+    extra_inputs: Optional[list[str]] = None,
 ) -> Path:
     """Render ``submit.cmd.j2`` and write ``submit.cmd`` into *job_path*.
 
@@ -115,6 +118,9 @@ def generate_submit_script(
         keep_wavefunction: Copy ``*.gbw`` back from scratch when True.
         keep_densities: Copy ``*.densities``/``*.densitiesinfo``/``*.cube``
                         back from scratch when True.
+        keep_hessian: Copy ``*.hess`` back from scratch when True.
+        extra_inputs: Files in *job_path* to stage into scratch next to
+                      ``input.inp``.
 
     Returns:
         Path to the written ``submit.cmd``.
@@ -140,6 +146,8 @@ def generate_submit_script(
         tmp_dir=tmp_dir,
         keep_wavefunction=keep_wavefunction,
         keep_densities=keep_densities,
+        keep_hessian=keep_hessian,
+        extra_inputs=extra_inputs or [],
     )
 
     submit_path = job_path / "submit.cmd"

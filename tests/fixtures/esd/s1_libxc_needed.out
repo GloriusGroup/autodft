@@ -1,0 +1,14 @@
+Your calculation utilizes the auxiliary basis: def2/J
+   H-Rn: F. Weigend, Phys. Chem. Chem. Phys. 8, 1057 (2006).
+   Fr-Lr: K. Eichkorn, F. Weigend, O. Treutler, R. Ahlrichs; Theor. Chem. Acc. 97, 119 (1997).
+
+================================================================================
+                                        WARNINGS
+                       Please study these warnings very carefully!
+================================================================================
+
+WARNING: Third functional derivative of a B88 exchange-containing functional requested.
+[file orca_main/main_input_check.cpp, line 2100]:          This is currently not available natively with ORCA. Please, use the LibXC version.
+
+[file orca_main/main_input_check.cpp, line 2100]:          This is currently not available natively with ORCA. Please, use the LibXC version.
+

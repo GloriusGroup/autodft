@@ -1025,6 +1025,25 @@
             font-size: 0.78rem;
             color: var(--text-primary);
         }
+        .pp-plot { margin-top: 10px; }
+        .pp-plot-title { font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 4px; }
+        .pp-waiting { font-size: 0.85rem; color: var(--text-muted); font-style: italic; margin-top: 10px; }
+        .pp-summary { font-size: 0.85rem; color: var(--text-secondary); margin-top: 8px; }
+        .pp-summary b { color: var(--text-primary); font-weight: 600; }
+        .pp-esd { border-collapse: collapse; font-size: 0.8rem; margin-top: 4px; }
+        .pp-esd th, .pp-esd td { padding: 2px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+        .pp-esd td.num { text-align: right; font-variant-numeric: tabular-nums; }
+        .pp-warn { color: var(--yellow); }
+        .pp-body { margin-top: 6px; }
+        .cat-detail { border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; background: var(--bg-secondary); min-width: 260px; max-width: 440px; }
+        .cat-detail-title { font-weight: 600; font-size: 0.85rem; margin-bottom: 6px; color: var(--text-primary); }
+        .cat-detail-body { display: flex; gap: 16px; align-items: flex-end; flex-wrap: wrap; }
+        .cat-detail-note { font-size: 0.78rem; color: var(--text-muted); margin-top: 6px; }
+        .cat-detail-note:empty { display: none; }
+        .cat-detail-note.warn { color: var(--yellow); }
+        .pp-nmr { border-collapse: collapse; font-size: 0.8rem; margin-top: 4px; }
+        .pp-nmr th, .pp-nmr td { padding: 2px 10px; border-bottom: 1px solid var(--border); text-align: left; }
+        .pp-nmr td.num { text-align: right; font-variant-numeric: tabular-nums; }
     </style>
 </head>
 <body>
@@ -1053,6 +1072,7 @@
             <a class="nav-item nav-sub" data-route="projects.summary"        href="#/projects/summary">Summary</a>
             <a class="nav-item nav-sub" data-route="projects.molecules"      href="#/projects/molecules">Molecules</a>
             <a class="nav-item nav-sub" data-route="projects.state-analysis" href="#/projects/state-analysis">State Analysis</a>
+            <a class="nav-item nav-sub" data-route="projects.photophysics"   href="#/projects/photophysics">Photophysics</a>
             <a class="nav-item" data-route="headers"  href="#/headers"> <span class="nav-icon">&#9881;</span> Headers</a>
             <a class="nav-item" data-route="admin"    href="#/admin">   <span class="nav-icon">&#9888;</span> Admin</a>
             <div class="sidebar-footer">
@@ -1132,6 +1152,25 @@
                             <input type="checkbox" id="requestVertEx" name="request_vert_ex" checked>
                             <label for="requestVertEx">Vertical excitations</label>
                         </div>
+                        <div class="checkbox-group" title="UV/Vis absorption: a TDDFT singlepoint on every optimised S0 conformer, Boltzmann-weighted. Uses the singlepoint header's method; the number of excited states is set below.">
+                            <input type="checkbox" id="requestUvvis" name="request_spec_uvvis">
+                            <label for="requestUvvis">UV/Vis</label>
+                        </div>
+                        <div class="checkbox-group" title="IR spectrum read from the optimisation's frequency calculation (needs Freq in the optimisation header). No extra jobs.">
+                            <input type="checkbox" id="requestIr" name="request_spec_ir">
+                            <label for="requestIr">IR</label>
+                        </div>
+                        <div class="checkbox-group" title="NMR shifts (1H/13C/19F) on every optimised S0 conformer, referenced to TMS / CFCl3 computed automatically at the same method. Closed-shell molecules only.">
+                            <input type="checkbox" id="requestNmr" name="request_spec_nmr">
+                            <label for="requestNmr">NMR</label>
+                        </div>
+                        <div class="checkbox-group" title="Excited-state dynamics: S1 and T1 optimised from the lowest S0 conformer, SOC TDDFT, and ORCA ESD rates (ISC, RISC, IC, fluorescence, phosphorescence). Expensive: the S1 Hessian is numerical. Closed-shell molecules only.">
+                            <input type="checkbox" id="requestEsd" name="request_esd">
+                            <label for="requestEsd">ESD</label>
+                        </div>
+                        <div id="diradicalNote" class="smiles-hint valid" style="display:none;">
+                            Diradical detected — calculated in the triplet state only.
+                        </div>
                     </div>
 
                     <!-- Row 2b: Per-state conformer count (only requested states show) -->
@@ -1151,6 +1190,59 @@
                         <div class="form-group conf-input" data-state="red" data-requires="requestRed" style="min-width: 110px; display:none;">
                             <label for="maxConfRed">Conformers — Red</label>
                             <input type="number" id="maxConfRed" min="1" max="50" value="1" style="width: 100px;">
+                        </div>
+                    </div>
+
+                    <!-- Row 2c: settings of the ticked categories (only ticked ones show) -->
+                    <div class="form-row" id="categoryDetailsRow" style="gap: 12px;">
+                        <div class="cat-detail" data-requires="requestUvvis" style="display:none;">
+                            <div class="cat-detail-title">UV/Vis</div>
+                            <div class="cat-detail-body">
+                                <div class="form-group" style="min-width: 150px;">
+                                    <label for="uvvisNroots">Excited states (nroots)</label>
+                                    <input type="number" id="uvvisNroots" min="1" max="100" value="20" style="width: 100px;">
+                                </div>
+                                <div class="checkbox-group" title="Tamm-Dancoff approximation: cheaper and more robust; full TDDFT (off) gives better oscillator strengths.">
+                                    <input type="checkbox" id="uvvisTda">
+                                    <label for="uvvisTda">TDA</label>
+                                </div>
+                            </div>
+                            <div class="cat-detail-note">A TDDFT singlepoint on every optimised S0 conformer, with the singlepoint header's method; the spectrum is Boltzmann-weighted.</div>
+                            <div class="cat-detail-note" id="uvvisHeaderNote"></div>
+                        </div>
+                        <div class="cat-detail" data-requires="requestIr" style="display:none;">
+                            <div class="cat-detail-title">IR</div>
+                            <div class="cat-detail-note">No extra calculation: the spectrum is read from the S0 optimisation's frequency run and Boltzmann-weighted over conformers.</div>
+                            <div class="cat-detail-note" id="irHeaderNote"></div>
+                        </div>
+                        <div class="cat-detail" data-requires="requestNmr" style="display:none;">
+                            <div class="cat-detail-title">NMR</div>
+                            <div class="cat-detail-body">
+                                <div class="checkbox-group"><input type="checkbox" id="nmrNucH" checked><label for="nmrNucH">¹H</label></div>
+                                <div class="checkbox-group"><input type="checkbox" id="nmrNucC" checked><label for="nmrNucC">¹³C</label></div>
+                                <div class="checkbox-group"><input type="checkbox" id="nmrNucF" checked><label for="nmrNucF">¹⁹F</label></div>
+                            </div>
+                            <div class="cat-detail-note">An NMR singlepoint on every optimised S0 conformer with the singlepoint header's method. Shifts are referenced to TMS (¹H, ¹³C) and CFCl₃ (¹⁹F), computed once per method in the protected system_references project; closed-shell molecules only.</div>
+                            <div class="cat-detail-note" id="nmrHeaderNote"></div>
+                        </div>
+                        <div class="cat-detail" data-requires="requestEsd" style="display:none;">
+                            <div class="cat-detail-title">ESD</div>
+                            <div class="cat-detail-body">
+                                <div class="checkbox-group" title="Herzberg-Teller vibronic coupling, for transitions that are forbidden at the Franck-Condon level. Much more expensive: numerical derivatives for every triplet sublevel.">
+                                    <input type="checkbox" id="requestEsdHt">
+                                    <label for="requestEsdHt">Herzberg–Teller</label>
+                                </div>
+                                <div class="form-group" style="min-width: 160px;">
+                                    <label for="esdTnWindow">Tn window above S1 (eV)</label>
+                                    <input type="number" id="esdTnWindow" min="0" max="1" step="0.05" value="0.2" style="width: 100px;">
+                                </div>
+                                <div class="form-group" style="min-width: 130px;">
+                                    <label for="esdTemperature">Temperature (K)</label>
+                                    <input type="number" id="esdTemperature" min="1" max="1000" step="0.01" value="298.15" style="width: 100px;">
+                                </div>
+                            </div>
+                            <div class="cat-detail-note">S1 and T1 start from the lowest S0 conformer once every S0 conformer is done. Franck-Condon rates unless Herzberg-Teller is ticked; S1→Tn channels within the window use the T1 geometry and Hessian.</div>
+                            <div class="cat-detail-note" id="esdHeaderNote"></div>
                         </div>
                     </div>
 
@@ -1321,6 +1413,22 @@
                 </button>
             </div>
             <div id="adminBreakerFeedback" class="submit-feedback"></div>
+        </div>
+
+        <div class="submit-section" id="adminHoldSection">
+            <h2 style="margin-bottom:12px;">Hold job submission</h2>
+            <div class="subtitle" style="margin-bottom:14px;">
+                Temporarily stops sending jobs to SLURM. Finished jobs are still
+                processed and follow-up jobs still prepared; they wait until
+                the hold is released. Jobs already in the queue are untouched.
+            </div>
+            <div id="adminHoldStatus" class="admin-summary">Loading...</div>
+            <div class="form-row">
+                <input type="text" id="adminHoldReason" maxlength="500"
+                       placeholder="Reason (optional)" style="flex:1;">
+                <button type="button" class="btn btn-danger" id="adminHoldToggle">Hold submissions</button>
+            </div>
+            <div id="adminHoldFeedback" class="submit-feedback"></div>
         </div>
 
         <div class="submit-section">
@@ -1668,10 +1776,13 @@
                             <th>Vert-Ox</th>
                             <th>Vert-Red</th>
                             <th>Vert-Spin</th>
+                            <th>UV/Vis</th>
+                            <th>NMR</th>
+                            <th>ESD</th>
                         </tr>
                     </thead>
                     <tbody id="moleculesTableBody">
-                        <tr><td colspan="10" class="empty-state">Loading...</td></tr>
+                        <tr><td colspan="13" class="empty-state">Loading...</td></tr>
                     </tbody>
                 </table>
             </div>
@@ -1728,6 +1839,48 @@
         <div id="saCards" class="sa-cards" style="display: none;"></div>
         </section>
         <!-- /PAGE: Project Overview > State Analysis -->
+
+        <!-- ============================================================ -->
+        <!-- PAGE: Project Overview > Photophysics                         -->
+        <!-- ============================================================ -->
+        <section class="page" data-page="projects.photophysics">
+        <div class="page-header">
+            <div>
+                <h1>Project Overview · Photophysics</h1>
+                <div class="subtitle">UV/Vis, IR and NMR, Boltzmann-weighted over each molecule's S0 conformers (298.15 K), and ESD rates. Open a card for spectra and details.</div>
+            </div>
+            <div class="form-group" style="min-width: 240px;">
+                <label for="projectSelectPP">Project</label>
+                <select id="projectSelectPP"><option value="">Loading...</option></select>
+            </div>
+        </div>
+
+        <div class="sa-toolbar">
+            <label for="ppUvFwhm" style="font-size: 0.82rem; color: var(--text-secondary); display: flex; align-items: center; gap: 8px;">
+                UV/Vis FWHM (eV)
+                <input type="number" id="ppUvFwhm" value="0.30" min="0.05" max="2" step="0.05" style="width: 80px;">
+            </label>
+            <label for="ppIrFwhm" style="font-size: 0.82rem; color: var(--text-secondary); display: flex; align-items: center; gap: 8px;">
+                IR FWHM (cm⁻¹)
+                <input type="number" id="ppIrFwhm" value="15" min="1" max="200" step="1" style="width: 80px;">
+            </label>
+            <label for="ppIrScale" style="font-size: 0.82rem; color: var(--text-secondary); display: flex; align-items: center; gap: 8px;"
+                   title="Harmonic frequencies are usually scaled; the factor depends on the functional and basis.">
+                IR scale factor
+                <input type="number" id="ppIrScale" value="1.000" min="0.8" max="1.1" step="0.001" style="width: 90px;">
+            </label>
+            <button type="button" class="btn" id="ppExportBtn" style="padding: 8px 16px; font-size: 0.85rem;"
+                    title="Download the photophysics workbook (XLSX); the full JSON is written next to it in the project's export directory.">
+                Photophysics (XLSX)
+            </button>
+        </div>
+
+        <div id="ppEmptyState" class="empty-state" style="padding: 60px 16px;">
+            Select a project to see its spectra.
+        </div>
+        <div id="ppCards" class="sa-cards" style="display: none;"></div>
+        </section>
+        <!-- /PAGE: Project Overview > Photophysics -->
 
     </div>  <!-- /container -->
     </div>  <!-- /app -->
@@ -1800,6 +1953,7 @@
         var ROUTES = [
             'submit', 'status',
             'projects.summary', 'projects.molecules', 'projects.state-analysis',
+            'projects.photophysics',
             'headers', 'admin',
         ];
 
@@ -1831,6 +1985,7 @@
             if (route === 'projects.summary')        fetchProjects();
             if (route === 'projects.molecules')      fetchProjects().then(loadMoleculesPage);
             if (route === 'projects.state-analysis') fetchProjects().then(loadStateAnalysisPage);
+            if (route === 'projects.photophysics')   fetchProjects().then(loadPhotophysicsPage);
             if (route === 'status')                  fetchFailed();
             if (route === 'admin')                   loadAdminPage();
         }
@@ -2027,6 +2182,28 @@
                     d.tripped ? '3px solid var(--red)' : '';
             }
 
+            // --- submission hold ----------------------------------------
+            var holdBox = document.getElementById('adminHoldStatus');
+            var holdBtn = document.getElementById('adminHoldToggle');
+            var h = await adminJSON('GET', '/api/admin/submission-hold');
+            if (!h.ok) {
+                holdBox.textContent = 'Could not read hold status.';
+            } else {
+                var s = h.data.state || {};
+                holdBox.textContent = h.data.held
+                    ? 'HELD — no new jobs are submitted\n'
+                      + 'since  : ' + (s.held_at || '?') + '\n'
+                      + 'by     : ' + (s.held_by || '?')
+                      + (s.reason ? '\nreason : ' + s.reason : '')
+                    : 'OK — submissions running';
+                holdBtn.dataset.held = h.data.held ? '1' : '';
+                holdBtn.textContent = h.data.held ? 'Release hold and resume submissions' : 'Hold submissions';
+                holdBtn.className = h.data.held ? 'btn' : 'btn btn-danger';
+                document.getElementById('adminHoldReason').style.display = h.data.held ? 'none' : '';
+                document.getElementById('adminHoldSection').style.borderLeft =
+                    h.data.held ? '3px solid var(--red)' : '';
+            }
+
             // --- project list -------------------------------------------
             var list = document.getElementById('adminProjectList');
             list.innerHTML = '<div class="empty-state">Loading...</div>';
@@ -2205,6 +2382,27 @@
             loadAdminPage();
         });
 
+        document.getElementById('adminHoldToggle').addEventListener('click', async function () {
+            var feedback = document.getElementById('adminHoldFeedback');
+            var held = !!this.dataset.held;
+            this.disabled = true;
+            var out = held
+                ? await adminJSON('POST', '/api/admin/submission-hold/release')
+                : await adminJSON('POST', '/api/admin/submission-hold',
+                                  { reason: document.getElementById('adminHoldReason').value });
+            this.disabled = false;
+            if (!out.ok) {
+                feedback.textContent = out.data.detail || ('HTTP ' + out.status);
+                feedback.className = 'submit-feedback error';
+                return;
+            }
+            feedback.textContent = held
+                ? 'Hold released. Submissions resume on the next tick.'
+                : 'Submissions held from the next tick on.';
+            feedback.className = 'submit-feedback success';
+            loadAdminPage();
+        });
+
         document.getElementById('adminMoleculeLookup').addEventListener('click', async function () {
             var target = document.getElementById('adminMoleculeResult');
             var id = parseInt(document.getElementById('adminMoleculeId').value, 10);
@@ -2311,6 +2509,90 @@
             refresh();
         })();
 
+        // ── Show/hide the settings of ticked categories ─────────────────
+        // Same rule as the conformer inputs: a .cat-detail panel is visible
+        // iff its category is ticked. The header notes warn about a choice
+        // the server would refuse, before the user submits.
+
+        (function () {
+            var panels = document.querySelectorAll('.cat-detail[data-requires]');
+            var FREQ_RE = /^\s*!.*\b(Freq|NumFreq|AnFreq)\b/im;
+            // Same rules as categories._SP_CONFLICTS.
+            var SP_CONFLICT_RE = /%tddft\b|%cis\b|%eprnmr\b|%esd\b|^\s*!.*\bNMR\b|^\s*!.*\b(Freq|NumFreq|AnFreq)\b|^\s*!.*\b\w*Opt(TS|H)?\b/im;
+            var TDDFT_RE = /%(tddft|cis)\b/i;
+            var ESD_KEYWORD_RE = /^\s*!.*\bESD\b/im;
+            // Native B88-exchange functionals lack the third derivatives that
+            // TDDFT gradients (S1 optimisation) and IC need in ORCA 6.1; the
+            // same rule as categories._NATIVE_B88_RE.
+            var B88_RE = /^\s*!(?:.*\s)?(?:RI-)?(B3LYP|BLYP|BP86|BP|B3P86|B3PW91|BPW91|B1LYP|BHANDHLYP|B2PLYP|B2GP-PLYP|X3LYP)(?![\w(])/im;
+
+            // Text of the header chosen in a slot; headerCache is filled by
+            // fetchHeaders, which calls refreshCategoryDetails when done.
+            function chosenHeaderText(selectId, kind) {
+                if (typeof headerCache === 'undefined' || !headerCache) return '';
+                var v = document.getElementById(selectId).value;
+                if (v.indexOf('id:') === 0) {
+                    var id = parseInt(v.slice(3), 10);
+                    var row = headerCache.custom.filter(function (c) { return c.id === id; })[0];
+                    return row ? row.text : '';
+                }
+                if (v) return v;
+                var def = headerCache.defaults.filter(function (d) { return d.kind === kind; })[0];
+                return def ? def.text : '';
+            }
+
+            function setNote(id, ok, okText, badText) {
+                var el = document.getElementById(id);
+                if (!el) return;
+                el.textContent = ok ? okText : badText;
+                el.classList.toggle('warn', !ok);
+            }
+
+            function refresh() {
+                panels.forEach(function (el) {
+                    var cb = document.getElementById(el.dataset.requires);
+                    el.style.display = (cb && cb.checked) ? '' : 'none';
+                });
+                setNote('irHeaderNote',
+                        FREQ_RE.test(chosenHeaderText('headerOptimization', 'optimization')),
+                        'The chosen optimisation header runs Freq.',
+                        'The chosen optimisation header has no Freq keyword — IR will be refused.');
+                setNote('uvvisHeaderNote',
+                        !SP_CONFLICT_RE.test(chosenHeaderText('headerSinglepoint', 'singlepoint')),
+                        '',
+                        'The chosen singlepoint header already has a %tddft / NMR / %eprnmr / %esd block, or a Freq / optimisation keyword — UV/Vis will be refused.');
+                setNote('nmrHeaderNote',
+                        !SP_CONFLICT_RE.test(chosenHeaderText('headerSinglepoint', 'singlepoint')),
+                        '',
+                        'The chosen singlepoint header already has a %tddft / NMR / %eprnmr / %esd block, or a Freq / optimisation keyword — NMR will be refused.');
+                var optText = chosenHeaderText('headerOptimization', 'optimization');
+                var spText = chosenHeaderText('headerSinglepoint', 'singlepoint');
+                var esdProblems = [];
+                if (!FREQ_RE.test(optText)) esdProblems.push('the optimisation header has no Freq (ESD needs Hessians)');
+                if (TDDFT_RE.test(optText)) esdProblems.push('the optimisation header already has a %tddft block');
+                if (B88_RE.test(optText)) {
+                    esdProblems.push('the optimisation header uses a native B88 functional — use its LibXC version, e.g. !LibXC(B3LYP)');
+                }
+                if (SP_CONFLICT_RE.test(spText) || ESD_KEYWORD_RE.test(spText)) {
+                    esdProblems.push('the singlepoint header already has a TDDFT / NMR / ESD block, or a Freq / optimisation keyword');
+                }
+                var spB88 = B88_RE.test(spText);
+                setNote('esdHeaderNote', !esdProblems.length && !spB88, '',
+                        esdProblems.length
+                            ? 'ESD will be refused: ' + esdProblems.join('; ') + '.'
+                            : 'The singlepoint header uses a native B88 functional: the IC rate will fail (ORCA 6.1 needs its LibXC version, e.g. !LibXC(B3LYP)); the other rates are unaffected.');
+            }
+
+            var watched = {};
+            panels.forEach(function (el) { watched[el.dataset.requires] = true; });
+            Object.keys(watched).concat(['headerOptimization', 'headerSinglepoint']).forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el) el.addEventListener('change', refresh);
+            });
+            window.refreshCategoryDetails = refresh;
+            refresh();
+        })();
+
         // ── Live SMILES validation (multi-line) ─────────────────────────
         // Debounces input by 300 ms, splits the textarea by newlines,
         // validates each unique non-empty line via /api/validate-smiles
@@ -2339,6 +2621,40 @@
                 input.classList.toggle('invalid', state === 'invalid');
                 input.classList.toggle('valid',   state === 'valid');
                 if (submitBtn) submitBtn.disabled = (state === 'invalid');
+            }
+
+            // ── Diradical lock ───────────────────────────────────────
+            // A diradical is only ever calculated as a triplet, so T1 / ox /
+            // red are cleared and disabled while one is in the textarea.
+            // The server enforces this too; this is so the form can't ask
+            // for something that would come back as a per-line rejection.
+            var STATE_BOXES = ['requestT1', 'requestOx', 'requestRed', 'requestNmr', 'requestEsd'];
+            var stashedChecks = null;   // user's choices before the lock
+            var lockNote = document.getElementById('diradicalNote');
+
+            function setDiradicalLock(locked) {
+                if (locked === (stashedChecks !== null)) return;  // no change
+                if (locked) {
+                    stashedChecks = {};
+                    STATE_BOXES.forEach(function (id) {
+                        var cb = document.getElementById(id);
+                        stashedChecks[id] = cb.checked;
+                        cb.checked = false;
+                        cb.disabled = true;
+                        // The conformer-count row syncs on 'change', which a
+                        // scripted .checked assignment does not fire.
+                        cb.dispatchEvent(new Event('change'));
+                    });
+                } else {
+                    STATE_BOXES.forEach(function (id) {
+                        var cb = document.getElementById(id);
+                        cb.disabled = false;
+                        cb.checked = stashedChecks[id];
+                        cb.dispatchEvent(new Event('change'));
+                    });
+                    stashedChecks = null;
+                }
+                if (lockNote) lockNote.style.display = locked ? '' : 'none';
             }
 
             async function validateOne(smi) {
@@ -2372,12 +2688,16 @@
                 }
                 window.lastSmilesResults = results;
 
+                var diradicals = results.filter(function (x) { return x.result.diradical; });
+                setDiradicalLock(diradicals.length > 0);
+
                 if (lines.length === 1) {
                     // Single line: rich detail (atoms, charge, mult, canonical)
                     var r = results[0].result;
                     if (r.valid) {
                         var note = 'OK — ' + r.atoms + ' atoms (' + r.heavy_atoms + ' heavy), '
                                  + 'charge ' + r.charge + ', mult ' + r.multiplicity;
+                        if (r.diradical) note += ' (diradical — triplet only)';
                         if (r.canonical && r.canonical !== lines[0]) note += ', canonical: ' + r.canonical;
                         setState('valid', note);
                     } else {
@@ -2389,7 +2709,9 @@
                 // Multi-line: summary + per-invalid detail
                 var invalid = results.filter(function (x) { return !x.result.valid; });
                 if (invalid.length === 0) {
-                    setState('valid', lines.length + ' SMILES — all valid');
+                    var ok = lines.length + ' SMILES — all valid';
+                    if (diradicals.length) ok += ' (' + diradicals.length + ' diradical — triplet only)';
+                    setState('valid', ok);
                 } else {
                     var details = invalid.slice(0, 3).map(function (x) {
                         return '"' + x.smiles + '" — ' + (x.result.error || 'invalid');
@@ -2404,6 +2726,7 @@
                 var lines = getLines();
                 if (!lines.length) {
                     window.lastSmilesResults = null;
+                    setDiradicalLock(false);
                     setState(null, '');
                     return;
                 }
@@ -2471,6 +2794,7 @@
                 populateHeaderSelect(document.getElementById('headerConfsearch'),    'confsearch',    headerCache.defaults, headerCache.custom);
                 populateHeaderSelect(document.getElementById('headerOptimization'),  'optimization',  headerCache.defaults, headerCache.custom);
                 populateHeaderSelect(document.getElementById('headerSinglepoint'),   'singlepoint',   headerCache.defaults, headerCache.custom);
+                if (window.refreshCategoryDetails) window.refreshCategoryDetails();
                 renderHeadersList();
             } catch (err) {
                 console.warn('Failed to load headers:', err);
@@ -2672,6 +2996,10 @@
                 request_ox:  document.getElementById('requestOx').checked,
                 request_red: document.getElementById('requestRed').checked,
                 request_singlepoint_vertical_excitations: document.getElementById('requestVertEx').checked,
+                request_spec_uvvis: document.getElementById('requestUvvis').checked,
+                request_spec_ir:    document.getElementById('requestIr').checked,
+                request_spec_nmr:   document.getElementById('requestNmr').checked,
+                request_esd:        document.getElementById('requestEsd').checked,
                 max_conformers_S0:  intOrDefault('maxConfS0',  1),
                 max_conformers_T1:  intOrDefault('maxConfT1',  1),
                 max_conformers_ox:  intOrDefault('maxConfOx',  1),
@@ -2683,6 +3011,24 @@
                 header_optimization_id: hOpt.id,
                 header_singlepoint_id:  hSp.id,
             };
+            // Options travel only with their category; a stale value from an
+            // unticked panel must not reach the API.
+            if (commonBody.request_spec_uvvis) {
+                commonBody.uvvis_nroots = intOrDefault('uvvisNroots', 20);
+                commonBody.uvvis_tda = document.getElementById('uvvisTda').checked;
+            }
+            if (commonBody.request_spec_nmr) {
+                commonBody.nmr_nuclei = ['H', 'C', 'F'].filter(function (n) {
+                    return document.getElementById('nmrNuc' + n).checked;
+                });
+            }
+            if (commonBody.request_esd) {
+                var esdWindow = parseFloat(document.getElementById('esdTnWindow').value);
+                var esdTemperature = parseFloat(document.getElementById('esdTemperature').value);
+                commonBody.request_esd_ht = document.getElementById('requestEsdHt').checked;
+                commonBody.esd_tn_window_ev = isFinite(esdWindow) ? esdWindow : 0.2;
+                commonBody.esd_temperature_k = isFinite(esdTemperature) ? esdTemperature : 298.15;
+            }
 
             // ── One request for the whole textarea. ───────────────────
             // Submitting line by line was one HTTP round trip and one SQLite
@@ -2733,8 +3079,10 @@
             if (failed.length === 0) {
                 smilesArea.value = '';
                 window.lastSmilesResults = null;
-                document.getElementById('smilesHint').style.display = 'none';
-                smilesArea.classList.remove('valid', 'invalid');
+                // Via 'input' rather than by hand: the validator owns the hint,
+                // the input's valid/invalid class and the diradical lock, and
+                // clearing the box by assignment fires no event of its own.
+                smilesArea.dispatchEvent(new Event('input'));
             } else {
                 // Keep the failed lines in the textarea so the user can fix and retry.
                 smilesArea.value = failed.map(function (f) { return f.smiles; }).join('\n');
@@ -2856,14 +3204,16 @@
                 var sel       = document.getElementById('projectSelect');
                 var selMols   = document.getElementById('projectSelectMols');
                 var selSA     = document.getElementById('projectSelectSA');
+                var selPP     = document.getElementById('projectSelectPP');
                 var prev      = sel.value || (selMols && selMols.value)
-                                || (selSA && selSA.value) || '';
+                                || (selSA && selSA.value) || (selPP && selPP.value) || '';
 
                 if (!projectCache || projectCache.length === 0) {
                     var empty = '<option value="">(no projects yet)</option>';
                     sel.innerHTML = empty;
                     if (selMols) selMols.innerHTML = empty;
                     if (selSA)   selSA.innerHTML   = empty;
+                    if (selPP)   selPP.innerHTML   = empty;
                     document.getElementById('projectCards').style.display = 'none';
                     document.getElementById('projectExportSection').style.display = 'none';
                     document.getElementById('projectMoleculesSection').style.display = 'none';
@@ -2875,6 +3225,10 @@
                     if (document.getElementById('saEmptyState')) {
                         document.getElementById('saEmptyState').style.display = 'block';
                         document.getElementById('saCards').style.display = 'none';
+                    }
+                    if (document.getElementById('ppEmptyState')) {
+                        document.getElementById('ppEmptyState').style.display = 'block';
+                        document.getElementById('ppCards').style.display = 'none';
                     }
                     return;
                 }
@@ -2890,11 +3244,13 @@
                 sel.innerHTML = html;
                 if (selMols) selMols.innerHTML = html;
                 if (selSA)   selSA.innerHTML   = html;
+                if (selPP)   selPP.innerHTML   = html;
 
                 if (prev && projectCache.some(function (p) { return p.name === prev; })) {
                     sel.value = prev;
                     if (selMols) selMols.value = prev;
                     if (selSA)   selSA.value   = prev;
+                    if (selPP)   selPP.value   = prev;
                 }
                 loadProjectDetail(sel.value);
             } catch (err) {
@@ -3181,7 +3537,7 @@
 
         (function () {
             function syncSelects(value) {
-                ['projectSelect', 'projectSelectMols', 'projectSelectSA'].forEach(function (id) {
+                ['projectSelect', 'projectSelectMols', 'projectSelectSA', 'projectSelectPP'].forEach(function (id) {
                     var el = document.getElementById(id);
                     if (el && el.value !== value) el.value = value;
                 });
@@ -3204,6 +3560,14 @@
                     currentProject = this.value;
                     syncSelects(this.value);
                     loadStateAnalysisPage();
+                });
+            }
+            var altPP = document.getElementById('projectSelectPP');
+            if (altPP) {
+                altPP.addEventListener('change', function () {
+                    currentProject = this.value;
+                    syncSelects(this.value);
+                    loadPhotophysicsPage();
                 });
             }
             document.getElementById('exportCsvBtn').addEventListener('click', function () { exportProject('csv'); });
@@ -3327,12 +3691,12 @@
             }
             empty.style.display = 'none';
             wrap.style.display = 'block';
-            tbody.innerHTML = '<tr><td colspan="10" class="empty-state">Loading...</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="13" class="empty-state">Loading...</td></tr>';
 
             var resp = await fetch('/api/projects/' + projectPath(name) + '/molecules-detail');
             var data = await resp.json();
             if (!data.molecules || data.molecules.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="10" class="empty-state">No molecules yet for this project.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="13" class="empty-state">No molecules yet for this project.</td></tr>';
                 return;
             }
 
@@ -3357,7 +3721,7 @@
                         cells.push('<td rowspan="1" class="mol-state">' + escHtml(st.description) + '</td>');
                         cells.push('<td class="mol-conf"><em style="color:var(--text-muted);">—</em></td>');
                         // Show the confsearch status in the Opt column so the user sees something even before any opt task exists.
-                        cells.push('<td colspan="5" style="color:var(--text-muted); font-style:italic;">confsearch ' + (st.confsearch || 'not yet') + '</td>');
+                        cells.push('<td colspan="8" style="color:var(--text-muted); font-style:italic;">confsearch ' + (st.confsearch || 'not yet') + '</td>');
                         rows.push('<tr class="' + (rows.length === 0 || cells.length > 5 ? 'mol-first' : '') + '">' + cells.join('') + '</tr>');
                         return;
                     }
@@ -3378,6 +3742,9 @@
                         cells.push('<td>' + statusCell(c.singlepoint_vert_ox) + '</td>');
                         cells.push('<td>' + statusCell(c.singlepoint_vert_red) + '</td>');
                         cells.push('<td>' + statusCell(c.singlepoint_vert_spin_change) + '</td>');
+                        cells.push('<td>' + statusCell(c.singlepoint_uvvis) + '</td>');
+                        cells.push('<td>' + statusCell(c.singlepoint_nmr) + '</td>');
+                        cells.push('<td>' + statusCell(c.esd) + '</td>');
                         var firstRowClass = (!molRendered ? '' : '') + (cells.some(function (c) { return c.indexOf('rowspan') !== -1 && c.indexOf('mol-id') !== -1; }) ? ' mol-first' : '');
                         rows.push('<tr class="' + (firstRowClass.trim()) + '">' + cells.join('') + '</tr>');
                     });
@@ -3616,6 +3983,401 @@
                     // download the produced file.
                     var started = await startProjectJob(
                         '/api/projects/' + projectPath(name) + '/state-analysis/export',
+                        { method: 'POST' }
+                    );
+                    if (!started.ok) {
+                        alert('Export failed: ' + started.detail);
+                        exportBtn.disabled = false;
+                        exportBtn.textContent = origLabel;
+                        return;
+                    }
+                    await pollProjectJob(started.project, started.job.id, {
+                        onRunning: function () { exportBtn.textContent = 'Building…'; },
+                        onSuccess: function (job) {
+                            exportBtn.disabled = false;
+                            exportBtn.textContent = origLabel;
+                            // Content-Disposition on the download endpoint makes
+                            // this save the .xlsx rather than navigate to it.
+                            window.location = '/api/jobs/' + job.id + '/download';
+                        },
+                        onError: function (e) {
+                            alert('Export failed: ' + e);
+                            exportBtn.disabled = false;
+                            exportBtn.textContent = origLabel;
+                        },
+                    });
+                });
+            }
+        })();
+
+        // ── Project Overview > Photophysics subpage ─────────────────────
+        // The API ships sticks and Boltzmann weights; broadening happens
+        // here so the line widths can change without a round trip.
+
+        var ppState = { project: null, payload: null, details: {} };
+        var HC_EV_NM = 1239.84193;
+
+        function ppUvCurve(ensemble, fwhmEv) {
+            var sigma = fwhmEv / (2 * Math.sqrt(2 * Math.LN2));
+            var lo = 180;
+            if (ensemble.shortest_nm) lo = Math.max(100, Math.min(180, Math.floor(ensemble.shortest_nm) - 10));
+            var points = [];
+            for (var nm = lo; nm <= 700; nm += 1) {
+                var e = HC_EV_NM / nm, y = 0;
+                ensemble.conformers.forEach(function (c) {
+                    c.transitions.forEach(function (t) {
+                        var d = (e - t.energy_ev) / sigma;
+                        y += c.weight * t.fosc * Math.exp(-0.5 * d * d);
+                    });
+                });
+                points.push([nm, y]);
+            }
+            return points;
+        }
+
+        function ppIrCurve(ensemble, fwhmCm, scale) {
+            var gamma = fwhmCm / 2, points = [];
+            for (var nu = 400; nu <= 4000; nu += 2) {
+                var y = 0;
+                ensemble.conformers.forEach(function (c) {
+                    c.modes.forEach(function (m) {
+                        if (m.frequency_cm <= 0) return;
+                        var d = nu - m.frequency_cm * scale;
+                        y += c.weight * m.intensity_km_mol * gamma * gamma / (d * d + gamma * gamma);
+                    });
+                });
+                points.push([nu, y]);
+            }
+            return points;
+        }
+
+        function ppPeak(points) {
+            var best = points[0];
+            points.forEach(function (p) { if (p[1] > best[1]) best = p; });
+            return best;
+        }
+
+        function ppSvg(points, xLabel, reverseX) {
+            var W = 560, H = 220, L = 12, R = 12, T = 10, B = 34;
+            var xmin = points[0][0], xmax = points[points.length - 1][0];
+            var ymax = ppPeak(points)[1] || 1;
+            function px(x) {
+                var f = (x - xmin) / ((xmax - xmin) || 1);
+                return L + (reverseX ? 1 - f : f) * (W - L - R);
+            }
+            function py(y) { return T + (1 - y / ymax) * (H - T - B); }
+            var line = points.map(function (p) {
+                return px(p[0]).toFixed(1) + ',' + py(p[1]).toFixed(1);
+            }).join(' ');
+            var ticks = [];
+            for (var i = 0; i <= 4; i++) {
+                var x = xmin + i * (xmax - xmin) / 4;
+                ticks.push('<text x="' + px(x).toFixed(1) + '" y="' + (H - 18) +
+                           '" text-anchor="middle" font-size="10" fill="var(--text-muted)">' +
+                           Math.round(x) + '</text>');
+            }
+            return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" role="img" aria-label="' +
+                   escHtml(xLabel) + '">' +
+                   '<line x1="' + L + '" y1="' + (H - B) + '" x2="' + (W - R) + '" y2="' + (H - B) +
+                   '" stroke="var(--border)"/>' +
+                   '<polyline fill="none" stroke="var(--accent)" stroke-width="1.5" points="' + line + '"/>' +
+                   ticks.join('') +
+                   '<text x="' + (W / 2) + '" y="' + (H - 3) +
+                   '" text-anchor="middle" font-size="11" fill="var(--text-secondary)">' +
+                   escHtml(xLabel) + '</text></svg>';
+        }
+
+        var PP_WEIGHTING = { G: 'weighted on G', E_sp: 'weighted on E (no G)', equal: 'equal weights (no energies)' };
+
+        function ppCounts(ens) {
+            var bits = [ens.count + ' conformer' + (ens.count === 1 ? '' : 's')];
+            if (ens.pending) bits.push(ens.pending + ' pending');
+            if (ens.failed) bits.push(ens.failed + ' failed');
+            if (ens.unavailable) bits.push(ens.unavailable + ' without output');
+            if (ens.unweighted) bits.push(ens.unweighted + ' without energy');
+            if (ens.count) bits.push(PP_WEIGHTING[ens.weighting] || ens.weighting);
+            return bits.join(', ');
+        }
+
+        var NMR_LABELS = { H: '¹H', C: '¹³C', F: '¹⁹F' };
+
+        function ppNmr(nmr) {
+            var parts = [];
+            ['H', 'C', 'F'].forEach(function (el) {
+                var signals = (nmr.nuclei || {})[el];
+                if (!signals || !signals.length) return;
+                var ref = (nmr.reference || {})[el] || {};
+                var head = NMR_LABELS[el] + ' NMR · ';
+                if (ref.status === 'ok') {
+                    head += 'δ vs ' + escHtml(ref.compound) +
+                            (ref.method_matches === false ? ' — reference computed at a different method!' : '');
+                } else {
+                    head += 'reference ' + escHtml(ref.status || 'missing') + ' — shieldings σ shown';
+                }
+                var rows = signals.map(function (s) {
+                    var value = (s.shift_ppm !== null && s.shift_ppm !== undefined)
+                        ? s.shift_ppm.toFixed(2) : ('σ ' + s.shielding_ppm.toFixed(2));
+                    return '<tr><td class="num">' + escHtml(value) + '</td><td class="num">' +
+                           escHtml(s.count) + '</td><td>' + escHtml(s.atoms.join(', ')) + '</td></tr>';
+                }).join('');
+                parts.push('<div class="pp-plot"><div class="pp-plot-title">' + head + ' · ' +
+                           escHtml(ppCounts(nmr)) + (nmr.equivalence === 'none' ? ' · no symmetry averaging' : '') +
+                           '</div><table class="pp-nmr"><thead><tr><th>δ (ppm)</th><th>n</th><th>ORCA atoms</th></tr></thead><tbody>' +
+                           rows + '</tbody></table></div>');
+            });
+            return parts.join('');
+        }
+
+        var ESD_RATES = [
+            ['isc', 'k<sub>ISC</sub> (S₁→T<sub>n</sub>)'], ['risc', 'k<sub>RISC</sub> (T₁→S₁)'],
+            ['ic', 'k<sub>IC</sub> (S₁→S₀)'], ['fluorescence', 'k<sub>F</sub>'],
+            ['isc_t1_s0', 'k<sub>ISC</sub> (T₁→S₀)'], ['phosphorescence', 'k<sub>P</sub>']
+        ];
+
+        function ppRate(v) { return v === 0 ? '0' : v.toExponential(2); }
+
+        function ppEsdSummary(esd) {
+            if (esd.status === 'waiting' || esd.status === 'failed') {
+                return '<div class="pp-summary">ESD · ' + escHtml(esd.reason || esd.status) + '</div>';
+            }
+            var bits = [];
+            if (esd.delta_est_ev !== undefined) {
+                bits.push('ΔE<sub>ST</sub> <b>' + escHtml(esd.delta_est_ev.toFixed(3)) + ' eV</b>');
+            }
+            ['isc', 'fluorescence', 'risc'].forEach(function (key) {
+                var r = esd.rates[key];
+                var label = ESD_RATES.filter(function (p) { return p[0] === key; })[0][1];
+                if (r && r.status === 'successful') bits.push(label + ' ' + escHtml(ppRate(r.rate_s)) + ' s⁻¹');
+            });
+            var d = esd.derived || {};
+            if (d.phi_fluorescence !== undefined) bits.push('Φ<sub>F</sub> ' + escHtml(d.phi_fluorescence.toFixed(3)));
+            var open = ESD_RATES.filter(function (p) {
+                var r = esd.rates[p[0]];
+                return !r || r.status !== 'successful';
+            }).length;
+            return '<div class="pp-summary">ESD (' + (esd.herzberg_teller ? 'FC+HT' : 'FC') + ', ' +
+                   escHtml(esd.temperature_k) + ' K) · ' + bits.join(' · ') +
+                   (open ? ' · ' + open + ' rate(s) not in' : '') +
+                   (esd.flags.length ? ' · <span class="pp-warn">' + esd.flags.length + ' warning(s)</span>' : '') +
+                   '</div>';
+        }
+
+        function ppEsdJobs(r) {
+            if (!r.jobs) return escHtml(r.reason || '');
+            return r.jobs.map(function (j) {
+                var label = j.triplet ? 'T' + j.triplet : '';
+                if (j.sublevel !== undefined) label += (label ? ' ' : '') + 'sublevel ' + j.sublevel;
+                var bits = [label ? label + ': ' + ppRate(j.rate_s) : ppRate(j.rate_s)];
+                if (j.dele_cm !== undefined) bits.push('ΔE ' + Math.round(j.dele_cm) + ' cm⁻¹');
+                if (j.socme_cm !== undefined) bits.push('SOCME ' + j.socme_cm.toFixed(2) + ' cm⁻¹');
+                if (j.ht_percent !== null && j.ht_percent !== undefined) bits.push(j.ht_percent.toFixed(0) + '% HT');
+                return escHtml(bits.join(', '));
+            }).join('<br>');
+        }
+
+        function ppEsd(esd) {
+            var rows = ESD_RATES.map(function (pair) {
+                var r = esd.rates[pair[0]] || { status: 'waiting' };
+                var value = r.status === 'successful' ? escHtml(ppRate(r.rate_s)) : escHtml(r.status);
+                return '<tr><td>' + pair[1] + '</td><td class="num">' + value + '</td><td>' + ppEsdJobs(r) + '</td></tr>';
+            }).join('');
+            var d = esd.derived || {};
+            var facts = [];
+            if (esd.delta_est_ev !== undefined) facts.push('ΔE<sub>ST</sub> ' + escHtml(esd.delta_est_ev.toFixed(3)) + ' eV (TDDFT)');
+            if (esd.delta_est_uks_ev !== undefined) facts.push(escHtml(esd.delta_est_uks_ev.toFixed(3)) + ' eV (vs UKS T₁)');
+            if (esd.rates.fluorescence && esd.rates.fluorescence.e00_ev) facts.push('E<sub>00</sub>(S₁) ' + escHtml(esd.rates.fluorescence.e00_ev.toFixed(3)) + ' eV');
+            if (esd.rates.phosphorescence && esd.rates.phosphorescence.e00_ev) facts.push('E<sub>00</sub>(T₁) ' + escHtml(esd.rates.phosphorescence.e00_ev.toFixed(3)) + ' eV');
+            if (d.tau_s1_ns !== undefined) facts.push('τ(S₁) ' + escHtml(d.tau_s1_ns.toPrecision(3)) + ' ns, Φ<sub>F</sub> ' + escHtml(d.phi_fluorescence.toFixed(3)) + ', Φ<sub>ISC</sub> ' + escHtml(d.phi_isc.toFixed(3)));
+            if (d.tau_t1_us !== undefined) facts.push('τ(T₁) ' + escHtml(d.tau_t1_us.toPrecision(3)) + ' µs, Φ<sub>P</sub>(T₁) ' + escHtml(d.phi_phosphorescence.toFixed(3)));
+            var socme = esd.socme_cm || {};
+            if (socme.S1_T1_at_T1 !== undefined && socme.S1_T1_at_T1 !== null) facts.push('⟨S₁|H<sub>SO</sub>|T₁⟩ ' + escHtml(socme.S1_T1_at_T1.toFixed(2)) + ' cm⁻¹');
+            var flags = (esd.flags || []).map(function (f) { return '<div class="pp-warn">⚠ ' + escHtml(f) + '</div>'; }).join('');
+            return '<div class="pp-plot"><div class="pp-plot-title">ESD (' + (esd.herzberg_teller ? 'FC+HT' : 'FC') + ', ' +
+                   escHtml(esd.temperature_k) + ' K, Tn window ' + escHtml(esd.tn_window_ev) + ' eV)</div>' +
+                   '<table class="pp-esd"><thead><tr><th>Process</th><th>k (s⁻¹)</th><th>Channels / notes</th></tr></thead><tbody>' +
+                   rows + '</tbody></table>' +
+                   (facts.length ? '<div class="pp-summary">' + facts.join(' · ') + '</div>' : '') + flags + '</div>';
+        }
+
+        function ppSummary(m) {
+            var rows = [];
+            if (m.stage) {
+                rows.push('<div class="pp-summary">' + (m.stage === 'searching'
+                    ? 'Conformers are still being computed.'
+                    : 'No conformer finished its optimisation.') + '</div>');
+            }
+            if (m.uvvis) {
+                var uv = m.uvvis.peak
+                    ? 'strongest transition <b>' + escHtml(m.uvvis.peak.wavelength_nm) + ' nm</b> (f = ' +
+                      escHtml(m.uvvis.peak.fosc.toFixed(3)) + ')'
+                    : 'no spectrum yet';
+                if (m.uvvis.shortest_nm && m.uvvis.shortest_nm > 200) {
+                    uv += ' · roots reach only ' + escHtml(Math.round(m.uvvis.shortest_nm)) + ' nm';
+                }
+                rows.push('<div class="pp-summary">UV/Vis · ' + uv + ' · ' + escHtml(ppCounts(m.uvvis)) + '</div>');
+            }
+            if (m.ir) {
+                var ir = m.ir.peak
+                    ? 'strongest band <b>' + escHtml(Math.round(m.ir.peak.frequency_cm)) + ' cm⁻¹</b> (unscaled)'
+                    : 'no spectrum yet';
+                rows.push('<div class="pp-summary">IR · ' + ir + ' · ' + escHtml(ppCounts(m.ir)) + '</div>');
+            }
+            if (m.nmr) {
+                var signals = ['H', 'C', 'F'].filter(function (el) { return m.nmr.signals[el]; })
+                    .map(function (el) { return m.nmr.signals[el] + ' ' + NMR_LABELS[el]; });
+                var refs = Object.keys(m.nmr.reference || {}).filter(function (el) {
+                    return m.nmr.reference[el].status !== 'ok';
+                }).map(function (el) { return NMR_LABELS[el] + ' reference ' + m.nmr.reference[el].status; });
+                rows.push('<div class="pp-summary">NMR · ' +
+                          (signals.length ? '<b>' + escHtml(signals.join(', ')) + '</b> signals' : 'no shifts yet') +
+                          (refs.length ? ' · ' + escHtml(refs.join(', ')) : '') +
+                          ' · ' + escHtml(ppCounts(m.nmr)) + '</div>');
+            }
+            if (m.esd) rows.push(ppEsdSummary(m.esd));
+            if (m.archived) rows.push('<div class="pp-waiting">Archived: raw outputs removed.</div>');
+            return rows.join('');
+        }
+
+        function ppPlots(m, detail) {
+            var uvFwhm  = parseFloat(document.getElementById('ppUvFwhm').value)  || 0.3;
+            var irFwhm  = parseFloat(document.getElementById('ppIrFwhm').value)  || 15;
+            var irScale = parseFloat(document.getElementById('ppIrScale').value) || 1;
+            var parts = [];
+            if (detail.uvvis && detail.uvvis.conformers.length) {
+                var uv = ppUvCurve(detail.uvvis, uvFwhm);
+                parts.push('<div class="pp-plot"><div class="pp-plot-title">UV/Vis · λ<sub>max</sub> ≈ ' +
+                           escHtml(ppPeak(uv)[0]) + ' nm (broadened)</div>' +
+                           ppSvg(uv, 'Wavelength (nm)', false) + '</div>');
+            }
+            if (detail.ir && detail.ir.conformers.length) {
+                var ir = ppIrCurve(detail.ir, irFwhm, irScale);
+                parts.push('<div class="pp-plot"><div class="pp-plot-title">IR · strongest band ≈ ' +
+                           escHtml(ppPeak(ir)[0]) + ' cm⁻¹ (scaled, broadened)</div>' +
+                           ppSvg(ir, 'Wavenumber (cm⁻¹)', true) + '</div>');
+            }
+            if (detail.nmr && detail.nmr.count) parts.push(ppNmr(detail.nmr));
+            if (detail.esd && detail.esd.seed_task_id) parts.push(ppEsd(detail.esd));
+            return parts.join('') || '<div class="pp-waiting">Nothing to plot yet.</div>';
+        }
+
+        function ppKey(m) { return m.id + ':' + m.state_id; }
+
+        function renderPhotophysics(payload) {
+            var host = document.getElementById('ppCards');
+            if (!payload.molecules.length) {
+                host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">' +
+                                 'No molecule in this project was submitted with UV/Vis, IR, NMR or ESD.</div>';
+                return;
+            }
+            var perMolecule = {};
+            payload.molecules.forEach(function (m) { perMolecule[m.id] = (perMolecule[m.id] || 0) + 1; });
+            host.innerHTML = payload.molecules.map(function (m) {
+                var key = ppKey(m);
+                var detail = ppState.details[key];
+                var label = perMolecule[m.id] > 1 ? ' <span class="sa-smiles">(state ' + escHtml(m.state_id) + ')</span>' : '';
+                return '<div class="sa-card" data-pp="' + escHtml(key) + '"><div class="sa-card-head">' +
+                       '<span class="sa-mol-id">#' + escHtml(m.id) + '</span>' +
+                       '<span class="sa-smiles">' + escHtml(m.smiles) + '</span>' + label +
+                       '<button type="button" class="btn-mini pp-open" data-mol="' + escHtml(m.id) + '">' +
+                       (detail ? 'Hide spectra' : 'Show spectra') + '</button></div>' +
+                       ppSummary(m) +
+                       '<div class="pp-body">' + (detail ? detail.html : '') + '</div></div>';
+            }).join('');
+            Array.prototype.forEach.call(host.querySelectorAll('.pp-open'), function (btn) {
+                btn.addEventListener('click', function () { ppToggle(parseInt(btn.getAttribute('data-mol'), 10)); });
+            });
+        }
+
+        async function ppToggle(molId) {
+            var mols = ppState.payload.molecules.filter(function (m) { return m.id === molId; });
+            var open = mols.some(function (m) { return ppState.details[ppKey(m)]; });
+            if (open) {
+                mols.forEach(function (m) { delete ppState.details[ppKey(m)]; });
+                renderPhotophysics(ppState.payload);
+                return;
+            }
+            try {
+                var resp = await fetch('/api/projects/' + projectPath(ppState.project) +
+                                       '/photophysics?molecule_id=' + molId);
+                var payload = await safeJson(resp);
+                if (!resp.ok || !payload.molecules) throw new Error(payload.detail || payload._err || ('HTTP ' + resp.status));
+                payload.molecules.forEach(function (d) {
+                    ppState.details[ppKey(d)] = { data: d, html: ppPlots(d, d) };
+                });
+            } catch (err) {
+                mols.forEach(function (m) {
+                    ppState.details[ppKey(m)] = { data: null,
+                        html: '<div class="pp-waiting">Could not load spectra: ' + escHtml(err.message) + '</div>' };
+                });
+            }
+            renderPhotophysics(ppState.payload);
+        }
+
+        function ppRedrawOpen() {
+            Object.keys(ppState.details).forEach(function (key) {
+                var d = ppState.details[key];
+                if (d.data) d.html = ppPlots(d.data, d.data);
+            });
+            if (ppState.payload) renderPhotophysics(ppState.payload);
+        }
+
+        async function loadPhotophysicsPage() {
+            var sel  = document.getElementById('projectSelectPP');
+            var name = sel ? sel.value : currentProject;
+            var empty = document.getElementById('ppEmptyState');
+            var host  = document.getElementById('ppCards');
+            if (!name) {
+                empty.style.display = 'block';
+                host.style.display = 'none';
+                return;
+            }
+            empty.style.display = 'none';
+            host.style.display = 'block';
+            host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Reading spectra…</div>';
+            try {
+                var resp = await fetch('/api/projects/' + projectPath(name) + '/photophysics');
+                // safeJson returns the parsed body, or {_err} when it is not JSON.
+                var payload = await safeJson(resp);
+                if (!resp.ok || !payload.molecules) {
+                    host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Error: ' +
+                                     escHtml(payload.detail || payload._err || ('HTTP ' + resp.status)) +
+                                     '</div>';
+                    return;
+                }
+                ppState.details = {};
+                ppState.project = name;
+                ppState.payload = payload;
+                renderPhotophysics(payload);
+            } catch (err) {
+                host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Network error: ' +
+                                 escHtml(err.message) + '</div>';
+            }
+        }
+
+        ['ppUvFwhm', 'ppIrFwhm', 'ppIrScale'].forEach(function (id) {
+            var el = document.getElementById(id);
+            if (el) {
+                el.addEventListener('input', function () {
+                    ppRedrawOpen();
+                });
+            }
+        });
+
+        (function () {
+            var exportBtn = document.getElementById('ppExportBtn');
+            if (exportBtn) {
+                exportBtn.addEventListener('click', async function () {
+                    var sel = document.getElementById('projectSelectPP');
+                    var name = ppState.project || (sel ? sel.value : null);
+                    if (!name) return;
+                    exportBtn.disabled = true;
+                    var origLabel = exportBtn.textContent;
+                    exportBtn.textContent = 'Preparing…';
+                    // The workbook + JSON are built by a background job
+                    // (re-parsing every molecule's outputs is slow on a big
+                    // project); poll, then download the workbook.
+                    var started = await startProjectJob(
+                        '/api/projects/' + projectPath(name) + '/export?format=photophysics',
                         { method: 'POST' }
                     );
                     if (!started.ok) {
