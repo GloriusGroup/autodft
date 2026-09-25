@@ -131,10 +131,11 @@ channel.
 **FC vs HT.** Franck-Condon rates by default. Herzberg-Teller
 (`request_esd_ht`) adds vibronic coupling for FC-forbidden transitions, far
 more expensive: an ISC-type HT job runs once per triplet sublevel
-(`trootssl -1/0/1`), PHOSP once per SOC root 1–3. Each ISC-type HT channel
-runs 6N displaced TDDFT+SOC gradients per sublevel: glyoxal/def2-SVP took
-715 s for its three sublevels; a 30–50-atom molecule on a large basis can
-take days.
+(`trootssl -1/0/1`), PHOSP once per SOC root 1–3. Each such job takes
+numerical derivatives: 3N−6 (+)-displaced TDDFT+SOC singlepoints, plus a
+(−) displacement for each mode whose change is not small (central
+differences). Singlepoints, not gradients: glyoxal/def2-SVP took 715 s for
+its three sublevels; a 30–50-atom molecule on a large basis can take days.
 
 **Cost.** The S1 Hessian is always numerical — ORCA 6.1 has no analytic
 TDDFT Hessian, TDA or not. `[pipeline.excited_optimization]` defaults to 4
