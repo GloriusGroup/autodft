@@ -279,3 +279,46 @@ def test_a_state_without_conformers_says_why(project):
         session.commit()
     entry = [m for m in analyze_spectra("nho/p", use_cache=False)["molecules"] if m["smiles"] == "CC#N"][0]
     assert entry["stage"] == "none"
+
+
+def test_a_broken_geometry_is_listed_on_the_molecule(project):
+    from autodft.models.result import JobResult
+
+    assert "broken_bonds" not in _molecule(project)
+    broken = {"ok": False, "lost": True, "fragments": 2, "detail": "dissociated: 2 fragments (C6H5 + H); C-H bonds 6 -> 5"}
+    with get_session() as session:
+        opt = session.exec(select(ComputationTask).where(
+            ComputationTask.task_type == TaskType.optimization).order_by(ComputationTask.id)).first()
+        job = results.latest_successful_job(session, opt.id)
+        record = results.parse_job("optimization", Path(job.job_path), True)
+        session.add(JobResult(job_id=job.id, task_id=opt.id, job_path=job.job_path, finished_at=job.time_end,
+                              parser_version=results.PARSER_VERSION,
+                              data_json=json.dumps({**record, "connectivity": broken})))
+        session.commit()
+        opt_id = opt.id
+    ir = _molecule(project, molecule_id=project["molecule"])["ir"]
+    assert [c.get("connectivity_ok") for c in ir["conformers"]] == [False, None]  # still weighted
+    assert sum(c["weight"] for c in ir["conformers"]) == pytest.approx(1.0)
+    assert _molecule(project)["broken_bonds"] == [{
+        "state": "S0", "state_id": project["state"], "conformer_index": 1, "opt_task_id": opt_id,
+        "detail": broken["detail"],
+    }]
+
+
+def test_goat_degeneracy_enters_the_weights(project):
+    from autodft.models import MoleculeGeometry
+
+    with get_session() as session:
+        opts = session.exec(select(ComputationTask).where(
+            ComputationTask.task_type == TaskType.optimization).order_by(ComputationTask.id)).all()
+        for opt, g in zip(opts[:2], (2, None)):  # None: a pre-degeneracy row counts as 1
+            geom = MoleculeGeometry(state_id=project["state"], xyz_data="1\n\nH 0 0 0\n", degeneracy=g)
+            session.add(geom)
+            session.commit()
+            opt.input_geometry_id = geom.id
+            session.add(opt)
+        session.commit()
+    ir = _molecule(project, molecule_id=project["molecule"])["ir"]
+    assert [c["degeneracy"] for c in ir["conformers"]] == [2, 1]
+    weights = [c["weight"] for c in ir["conformers"]]
+    assert weights[1] / weights[0] == pytest.approx(math.exp(-1 / (0.0019872043 * 298.15)) / 2, rel=1e-3)

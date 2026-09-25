@@ -1943,6 +1943,12 @@
 
         // ── Helpers ──────────────────────────────────────────────────────
 
+        // Warning for an optimised geometry that lost bonds of its molecule (new jobs only).
+        function brokenBadge(check) {
+            if (!check || check.ok) return '';
+            return ' <span class="badge badge-failed" title="' + escHtml(check.detail) + '">⚠ bonds</span>';
+        }
+
         function badge(value) {
             if (!value) return '<span class="badge badge-created">unknown</span>';
             return '<span class="badge badge-' + escHtml(value) + '">' + escHtml(value) + '</span>';
@@ -3815,7 +3821,7 @@
                         if (ci === 0) {
                             cells.push('<td rowspan="' + rowsForState + '" class="mol-state" title="charge ' + st.charge + ' / mult ' + st.multiplicity + '">' + escHtml(st.description) + '</td>');
                         }
-                        cells.push('<td class="mol-conf">' + escHtml(c.index) + '</td>');
+                        cells.push('<td class="mol-conf">' + escHtml(c.index) + brokenBadge(c.connectivity) + '</td>');
                         cells.push('<td>' + statusCell(c.optimization) + '</td>');
                         cells.push('<td>' + statusCell(c.singlepoint) + '</td>');
                         cells.push('<td>' + statusCell(c.singlepoint_vert_ox) + '</td>');
@@ -3978,8 +3984,10 @@
                     var p = picks[st];
                     var rmsd = (st === 'S0' || p.rmsd_to_s0 === null)
                                ? '' : ' (RMSD ' + fmtRmsd(p.rmsd_to_s0) + ' vs S0)';
+                    var broken = (p.connectivity && !p.connectivity.ok)
+                               ? ' <span class="pp-warn">⚠ geometry ' + escHtml(p.connectivity.detail) + '</span>' : '';
                     return '<div><code>' + escHtml(st) + '</code> — conformer ' +
-                           escHtml(p.conformer_index) + rmsd + '</div>';
+                           escHtml(p.conformer_index) + rmsd + broken + '</div>';
                 }).join('');
 
                 return '<div class="sa-card">' +
@@ -4350,6 +4358,10 @@
             }
             if (m.esd) rows.push(ppEsdSummary(m.esd));
             if (m.nbo) rows.push(ppNboSummary(m.nbo));
+            (m.broken_bonds || []).forEach(function (b) {
+                rows.push('<div class="pp-summary pp-warn">⚠ ' + escHtml(b.state) + ' conformer ' +
+                          escHtml(b.conformer_index) + ' geometry ' + escHtml(b.detail) + '</div>');
+            });
             if (m.archived) rows.push('<div class="pp-waiting">Archived: raw outputs removed.</div>');
             return rows.join('');
         }

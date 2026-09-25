@@ -31,7 +31,11 @@ def build_xlsx(payload: dict) -> bytes:
     summary.column_dimensions["B"].width = 40
 
     uv, uv_sticks, ir, ir_sticks, nmr, esd, esd_jobs, nbo = [], [], [], [], [], [], [], []
+    broken = []
     for m in payload.get("molecules", []):
+        for b in m.get("broken_bonds", []):
+            broken.append((m["id"], m["smiles"], b["state"], b["state_id"], b["conformer_index"],
+                           b["opt_task_id"], b["detail"]))
         if m.get("uvvis"):
             e, peak = m["uvvis"], m["uvvis"].get("peak") or {}
             uv.append((m["id"], m["smiles"], m["state_id"], e["count"], e["pending"], e["failed"],
@@ -95,6 +99,8 @@ def build_xlsx(payload: dict) -> bytes:
                             "socme_cm", "fc_percent", "ht_percent", "k_squared", "e00_cm"), esd_jobs)
     _sheet(wb, "NBO", ("mol_id", "smiles", "state_id", "state", "atom_1based", "element", "charge", "spin",
                        "count", "weighting"), nbo)
+    _sheet(wb, "Broken bonds", ("mol_id", "smiles", "state", "state_id", "conformer", "opt_task_id",
+                                "detail"), broken)
 
     buffer = BytesIO()
     wb.save(buffer)

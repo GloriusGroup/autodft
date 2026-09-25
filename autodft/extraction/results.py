@@ -18,6 +18,7 @@ from sqlmodel import Session, col, select
 
 from autodft import categories
 from autodft.db import get_session
+from autodft.extraction import connectivity
 from autodft.models import ComputationJob, ComputationTask, Molecule, MoleculeState, TaskType
 from autodft.models.result import JobResult
 from autodft.qm.orca import esd_parser
@@ -119,6 +120,12 @@ def _upsert(
     row = session.exec(select(JobResult).where(JobResult.job_id == job_id)).first()
     if row is None:
         row = JobResult(job_id=job_id, task_id=task_id, parser_version=PARSER_VERSION, data_json="")
+    elif (row.task_id == task_id and row.job_path == job_path and _same_instant(row.finished_at, finished_at)
+          and "connectivity" not in record):
+        # Same job: a re-parse (backfill) must not drop the check made when it was judged.
+        kept = json.loads(row.data_json or "{}").get("connectivity")
+        if kept is not None:
+            record = {**record, "connectivity": kept}
     row.task_id = task_id
     row.job_path = job_path
     row.finished_at = finished_at
@@ -139,8 +146,68 @@ def store(session: Session, task: ComputationTask, job: ComputationJob, job_path
         record = parse_job(task_type, job_path, _wants_ir(session, task_type, task.state_id))
         if record is None:
             return False
+        if task_type == "optimization":
+            try:
+                found = _connectivity(session, task.state_id, job_path)
+            except Exception:  # noqa: BLE001 - the record matters more than the check
+                logger.warning("Connectivity check failed for job %d; stored without it", job.id, exc_info=True)
+                found = None
+            if found is not None:
+                record["connectivity"] = found
         _upsert(session, job.id, task.id, job.job_path, job.time_end, record)
     return True
+
+
+def _connectivity(session: Session, state_id: int, job_path: Path) -> Optional[dict]:
+    """The optimised geometry's bonds against the molecule's SMILES; only new jobs get one."""
+    state = session.get(MoleculeState, state_id)
+    molecule = session.get(Molecule, state.molecule_id) if state is not None else None
+    xyz = _read(job_path / "input.xyz")
+    if molecule is None or xyz is None:
+        return None
+    return connectivity.check(molecule.smiles, xyz)
+
+
+def connectivity_by_task(session: Session, task_ids: Iterable[int]) -> dict[int, dict]:
+    """Stored connectivity checks of these optimisations' latest successful jobs, by task id."""
+    ids = sorted(set(task_ids))
+    if not ids:
+        return {}
+    latest: dict[int, ComputationJob] = {}
+    for job in session.exec(
+        select(ComputationJob).where(
+            col(ComputationJob.task_id).in_(ids), ComputationJob.success == True,  # noqa: E712
+        )
+    ).all():
+        best = latest.get(job.task_id)
+        if best is None or (job.attempt, job.id) > (best.attempt, best.id):
+            latest[job.task_id] = job
+    rows = {
+        row.job_id: row for row in session.exec(
+            select(JobResult).where(
+                col(JobResult.job_id).in_([j.id for j in latest.values()]),
+                col(JobResult.data_json).contains('"connectivity"'),
+            )
+        ).all()
+    } if latest else {}
+    out = {}
+    for task_id, job in latest.items():
+        row = rows.get(job.id)
+        if (row is None or row.task_id != job.task_id or row.job_path != job.job_path
+                or not _same_instant(row.finished_at, job.time_end)):
+            continue
+        found = json.loads(row.data_json).get("connectivity")
+        if found is not None:
+            out[task_id] = found
+    return out
+
+
+def broken_bonds(session: Session, task: Optional[ComputationTask]) -> Optional[str]:
+    """How *task*'s optimised geometry lost bonds of its SMILES, or None (extra bonds alone do not count)."""
+    if task is None or task.task_type != TaskType.optimization:
+        return None
+    found = connectivity_by_task(session, [task.id]).get(task.id)
+    return found["detail"] if connectivity.breaks(found) else None
 
 
 def latest_successful_job(session: Session, task_id: int) -> Optional[ComputationJob]:

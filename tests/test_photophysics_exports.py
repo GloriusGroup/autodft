@@ -417,6 +417,19 @@ def test_nbo_sheet_writes_each_states_own_state_id():
     assert [r[2] for r in rows if r[3] == "ox"] == [11]
 
 
+def test_broken_geometries_get_their_own_sheet():
+    payload = {"project": "nho/p", "molecules": [{
+        "id": 1, "smiles": "CCCCF", "state_id": 10, "archived": False,
+        "broken_bonds": [{"state": "T1", "state_id": 12, "conformer_index": 1, "opt_task_id": 99,
+                          "detail": "dissociated: 2 fragments (C4H8F + H); C-H bonds 9 -> 8"}],
+    }]}
+    ws = load_workbook(BytesIO(build_xlsx(payload)))["Broken bonds"]
+    assert _header(ws) == ["mol_id", "smiles", "state", "state_id", "conformer", "opt_task_id", "detail"]
+    assert [c.value for c in ws[2]] == [
+        1, "CCCCF", "T1", 12, 1, 99, "dissociated: 2 fragments (C4H8F + H); C-H bonds 9 -> 8",
+    ]
+
+
 def test_build_xlsx_on_an_empty_payload_has_only_the_summary_sheet():
     wb = load_workbook(BytesIO(build_xlsx({"project": "nho/p", "molecules": []})))
     assert wb.sheetnames == ["Summary"]

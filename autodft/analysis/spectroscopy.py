@@ -22,7 +22,7 @@ from autodft import categories
 from autodft.db import get_session
 from autodft.extraction import results
 from autodft.extraction.extractor import PipelineExtractor
-from autodft.models import ComputationTask, Molecule, MoleculeState, TaskStatus, TaskType
+from autodft.models import ComputationTask, Molecule, MoleculeGeometry, MoleculeState, TaskStatus, TaskType
 from autodft.paths import safe_subdirectory
 from autodft.qm.orca.spectra_parser import IRMode
 
@@ -35,20 +35,22 @@ ROOM_TEMPERATURE = 298.15
 
 def boltzmann_weights(
     energies: list[Optional[float]], temperature: float = ROOM_TEMPERATURE,
+    degeneracies: Optional[list[int]] = None,
 ) -> list[float]:
-    """Normalised populations for *energies* in Hartree.
+    """Normalised populations g_i exp(-E_i/kT) for *energies* in Hartree.
 
     A conformer without an energy gets no weight; if none has one, all are
-    weighted equally.
+    weighted by their degeneracy alone (equally without degeneracies).
     """
     if not energies:
         return []
+    g = degeneracies if degeneracies is not None else [1] * len(energies)
     known = [e for e in energies if e is not None]
     if not known:
-        return [1.0 / len(energies)] * len(energies)
+        return [d / sum(g) for d in g]
     lowest = min(known)
     kt = K_B_HARTREE * temperature
-    raw = [math.exp(-(e - lowest) / kt) if e is not None else 0.0 for e in energies]
+    raw = [d * math.exp(-(e - lowest) / kt) if e is not None else 0.0 for e, d in zip(energies, g)]
     total = sum(raw)
     return [r / total for r in raw]
 
@@ -75,6 +77,8 @@ class Conformer:
     e_combined: Optional[float] = None
     ir_modes: Optional[list[IRMode]] = None
     energy_pending: bool = False  # its energy singlepoint is still to come
+    degeneracy: int = 1  # GOAT's, from the conformer geometry the optimisation started from
+    connectivity_ok: Optional[bool] = None  # the optimisation's stored bond check; None when unchecked
     sp_record: Optional[dict] = None  # the energy singlepoint's own record, read once
 
 
@@ -95,9 +99,18 @@ def conformer_pool(
             ComputationTask.task_type == TaskType.optimization,
         ).order_by(col(ComputationTask.id))
     ).all()
+    starts = {
+        g.id: g.degeneracy for g in session.exec(
+            select(MoleculeGeometry).where(
+                col(MoleculeGeometry.id).in_([o.input_geometry_id for o in opts if o.input_geometry_id]),
+            )
+        ).all()
+    } if opts else {}
+    checks = results.connectivity_by_task(session, [o.id for o in opts])
     pool = []
     for index, opt in enumerate(opts, 1):
-        conformer = Conformer(index, opt)
+        conformer = Conformer(index, opt, degeneracy=starts.get(opt.input_geometry_id) or 1,
+                              connectivity_ok=checks[opt.id]["ok"] if opt.id in checks else None)
         pool.append(conformer)
         if opt.status != TaskStatus.successful:
             continue
@@ -139,7 +152,9 @@ def ensemble(
     basis = weighting([c for c, _ in ready])
     have = [(c, data) for c, data in ready if _has_energy(c, basis)]
     waiting = [c for c, _ in ready if not _has_energy(c, basis)]
-    weights = boltzmann_weights(ranking_energies([c for c, _ in have]))
+    weights = boltzmann_weights(
+        ranking_energies([c for c, _ in have]), degeneracies=[c.degeneracy for c, _ in have],
+    )
     weighted = [(c, data, w) for (c, data), w in zip(have, weights)]
     out = {
         "count": len(have),
@@ -154,7 +169,8 @@ def ensemble(
         out["peak"] = peak(weighted)
     if detail:
         out["conformers"] = [
-            {"conformer_index": c.conformer_index, "opt_task_id": c.opt.id, "weight": w, **data}
+            {"conformer_index": c.conformer_index, "opt_task_id": c.opt.id, "degeneracy": c.degeneracy,
+             "weight": w, **({"connectivity_ok": False} if c.connectivity_ok is False else {}), **data}
             for c, data, w in weighted
         ]
     return out
@@ -289,6 +305,9 @@ def _molecule_entries(
             from autodft.analysis.nbo import molecule_nbo
 
             entry["nbo"] = molecule_nbo(session, extractor, state, detail)
+        broken = broken_geometries(session, state)
+        if broken:
+            entry["broken_bonds"] = broken
         entries.append(entry)
     return entries
 
@@ -380,6 +399,34 @@ def freeze(project_name: str, settings) -> int:
             os.replace(tmp, path)
             written += 1
     return written
+
+
+def broken_geometries(session: Session, s0: MoleculeState) -> list[dict]:
+    """Optimisations in *s0*'s state family whose geometry lost bonds, numbered as on the Molecules page."""
+    states = session.exec(
+        select(MoleculeState).where(
+            MoleculeState.molecule_id == s0.molecule_id,
+            MoleculeState.confsearch_header_id == s0.confsearch_header_id,
+            MoleculeState.optimization_header_id == s0.optimization_header_id,
+            MoleculeState.singlepoint_header_id == s0.singlepoint_header_id,
+        ).order_by(col(MoleculeState.id))
+    ).all()
+    opts = session.exec(
+        select(ComputationTask).where(
+            col(ComputationTask.state_id).in_([s.id for s in states]),
+            ComputationTask.task_type == TaskType.optimization,
+        ).order_by(col(ComputationTask.id))
+    ).all()
+    checks = results.connectivity_by_task(session, [o.id for o in opts])
+    out = []
+    for state in states:
+        mine = [o for o in opts if o.state_id == state.id]
+        for index, opt in enumerate(mine, 1):
+            found = checks.get(opt.id)
+            if found is not None and not found["ok"]:
+                out.append({"state": state.description, "state_id": state.id, "conformer_index": index,
+                            "opt_task_id": opt.id, "detail": found["detail"]})
+    return out
 
 
 def _stage(session: Session, state: MoleculeState) -> str:

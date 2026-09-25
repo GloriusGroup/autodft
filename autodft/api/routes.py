@@ -372,6 +372,11 @@ def api_molecule_detail(
         if mol is None:
             return JSONResponse(status_code=404, content={"detail": "Molecule not found"})
 
+        from autodft.extraction import results as stored
+
+        checks = stored.connectivity_by_task(
+            session, [t.id for s in mol.states for t in s.tasks if t.task_type == TaskType.optimization],
+        )
         states_data = []
         for state in mol.states:
             tasks_data = []
@@ -394,6 +399,7 @@ def api_molecule_detail(
                         "status": task.status.value,
                         "created_at": task.created_at.isoformat() if task.created_at else None,
                         "jobs": jobs_data,
+                        **({"connectivity": checks[task.id]} if task.id in checks else {}),
                     }
                 )
             states_data.append(
@@ -734,6 +740,11 @@ def api_project_molecules_detail(
             ).all()
             if geom_ids else []
         )
+        from autodft.extraction import results as stored
+
+        checks = stored.connectivity_by_task(
+            session, [t.id for t in tasks if t.task_type == TaskType.optimization],
+        )
 
     # Group helpers
     states_by_mol: dict[int, list[MoleculeState]] = {}
@@ -775,6 +786,8 @@ def api_project_molecules_detail(
                         d for t, d in deps.items()
                         if t == TaskType.singlepoint_soc or t.value.startswith("esd_")
                     ]),
+                    # Only optimisations judged since the bond check existed carry one.
+                    **({"connectivity": checks[opt.id]} if opt.id in checks else {}),
                 })
             # Confsearch status for the state — useful when no opt tasks exist yet.
             cs = next((t for t in tasks_by_state.get(st.id, [])

@@ -129,6 +129,40 @@ def test_no_usable_conformer_is_recorded_once(session, esd, monkeypatch):
     assert _tasks(session, esd["s1"]) == [] and _tasks(session, esd["t1"]) == []
 
 
+def _flag_broken(session, task):
+    """A stored record for *task* whose optimised geometry dissociated."""
+    from autodft.extraction import results
+    from autodft.models import ComputationJob
+    from autodft.models.result import JobResult
+
+    job = ComputationJob(task_id=task.id, attempt=1, job_path=f"/jobs/{task.id}", success=True)
+    session.add(job)
+    session.commit()
+    session.add(JobResult(
+        job_id=job.id, task_id=task.id, job_path=job.job_path, parser_version=results.PARSER_VERSION,
+        data_json=json.dumps({"connectivity": {"ok": False, "lost": True, "fragments": 2, "detail": "dissociated: x"}}),
+    ))
+    session.commit()
+
+
+def test_a_broken_s0_conformer_is_never_s0_star(session, esd):
+    _flag_broken(session, esd["opts"][1])  # the lowest in G
+    photophysics.advance_photophysics(session, Settings())
+    other = esd["opts"][0]
+    assert json.loads(esd["s1"].metadata_json)["esd_seed"] == {"task": other.id}
+    [opt] = _tasks(session, esd["t1"])
+    assert session.get(MoleculeGeometry, opt.input_geometry_id).label == f"seed_from_task_{other.id}"
+
+
+def test_every_s0_conformer_broken_ends_esd(session, esd):
+    for opt in esd["opts"]:
+        _flag_broken(session, opt)
+    photophysics.advance_photophysics(session, Settings())
+    seed = json.loads(esd["s1"].metadata_json)["esd_seed"]
+    assert seed == {"error": "Every S0 conformer's optimised geometry lost bonds of the molecule."}
+    assert _tasks(session, esd["s1"]) == [] and _tasks(session, esd["t1"]) == []
+
+
 def test_paused_and_archived_projects_wait(session, esd, monkeypatch):
     monkeypatch.setattr(photophysics, "paused_project_names", lambda session: {"nho/p"})
     photophysics.advance_photophysics(session, Settings())

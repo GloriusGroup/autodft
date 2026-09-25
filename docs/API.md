@@ -347,7 +347,8 @@ Paginated molecule list.
 
 ### `GET /api/molecules/{id}`
 
-Full molecule tree: states → tasks → jobs.
+Full molecule tree: states → tasks → jobs. An optimisation task judged
+since the broken-bond check existed adds `connectivity` (below).
 
 ### `GET /api/tasks` `?status=&type=&limit=`
 
@@ -427,18 +428,30 @@ plus `esd`: one combined status (`failed` > `pending` > `created` >
 `singlepoint_soc` and every `esd_*` rate task. This is what the
 dashboard's *Project Overview → Molecules* subpage renders.
 
+A conformer whose optimisation was judged since the broken-bond check
+existed adds `connectivity`: `{"ok": false, "lost": true, "fragments": 2,
+"detail": "dissociated: 2 fragments (C4H8F + H); C-H bonds 9 -> 8"}`
+(`ok: true`, `detail: ""` when intact; `lost: false` with `bond formed: ...`
+when only an extra bond appeared). Older conformers carry no key. See
+[`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md#broken-bonds).
+
 ### `GET /api/projects/{name}/state-analysis`
 
 Triplet energies, redox free energies / E vs SCE in MeCN, and 4-point
 Marcus reorganisation energies, for both the `lowest_energy` and the
 `rmsd_matched` conformer-selection modes. Solvation is detected from the
-header text; without it, redox values are reported as ΔG only.
+header text; without it, redox values are reported as ΔG only. A pick
+whose optimisation has a broken-bond check adds `connectivity` (same shape
+as in `molecules-detail`).
 
 ### `GET /api/projects/{name}/state-analysis/export`
 
 The same payload as a multi-sheet XLSX attachment (Summary, Lowest
 Energy, RMSD Matched, Conformers). Energies in Hartree, potentials in V
-vs SCE.
+vs SCE. When any pick has a broken-bond check, the mode sheets add a last
+column `broken_bonds` (`<state>: ok`, `<state>: <detail>` or
+`<state>: unchecked` per pick, joined by ` | `) and
+Conformers a last column `connectivity`.
 
 ### `GET /api/projects/{name}/photophysics` `?molecule_id=`
 
@@ -532,7 +545,9 @@ rate is still open, `"done"` once all six have settled, or `"failed"`
 its own `status`: `"successful"`, `"created"`, `"pending"`, `"failed"`
 (with `reason`), `"waiting"`, `"blocked"` (with `reason` — an upstream
 optimisation or SOC singlepoint failure, named with the `!LibXC(<functional>)`
-fix when that is the cause), `"unavailable"` (the output has no rate
+fix when that is the cause, or an S1/T1 optimisation whose geometry lost
+bonds: `T1 geometry dissociated: ... (optimisation task N); no rates on a
+broken geometry`), `"unavailable"` (the output has no rate
 to parse), or `"incomplete"` (`rate_s` null, `reason` naming the ORCA
 jobs that printed no rate: a multi-job rate is never combined from a
 subset). A successful rate's `rate_s` sums its jobs for `isc` (one job
@@ -591,11 +606,11 @@ With `?molecule_id=`, that molecule's entries add `conformers` (read on
 request, not cached) and drop nothing:
 
     "uvvis": {..., "conformers": [{"conformer_index": 1, "opt_task_id": 90,
-              "weight": 1.0, "transitions": [{"root": 1, "energy_ev": 5.4,
+              "degeneracy": 3, "weight": 1.0, "transitions": [{"root": 1, "energy_ev": 5.4,
               "wavelength_nm": 229.6, "fosc": 0.24}]}]}
 
     "nmr": {..., "conformers": [{"conformer_index": 1, "opt_task_id": 90,
-            "weight": 1.0}],
+            "degeneracy": 3, "weight": 1.0}],
             "nuclei": {"H": [{"atoms": [4, 5], "count": 2,
                               "shielding_ppm": 22.614, "shift_ppm": 8.74}],
                        "C": [...]}}
@@ -611,7 +626,7 @@ Each of `nbo`'s states adds `atoms` (the weighted natural charge, and
 
     "nbo": {"states": [{..., "atoms": [{"index": 0, "element": "C", "charge": 0.812},
                         {"index": 1, "element": "O", "charge": -0.612, "spin": 0.034}],
-                        "conformers": [{"conformer_index": 1, "opt_task_id": 90, "weight": 1.0,
+                        "conformers": [{"conformer_index": 1, "opt_task_id": 90, "degeneracy": 3, "weight": 1.0,
                                         "charges": [{"index": 0, "element": "C", "charge": 0.812,
                                                      "spin": null}, {"index": 1, ...}]}]}]}
 
@@ -621,6 +636,14 @@ state's atoms; a closed-shell state's atoms carry no `spin` key.
 
 `conformer_index` is the conformer's 1-based position among the state's
 optimisation tasks by id, the same numbering as the Molecules page.
+`degeneracy` is GOAT's g of the conformer the optimisation started from (1
+without one); `weight` ∝ g·exp(−E/kT). A conformer whose optimisation was
+flagged by the broken-bond check adds `connectivity_ok: false`; see
+[`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md#weighting).
+
+A molecule any of whose state family's optimisations lost bonds adds
+`broken_bonds` (summary and detail): `[{"state": "T1", "state_id": 23,
+"conformer_index": 1, "opt_task_id": 95, "detail": "dissociated: ..."}]`.
 
 ### `POST /api/projects/{name}/export` `?format=csv|json|files|xlsx|photophysics&all_conformers=true|false`
 

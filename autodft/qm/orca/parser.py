@@ -148,9 +148,11 @@ class OrcaParser(QMEngine):
 
         conformers: Optional[list[str]] = None
         conformer_energies: Optional[list[float]] = None
+        conformer_degeneracies: Optional[list[int]] = None
         if task_type == "confsearch":
             conformers = self.extract_conformer_ensemble(job_path, content)
             conformer_energies = self.extract_conformer_ensemble_energies(content)
+            conformer_degeneracies = self.extract_conformer_ensemble_degeneracies(content)
 
         return QMResult(
             success=success,
@@ -159,6 +161,7 @@ class OrcaParser(QMEngine):
             free_energy_correction=free_energy_correction,
             conformers=conformers,
             conformer_energies=conformer_energies,
+            conformer_degeneracies=conformer_degeneracies,
         )
 
     def generate_input(
@@ -452,33 +455,13 @@ class OrcaParser(QMEngine):
             List of XYZ-format strings, or ``None`` if no ensemble data
             was found.
         """
-        contributions: list[list] = []  # [index, %total, energy]
-        start_reading = False
-
-        for line in content.splitlines():
-            if "# Final ensemble info #" in line:
-                start_reading = True
-                continue
-
-            if start_reading:
-                if "Conformer" in line or "----" in line:
-                    continue
-                parts = line.strip().split()
-                if len(parts) == 5 and parts[0].isdigit():
-                    index = int(parts[0])
-                    energy = float(parts[1])
-                    total_pct = float(parts[3])
-                    contributions.append([index, total_pct, energy])
-
+        contributions = cls._parse_ensemble_table(content)
         if not contributions:
             logger.warning("No conformers found in the output file.")
             return None
 
-        # Sort by energy (ascending) and filter by contribution > 0.1%
-        contributions.sort(key=lambda x: x[2])
-        used = [c[0] for c in contributions if c[1] > 0.1]
-        if len(used) > max_conformers:
-            used = used[:max_conformers]
+        # Already sorted by energy; keep those contributing > 0.1 %.
+        used = [c[0] for c in contributions if c[1] > 0.1][:max_conformers]
 
         ensemble_file = job_path / "input.finalensemble.xyz"
         conformers: list[str] = []
@@ -504,9 +487,21 @@ class OrcaParser(QMEngine):
             return None
         return [c[2] for c in contributions if c[1] > 0.1][:max_conformers]
 
+    @classmethod
+    def extract_conformer_ensemble_degeneracies(
+        cls,
+        content: str,
+        max_conformers: int = 20,
+    ) -> Optional[list[Optional[int]]]:
+        """GOAT's per-conformer degeneracy (``Degen.``), index-aligned like the energies."""
+        contributions = cls._parse_ensemble_table(content)
+        if not contributions:
+            return None
+        return [c[3] for c in contributions if c[1] > 0.1][:max_conformers]
+
     @staticmethod
     def _parse_ensemble_table(content: str) -> list[list]:
-        """Parse the ``# Final ensemble info #`` table into [index, %total, energy].
+        """Parse the ``# Final ensemble info #`` table into [index, %total, energy, degeneracy].
 
         Sorted by energy ascending. Shared by the geometry and energy
         extractors so the two can never drift out of alignment.
@@ -524,7 +519,7 @@ class OrcaParser(QMEngine):
                 parts = line.strip().split()
                 if len(parts) == 5 and parts[0].isdigit():
                     contributions.append(
-                        [int(parts[0]), float(parts[3]), float(parts[1])]
+                        [int(parts[0]), float(parts[3]), float(parts[1]), _degeneracy(parts[2])]
                     )
 
         contributions.sort(key=lambda x: x[2])
@@ -653,3 +648,12 @@ class OrcaParser(QMEngine):
             logger.warning("ORCA aborted the run and the optimisation failed")
             return False
         return True
+
+
+def _degeneracy(text: str) -> Optional[int]:
+    """GOAT's ``Degen.`` entry; None when it is not a positive number."""
+    try:
+        value = int(float(text))
+    except (ValueError, OverflowError):
+        return None
+    return value if value >= 1 else None

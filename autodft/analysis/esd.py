@@ -149,6 +149,12 @@ def _rate(session, extractor, rate, task, inputs, states, flags, detail, herzber
         for state in states:
             if photophysics.input_status(inputs[state]) == "failed":
                 return {"status": "blocked", "reason": _blocker(session, state, inputs[state])}
+        for state in states:
+            broken = results.broken_bonds(session, inputs[state][0])
+            if broken:
+                label = "S0*" if state == "S0" else state
+                return {"status": "blocked", "reason": f"{label} geometry {broken} "
+                        f"(optimisation task {inputs[state][0].id}); no rates on a broken geometry"}
         return {"status": "waiting"}
     if task.status != TaskStatus.successful:
         entry = {"status": task.status.value}
