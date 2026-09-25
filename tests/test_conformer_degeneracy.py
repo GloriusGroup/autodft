@@ -29,6 +29,23 @@ def test_the_degen_column_is_read_like_the_energies():
     assert OrcaParser.extract_conformer_ensemble_degeneracies("no ensemble") is None
 
 
+def test_an_unreadable_degen_entry_is_none_and_never_raises():
+    broken = GOAT.replace("\t     3      20.27", "\t     x      20.27")
+    broken = broken.replace("\t     6      40.30", "\t     inf      40.30")
+    assert OrcaParser.extract_conformer_ensemble_degeneracies(broken) == [None, None, 6, 6, 6]
+
+
+def test_geometries_and_degeneracies_share_one_filter_and_order(tmp_path):
+    atoms = 14
+    blocks = []
+    for i in range(7):
+        blocks.append(f"{atoms}\nconformer {i}\n" + "".join(f"H {i} {k} 0\n" for k in range(atoms)))
+    (tmp_path / "input.finalensemble.xyz").write_text("".join(blocks))
+    conformers = OrcaParser.extract_conformer_ensemble(tmp_path, GOAT)
+    assert [c.splitlines()[1] for c in conformers] == [f"conformer {i}" for i in range(5)]
+    assert len(OrcaParser.extract_conformer_ensemble_degeneracies(GOAT)) == len(conformers)
+
+
 def test_each_conformer_geometry_keeps_its_degeneracy(session, sample_state, sample_header):
     task = ComputationTask(task_type=TaskType.confsearch, state_id=sample_state.id,
                            header_id=sample_header.id)
