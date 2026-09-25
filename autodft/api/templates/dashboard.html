@@ -2778,6 +2778,16 @@
             // Preserve selection across reloads where possible
             if (current && [].some.call(selectEl.options, function (o) { return o.value === current; })) {
                 selectEl.value = current;
+                return;
+            }
+
+            // Nothing selected before: preselect the stored header whose text
+            // matches the package default for this kind, else take the first option.
+            var def = defaults.filter(function (d) { return d.kind === kind; })[0];
+            if (def) {
+                var defText = (def.text || '').trim();
+                var match = relevant.filter(function (c) { return (c.text || '').trim() === defText; })[0];
+                if (match) selectEl.value = 'id:' + match.id;
             }
         }
 

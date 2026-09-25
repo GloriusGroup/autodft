@@ -31,8 +31,6 @@ from autodft.engine.entrypoint_processor import validate_smiles
 from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.models.header import ComputationHeader
 from autodft.qm.orca.defaults import (
-    B3LYP_HEADER_OPTIMIZATION,
-    B3LYP_HEADER_SINGLEPOINT,
     DEFAULT_HEADER_CONFSEARCH,
     DEFAULT_HEADER_OPTIMIZATION,
     DEFAULT_HEADER_SINGLEPOINT,

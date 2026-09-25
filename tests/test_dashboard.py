@@ -197,3 +197,12 @@ def test_category_panels_share_a_row_height():
     html = (TEMPLATE / "dashboard.html").read_text()
     row = html.split('id="categoryDetailsRow"', 1)[1].split(">", 1)[0]
     assert "align-items: stretch" in row
+
+
+def test_header_select_preselects_the_stored_package_default():
+    # When nothing was selected before, populateHeaderSelect picks the
+    # stored header whose text matches the package default for that kind.
+    html = (TEMPLATE / "dashboard.html").read_text()
+    assert "function populateHeaderSelect(selectEl, kind, defaults, custom) {" in html
+    assert "var def = defaults.filter(function (d) { return d.kind === kind; })[0];" in html
+    assert "(c.text || '').trim() === defText" in html
