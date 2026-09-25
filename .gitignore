@@ -35,6 +35,10 @@ autodft.db-wal
 comp_data/
 export_data/
 
+# Development plans and notes: kept locally, never pushed
+docs/superpowers/
+.superpowers/
+
 # OS
 .DS_Store
 Thumbs.db

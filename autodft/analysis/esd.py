@@ -14,10 +14,10 @@ from sqlmodel import Session, col, select
 
 from autodft import categories
 from autodft.engine import photophysics
+from autodft.extraction import results
 from autodft.extraction.extractor import PipelineExtractor
 from autodft.models import ComputationJob, ComputationTask, MoleculeState, TaskStatus, TaskType
-from autodft.qm.orca import esd_inputs, esd_parser
-from autodft.qm.orca.parser import OrcaParser
+from autodft.qm.orca import esd_inputs
 
 EH_TO_EV = 27.211386
 CM_TO_EV = 1 / 8065.544
@@ -102,11 +102,10 @@ def _state_data(session, extractor, inputs) -> dict[str, esd_inputs.StateData]:
     for name, (_, soc) in inputs.items():
         if soc is None or soc.status != TaskStatus.successful:
             continue
-        content = extractor.successful_output(session, soc.id)
-        try:
-            data[name] = esd_inputs.StateData.parse(content or "")
-        except esd_inputs.EsdInputError:
-            continue
+        record = results.for_task(session, soc)
+        state = results.state_data(record) if record is not None else None
+        if state is not None:
+            data[name] = state
     return data
 
 
@@ -140,8 +139,8 @@ def _uks_t1(session, extractor, opt: Optional[ComputationTask]) -> Optional[floa
             ComputationTask.status == TaskStatus.successful,
         )
     ).first()
-    content = extractor.successful_output(session, sp.id) if sp is not None else None
-    return OrcaParser.extract_electronic_energy(content) if content else None
+    record = results.for_task(session, sp) if sp is not None else None
+    return record["energy"] if record else None
 
 
 def _rate(session, extractor, rate, task, inputs, states, flags, detail, herzberg_teller) -> dict:
@@ -156,8 +155,8 @@ def _rate(session, extractor, rate, task, inputs, states, flags, detail, herzber
         if task.status == TaskStatus.failed:
             entry["reason"] = _last_failure(session, task)
         return entry
-    content = extractor.successful_output(session, task.id)
-    found = esd_parser.rates(content) if content else []
+    record = results.for_task(session, task)
+    found = results.rates(record) if record else []
     if not found:
         return {"status": "unavailable"}
     computed = json.loads(task.inputs_json or "{}").get("computed", {})
@@ -246,14 +245,14 @@ def _optimisation_warnings(session, extractor, inputs) -> list[str]:
     for name, (opt, _) in inputs.items():
         if opt is None or opt.status != TaskStatus.successful:
             continue
-        content = extractor.successful_output(session, opt.id)
-        modes = OrcaParser.extract_imaginary_frequencies(content) if content else []
+        record = results.for_task(session, opt)
+        modes = record["imaginary"] if record else []
         if modes:
             label = "S0*" if name == "S0" else name
             flags.append(f"{label} has imaginary modes ({', '.join(f'{m:.0f}' for m in modes)} cm⁻¹); "
                          f"ORCA's ESD treats them as real.")
-        if name == "S1" and content:
-            root = esd_parser.followed_root(content)
+        if name == "S1" and record:
+            root = record["followed_root"]
             if root is not None and root != 1:
                 flags.append(
                     f"The S1 optimisation followed root {root} at its final geometry; the S1 "

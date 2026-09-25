@@ -169,6 +169,39 @@ def requeue_failed(
     logger.info("Requeued %d failed tasks%s", count, project_msg)
 
 
+@app.command("backfill-results")
+def backfill_results(
+    project: Optional[str] = typer.Option(None, "--project", help="Filter by project name"),
+    config: Optional[str] = typer.Option(None, "--config", help="Path to config TOML file"),
+) -> None:
+    """Store parsed results for successful jobs that have none, or an older parser's.
+
+    Reads and parses each chunk before writing it, in one short transaction,
+    so it is safe to run on the controller host while the controller keeps
+    going. The database is SQLite on NFS, so only processes on the controller
+    host may open it. Safe to repeat.
+    """
+    from autodft.config import load_settings
+    from autodft.extraction import results
+
+    init_db(load_settings(config))
+
+    def _report(counts: dict) -> None:
+        console.print(
+            f"  stored {counts['stored']}, current {counts['current']}, "
+            f"missing {counts['missing_output']}, unreadable {counts['unreadable']}"
+        )
+
+    counts = results.backfill(project=project, progress=_report)
+    console.print(
+        f"[green]Done.[/green] Stored {counts['stored']}, "
+        f"[dim]{counts['current']} already current, "
+        f"{counts['missing_output']} missing output, "
+        f"{counts['unreadable']} unreadable.[/dim]"
+    )
+    logger.info("backfill-results: %s", counts)
+
+
 @app.command()
 def cleanup(
     days: int = typer.Option(30, "--days", help="Remove completed entries older than N days"),

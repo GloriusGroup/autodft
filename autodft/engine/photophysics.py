@@ -19,6 +19,7 @@ from sqlmodel import Session, col, select
 
 from autodft.config import Settings
 from autodft.engine.state_machine import _create_singlepoint_task, paused_project_names
+from autodft.extraction import results
 from autodft.extraction.extractor import PipelineExtractor
 from autodft.models import (
     ComputationTask, Molecule, MoleculeGeometry, MoleculeState, TaskStatus, TaskType,
@@ -226,13 +227,18 @@ def prepare_rate_job(
     extractor = PipelineExtractor(molecule.project_name if molecule is not None else "")
     data = {}
     for name, ids in roles.items():
-        content = extractor.successful_output(session, ids["soc"])
-        if content is None:
+        soc_task = session.get(ComputationTask, ids["soc"])
+        record = results.for_task(session, soc_task) if soc_task is not None else None
+        if record is None:
             raise esd_inputs.EsdInputError(f"the {name} SOC singlepoint (task {ids['soc']}) has no output")
-        try:
-            data[name] = esd_inputs.StateData.parse(content)
-        except esd_inputs.EsdInputError as exc:
-            raise esd_inputs.EsdInputError(f"{name} SOC singlepoint (task {ids['soc']}): {exc}") from None
+        state_data = results.state_data(record)
+        if state_data is None:
+            # StateData.parse's one message: fixed text, no arguments.
+            raise esd_inputs.EsdInputError(
+                f"{name} SOC singlepoint (task {ids['soc']}): "
+                "the SOC singlepoint output lacks its roots or its SOC matrix"
+            )
+        data[name] = state_data
     _, _, hessians = esd_inputs.RATES[task.task_type.value]
     job_path.mkdir(parents=True, exist_ok=True)
     for filename, name in hessians.items():

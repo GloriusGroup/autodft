@@ -12,6 +12,7 @@ from autodft import categories
 from autodft.config import Settings
 from autodft.engine import photophysics
 from autodft.engine.state_machine import _create_job_for_task, create_retry_jobs
+from autodft.extraction import results
 from autodft.models import (
     ComputationHeader, ComputationJob, ComputationTask, Molecule, MoleculeGeometry, MoleculeState,
     TaskStatus, TaskType,
@@ -254,3 +255,29 @@ class TestJobFiles:
         _, job, _ = self._job(session, esd, TaskType.esd_isc)
         assert job.success is False
         assert job.fail_reason.startswith("ESD inputs:") and "input.hess" in job.fail_reason
+
+
+def test_stored_records_build_the_same_rate_job_input(session, esd, tmp_path):
+    """prepare_rate_job reads the stored SOC record, not output.out, once one exists."""
+    photophysics.advance_photophysics(session, Settings())
+    task = _rates(session, esd)[TaskType.esd_isc]
+    state = esd["states"]["S1"]
+
+    before_path = tmp_path / "before"
+    before_text, before_hess = photophysics.prepare_rate_job(session, task, state, SP, before_path)
+
+    for job in session.exec(select(ComputationJob).where(ComputationJob.success == True)).all():  # noqa: E712
+        job_task = session.get(ComputationTask, job.task_id)
+        results.store(session, job_task, job, Path(job.job_path))
+    session.commit()
+
+    for name in ("S0", "S1", "T1"):
+        (esd["tmp_path"] / "jobs" / f"soc_{name}" / "output.out").unlink()
+
+    after_path = tmp_path / "after"
+    after_text, after_hess = photophysics.prepare_rate_job(session, task, state, SP, after_path)
+
+    assert after_text == before_text
+    assert after_hess == before_hess
+    for filename in after_hess:
+        assert (after_path / filename).read_bytes() == (before_path / filename).read_bytes()

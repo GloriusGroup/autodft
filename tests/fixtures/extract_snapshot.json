@@ -1,0 +1,1147 @@
+{
+  "1": {
+    "esd_fluor": {
+      "energy": null,
+      "free_energy_correction": null,
+      "rates": [
+        {
+          "e00_cm": 19321.27,
+          "fc_percent": 100.0,
+          "ht_percent": 0.0,
+          "k_squared": 0.739141,
+          "process": "fluorescence",
+          "rate": 4811.336
+        }
+      ]
+    },
+    "esd_ic": {
+      "energy": null,
+      "free_energy_correction": null,
+      "rates": [
+        {
+          "e00_cm": 19321.27,
+          "fc_percent": null,
+          "ht_percent": null,
+          "k_squared": 0.739141,
+          "process": "internal conversion",
+          "rate": 26468.87
+        }
+      ]
+    },
+    "esd_isc": {
+      "energy": null,
+      "free_energy_correction": null,
+      "rates": [
+        {
+          "e00_cm": 5331.09,
+          "fc_percent": 100.0,
+          "ht_percent": 0.0,
+          "k_squared": 0.011699,
+          "process": "ISC",
+          "rate": 9521.341
+        },
+        {
+          "e00_cm": -4602.11,
+          "fc_percent": 100.0,
+          "ht_percent": -0.0,
+          "k_squared": 0.011699,
+          "process": "ISC",
+          "rate": -1.53767e-09
+        }
+      ]
+    },
+    "esd_isc_t1s0": {
+      "energy": null,
+      "free_energy_correction": null,
+      "rates": [
+        {
+          "e00_cm": 13990.18,
+          "fc_percent": 100.0,
+          "ht_percent": 0.0,
+          "k_squared": 0.87003,
+          "process": "ISC",
+          "rate": 0.1598812
+        }
+      ]
+    },
+    "esd_phosp": {
+      "energy": null,
+      "free_energy_correction": null,
+      "rates": [
+        {
+          "e00_cm": 13990.18,
+          "fc_percent": 100.0,
+          "ht_percent": 0.0,
+          "k_squared": 0.87003,
+          "process": "phosphorescence",
+          "rate": 1.187214
+        },
+        {
+          "e00_cm": 13990.18,
+          "fc_percent": 100.0,
+          "ht_percent": 0.0,
+          "k_squared": 0.87003,
+          "process": "phosphorescence",
+          "rate": 0.09715617
+        },
+        {
+          "e00_cm": 13990.18,
+          "fc_percent": 100.0,
+          "ht_percent": 0.0,
+          "k_squared": 0.87003,
+          "process": "phosphorescence",
+          "rate": 132.8943
+        }
+      ]
+    },
+    "esd_risc": {
+      "energy": null,
+      "free_energy_correction": null,
+      "rates": [
+        {
+          "e00_cm": -5331.09,
+          "fc_percent": 102.52,
+          "ht_percent": -2.52,
+          "k_squared": 0.011517,
+          "process": "ISC",
+          "rate": 3.57734e-05
+        }
+      ]
+    },
+    "optimization": {
+      "energy": -230.123456789,
+      "followed_root": 1,
+      "free_energy_correction": 0.042567,
+      "imaginary": [
+        -123.45
+      ],
+      "ir_modes": [
+        {
+          "frequency_cm": 245.98,
+          "intensity_km_mol": 0.02,
+          "mode": 6
+        },
+        {
+          "frequency_cm": 278.24,
+          "intensity_km_mol": 0.16,
+          "mode": 7
+        },
+        {
+          "frequency_cm": 328.4,
+          "intensity_km_mol": 2.51,
+          "mode": 8
+        },
+        {
+          "frequency_cm": 338.81,
+          "intensity_km_mol": 1.57,
+          "mode": 9
+        },
+        {
+          "frequency_cm": 425.17,
+          "intensity_km_mol": 2.05,
+          "mode": 10
+        },
+        {
+          "frequency_cm": 650.69,
+          "intensity_km_mol": 23.21,
+          "mode": 11
+        },
+        {
+          "frequency_cm": 917.12,
+          "intensity_km_mol": 8.1,
+          "mode": 12
+        },
+        {
+          "frequency_cm": 933.52,
+          "intensity_km_mol": 1.68,
+          "mode": 13
+        },
+        {
+          "frequency_cm": 951.95,
+          "intensity_km_mol": 0.0,
+          "mode": 14
+        },
+        {
+          "frequency_cm": 1076.24,
+          "intensity_km_mol": 14.66,
+          "mode": 15
+        },
+        {
+          "frequency_cm": 1163.35,
+          "intensity_km_mol": 1.93,
+          "mode": 16
+        },
+        {
+          "frequency_cm": 1183.44,
+          "intensity_km_mol": 14.6,
+          "mode": 17
+        },
+        {
+          "frequency_cm": 1282.23,
+          "intensity_km_mol": 29.46,
+          "mode": 18
+        },
+        {
+          "frequency_cm": 1347.71,
+          "intensity_km_mol": 0.01,
+          "mode": 19
+        },
+        {
+          "frequency_cm": 1399.95,
+          "intensity_km_mol": 17.02,
+          "mode": 20
+        },
+        {
+          "frequency_cm": 1401.63,
+          "intensity_km_mol": 8.48,
+          "mode": 21
+        },
+        {
+          "frequency_cm": 1456.11,
+          "intensity_km_mol": 1.36,
+          "mode": 22
+        },
+        {
+          "frequency_cm": 1460.76,
+          "intensity_km_mol": 0.66,
+          "mode": 23
+        },
+        {
+          "frequency_cm": 1466.83,
+          "intensity_km_mol": 11.01,
+          "mode": 24
+        },
+        {
+          "frequency_cm": 1482.17,
+          "intensity_km_mol": 7.81,
+          "mode": 25
+        },
+        {
+          "frequency_cm": 3062.09,
+          "intensity_km_mol": 9.46,
+          "mode": 26
+        },
+        {
+          "frequency_cm": 3064.49,
+          "intensity_km_mol": 13.11,
+          "mode": 27
+        },
+        {
+          "frequency_cm": 3127.78,
+          "intensity_km_mol": 3.89,
+          "mode": 28
+        },
+        {
+          "frequency_cm": 3156.38,
+          "intensity_km_mol": 0.35,
+          "mode": 29
+        },
+        {
+          "frequency_cm": 3161.42,
+          "intensity_km_mol": 22.45,
+          "mode": 30
+        },
+        {
+          "frequency_cm": 3176.63,
+          "intensity_km_mol": 6.35,
+          "mode": 31
+        },
+        {
+          "frequency_cm": 3178.41,
+          "intensity_km_mol": 10.83,
+          "mode": 32
+        }
+      ]
+    },
+    "singlepoint": {
+      "energy": null,
+      "free_energy_correction": null
+    },
+    "singlepoint_nmr": {
+      "energy": null,
+      "free_energy_correction": null,
+      "method_fingerprint": [
+        [
+          "b3lyp",
+          "def2-svp",
+          "nmr"
+        ],
+        ""
+      ],
+      "shieldings": [
+        {
+          "anisotropy": 121.597,
+          "element": "C",
+          "index": 0,
+          "isotropic": 6.323
+        },
+        {
+          "anisotropy": 121.594,
+          "element": "C",
+          "index": 1,
+          "isotropic": 6.324
+        },
+        {
+          "anisotropy": -977.037,
+          "element": "O",
+          "index": 2,
+          "isotropic": -365.459
+        },
+        {
+          "anisotropy": -977.03,
+          "element": "O",
+          "index": 3,
+          "isotropic": -365.456
+        },
+        {
+          "anisotropy": 1.141,
+          "element": "H",
+          "index": 4,
+          "isotropic": 22.614
+        },
+        {
+          "anisotropy": 1.141,
+          "element": "H",
+          "index": 5,
+          "isotropic": 22.614
+        }
+      ]
+    },
+    "singlepoint_soc": {
+      "energy": -227.472098393826,
+      "free_energy_correction": null,
+      "soc": {
+        "ground": -227.533851027826,
+        "singlets": [
+          [
+            1,
+            0.086019
+          ],
+          [
+            2,
+            0.134217
+          ],
+          [
+            3,
+            0.236231
+          ],
+          [
+            4,
+            0.266021
+          ],
+          [
+            5,
+            0.273277
+          ],
+          [
+            6,
+            0.285175
+          ],
+          [
+            7,
+            0.305628
+          ],
+          [
+            8,
+            0.306232
+          ],
+          [
+            9,
+            0.311956
+          ],
+          [
+            10,
+            0.321644
+          ]
+        ],
+        "socme": [
+          [
+            1,
+            0,
+            0.0
+          ],
+          [
+            1,
+            1,
+            0.89
+          ],
+          [
+            1,
+            2,
+            0.0
+          ],
+          [
+            1,
+            3,
+            0.0
+          ],
+          [
+            1,
+            4,
+            45.77000218483718
+          ],
+          [
+            1,
+            5,
+            50.96499288727509
+          ],
+          [
+            1,
+            6,
+            11.250004444443567
+          ],
+          [
+            1,
+            7,
+            0.0
+          ],
+          [
+            1,
+            8,
+            0.0
+          ],
+          [
+            1,
+            9,
+            20.19
+          ],
+          [
+            1,
+            10,
+            3.29460164511584
+          ],
+          [
+            2,
+            0,
+            79.5655233125504
+          ],
+          [
+            2,
+            1,
+            0.0
+          ],
+          [
+            2,
+            2,
+            0.45
+          ],
+          [
+            2,
+            3,
+            4.12
+          ],
+          [
+            2,
+            4,
+            0.0
+          ],
+          [
+            2,
+            5,
+            0.0
+          ],
+          [
+            2,
+            6,
+            0.0
+          ],
+          [
+            2,
+            7,
+            37.89906727084454
+          ],
+          [
+            2,
+            8,
+            47.060106247223885
+          ],
+          [
+            2,
+            9,
+            0.0
+          ],
+          [
+            2,
+            10,
+            0.0
+          ],
+          [
+            3,
+            0,
+            0.0
+          ],
+          [
+            3,
+            1,
+            44.3055086868439
+          ],
+          [
+            3,
+            2,
+            0.0
+          ],
+          [
+            3,
+            3,
+            0.0
+          ],
+          [
+            3,
+            4,
+            37.26479571928444
+          ],
+          [
+            3,
+            5,
+            0.024494897427831782
+          ],
+          [
+            3,
+            6,
+            19.31967908636166
+          ],
+          [
+            3,
+            7,
+            0.0
+          ],
+          [
+            3,
+            8,
+            0.0
+          ],
+          [
+            3,
+            9,
+            27.027515609097335
+          ],
+          [
+            3,
+            10,
+            0.05
+          ],
+          [
+            4,
+            0,
+            0.24
+          ],
+          [
+            4,
+            1,
+            0.0
+          ],
+          [
+            4,
+            2,
+            40.285110152511685
+          ],
+          [
+            4,
+            3,
+            12.537695162987495
+          ],
+          [
+            4,
+            4,
+            0.0
+          ],
+          [
+            4,
+            5,
+            0.0
+          ],
+          [
+            4,
+            6,
+            0.0
+          ],
+          [
+            4,
+            7,
+            0.0670820393249937
+          ],
+          [
+            4,
+            8,
+            27.30781023809855
+          ],
+          [
+            4,
+            9,
+            0.0
+          ],
+          [
+            4,
+            10,
+            0.0
+          ],
+          [
+            5,
+            0,
+            42.32465239077575
+          ],
+          [
+            5,
+            1,
+            0.0
+          ],
+          [
+            5,
+            2,
+            6.66
+          ],
+          [
+            5,
+            3,
+            1.04
+          ],
+          [
+            5,
+            4,
+            0.0
+          ],
+          [
+            5,
+            5,
+            0.0
+          ],
+          [
+            5,
+            6,
+            0.0
+          ],
+          [
+            5,
+            7,
+            19.78626543842976
+          ],
+          [
+            5,
+            8,
+            5.240238544188614
+          ],
+          [
+            5,
+            9,
+            0.0
+          ],
+          [
+            5,
+            10,
+            0.0
+          ],
+          [
+            6,
+            0,
+            0.0
+          ],
+          [
+            6,
+            1,
+            48.52
+          ],
+          [
+            6,
+            2,
+            0.0
+          ],
+          [
+            6,
+            3,
+            0.0
+          ],
+          [
+            6,
+            4,
+            4.510022172894497
+          ],
+          [
+            6,
+            5,
+            42.749092388026206
+          ],
+          [
+            6,
+            6,
+            11.12
+          ],
+          [
+            6,
+            7,
+            0.0
+          ],
+          [
+            6,
+            8,
+            0.0
+          ],
+          [
+            6,
+            9,
+            14.82
+          ],
+          [
+            6,
+            10,
+            2.922498930709813
+          ],
+          [
+            7,
+            0,
+            68.47360367324039
+          ],
+          [
+            7,
+            1,
+            0.0
+          ],
+          [
+            7,
+            2,
+            47.35
+          ],
+          [
+            7,
+            3,
+            5.88
+          ],
+          [
+            7,
+            4,
+            0.0
+          ],
+          [
+            7,
+            5,
+            0.0
+          ],
+          [
+            7,
+            6,
+            0.0
+          ],
+          [
+            7,
+            7,
+            27.105838854387073
+          ],
+          [
+            7,
+            8,
+            0.1004987562112089
+          ],
+          [
+            7,
+            9,
+            0.0
+          ],
+          [
+            7,
+            10,
+            0.0
+          ],
+          [
+            8,
+            0,
+            0.01414213562373095
+          ],
+          [
+            8,
+            1,
+            2.91
+          ],
+          [
+            8,
+            2,
+            0.01
+          ],
+          [
+            8,
+            3,
+            0.0
+          ],
+          [
+            8,
+            4,
+            8.28
+          ],
+          [
+            8,
+            5,
+            15.33290579114083
+          ],
+          [
+            8,
+            6,
+            2.35
+          ],
+          [
+            8,
+            7,
+            0.0
+          ],
+          [
+            8,
+            8,
+            0.0
+          ],
+          [
+            8,
+            9,
+            2.23
+          ],
+          [
+            8,
+            10,
+            1.749085475327035
+          ],
+          [
+            9,
+            0,
+            0.0
+          ],
+          [
+            9,
+            1,
+            13.710018234852937
+          ],
+          [
+            9,
+            2,
+            0.0
+          ],
+          [
+            9,
+            3,
+            0.0
+          ],
+          [
+            9,
+            4,
+            16.35000611620681
+          ],
+          [
+            9,
+            5,
+            29.678182221962313
+          ],
+          [
+            9,
+            6,
+            0.18
+          ],
+          [
+            9,
+            7,
+            0.0
+          ],
+          [
+            9,
+            8,
+            0.0
+          ],
+          [
+            9,
+            9,
+            2.75
+          ],
+          [
+            9,
+            10,
+            2.0334453521056326
+          ],
+          [
+            10,
+            0,
+            0.0
+          ],
+          [
+            10,
+            1,
+            5.825633012815002
+          ],
+          [
+            10,
+            2,
+            0.0
+          ],
+          [
+            10,
+            3,
+            0.0
+          ],
+          [
+            10,
+            4,
+            0.9628083921528727
+          ],
+          [
+            10,
+            5,
+            1.2330044606569759
+          ],
+          [
+            10,
+            6,
+            2.0724140512938045
+          ],
+          [
+            10,
+            7,
+            0.0
+          ],
+          [
+            10,
+            8,
+            0.0
+          ],
+          [
+            10,
+            9,
+            1.8170855786120808
+          ],
+          [
+            10,
+            10,
+            2.45
+          ]
+        ],
+        "triplets": [
+          [
+            1,
+            0.061753
+          ],
+          [
+            2,
+            0.107825
+          ],
+          [
+            3,
+            0.140789
+          ],
+          [
+            4,
+            0.1939
+          ],
+          [
+            5,
+            0.227179
+          ],
+          [
+            6,
+            0.23509
+          ],
+          [
+            7,
+            0.265454
+          ],
+          [
+            8,
+            0.265968
+          ],
+          [
+            9,
+            0.296801
+          ],
+          [
+            10,
+            0.297001
+          ]
+        ]
+      }
+    },
+    "singlepoint_uvvis": {
+      "energy": null,
+      "free_energy_correction": null,
+      "transitions": [
+        {
+          "energy_cm": 20386.7,
+          "energy_ev": 2.527633,
+          "fosc": 3.5372e-05,
+          "root": 1,
+          "wavelength_nm": 490.5
+        },
+        {
+          "energy_cm": 43965.5,
+          "energy_ev": 5.451023,
+          "fosc": 0.001863441,
+          "root": 2,
+          "wavelength_nm": 227.5
+        },
+        {
+          "energy_cm": 48573.5,
+          "energy_ev": 6.022348,
+          "fosc": 0.240844161,
+          "root": 3,
+          "wavelength_nm": 205.9
+        },
+        {
+          "energy_cm": 48600.3,
+          "energy_ev": 6.025667,
+          "fosc": 0.003705081,
+          "root": 4,
+          "wavelength_nm": 205.8
+        },
+        {
+          "energy_cm": 49239.7,
+          "energy_ev": 6.104949,
+          "fosc": 0.068668142,
+          "root": 5,
+          "wavelength_nm": 203.1
+        },
+        {
+          "energy_cm": 49382.8,
+          "energy_ev": 6.122684,
+          "fosc": 0.107323132,
+          "root": 6,
+          "wavelength_nm": 202.5
+        },
+        {
+          "energy_cm": 52180.8,
+          "energy_ev": 6.469595,
+          "fosc": 0.031309901,
+          "root": 7,
+          "wavelength_nm": 191.6
+        },
+        {
+          "energy_cm": 53531.6,
+          "energy_ev": 6.637074,
+          "fosc": 0.010210732,
+          "root": 8,
+          "wavelength_nm": 186.8
+        },
+        {
+          "energy_cm": 54135.7,
+          "energy_ev": 6.711974,
+          "fosc": 0.100641773,
+          "root": 9,
+          "wavelength_nm": 184.7
+        },
+        {
+          "energy_cm": 55180.5,
+          "energy_ev": 6.841513,
+          "fosc": 0.000456893,
+          "root": 10,
+          "wavelength_nm": 181.2
+        },
+        {
+          "energy_cm": 55454.2,
+          "energy_ev": 6.875447,
+          "fosc": 0.002204574,
+          "root": 11,
+          "wavelength_nm": 180.3
+        },
+        {
+          "energy_cm": 56411.5,
+          "energy_ev": 6.994135,
+          "fosc": 0.440373874,
+          "root": 12,
+          "wavelength_nm": 177.3
+        },
+        {
+          "energy_cm": 56607.3,
+          "energy_ev": 7.018409,
+          "fosc": 0.127521597,
+          "root": 13,
+          "wavelength_nm": 176.7
+        },
+        {
+          "energy_cm": 56966.2,
+          "energy_ev": 7.062904,
+          "fosc": 0.603491205,
+          "root": 14,
+          "wavelength_nm": 175.5
+        },
+        {
+          "energy_cm": 57103.7,
+          "energy_ev": 7.079953,
+          "fosc": 0.000994911,
+          "root": 15,
+          "wavelength_nm": 175.1
+        },
+        {
+          "energy_cm": 59929.3,
+          "energy_ev": 7.430287,
+          "fosc": 0.016849173,
+          "root": 16,
+          "wavelength_nm": 166.9
+        },
+        {
+          "energy_cm": 61210.1,
+          "energy_ev": 7.589084,
+          "fosc": 0.000657425,
+          "root": 17,
+          "wavelength_nm": 163.4
+        },
+        {
+          "energy_cm": 61264.0,
+          "energy_ev": 7.595766,
+          "fosc": 0.074335534,
+          "root": 18,
+          "wavelength_nm": 163.2
+        },
+        {
+          "energy_cm": 61584.6,
+          "energy_ev": 7.635511,
+          "fosc": 0.000543119,
+          "root": 19,
+          "wavelength_nm": 162.4
+        },
+        {
+          "energy_cm": 62422.4,
+          "energy_ev": 7.739388,
+          "fosc": 0.001752394,
+          "root": 20,
+          "wavelength_nm": 160.2
+        },
+        {
+          "energy_cm": 62642.7,
+          "energy_ev": 7.766707,
+          "fosc": 0.000520641,
+          "root": 21,
+          "wavelength_nm": 159.6
+        },
+        {
+          "energy_cm": 62663.3,
+          "energy_ev": 7.76926,
+          "fosc": 0.015855137,
+          "root": 22,
+          "wavelength_nm": 159.6
+        },
+        {
+          "energy_cm": 62827.8,
+          "energy_ev": 7.789648,
+          "fosc": 0.012281662,
+          "root": 23,
+          "wavelength_nm": 159.2
+        },
+        {
+          "energy_cm": 63578.2,
+          "energy_ev": 7.882687,
+          "fosc": 0.023668065,
+          "root": 24,
+          "wavelength_nm": 157.3
+        },
+        {
+          "energy_cm": 63889.6,
+          "energy_ev": 7.921306,
+          "fosc": 0.000346277,
+          "root": 25,
+          "wavelength_nm": 156.5
+        }
+      ]
+    },
+    "singlepoint_vert_ox": {
+      "energy": null,
+      "free_energy_correction": null
+    },
+    "singlepoint_vert_red": {
+      "energy": null,
+      "free_energy_correction": null
+    },
+    "singlepoint_vert_spin_change": {
+      "energy": null,
+      "free_energy_correction": null
+    }
+  }
+}

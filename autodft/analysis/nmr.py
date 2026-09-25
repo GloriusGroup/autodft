@@ -17,9 +17,10 @@ from sqlmodel import Session, col, select
 from autodft import categories
 from autodft.analysis.spectroscopy import Conformer, ensemble
 from autodft.engine import nmr_references
+from autodft.extraction import results as stored
 from autodft.extraction.extractor import PipelineExtractor
 from autodft.models import ComputationTask, Molecule, MoleculeGeometry, MoleculeState, TaskStatus, TaskType
-from autodft.qm.orca.spectra_parser import Shielding, parse_shieldings
+from autodft.qm.orca.spectra_parser import Shielding
 
 _OPEN = (TaskStatus.created, TaskStatus.pending)
 
@@ -269,14 +270,11 @@ def _status(session, extractor, conformer: Conformer, results: dict) -> str:
 
 
 def _nmr_result(session, extractor, task_id) -> tuple[list[Shielding], Optional[tuple[frozenset[str], str]]]:
-    path = extractor.successful_job_path(session, task_id)
-    if path is None:
+    task = session.get(ComputationTask, task_id)
+    record = stored.for_task(session, task) if task is not None else None
+    if record is None:
         return [], None
-    output = path / "output.out"
-    inp = path / "input.inp"
-    shieldings = parse_shieldings(output.read_text(errors="replace")) if output.exists() else []
-    fingerprint = method_fingerprint(inp.read_text(errors="replace")) if inp.exists() else None
-    return shieldings, fingerprint
+    return stored.shieldings(record), stored.fingerprint(record)
 
 
 def _geometry(session: Session, opt_task_id: int) -> str:

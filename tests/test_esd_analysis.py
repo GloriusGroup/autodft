@@ -13,6 +13,7 @@ from autodft.analysis.esd import EH_TO_EV, molecule_esd
 from autodft.config import Settings
 from autodft.engine import photophysics
 from autodft.engine.state_machine import _create_job_for_task
+from autodft.extraction import results
 from autodft.extraction.extractor import PipelineExtractor
 from autodft.models import ComputationJob, ComputationTask, MoleculeGeometry, TaskStatus, TaskType
 from autodft.qm.orca import esd_inputs
@@ -185,6 +186,26 @@ def test_a_large_displacement_is_flagged(session, done):
     text = (path / "output.out").read_text().replace("0.739141", "8.500000")
     (path / "output.out").write_text(text)
     assert any("K*K" in f for f in _analyse(session, done)["flags"])
+
+
+def _store_every_successful_job(session):
+    """Backfill, scoped to the fixture's own engine (not autodft.db.get_session())."""
+    jobs = session.exec(select(ComputationJob).where(ComputationJob.success == True)).all()  # noqa: E712
+    for job in jobs:
+        task = session.get(ComputationTask, job.task_id)
+        results.store(session, task, job, Path(job.job_path))
+    session.commit()
+
+
+def test_stored_records_give_the_same_payload(session, done):
+    before = _analyse(session, done)
+    _store_every_successful_job(session)
+    assert _analyse(session, done) == before
+
+    for name in ("output.out", "input.inp"):
+        for f in done["tmp_path"].rglob(name):
+            f.unlink()
+    assert _analyse(session, done) == before
 
 
 def test_the_photophysics_payload_has_an_esd_entry(tmp_path):
