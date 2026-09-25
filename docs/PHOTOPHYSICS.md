@@ -159,6 +159,15 @@ retried. A native B88 *singlepoint* header costs the IC rate and therefore
 τ(S1) and the S1 yields, which need k_IC; the other five rates are
 unaffected. Use `!LibXC(B3LYP)` etc. either way.
 
+**Heavy elements.** def2 basis sets put an effective core potential on
+every element past Kr (Rb onwards, e.g. I), and ORCA has no spin-orbit
+integrals for ECPs, so SOCMEs and every rate built on them would be
+wrong. ESD is refused at submission for such molecules unless the
+singlepoint header's `!` line asks for a scalar-relativistic all-electron
+treatment (`ZORA`, `DKH`/`DKH2` or `X2C`, with matching basis sets such as
+`ZORA-def2-TZVP` plus `SARC-ZORA-TZVP` on the heavy atom). Br and lighter
+elements are all-electron in def2 and need nothing extra.
+
 **Caveats.** Rates are harmonic. A job whose Duschinsky rotation is large
 (sum of K\*K over 7) is flagged as unreliable rather than dropped. A
 negative rate is clamped to 0 and flagged. Soft imaginary modes that the

@@ -43,6 +43,10 @@ _NATIVE_B88_RE = re.compile(
     r"|B2GP-PLYP|X3LYP)(?![\w(])",
     re.IGNORECASE | re.MULTILINE,
 )
+# def2 puts an ECP on every element past Kr, and ORCA has no SOC integrals
+# for ECPs; a scalar-relativistic all-electron header is the way around it.
+ECP_MIN_Z = 37
+_RELATIVISTIC_RE = re.compile(r"^\s*!.*\b(?:ZORA|DKH2?|X2C)\b", re.IGNORECASE | re.MULTILINE)
 _SP_CONFLICTS = (
     (re.compile(r"%tddft\b", re.IGNORECASE), "%tddft"),
     (re.compile(r"%cis\b", re.IGNORECASE), "%cis"),
@@ -192,6 +196,14 @@ def rejection(
                 "ESD's S1 optimisation needs TDDFT gradients, which ORCA 6.1 cannot "
                 "compute with a native B88 functional (B3LYP, BLYP, BP86, ...); use "
                 "its LibXC version in the optimisation header, e.g. !LibXC(B3LYP)."
+            )
+        if ((check.get("max_atomic_number") or 0) >= ECP_MIN_Z
+                and not _RELATIVISTIC_RE.search(header_singlepoint or "")):
+            return (
+                "ESD needs spin-orbit coupling, which ORCA cannot compute for "
+                "atoms on an effective core potential (def2 puts one on every "
+                "element past Kr, e.g. I). Use a singlepoint header with a "
+                "scalar-relativistic all-electron setup (ZORA/DKH/X2C) instead."
             )
         window = metadata.get("esd_tn_window_ev", OPTIONS[ESD]["esd_tn_window_ev"])
         if not _number(window) or not 0 <= window <= 1:
