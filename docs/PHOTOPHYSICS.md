@@ -331,7 +331,10 @@ not block the archive: the frozen detail keeps every signal's
 `.hess` alongside `.out`/`.xyz`/`.inp` in the optimisation directories of
 ESD states — S0 with `request_esd`, and every state carrying `esd_role`
 (S1, T1) — since the rate jobs read that Hessian back whenever they
-(re)run. `--dry-run` now counts every file it would delete, not only the
+(re)run. Rate jobs copy ESD's by-products back from scratch
+(`*.FS.hess`, `*.GS.hess`, `*.ES.hess`, `*.spectrum*`, `*.corrfunc`);
+nothing reads them back, so `cleanup-files` deletes them from successful
+rate jobs like any other large file. `--dry-run` now counts every file it would delete, not only the
 ones it actually removes.
 
 ## Deploy

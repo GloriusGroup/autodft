@@ -217,7 +217,9 @@ class TestJobFiles:
         text = (path / "input.inp").read_text()
         assert text.startswith("!B3LYP def2-SVP ESD(PHOSP)\n")
         assert text.rstrip().endswith("*xyzfile 0 1 input.xyz")
-        assert 'cp "$WORK_DIR"/ts.hess "$TMP_DIR"/' in (path / "submit.cmd").read_text()
+        submit = (path / "submit.cmd").read_text()
+        assert 'cp "$WORK_DIR"/ts.hess "$TMP_DIR"/' in submit
+        assert "cp *.FS.hess *.GS.hess *.ES.hess *.spectrum* *.corrfunc" in submit
 
     def test_a_timed_out_ht_rate_job_is_escalated_on_retry(self, session, esd):
         s1 = esd["states"]["S1"]

@@ -116,6 +116,18 @@ def test_cleanup_keeps_the_hessians_esd_needs(db):
     assert deleted == 3 + 2 * 3
 
 
+def test_cleanup_drops_a_rate_jobs_by_products_but_not_the_opt_hessian(db):
+    with get_session() as session:
+        opt = _job_dir(session, db, "esd_t1", {"esd_role": "T1"}, description="T1")
+        rate = _job_dir(session, db, "rate", {"esd_role": "T1"}, task_type=TaskType.esd_isc_t1s0,
+                        description="T1")
+    for name in ("input.FS.hess", "input.spectrum", "input.corrfunc", "initial.hess"):
+        (rate / name).write_text(name)
+    PipelineExtractor("__all__").cleanup_large_files()
+    assert sorted(p.name for p in opt.iterdir()) == ["input.hess", "output.out"]
+    assert sorted(p.name for p in rate.iterdir()) == ["output.out"]
+
+
 def test_a_dry_run_counts_the_same_files(db):
     with get_session() as session:
         _job_dir(session, db, "esd_s1", {"esd_role": "S1"}, description="S1")

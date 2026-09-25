@@ -55,6 +55,19 @@ def test_cubes_are_copied_back_only_when_requested(tmp_path):
     assert 'cp *.cube "$WORK_DIR"/ 2>/dev/null || true' in with_cubes
 
 
+ESD_COPY = 'cp *.FS.hess *.GS.hess *.ES.hess *.spectrum* *.corrfunc "$WORK_DIR"/ 2>/dev/null || true'
+
+
+def test_esd_by_products_are_copied_back_only_when_requested(tmp_path):
+    without = generate_submit_script(tmp_path / "a", "j", 1, 2000, "1-00:00:00", "CPU").read_text()
+    with_esd = generate_submit_script(
+        tmp_path / "b", "j", 1, 2000, "1-00:00:00", "CPU", keep_esd_files=True,
+    ).read_text()
+    assert ESD_COPY not in without
+    assert ESD_COPY + "\ncp input.finalensemble.xyz" in with_esd
+    assert without == with_esd.replace(ESD_COPY + "\n", "").replace(str(tmp_path / "b"), str(tmp_path / "a"))
+
+
 def test_stage_configs():
     settings = Settings()
     assert settings.pipeline.excited_optimization.time_limit == "4-00:00:00"
@@ -120,3 +133,7 @@ def test_esd_optimisations_keep_their_hessian(session, tmp_path):
 
 def test_other_optimisations_do_not(session, tmp_path):
     assert "cp *.hess" not in _opt_job_script(session, tmp_path, {})
+
+
+def test_only_rate_jobs_keep_the_esd_by_products(session, tmp_path):
+    assert "*.corrfunc" not in _opt_job_script(session, tmp_path, {categories.ESD: True})

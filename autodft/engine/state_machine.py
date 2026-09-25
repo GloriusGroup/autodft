@@ -1115,6 +1115,7 @@ def _generate_job_files(
         nice=settings.slurm.nice,
         keep_hessian=_keeps_hessian(state, task),
         keep_cubes=_keeps_cubes(state, task),
+        keep_esd_files=task.task_type.value.startswith("esd_"),
         extra_inputs=extra_inputs,
     )
 

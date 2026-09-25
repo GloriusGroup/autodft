@@ -71,6 +71,7 @@ cp *.out *.txt *.xyz "$WORK_DIR"/ 2>/dev/null || true
 {% endif %}{% if keep_densities %}cp *.densities *.densitiesinfo *.cube   "$WORK_DIR"/ 2>/dev/null || true
 {% endif %}{% if keep_hessian %}cp *.hess                               "$WORK_DIR"/ 2>/dev/null || true
 {% endif %}{% if keep_cubes %}cp *.cube "$WORK_DIR"/ 2>/dev/null || true
+{% endif %}{% if keep_esd_files %}cp *.FS.hess *.GS.hess *.ES.hess *.spectrum* *.corrfunc "$WORK_DIR"/ 2>/dev/null || true
 {% endif %}cp input.finalensemble.xyz              "$WORK_DIR"/ 2>/dev/null || true
 
 cd /
