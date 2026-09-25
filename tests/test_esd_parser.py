@@ -87,6 +87,15 @@ class TestRates:
         found = esd_parser.rates(text)
         assert [r.socme_cm for r in found] == [pytest.approx(13.886, abs=1e-3), pytest.approx(50.564, abs=1e-3)]
 
+    def test_job_numbers_skip_a_job_without_a_rate(self):
+        rate = "The calculated ISC rate constant is\t\t1.0e+00 s-1\n"
+        text = "".join(
+            f"$$$$$$$$$$$$$$$$  JOB NUMBER  {i} $$$$$$$$$$$$$$\n" + (rate + DONE if i != 2 else "aborted\n")
+            for i in (1, 2, 3)
+        )
+        assert [r.job for r in esd_parser.rates(text)] == [1, 3]
+        assert esd_parser.rates(rate + DONE)[0].job is None
+
     def test_herzberg_teller_split_without_percent_sign(self):
         [rate] = esd_parser.rates(_read("isc_ht.out"))
         assert (rate.rate, rate.fc_percent, rate.ht_percent) == (1.691880e4, 25.67, 74.33)

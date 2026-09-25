@@ -529,8 +529,10 @@ rate is still open, `"done"` once all six have settled, or `"failed"`
 its own `status`: `"successful"`, `"created"`, `"pending"`, `"failed"`
 (with `reason`), `"waiting"`, `"blocked"` (with `reason` — an upstream
 optimisation or SOC singlepoint failure, named with the `!LibXC(<functional>)`
-fix when that is the cause), or `"unavailable"` (the output has no rate
-to parse). A successful rate's `rate_s` sums its jobs for `isc` (one job
+fix when that is the cause), `"unavailable"` (the output has no rate
+to parse), or `"incomplete"` (`rate_s` null, `reason` naming the ORCA
+jobs that printed no rate: a multi-job rate is never combined from a
+subset). A successful rate's `rate_s` sums its jobs for `isc` (one job
 per T_n channel within `tn_window_ev` of S1) and averages them for every
 other rate; `fluorescence` also reports `e00_ev`, its 0-0 energy. An
 FC-mode `isc`, `isc_t1_s0` or `risc` rate whose SOCME printed as

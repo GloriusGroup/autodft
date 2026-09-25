@@ -161,12 +161,18 @@ def _rate(session, extractor, rate, task, inputs, states, flags, detail, herzber
         return {"status": "unavailable"}
     computed = json.loads(task.inputs_json or "{}").get("computed", {})
     jobs = computed.get("jobs") or []
-    if len(jobs) != len(found):
-        flags.append(f"{name}: {len(found)} rates for {len(jobs)} jobs; per-job inputs not shown.")
-        jobs = [{} for _ in found]
+    pairs = list(zip(jobs, found))
+    incomplete = None
+    if not jobs:
+        flags.append(f"{name}: {len(found)} rates for 0 jobs; per-job inputs not shown.")
+        pairs = [({}, r) for r in found]
+    elif len(jobs) != len(found):
+        incomplete = _incomplete(jobs, found)
+        flags.append(f"{name}: {incomplete}")
+        pairs = [(jobs[r.job - 1] if r.job and r.job <= len(jobs) else {}, r) for r in found]
     fc_mode = rate in esd_inputs.FC_RATES and not herzberg_teller
     values, rows, zero_socme = [], [], 0
-    for job, found_rate in zip(jobs, found):
+    for job, found_rate in pairs:
         label = name + (f" T{job['triplet']}" if "triplet" in job else "")
         value = found_rate.rate
         if value < 0:
@@ -193,8 +199,13 @@ def _rate(session, extractor, rate, task, inputs, states, flags, detail, herzber
             if found_rate.socme_cm is not None:
                 row["socme_cm"] = found_rate.socme_cm
         rows.append(row)
+    if incomplete is not None:
+        entry: dict = {"status": "incomplete", "rate_s": None, "reason": incomplete}
+        if detail:
+            entry["jobs"] = rows
+        return entry
     total = sum(values) if computed.get("combine") == "sum" else sum(values) / len(values)
-    entry: dict = {"status": "successful", "rate_s": total}
+    entry = {"status": "successful", "rate_s": total}
     if fc_mode and jobs and zero_socme == len(jobs):
         entry["socme_zero"] = True
     e00 = [r.e00_cm for r in found if r.e00_cm is not None]
@@ -203,6 +214,20 @@ def _rate(session, extractor, rate, task, inputs, states, flags, detail, herzber
     if detail:
         entry["jobs"] = rows
     return entry
+
+
+def _incomplete(jobs: list[dict], found) -> str:
+    """Why a multi-job rate is not combined: which ORCA jobs printed no rate."""
+    text = f"{len(found)} rates for {len(jobs)} ORCA jobs"
+    numbers = {r.job for r in found}
+    if None not in numbers:
+        missing = [
+            f"job {i}" + "".join(f" {key} {job[key]}" for key in ("triplet", "sublevel") if key in job)
+            for i, job in enumerate(jobs, 1) if i not in numbers
+        ]
+        if missing:
+            text += f"; no rate from {', '.join(missing)}"
+    return text + "; the rest are not combined into a rate."
 
 
 def _blocker(session, state: str, pair) -> str:

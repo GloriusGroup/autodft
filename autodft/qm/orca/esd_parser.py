@@ -26,6 +26,7 @@ _SPLIT = re.compile(r"^with\s+(-?[\d.]+)%? from FC and\s+(-?[\d.]+)%? from HT", 
 _K_SQUARED = re.compile(r"^The sum of K\*K is:\s+(\S+)", re.MULTILINE)
 _E00 = re.compile(r"^0-0 energy difference:\s+(-?[\d.]+) cm-1", re.MULTILINE)
 _REFERENCE_SOC = re.compile(r"^Reference SOC \(Re and Im\):\s+(\S+),\s*(\S+)", re.MULTILINE)
+_JOB_NUMBER = re.compile(r"JOB NUMBER\s+(\d+)")
 _LIBXC = re.compile(r"Third functional derivative of a B88|Native implementation of 3d derivative")
 
 
@@ -41,6 +42,8 @@ class Rate:
     e00_cm: Optional[float] = None
     # |SOC| (cm-1) of this job's own sublevel pair, from ORCA's "Reference SOC" line.
     socme_cm: Optional[float] = None
+    # ORCA's "JOB NUMBER" (1-based); None in a single-job output.
+    job: Optional[int] = None
 
 
 def ground_energy(content: str) -> Optional[float]:
@@ -121,6 +124,7 @@ def rates(content: str) -> list[Rate]:
         k_squared = _K_SQUARED.findall(job)
         e00 = _E00.findall(job)
         soc = _REFERENCE_SOC.findall(job)
+        number = _JOB_NUMBER.findall(job)
         found.append(Rate(
             process=rate[-1][0],
             rate=float(rate[-1][1]),
@@ -129,6 +133,7 @@ def rates(content: str) -> list[Rate]:
             k_squared=float(k_squared[-1]) if k_squared else None,
             e00_cm=float(e00[-1]) if e00 else None,
             socme_cm=math.hypot(float(soc[-1][0]), float(soc[-1][1])) * EH_TO_CM if soc else None,
+            job=int(number[-1]) if number else None,
         ))
     return found
 

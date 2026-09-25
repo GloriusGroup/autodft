@@ -306,7 +306,7 @@ class TestZeroSocme:
 ACETONE_SOC = ("-6.326655e-05, -5.262007e-07", "0.000000e+00, 2.303857e-04", "-6.326690e-05, 5.261551e-07")
 
 
-def _ht_t1s0(session, esd, n_outputs=3):
+def _ht_t1s0(session, esd, present=(1, 2, 3)):
     s1 = esd["states"]["S1"]
     s1.metadata_json = json.dumps({**json.loads(s1.metadata_json), categories.ESD_HT: True})
     task = _rates(session, esd)[TaskType.esd_isc_t1s0]
@@ -320,7 +320,9 @@ def _ht_t1s0(session, esd, n_outputs=3):
     job = session.exec(select(ComputationJob).where(ComputationJob.task_id == task.id)).one()
     one = (FIXTURES / "t1s0.out").read_text()
     Path(job.job_path, "output.out").write_text("".join(
-        one.replace("0.000000e+00, 5.261203e-08", soc) for soc in ACETONE_SOC[:n_outputs]
+        f"$$$$$$$$$$$$$$$$  JOB NUMBER  {i} $$$$$$$$$$$$$$\n"
+        + (one.replace("0.000000e+00, 5.261203e-08", soc) if i in present else "ORCA finished by error\n")
+        for i, soc in enumerate(ACETONE_SOC, 1)
     ))
     session.commit()
 
@@ -338,3 +340,31 @@ def test_fc_rows_keep_the_builders_socme(session, done):
     [job] = _analyse(session, done)["rates"]["isc_t1_s0"]["jobs"]
     task = _rates(session, done)[TaskType.esd_isc_t1s0]
     assert job["socme_cm"] == json.loads(task.inputs_json)["computed"]["jobs"][0]["socme_cm"]
+
+
+# ----------------------------------------------------------------------
+# A2: a multi-job rate missing one job's rate is not combined.
+# ----------------------------------------------------------------------
+
+def test_a_missing_sublevel_leaves_the_rate_incomplete(session, done):
+    _ht_t1s0(session, done, present=(1, 3))
+    result = _analyse(session, done)
+    entry = result["rates"]["isc_t1_s0"]
+    assert entry["status"] == "incomplete" and entry["rate_s"] is None
+    assert "no rate from job 2 triplet 1 sublevel 0" in entry["reason"]
+    assert [j["sublevel"] for j in entry["jobs"]] == [-1, 1]
+    assert any(f.startswith("isc_t1_s0: 2 rates for 3 ORCA jobs") for f in result["flags"])
+    assert "tau_t1_us" not in result["derived"]
+    assert result["status"] == "done"
+
+
+def test_an_unnumbered_mismatch_is_incomplete_too(session, done):
+    task = _rates(session, done)[TaskType.esd_isc]
+    job = session.exec(select(ComputationJob).where(ComputationJob.task_id == task.id)).one()
+    text = (FIXTURES / "isc_two_channels.out").read_text()
+    end = "****ORCA ESD FINISHED WITHOUT ERROR****"
+    Path(job.job_path, "output.out").write_text(text.split(end)[0] + end + "\n")
+    entry = _analyse(session, done, detail=False)["rates"]["isc"]
+    assert entry["status"] == "incomplete" and entry["rate_s"] is None
+    assert entry["reason"].startswith("1 rates for 2 ORCA jobs;") and "no rate from" not in entry["reason"]
+    assert "jobs" not in entry
