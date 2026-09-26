@@ -81,7 +81,9 @@ two methods (`nmr_method`):
   shieldings from the relaxed MP2 density last, and that is what is read.
   `pcSseg-3` covers H–Kr in ORCA 6.1, so `dh` is refused for a molecule
   with a heavier element. Much more expensive than the default (CH₃F in
-  MeCN: 3 min on 2 cores); CPCM is accepted with it.
+  MeCN: 3 min on 2 cores); CPCM is accepted with it. These jobs run on
+  the `[pipeline.nmr_dh]` stage (4 days by default) instead of the
+  singlepoint one.
 
 The reference compounds run in the same method, so references and
 molecules share one NMR method. NMR needs a closed-shell singlet reference

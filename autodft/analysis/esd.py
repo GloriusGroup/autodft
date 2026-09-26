@@ -78,7 +78,8 @@ def molecule_esd(
             )
         ).all()
     }
-    wanted = photophysics.wanted_rates(metadata)
+    # Molecules from before the esd_ic option always asked for IC.
+    wanted = photophysics.wanted_rates(metadata) if "esd_ic" in metadata else tuple(esd_inputs.RATES)
     for rate, (initial, final, _) in esd_inputs.RATES.items():
         if rate not in tasks and rate not in wanted:
             out["rates"][NAMES[rate]] = {"status": NOT_REQUESTED}

@@ -126,7 +126,7 @@ def test_lifetimes_and_yields(session, done):
 @pytest.fixture()
 def done_without_ic(session, esd):
     s1 = esd["states"]["S1"]
-    s1.metadata_json = json.dumps({k: v for k, v in json.loads(s1.metadata_json).items() if k != "esd_ic"})
+    s1.metadata_json = json.dumps({**json.loads(s1.metadata_json), "esd_ic": False})
     session.add(s1)
     session.commit()
     _uks_singlepoint(session, esd)
@@ -155,6 +155,14 @@ def test_an_existing_ic_task_is_shown_without_the_option(session, done):
     assert result["rates"]["ic"]["rate_s"] == pytest.approx(2.646887e4)
     assert "phi_ic" in result["derived"]
     assert not any("internal conversion" in f for f in result["flags"])
+
+
+def test_a_molecule_from_before_the_option_still_expects_ic(session, esd):
+    s1 = esd["states"]["S1"]
+    s1.metadata_json = json.dumps({k: v for k, v in json.loads(s1.metadata_json).items() if k != "esd_ic"})
+    session.add(s1)
+    session.commit()
+    assert _analyse(session, esd)["rates"]["ic"]["status"] != "not requested"
 
 
 def test_the_workbook_says_not_requested(session, done_without_ic):

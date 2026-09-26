@@ -78,6 +78,17 @@ def test_nbo_archive_is_copied_back_only_when_requested(tmp_path):
     assert without == with_nbo.replace(copy + "\n", "").replace(str(tmp_path / "b"), str(tmp_path / "a"))
 
 
+def test_double_hybrid_nmr_gets_the_long_stage():
+    settings = Settings()
+    dh = MoleculeState(id=1, molecule_id=1, description="S0", charge=0, multiplicity=1,
+                       metadata_json=json.dumps({"request_spec_nmr": True, "nmr_method": "dh"}))
+    plain = MoleculeState(id=2, molecule_id=1, description="S0", charge=0, multiplicity=1,
+                          metadata_json=json.dumps({"request_spec_nmr": True}))
+    assert _get_stage_config(settings, TaskType.singlepoint_nmr, dh) is settings.pipeline.nmr_dh
+    assert settings.pipeline.nmr_dh.time_limit == "4-00:00:00"
+    assert _get_stage_config(settings, TaskType.singlepoint_nmr, plain) is settings.pipeline.singlepoint
+
+
 def test_stage_configs():
     settings = Settings()
     assert settings.pipeline.excited_optimization.time_limit == "4-00:00:00"

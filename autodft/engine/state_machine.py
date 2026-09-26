@@ -1442,6 +1442,9 @@ def _get_stage_config(
         if state is not None and _esd_role(state) == "S1":
             return settings.pipeline.excited_optimization
         return settings.pipeline.optimization
+    elif task_type == TaskType.singlepoint_nmr and state is not None and \
+            json.loads(state.metadata_json or "{}").get("nmr_method") == "dh":
+        return settings.pipeline.nmr_dh
     else:
         # All singlepoint variants share the singlepoint config
         return settings.pipeline.singlepoint
