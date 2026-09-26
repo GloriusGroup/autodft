@@ -175,7 +175,7 @@ def test_the_dashboard_offers_esd(client):
     for needle in ('id="requestEsd"', 'id="requestEsdHt"', 'id="esdTnWindow"', 'id="esdTemperature"',
                    'id="esdHeaderNote"', "request_esd:", "commonBody.request_esd_ht =",
                    "'requestEsd'", "var B88_RE", "function ppEsdSummary(", "function ppEsd(",
-                   "<th>ESD</th>"):
+                   "<th>ESD</th>", 'id="esdIc"', "commonBody.esd_ic =", "r.status !== 'not requested'"):
         assert needle in html, needle
 
 

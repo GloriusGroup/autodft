@@ -36,6 +36,7 @@ NAMES = {
     "esd_isc_t1s0": "isc_t1_s0", "esd_phosp": "phosphorescence",
 }
 _OPEN = ("waiting", "created", "pending")
+NOT_REQUESTED = "not requested"
 
 
 def molecule_esd(
@@ -77,7 +78,11 @@ def molecule_esd(
             )
         ).all()
     }
+    wanted = photophysics.wanted_rates(metadata)
     for rate, (initial, final, _) in esd_inputs.RATES.items():
+        if rate not in tasks and rate not in wanted:
+            out["rates"][NAMES[rate]] = {"status": NOT_REQUESTED}
+            continue
         out["rates"][NAMES[rate]] = _rate(
             session, extractor, rate, tasks.get(rate), inputs, (initial, final), out["flags"], detail,
             out["herzberg_teller"],
@@ -93,6 +98,8 @@ def molecule_esd(
     out["derived"] = _derived(out["rates"])
     if out["derived"].get("tau_s1_ns") is not None and out["rates"]["isc"].get("socme_zero"):
         out["flags"].append("τ(S1) and the S1 yields count k_ISC as 0.")
+    if out["derived"].get("tau_s1_ns") is not None and out["rates"]["ic"]["status"] == NOT_REQUESTED:
+        out["flags"].append("τ(S1) and the S1 yields exclude internal conversion (not requested).")
     if out["derived"].get("tau_t1_us") is not None:
         for rate_key, label in (("isc_t1_s0", "T1→S0 ISC"), ("risc", "RISC")):
             if out["rates"][rate_key].get("socme_zero"):
@@ -319,11 +326,14 @@ def _derived(rates: dict) -> dict:
         return entry.get("rate_s") if entry.get("status") == "successful" else None
 
     out = {}
-    s1 = [k("fluorescence"), k("isc"), k("ic")]
+    # Without an IC job (not requested) the S1 decay is fluorescence and ISC only.
+    ic_wanted = rates.get("ic", {}).get("status") != NOT_REQUESTED
+    s1 = [k("fluorescence"), k("isc"), *((k("ic"),) if ic_wanted else ())]
     if all(v is not None for v in s1) and sum(s1) > 0:
         total = sum(s1)
-        out.update(tau_s1_ns=1e9 / total, phi_fluorescence=s1[0] / total,
-                   phi_isc=s1[1] / total, phi_ic=s1[2] / total)
+        out.update(tau_s1_ns=1e9 / total, phi_fluorescence=s1[0] / total, phi_isc=s1[1] / total)
+        if ic_wanted:
+            out["phi_ic"] = s1[2] / total
     t1 = [k("phosphorescence"), k("isc_t1_s0"), k("risc")]
     if all(v is not None for v in t1) and sum(t1) > 0:
         total = sum(t1)

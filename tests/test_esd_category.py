@@ -101,18 +101,25 @@ class TestRejection:
 
 def test_esd_settings_for_the_excited_states():
     assert categories.esd_settings({**ESD, "esd_temperature_k": 77}) == {
-        categories.ESD_HT: False, "esd_tn_window_ev": 0.3, "esd_temperature_k": 77,
+        categories.ESD_HT: False, "esd_tn_window_ev": 0.3, "esd_temperature_k": 77, "esd_ic": False,
     }
+    assert categories.esd_settings({**ESD, "esd_ic": True})["esd_ic"] is True
     assert categories.esd_settings({**ESD, categories.ESD_HT: True})[categories.ESD_HT] is True
 
 
 def test_options_default_and_ride_with_the_category():
-    assert categories.options(ESD) == {"esd_tn_window_ev": 0.3, "esd_temperature_k": 298.15}
+    assert categories.options(ESD) == {"esd_tn_window_ev": 0.3, "esd_temperature_k": 298.15, "esd_ic": False}
     assert categories.snapshot({**ESD, categories.ESD_HT: True, "esd_tn_window_ev": 0.1}) == {
         categories.ESD: True, categories.ESD_HT: True,
-        "esd_tn_window_ev": 0.1, "esd_temperature_k": 298.15,
+        "esd_tn_window_ev": 0.1, "esd_temperature_k": 298.15, "esd_ic": False,
     }
-    assert categories.snapshot({"esd_tn_window_ev": 0.1}) == {}
+    assert categories.snapshot({"esd_tn_window_ev": 0.1, "esd_ic": True}) == {}
+
+
+@pytest.mark.parametrize("value", ["yes", 1, None])
+def test_esd_ic_must_be_a_bool(value):
+    reason = categories.rejection(SINGLET, {**ESD, "esd_ic": value}, OPT_ESD, SP)
+    assert "esd_ic" in reason
 
 
 class TestApi:
@@ -126,6 +133,15 @@ class TestApi:
         meta = _metadata(r.json()["id"])
         assert (meta["request_esd"], meta["request_esd_ht"]) == (True, True)
         assert (meta["esd_tn_window_ev"], meta["esd_temperature_k"]) == (0.3, 77)
+        assert meta["esd_ic"] is False
+
+    def test_ic_is_opt_in(self, api):
+        client, key = api
+        r = client.post("/api/submit", headers=key, json={
+            "smiles": "c1ccccc1", "project": "p", "request_esd": True, "esd_ic": True,
+        })
+        assert r.status_code == 200, r.text
+        assert _metadata(r.json()["id"])["esd_ic"] is True
 
     def test_esd_is_refused_for_a_radical(self, api):
         client, key = api
@@ -152,7 +168,7 @@ class TestApi:
 def test_cli_options():
     flags = cli._category_options_to_flags(
         uvvis=False, ir=False, esd=True, esd_ht=False, nmr=False,
-        esd_tn_window_ev=0.1, esd_temperature_k=100.0,
+        esd_tn_window_ev=0.1, esd_temperature_k=100.0, esd_ic=True,
     )
     meta = json.loads(cli._build_request_metadata(
         project_name="nho/p", project_author="nho",
@@ -161,4 +177,4 @@ def test_cli_options():
         max_conformers_s0=1, max_conformers_t1=1, max_conformers_ox=1, max_conformers_red=1,
         category_flags=flags,
     ))
-    assert (meta["esd_tn_window_ev"], meta["esd_temperature_k"]) == (0.1, 100.0)
+    assert (meta["esd_tn_window_ev"], meta["esd_temperature_k"], meta["esd_ic"]) == (0.1, 100.0, True)

@@ -77,7 +77,7 @@ _NBO_KEYWORDS_RE = re.compile(r"^[A-Za-z0-9 =_.,+-]{0,200}\Z")
 # Settings each category takes, with defaults. Stored -- defaults filled in --
 # only when the category is requested.
 OPTIONS: dict[str, dict] = {
-    ESD: {"esd_tn_window_ev": 0.3, "esd_temperature_k": 298.15},
+    ESD: {"esd_tn_window_ev": 0.3, "esd_temperature_k": 298.15, "esd_ic": False},
     UVVIS: {"uvvis_nroots": 20, "uvvis_tda": False},
     NMR: {"nmr_nuclei": ["H", "C", "F"], "nmr_method": "singlepoint"},
     DENSITIES: {
@@ -215,6 +215,8 @@ def rejection(
         temperature = metadata.get("esd_temperature_k", OPTIONS[ESD]["esd_temperature_k"])
         if not _number(temperature) or not 0 < temperature <= 1000:
             return "The ESD temperature must be above 0 and at most 1000 K (esd_temperature_k)."
+        if not isinstance(metadata.get("esd_ic", False), bool):
+            return "esd_ic must be true or false."
 
     if UVVIS in wanted:
         nroots = metadata.get("uvvis_nroots", OPTIONS[UVVIS]["uvvis_nroots"])

@@ -202,6 +202,7 @@ class SubmitRequest(BaseModel):
     nmr_method: str = "singlepoint"
     esd_tn_window_ev: float = 0.3
     esd_temperature_k: float = 298.15
+    esd_ic: bool = False
     density_eldens: bool = True
     density_spindens: bool = True
     density_grid: int = 75
@@ -2078,6 +2079,7 @@ def _category_flags(body: SubmitRequest) -> dict:
         "nmr_method": body.nmr_method,
         "esd_tn_window_ev": body.esd_tn_window_ev,
         "esd_temperature_k": body.esd_temperature_k,
+        "esd_ic": body.esd_ic,
         "density_eldens": body.density_eldens,
         "density_spindens": body.density_spindens,
         "density_grid": body.density_grid,

@@ -123,6 +123,55 @@ def test_lifetimes_and_yields(session, done):
     assert derived["phi_phosphorescence"] == pytest.approx(k_p / k_t1)
 
 
+@pytest.fixture()
+def done_without_ic(session, esd):
+    s1 = esd["states"]["S1"]
+    s1.metadata_json = json.dumps({k: v for k, v in json.loads(s1.metadata_json).items() if k != "esd_ic"})
+    session.add(s1)
+    session.commit()
+    _uks_singlepoint(session, esd)
+    _finish_rates(session, esd)
+    return esd
+
+
+def test_ic_not_requested(session, done_without_ic):
+    result = _analyse(session, done_without_ic)
+    assert result["status"] == "done"
+    assert result["rates"]["ic"] == {"status": "not requested"}
+    derived = result["derived"]
+    k_s1 = 9.521341e3 + 4.811336e3
+    assert derived["tau_s1_ns"] == pytest.approx(1e9 / k_s1)
+    assert derived["phi_fluorescence"] + derived["phi_isc"] == pytest.approx(1.0)
+    assert "phi_ic" not in derived
+    assert "τ(S1) and the S1 yields exclude internal conversion (not requested)." in result["flags"]
+
+
+def test_an_existing_ic_task_is_shown_without_the_option(session, done):
+    s1 = done["states"]["S1"]
+    s1.metadata_json = json.dumps({k: v for k, v in json.loads(s1.metadata_json).items() if k != "esd_ic"})
+    session.add(s1)
+    session.commit()
+    result = _analyse(session, done)
+    assert result["rates"]["ic"]["rate_s"] == pytest.approx(2.646887e4)
+    assert "phi_ic" in result["derived"]
+    assert not any("internal conversion" in f for f in result["flags"])
+
+
+def test_the_workbook_says_not_requested(session, done_without_ic):
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    from autodft.analysis.photophysics_export import build_xlsx
+
+    esd = _analyse(session, done_without_ic)
+    payload = {"project": "nho/p", "molecules": [{"id": 1, "smiles": "O=CC=O", "state_id": 1, "esd": esd}]}
+    rows = list(load_workbook(BytesIO(build_xlsx(payload)))["ESD"].iter_rows(values_only=True))
+    row = dict(zip(rows[0], rows[1]))
+    assert row["k_IC"] == "not requested" and row["phi_IC"] is None
+    assert row["k_F"] == pytest.approx(4.811336e3)
+
+
 def test_the_summary_leaves_out_the_details(session, done):
     result = _analyse(session, done, detail=False)
     assert "jobs" not in result["rates"]["isc"] and "socme_cm" not in result

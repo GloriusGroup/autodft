@@ -79,7 +79,7 @@ def _category_options_to_flags(
     uvvis: bool, ir: bool, esd: bool, esd_ht: bool, nmr: bool,
     uvvis_nroots: int = 20, uvvis_tda: bool = False, nmr_nuclei: Optional[list] = None,
     esd_tn_window_ev: float = 0.3, esd_temperature_k: float = 298.15,
-    nmr_method: str = "singlepoint",
+    nmr_method: str = "singlepoint", esd_ic: bool = False,
     densities: bool = False, density_eldens: bool = True, density_spindens: bool = True,
     density_grid: int = 75, density_eldens_file: str = "ElDens.cube",
     density_spindens_file: str = "SpinDens.cube",
@@ -102,6 +102,7 @@ def _category_options_to_flags(
         "esd_tn_window_ev": esd_tn_window_ev,
         "esd_temperature_k": esd_temperature_k,
         "nmr_method": nmr_method,
+        "esd_ic": esd_ic,
         "density_eldens": density_eldens,
         "density_spindens": density_spindens,
         "density_grid": density_grid,
@@ -249,7 +250,7 @@ def submit(
     ir: bool = typer.Option(False, "--ir", help="IR spectrum from the optimisation's frequencies"),
     esd: bool = typer.Option(
         False, "--esd",
-        help="Excited-state dynamics: ISC/RISC/IC/fluorescence/phosphorescence rates from S1 and T1 seeded at the lowest S0",
+        help="Excited-state dynamics: ISC/RISC/fluorescence/phosphorescence rates (IC with --esd-ic) from S1 and T1 seeded at the lowest S0",
     ),
     esd_ht: bool = typer.Option(
         False, "--esd-ht", help="Herzberg-Teller for fluorescence, phosphorescence and ISC channels with SOCME below 5 cm-1 (much more expensive: 3N-6 or more displaced TDDFT+SOC singlepoints per triplet sublevel; hours to days)"
@@ -264,6 +265,9 @@ def submit(
     ),
     esd_tn_window_ev: float = typer.Option(0.3, "--esd-tn-window", help="Include S1->Tn ISC for Tn up to this many eV above S1"),
     esd_temperature_k: float = typer.Option(298.15, "--esd-temperature", help="Temperature of the ESD rates (K)"),
+    esd_ic: bool = typer.Option(
+        False, "--esd-ic", help="Also compute the S1->S0 internal conversion rate (harmonic, often unreliable for large gaps)"
+    ),
     nmr_method: str = typer.Option(
         "singlepoint", "--nmr-method",
         help="NMR method: singlepoint (the singlepoint header's) or dh (revDSD-PBEP86-D4/2021 / pcSseg-3; H-Kr only)",
@@ -289,7 +293,7 @@ def submit(
         uvvis, ir, esd, esd_ht, nmr, uvvis_nroots, uvvis_tda,
         nmr_nuclei=[n.strip() for n in nmr_nuclei.split(",") if n.strip()],
         esd_tn_window_ev=esd_tn_window_ev, esd_temperature_k=esd_temperature_k,
-        nmr_method=nmr_method,
+        nmr_method=nmr_method, esd_ic=esd_ic,
         densities=densities, density_eldens=not no_eldens, density_spindens=not no_spindens,
         density_grid=density_grid, density_eldens_file=eldens_file, density_spindens_file=spindens_file,
         nbo=nbo, nbo_keywords=nbo_keywords,
@@ -374,7 +378,7 @@ def submit_batch(
     ir: bool = typer.Option(False, "--ir", help="IR spectrum from the optimisation's frequencies"),
     esd: bool = typer.Option(
         False, "--esd",
-        help="Excited-state dynamics: ISC/RISC/IC/fluorescence/phosphorescence rates from S1 and T1 seeded at the lowest S0",
+        help="Excited-state dynamics: ISC/RISC/fluorescence/phosphorescence rates (IC with --esd-ic) from S1 and T1 seeded at the lowest S0",
     ),
     esd_ht: bool = typer.Option(
         False, "--esd-ht", help="Herzberg-Teller for fluorescence, phosphorescence and ISC channels with SOCME below 5 cm-1 (much more expensive: 3N-6 or more displaced TDDFT+SOC singlepoints per triplet sublevel; hours to days)"
@@ -389,6 +393,9 @@ def submit_batch(
     ),
     esd_tn_window_ev: float = typer.Option(0.3, "--esd-tn-window", help="Include S1->Tn ISC for Tn up to this many eV above S1"),
     esd_temperature_k: float = typer.Option(298.15, "--esd-temperature", help="Temperature of the ESD rates (K)"),
+    esd_ic: bool = typer.Option(
+        False, "--esd-ic", help="Also compute the S1->S0 internal conversion rate (harmonic, often unreliable for large gaps)"
+    ),
     nmr_method: str = typer.Option(
         "singlepoint", "--nmr-method",
         help="NMR method: singlepoint (the singlepoint header's) or dh (revDSD-PBEP86-D4/2021 / pcSseg-3; H-Kr only)",
@@ -417,7 +424,7 @@ def submit_batch(
         uvvis, ir, esd, esd_ht, nmr, uvvis_nroots, uvvis_tda,
         nmr_nuclei=[n.strip() for n in nmr_nuclei.split(",") if n.strip()],
         esd_tn_window_ev=esd_tn_window_ev, esd_temperature_k=esd_temperature_k,
-        nmr_method=nmr_method,
+        nmr_method=nmr_method, esd_ic=esd_ic,
         densities=densities, density_eldens=not no_eldens, density_spindens=not no_spindens,
         density_grid=density_grid, density_eldens_file=eldens_file, density_spindens_file=spindens_file,
         nbo=nbo, nbo_keywords=nbo_keywords,

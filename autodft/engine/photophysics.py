@@ -179,10 +179,11 @@ def input_status(pair: tuple[Optional[ComputationTask], Optional[ComputationTask
 
 
 def _join(session: Session, s0: MoleculeState, s1: MoleculeState, t1: MoleculeState) -> None:
-    """Create each rate task whose two states' inputs succeeded."""
+    """Create each wanted rate task whose two states' inputs succeeded."""
     if "task" not in _metadata(s1)["esd_seed"]:
         _mark(session, s1, esd_done=True)
         return
+    wanted = wanted_rates(_metadata(s1))
     states = {"S0": s0, "S1": s1, "T1": t1}
     inputs = rate_inputs(session, s0, s1, t1)
     existing = set(session.exec(
@@ -194,7 +195,7 @@ def _join(session: Session, s0: MoleculeState, s1: MoleculeState, t1: MoleculeSt
     created = set(existing)
     for rate, (initial, final, _) in esd_inputs.RATES.items():
         task_type = TaskType(rate)
-        if task_type in existing:
+        if task_type in existing or rate not in wanted:
             continue
         status = {input_status(inputs[initial]), input_status(inputs[final])}
         if status != {"successful"}:
@@ -217,8 +218,13 @@ def _join(session: Session, s0: MoleculeState, s1: MoleculeState, t1: MoleculeSt
         ))
         created.add(task_type)
         logger.info("Molecule %d: created %s", s1.molecule_id, rate)
-    if len(created) == len(_RATE_TYPES):
+    if {TaskType(rate) for rate in wanted} <= created:
         _mark(session, s1, esd_done=True)
+
+
+def wanted_rates(metadata: dict) -> tuple[str, ...]:
+    """The rate task types an ESD S1 state asks for: IC only with ``esd_ic``."""
+    return tuple(rate for rate in esd_inputs.RATES if rate != "esd_ic" or metadata.get("esd_ic"))
 
 
 def prepare_rate_job(

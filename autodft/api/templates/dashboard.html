@@ -1164,7 +1164,7 @@
                             <input type="checkbox" id="requestNmr" name="request_spec_nmr">
                             <label for="requestNmr">NMR</label>
                         </div>
-                        <div class="checkbox-group" title="Excited-state dynamics: S1 and T1 optimised from the lowest S0 conformer, SOC TDDFT, and ORCA ESD rates (ISC, RISC, IC, fluorescence, phosphorescence). Expensive: the S1 Hessian is numerical. Closed-shell molecules only.">
+                        <div class="checkbox-group" title="Excited-state dynamics: S1 and T1 optimised from the lowest S0 conformer, SOC TDDFT, and ORCA ESD rates (ISC, RISC, fluorescence, phosphorescence; IC on request). Expensive: the S1 Hessian is numerical. Closed-shell molecules only.">
                             <input type="checkbox" id="requestEsd" name="request_esd">
                             <label for="requestEsd">ESD</label>
                         </div>
@@ -1254,6 +1254,10 @@
                                 <div class="form-group" style="min-width: 130px;">
                                     <label for="esdTemperature">Temperature (K)</label>
                                     <input type="number" id="esdTemperature" min="1" max="1000" step="0.01" value="298.15" style="width: 100px;">
+                                </div>
+                                <div class="checkbox-group" title="Without it, τ(S1) and the S1 yields leave internal conversion out.">
+                                    <input type="checkbox" id="esdIc">
+                                    <label for="esdIc">Internal conversion rate (S1→S0; harmonic, often unreliable for large gaps)</label>
                                 </div>
                             </div>
                             <div class="cat-detail-note">S1 and T1 start from the lowest S0 conformer once every S0 conformer is done. Franck-Condon rates unless Herzberg-Teller is ticked; S1→Tn channels within the window use the T1 geometry and Hessian. ISC channels also get cheap FC reruns flagging width-sensitive and soft-mode-dominated rates.</div>
@@ -2638,7 +2642,7 @@
                 if (SP_CONFLICT_RE.test(spText) || ESD_KEYWORD_RE.test(spText)) {
                     esdProblems.push('the singlepoint header already has a TDDFT / NMR / ESD block, or a Freq / optimisation keyword');
                 }
-                var spB88 = B88_RE.test(spText);
+                var spB88 = B88_RE.test(spText) && document.getElementById('esdIc').checked;
                 setNote('esdHeaderNote', !esdProblems.length && !spB88, '',
                         esdProblems.length
                             ? 'ESD will be refused: ' + esdProblems.join('; ') + '.'
@@ -2651,7 +2655,7 @@
 
             var watched = {};
             panels.forEach(function (el) { watched[el.dataset.requires] = true; });
-            Object.keys(watched).concat(['headerOptimization', 'headerSinglepoint']).forEach(function (id) {
+            Object.keys(watched).concat(['headerOptimization', 'headerSinglepoint', 'esdIc']).forEach(function (id) {
                 var el = document.getElementById(id);
                 if (el) el.addEventListener('change', refresh);
             });
@@ -3111,6 +3115,7 @@
                 commonBody.request_esd_ht = document.getElementById('requestEsdHt').checked;
                 commonBody.esd_tn_window_ev = isFinite(esdWindow) ? esdWindow : 0.3;
                 commonBody.esd_temperature_k = isFinite(esdTemperature) ? esdTemperature : 298.15;
+                commonBody.esd_ic = document.getElementById('esdIc').checked;
             }
             if (commonBody.request_densities) {
                 commonBody.density_eldens = document.getElementById('densityEldens').checked;
@@ -4248,7 +4253,7 @@
             if (d.phi_fluorescence !== undefined) bits.push('Φ<sub>F</sub> ' + escHtml(d.phi_fluorescence.toFixed(3)));
             var open = ESD_RATES.filter(function (p) {
                 var r = esd.rates[p[0]];
-                return !r || r.status !== 'successful';
+                return !r || (r.status !== 'successful' && r.status !== 'not requested');
             }).length;
             return '<div class="pp-summary">ESD (' + (esd.herzberg_teller ? 'FC+HT' : 'FC') + ', ' +
                    escHtml(esd.temperature_k) + ' K) · ' + bits.join(' · ') +

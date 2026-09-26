@@ -178,6 +178,14 @@ class TestExistingConflict:
         )
         assert reason is not None and "nmr_method='singlepoint'" in reason
 
+    def test_a_different_esd_ic_is_refused(self, session):
+        self._molecule(session, {categories.ESD: True, "esd_ic": False})
+        reason = categories.existing_conflict(
+            session, "nho/p", "c1ccccc1", {categories.ESD},
+            categories.options({categories.ESD: True, "esd_ic": True}),
+        )
+        assert reason is not None and "esd_ic=False" in reason
+
     def test_options_are_not_compared_without_requested_options(self, session):
         self._molecule(session, {categories.ESD: True, "esd_temperature_k": 298.15})
         assert categories.existing_conflict(session, "nho/p", "c1ccccc1", {categories.ESD}) is None

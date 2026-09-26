@@ -45,7 +45,8 @@ def esd(session, tmp_path):
     session.commit()
     ids = dict(confsearch_header_id=header.id, optimization_header_id=header.id,
                singlepoint_header_id=header.id)
-    settings = {categories.ESD_HT: False, "esd_tn_window_ev": 0.2, "esd_temperature_k": 298.15}
+    settings = {categories.ESD_HT: False, "esd_tn_window_ev": 0.2, "esd_temperature_k": 298.15,
+                "esd_ic": True}
     states = {
         "S0": MoleculeState(molecule_id=mol.id, description="S0", multiplicity=1, charge=0,
                             metadata_json=json.dumps({categories.ESD: True}), **ids),
@@ -123,6 +124,29 @@ def test_rates_are_created_once(session, esd):
     photophysics.advance_photophysics(session, Settings())
     rates = [t for t in session.exec(select(ComputationTask)).all() if t.task_type in RATE_TYPES]
     assert len(rates) == 6
+
+
+def _without_ic(session, esd):
+    s1 = esd["states"]["S1"]
+    s1.metadata_json = json.dumps({k: v for k, v in _meta(s1).items() if k != "esd_ic"})
+    session.add(s1)
+    session.commit()
+
+
+def test_ic_is_created_only_when_requested(session, esd):
+    _without_ic(session, esd)
+    photophysics.advance_photophysics(session, Settings())
+    assert set(_rates(session, esd)) == RATE_TYPES - {TaskType.esd_ic}
+    assert _meta(esd["states"]["S1"])["esd_done"] is True
+
+
+def test_esd_ic_false_skips_ic(session, esd):
+    s1 = esd["states"]["S1"]
+    s1.metadata_json = json.dumps({**_meta(s1), "esd_ic": False})
+    session.add(s1)
+    session.commit()
+    photophysics.advance_photophysics(session, Settings())
+    assert TaskType.esd_ic not in _rates(session, esd)
 
 
 def test_rates_wait_for_their_inputs(session, esd):

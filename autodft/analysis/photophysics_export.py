@@ -8,6 +8,8 @@ from io import BytesIO
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 
+from autodft.analysis.esd import NOT_REQUESTED
+
 _HEADER_FONT = Font(bold=True, color="FFFFFF")
 _HEADER_FILL = PatternFill("solid", fgColor="2F3340")
 RATES = ("isc", "risc", "ic", "fluorescence", "isc_t1_s0", "phosphorescence")
@@ -69,7 +71,7 @@ def build_xlsx(payload: dict) -> bytes:
             rates = e.get("rates", {})
             esd.append((m["id"], m["smiles"], m["state_id"], e["status"], e.get("temperature_k"),
                         e.get("herzberg_teller"), e.get("delta_est_ev"), e.get("delta_est_uks_ev"),
-                        *(rates.get(r, {}).get("rate_s") for r in RATES),
+                        *(_rate_cell(rates.get(r, {})) for r in RATES),
                         *(d.get(k) for k in DERIVED), " | ".join(e.get("flags", []))))
             for r in RATES:
                 entry = rates.get(r, {})
@@ -118,6 +120,11 @@ def build_xlsx(payload: dict) -> bytes:
     buffer = BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
+
+
+def _rate_cell(entry: dict):
+    """A rate's value, or ``not requested`` for a channel left out (IC)."""
+    return entry["status"] if entry.get("status") == NOT_REQUESTED else entry.get("rate_s")
 
 
 def _sheet(wb: Workbook, title: str, header: tuple, rows: list) -> None:
