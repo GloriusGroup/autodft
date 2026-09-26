@@ -43,6 +43,11 @@ _NATIVE_B88_RE = re.compile(
     r"|B2GP-PLYP|X3LYP)(?![\w(])",
     re.IGNORECASE | re.MULTILINE,
 )
+# Native wB97X-D4 (the wB97X-D3BJ exchange) has no third derivative for TDDFT
+# gradients either; ORCA aborts with "Invalid or unknown value for Exchange in DFT GXC".
+_NO_TDDFT_GRADIENT_RE = re.compile(
+    r"^\s*!(?:.*\s)?wB97X-(?:D4|D3BJ)(?![\w(])", re.IGNORECASE | re.MULTILINE,
+)
 # def2 puts an ECP on every element past Kr, and ORCA has no SOC integrals
 # for ECPs; a scalar-relativistic all-electron header is the way around it.
 ECP_MIN_Z = 37
@@ -200,6 +205,12 @@ def rejection(
                 "ESD's S1 optimisation needs TDDFT gradients, which ORCA 6.1 cannot "
                 "compute with a native B88 functional (B3LYP, BLYP, BP86, ...); use "
                 "its LibXC version in the optimisation header, e.g. !LibXC(B3LYP)."
+            )
+        if _NO_TDDFT_GRADIENT_RE.search(header_optimization or ""):
+            return (
+                "ESD's S1 optimisation needs TDDFT gradients, which ORCA 6.1 cannot "
+                "compute with wB97X-D4 / wB97X-D3BJ; use an optimisation header with "
+                "wB97X-D3 for ESD."
             )
         if ((check.get("max_atomic_number") or 0) >= ECP_MIN_Z
                 and not _RELATIVISTIC_RE.search(header_singlepoint or "")):

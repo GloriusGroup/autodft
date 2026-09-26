@@ -1,0 +1,55 @@
+
+                                 *****************
+                                 * O   R   C   A *
+                                 *****************
+
+                                            #,                                       
+                                            ###                                      
+                                            ####                                     
+                                            #####                                    
+                                            ######                                   
+                                           ########,                                 
+                                     ,,################,,,,,                         
+...
+Building xc 3rd derivative on the grid ... [file orca_tools/Tool-Numint/qcgxc.cpp, line 9535, Process 6]: Error: Invalid or unknown value for Exchange in DFT GXC
+Please try using LibXC instead!
+
+[file orca_tools/Tool-Numint/qcgxc.cpp, line 9535, Process 11]: Error: Invalid or unknown value for Exchange in DFT GXC
+Please try using LibXC instead!
+
+[file orca_tools/Tool-Numint/qcgxc.cpp, line 9535, Process 2]: Error: Invalid or unknown value for Exchange in DFT GXC
+Please try using LibXC instead!
+
+[file orca_tools/Tool-Numint/qcgxc.cpp, line 9535, Process 1]: Error: Invalid or unknown value for Exchange in DFT GXC
+Please try using LibXC instead!
+
+[file orca_tools/Tool-Numint/qcgxc.cpp, line 9535, Process 8]: Error: Invalid or unknown value for Exchange in DFT GXC
+Please try using LibXC instead!
+
+[file orca_tools/Tool-Numint/qcgxc.cpp, line 9535, Process 3]: Error: Invalid or unknown value for Exchange in DFT GXC
+Please try using LibXC instead!
+
+[file orca_tools/Tool-Numint/qcgxc.cpp, line 9535, Process 4]: Error: Invalid or unknown value for Exchange in DFT GXC
+Please try using LibXC instead!
+
+[file orca_tools/Tool-Numint/qcgxc.cpp, line 9535, Process 9]: Error: Invalid or unknown value for Exchange in DFT GXC
+Please try using LibXC instead!
+
+[file orca_tools/Tool-Numint/qcgxc.cpp, line 9535, Process 7]: Error: Invalid or unknown value for Exchange in DFT GXC
+Please try using LibXC instead!
+
+[file orca_tools/Tool-Numint/qcgxc.cpp, line 9535, Process 10]: Error: Invalid or unknown value for Exchange in DFT GXC
+Please try using LibXC instead!
+
+[file orca_tools/Tool-Numint/qcgxc.cpp, line 9535, Process 5]: Error: Invalid or unknown value for Exchange in DFT GXC
+Please try using LibXC instead!
+
+[file orca_tools/Tool-Numint/qcgxc.cpp, line 9535, Process 0]: Error: Invalid or unknown value for Exchange in DFT GXC
+Please try using LibXC instead!
+
+
+ORCA finished by error termination in CIS
+Calling Command: mpirun -np 12 --bind-to none /mnt/share/public/software/orca-6.1.1-gxtb/orca_cis_mpi input.cisinp.tmp input 
+[file orca_tools/qcmsg.cpp, line 394]: 
+  .... aborting the run
+

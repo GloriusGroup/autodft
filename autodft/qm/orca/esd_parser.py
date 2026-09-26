@@ -27,7 +27,10 @@ _K_SQUARED = re.compile(r"^The sum of K\*K is:\s+(\S+)", re.MULTILINE)
 _E00 = re.compile(r"^0-0 energy difference:\s+(-?[\d.]+) cm-1", re.MULTILINE)
 _REFERENCE_SOC = re.compile(r"^Reference SOC \(Re and Im\):\s+(\S+),\s*(\S+)", re.MULTILINE)
 _JOB_NUMBER = re.compile(r"JOB NUMBER\s+(\d+)")
-_LIBXC = re.compile(r"Third functional derivative of a B88|Native implementation of 3d derivative")
+_LIBXC = re.compile(
+    r"Third functional derivative of a B88|Native implementation of 3d derivative"
+    r"|Invalid or unknown value for Exchange in DFT GXC"
+)
 
 
 @dataclass(frozen=True)

@@ -483,3 +483,14 @@ class TestNboUnavailable:
         settings.orca.nbo_exe = "/path/to/nbo7.i8.exe"
         assert categories.nbo_unavailable(settings) is None
 
+
+
+@pytest.mark.parametrize("opt", ["!wB97X-D4 def2-SVP Opt Freq\n", "! wb97x-d3bj def2-SVP Opt Freq\n"])
+def test_esd_refuses_wb97x_d4_optimisation_headers(opt):
+    reason = categories.rejection({"multiplicity": 1}, {categories.ESD: True}, opt, SP)
+    assert "wB97X-D4" in reason
+
+
+def test_esd_accepts_wb97x_d3():
+    opt = "!wB97X-D3 def2-SVP Opt Freq\n"
+    assert categories.rejection({"multiplicity": 1}, {categories.ESD: True}, opt, SP) is None

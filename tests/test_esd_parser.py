@@ -146,7 +146,7 @@ class TestRates:
 
 
 class TestLibxc:
-    @pytest.mark.parametrize("name", ["s1_libxc_needed.out", "ic_libxc_needed.out"])
+    @pytest.mark.parametrize("name", ["s1_libxc_needed.out", "ic_libxc_needed.out", "s1_wb97x_d4_gxc.out"])
     def test_native_b88_failures(self, name):
         assert esd_parser.needs_libxc(_read(name))
 

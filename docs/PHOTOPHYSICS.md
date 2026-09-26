@@ -262,7 +262,11 @@ would always fail. This list is a courtesy check: any other functional
 ORCA can't differentiate fails once with `LibXC Needed` and is not
 retried. A native B88 *singlepoint* header costs the IC rate (when
 requested) and therefore τ(S1) and the S1 yields, which then need k_IC;
-the other five rates are unaffected. Use `!LibXC(B3LYP)` etc. either way.
+the other five rates are unaffected. Use `!LibXC(B3LYP)` etc. either way. The same holds for ORCA's native
+ωB97X-D4 (its exchange is ωB97X-D3BJ's): the S1 gradient aborts with
+"Invalid or unknown value for Exchange in DFT GXC", so ESD refuses an
+optimisation header with `wB97X-D4`/`wB97X-D3BJ` and that abort is
+recognised as `LibXC Needed` (not retried). ωB97X-D3 works.
 
 **Heavy elements.** def2 basis sets put an effective core potential on
 every element past Kr (Rb onwards, e.g. I), and ORCA has no spin-orbit
