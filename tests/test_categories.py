@@ -78,13 +78,25 @@ class TestRejection:
         bromine = {"multiplicity": 1, "max_atomic_number": 35}
         assert categories.rejection(bromine, meta, opt, SP) is None
 
-    def test_nmr_refuses_elements_past_krypton(self):
+    def test_nmr_in_the_singlepoint_method_takes_any_element_and_header(self):
         meta = {categories.NMR: True}
         iodine = {"multiplicity": 1, "max_atomic_number": 53}
+        assert categories.rejection(iodine, meta, OPT_FREQ, SP) is None
+        with_basis = SP + '%basis\n  NewGTO H "def2-SVP" end\nend\n'
+        assert categories.rejection(iodine, meta, OPT_FREQ, with_basis) is None
+
+    def test_dh_nmr_refuses_elements_past_krypton(self):
+        meta = {categories.NMR: True, "nmr_method": "dh"}
+        iodine = {"multiplicity": 1, "max_atomic_number": 53}
         reason = categories.rejection(iodine, meta, OPT_FREQ, SP)
-        assert "pcSseg-2" in reason and "Kr" in reason and "53" in reason
+        assert "pcSseg-3" in reason and "Kr" in reason and "53" in reason
         krypton = {"multiplicity": 1, "max_atomic_number": 36}
         assert categories.rejection(krypton, meta, OPT_FREQ, SP) is None
+
+    @pytest.mark.parametrize("method", ["DH", "pcsseg", "", None, 1])
+    def test_unknown_nmr_methods_are_refused(self, method):
+        meta = {categories.NMR: True, "nmr_method": method}
+        assert "nmr_method" in categories.rejection({"multiplicity": 1}, meta, OPT_FREQ, SP)
 
     def test_ecp_elements_only_matter_for_esd(self):
         iodine = {"multiplicity": 1, "max_atomic_number": 53}
@@ -157,6 +169,14 @@ class TestExistingConflict:
             categories.options({categories.NMR: True, "nmr_nuclei": ["F", "C", "H"]}),
         )
         assert reason is None
+
+    def test_a_different_nmr_method_is_refused(self, session):
+        self._molecule(session, {categories.NMR: True, "nmr_method": "singlepoint"})
+        reason = categories.existing_conflict(
+            session, "nho/p", "c1ccccc1", {categories.NMR},
+            categories.options({categories.NMR: True, "nmr_method": "dh"}),
+        )
+        assert reason is not None and "nmr_method='singlepoint'" in reason
 
     def test_options_are_not_compared_without_requested_options(self, session):
         self._molecule(session, {categories.ESD: True, "esd_temperature_k": 298.15})
@@ -455,8 +475,3 @@ class TestNboUnavailable:
         settings.orca.nbo_exe = "/path/to/nbo7.i8.exe"
         assert categories.nbo_unavailable(settings) is None
 
-
-def test_nmr_refuses_a_singlepoint_header_with_a_basis_block():
-    header = "!wB97X-D3 def2-TZVP\n%basis NewGTO C \"def2-QZVP\" end end\n"
-    reason = categories.rejection({"multiplicity": 1}, {categories.NMR: True}, OPT_FREQ, header)
-    assert "%basis" in reason

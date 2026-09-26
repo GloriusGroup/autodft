@@ -95,6 +95,13 @@ class TestShieldings:
         assert rows[-1].isotropic == pytest.approx(30.338)
         assert sum(r.element == "H" for r in rows) == 21
 
+    def test_a_dh_run_gives_the_relaxed_mp2_shieldings(self):
+        # ORCA 6.1.1 revDSD-PBEP86-D4/2021 / pcSseg-3 NoFrozenCore CPCM(MeCN) on CH3F: SCF,
+        # unrelaxed and relaxed MP2 summaries, in that order.
+        rows = parse_shieldings((FIXTURES / "nmr_dh_ch3f_cpcm.out").read_text())
+        assert [r.element for r in rows] == ["C", "F", "H", "H", "H"]
+        assert (rows[0].isotropic, rows[1].isotropic, rows[2].isotropic) == pytest.approx((115.558, 481.212, 27.060))
+
     def test_two_letter_elements(self):
         rows = parse_shieldings((FIXTURES / "nmr_cfcl3.out").read_text())
         assert [r.element for r in rows] == ["F", "C", "Cl", "Cl", "Cl"]

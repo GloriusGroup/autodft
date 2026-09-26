@@ -1229,8 +1229,15 @@
                                 <div class="checkbox-group"><input type="checkbox" id="nmrNucH" checked><label for="nmrNucH">¹H</label></div>
                                 <div class="checkbox-group"><input type="checkbox" id="nmrNucC" checked><label for="nmrNucC">¹³C</label></div>
                                 <div class="checkbox-group"><input type="checkbox" id="nmrNucF" checked><label for="nmrNucF">¹⁹F</label></div>
+                                <div class="form-group" style="min-width: 220px;">
+                                    <label for="nmrMethod">NMR method</label>
+                                    <select id="nmrMethod" style="max-width: 400px;">
+                                        <option value="singlepoint" selected>Singlepoint method</option>
+                                        <option value="dh">High accuracy: revDSD-PBEP86-D4/2021 / pcSseg-3 (double hybrid, NMR-optimised basis)</option>
+                                    </select>
+                                </div>
                             </div>
-                            <div class="cat-detail-note">An NMR singlepoint on every optimised S0 conformer with the singlepoint header's method. Shifts are referenced to TMS (¹H, ¹³C) and CFCl₃ (¹⁹F), computed once per method in the protected reference_systems project; closed-shell molecules only.</div>
+                            <div class="cat-detail-note">An NMR singlepoint on every optimised S0 conformer, with the singlepoint header's method or, for high accuracy, the double hybrid revDSD-PBEP86-D4/2021 / pcSseg-3 (NoFrozenCore; keeps only the header's solvent, %maxcore and %pal; much more expensive; H–Kr only). Shifts are referenced to TMS (¹H, ¹³C) and CFCl₃ (¹⁹F), computed once per method in the protected reference_systems project; closed-shell molecules only.</div>
                             <div class="cat-detail-note" id="nmrHeaderNote"></div>
                         </div>
                         <div class="cat-detail" data-requires="requestEsd" style="display:none;">
@@ -3096,6 +3103,7 @@
                 commonBody.nmr_nuclei = ['H', 'C', 'F'].filter(function (n) {
                     return document.getElementById('nmrNuc' + n).checked;
                 });
+                commonBody.nmr_method = document.getElementById('nmrMethod').value;
             }
             if (commonBody.request_esd) {
                 var esdWindow = parseFloat(document.getElementById('esdTnWindow').value);

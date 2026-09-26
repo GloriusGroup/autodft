@@ -38,7 +38,9 @@ class TestRejection:
 
 class TestOptions:
     def test_nuclei_default_to_all_three(self):
-        assert categories.options({categories.NMR: True}) == {"nmr_nuclei": ["H", "C", "F"]}
+        assert categories.options({categories.NMR: True}) == {
+            "nmr_nuclei": ["H", "C", "F"], "nmr_method": "singlepoint",
+        }
 
     def test_the_default_list_is_never_shared(self):
         first = categories.options({categories.NMR: True})["nmr_nuclei"]
@@ -54,6 +56,29 @@ class TestApi:
         })
         assert r.status_code == 200, r.text
         assert _metadata(r.json()["id"])["nmr_nuclei"] == ["H", "C"]
+        assert _metadata(r.json()["id"])["nmr_method"] == "singlepoint"
+
+    def test_the_dh_method_is_recorded(self, api):
+        client, key = api
+        r = client.post("/api/submit", headers=key, json={
+            "smiles": "c1ccccc1", "project": "p", "request_spec_nmr": True, "nmr_method": "dh",
+        })
+        assert r.status_code == 200, r.text
+        assert _metadata(r.json()["id"])["nmr_method"] == "dh"
+
+    def test_dh_past_krypton_is_a_400(self, api):
+        client, key = api
+        r = client.post("/api/submit", headers=key, json={
+            "smiles": "Ic1ccccc1", "project": "p", "request_spec_nmr": True, "nmr_method": "dh",
+        })
+        assert r.status_code == 400 and "pcSseg-3" in r.json()["detail"]
+
+    def test_an_unknown_method_is_a_400(self, api):
+        client, key = api
+        r = client.post("/api/submit", headers=key, json={
+            "smiles": "c1ccccc1", "project": "p", "request_spec_nmr": True, "nmr_method": "mp2",
+        })
+        assert r.status_code == 400 and "nmr_method" in r.json()["detail"]
 
     def test_a_radical_is_a_400(self, api):
         client, key = api
@@ -66,7 +91,7 @@ class TestApi:
 class TestCli:
     def test_nuclei_option(self):
         flags = cli._category_options_to_flags(
-            uvvis=False, ir=False, esd=False, esd_ht=False, nmr=True, nmr_nuclei=["F"],
+            uvvis=False, ir=False, esd=False, esd_ht=False, nmr=True, nmr_nuclei=["F"], nmr_method="dh",
         )
         meta = json.loads(cli._build_request_metadata(
             project_name="nho/p", project_author="nho",
@@ -75,7 +100,7 @@ class TestCli:
             max_conformers_s0=1, max_conformers_t1=1, max_conformers_ox=1, max_conformers_red=1,
             category_flags=flags,
         ))
-        assert meta["nmr_nuclei"] == ["F"]
+        assert (meta["nmr_nuclei"], meta["nmr_method"]) == (["F"], "dh")
 
     def test_a_radical_exits(self):
         flags = cli._category_options_to_flags(uvvis=False, ir=False, esd=False, esd_ht=False, nmr=True)

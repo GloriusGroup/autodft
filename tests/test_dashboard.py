@@ -164,7 +164,8 @@ def test_the_dashboard_offers_nmr(client):
     html = c.get("/", headers=headers).text
     for needle in ('id="requestNmr"', 'id="nmrNucH"', 'id="nmrNucC"', 'id="nmrNucF"',
                    'id="nmrHeaderNote"', "request_spec_nmr:", "commonBody.nmr_nuclei =",
-                   "'requestNmr'", "function ppNmr"):
+                   "'requestNmr'", "function ppNmr", 'id="nmrMethod"', '<option value="singlepoint" selected>',
+                   '<option value="dh">', "commonBody.nmr_method ="):
         assert needle in html, needle
 
 

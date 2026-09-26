@@ -1,0 +1,113 @@
+
+================================================================================
+                                        WARNINGS
+                       Please study these warnings very carefully!
+================================================================================
+
+
+WARNING: MP2 level second derivatives have been requested.
+    ===> Will calculate the relaxed density
+
+================================================================================
+                                       INPUT FILE
+================================================================================
+NAME = input.inp
+|  1> !revDSD-PBEP86-D4/2021 PCSSEG-3 AUTOAUX NMR NOFROZENCORE TightSCF CPCM(MeCN)
+|  2> %maxcore 2000
+|  3> %pal nprocs 2 end
+|  4> 
+|  5> *xyzfile 0 1 input.xyz
+|  6> 
+|  7>                          ****END OF INPUT****
+...
+Dispersion correction           -0.000836709
+-------------------------   ----------------
+
+
+-------------------------   --------------------
+FINAL SINGLE POINT ENERGY      -139.672784661377
+...
+Dipole moment calculation done in   0.0 sec 
+GIAO: Analytic para- and diamagnetic shielding integrals (SHARK)       ... done (  0.3 sec)
+-------------------
+CHEMICAL SHIELDINGS (ppm)
+-------------------
+
+Method             : SCF
+Type of density    : Electron Density
+Type of derivative : Magnetic Field (with GIAOs) (Direction=X)
+Multiplicity       :   1
+...
+--------------------------------
+CHEMICAL SHIELDING SUMMARY (ppm)
+--------------------------------
+
+
+  Nucleus  Element    Isotropic     Anisotropy
+  -------  -------  ------------   ------------
+      0       C          116.297        105.683 
+      1       F          485.199         35.567 
+      2       H           27.259          7.109 
+      3       H           27.259          7.108 
+      4       H           27.259          7.108 
+
+GIAO: Analytic para- and diamagnetic shielding integrals (SHARK)       ... done (  0.3 sec)
+...
+-------------------
+CHEMICAL SHIELDINGS (ppm)
+-------------------
+
+Method             : MP2
+Type of density    : Electron Density
+Type of derivative : Magnetic Field (with GIAOs) (Direction=X)
+Multiplicity       :   1
+Level              : Unrelaxed density
+Irrep              :   0
+Basis              : AO
+ --------------
+...
+--------------------------------
+CHEMICAL SHIELDING SUMMARY (ppm)
+--------------------------------
+
+
+  Nucleus  Element    Isotropic     Anisotropy
+  -------  -------  ------------   ------------
+      0       C          116.264        106.365 
+      1       F          484.416         34.983 
+      2       H           27.192          7.179 
+      3       H           27.191          7.178 
+      4       H           27.191          7.178 
+
+GIAO: Analytic para- and diamagnetic shielding integrals (SHARK)       ... done (  0.3 sec)
+...
+-------------------
+CHEMICAL SHIELDINGS (ppm)
+-------------------
+
+Method             : MP2
+Type of density    : Electron Density
+Type of derivative : Magnetic Field (with GIAOs) (Direction=X)
+Multiplicity       :   1
+Level              : Relaxed density
+Irrep              :   0
+Basis              : AO
+ --------------
+...
+--------------------------------
+CHEMICAL SHIELDING SUMMARY (ppm)
+--------------------------------
+
+
+  Nucleus  Element    Isotropic     Anisotropy
+  -------  -------  ------------   ------------
+      0       C          115.558        110.001 
+      1       F          481.212         34.396 
+      2       H           27.060          7.225 
+      3       H           27.066          7.220 
+      4       H           27.066          7.220 
+
+
+...
+                             ****ORCA TERMINATED NORMALLY****
+TOTAL RUN TIME: 0 days 0 hours 2 minutes 59 seconds 648 msec

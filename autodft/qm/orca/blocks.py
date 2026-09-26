@@ -15,19 +15,16 @@ from autodft import categories
 ESD_NROOTS = 10
 # The S1 optimisation takes root 1; a few roots above keep it converged.
 S1_NROOTS = 5
-# An orbital basis token of a route line; aux bases (def2/J, AutoAux) never match.
-_ORBITAL_BASIS_RE = re.compile(
-    r"(?:(?:ma|old|ZORA|DKH|SARC)-)*def2?-\S+|SARC-\S+|(?:[a-z]+-)?cc-p\S+|\d-\d+\+*G\S*"
-    r"|STO-\dG|(?:aug-)?pc(?:S?seg|[JHX])?-\d\S*|x2c-\S+|ANO-\S+|IGLO-\S+|EPR-\S+"
-    r"|SV\(P\)|SVP|TZVPP?|QZVPP?|vDZP",
-    re.IGNORECASE,
-)
 _SOLVATION_RE = re.compile(r"^\s*!.*\b(?:CPCM|SMD|CPCMC)\b|%cpcm\b", re.IGNORECASE | re.MULTILINE)
 # A standalone Opt: not L-Opt, COpt or the like.
 _OPT_RE = re.compile(r"(?<![\w-])Opt(?![\w-])", re.IGNORECASE)
 _OPT_LEVEL_RE = re.compile(r"\b(?:Tight|VeryTight|Loose|Normal|Sloppy)Opt\b", re.IGNORECASE)
 _GRID_RE = re.compile(r"\bDEFGRID\d\b", re.IGNORECASE)
 _KEEPDENS_RE = re.compile(r"\s*\bKeepDens\b", re.IGNORECASE)
+# High-accuracy NMR (ORCA 6.1 NMR tutorial): NoFrozenCore, as core electrons shape shieldings.
+NMR_DH_ROUTE = "!revDSD-PBEP86-D4/2021 PCSSEG-3 AUTOAUX NMR NOFROZENCORE TightSCF"
+_SOLVENT_TOKEN_RE = re.compile(r"(?:CPCMC?|SMD)(?:\(.*\))?", re.IGNORECASE)
+_DH_KEPT_BLOCKS_RE = re.compile(r"%(?:cpcm|pal)\b.*?\bend\b|%maxcore\s+\S+", re.IGNORECASE | re.DOTALL)
 
 
 class HeaderConflict(ValueError):
@@ -82,26 +79,14 @@ def with_keyword(header: str, keyword: str) -> str:
     return f"! {keyword}\n" + header
 
 
-def with_basis(header: str, basis: str) -> str:
-    """*header* with the orbital basis on its ``!`` lines replaced by *basis* (added if none)."""
-    found = False
-
-    def swap(match: re.Match) -> str:
-        nonlocal found
-        space, token = match.groups()
-        if "/" in token or not _ORBITAL_BASIS_RE.fullmatch(token):
-            return match.group(0)
-        if found:
-            return ""
-        found = True
-        return space + basis
-
-    lines = header.splitlines(keepends=True)
-    for i, line in enumerate(lines):
-        if line.lstrip().startswith("!"):
-            body, hash_, comment = line.partition("#")
-            lines[i] = re.sub(r"(\s*)([^\s!]+)", swap, body) + hash_ + comment
-    return "".join(lines) if found else with_keyword(header, basis)
+def nmr_dh_header(header: str) -> str:
+    """The double-hybrid NMR route with *header*'s solvation, %maxcore and %pal."""
+    solvent = [token for line in _keyword_lines(header)
+               for token in line.lstrip()[1:].split() if _SOLVENT_TOKEN_RE.fullmatch(token)]
+    rest = "\n".join(line.partition("#")[0] for line in header.splitlines()
+                     if not line.lstrip().startswith("!"))
+    kept = [match.group(0) for match in _DH_KEPT_BLOCKS_RE.finditer(rest)]
+    return "\n".join([" ".join([NMR_DH_ROUTE, *solvent]), *kept]) + "\n"
 
 
 def _on_keyword_lines(header: str, change) -> str:
@@ -204,7 +189,9 @@ def compose_header(
             tda=bool(options.get("uvvis_tda", defaults["uvvis_tda"])),
         )
     if task_type == "singlepoint_nmr":
-        return with_keyword(with_basis(header, categories.NMR_BASIS), "NMR")
+        if options.get("nmr_method") == "dh":
+            return nmr_dh_header(header)
+        return with_keyword(header, "NMR")
     if task_type == "singlepoint_soc":
         # Equilibrium solvation, as in the S1 optimisation, keeps DELE consistent.
         solvated = {"cpcmeq": True} if _SOLVATION_RE.search(header) else {}

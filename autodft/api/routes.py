@@ -199,6 +199,7 @@ class SubmitRequest(BaseModel):
     uvvis_nroots: int = 20
     uvvis_tda: bool = False
     nmr_nuclei: list[str] = Field(default_factory=lambda: ["H", "C", "F"])
+    nmr_method: str = "singlepoint"
     esd_tn_window_ev: float = 0.3
     esd_temperature_k: float = 298.15
     density_eldens: bool = True
@@ -2074,6 +2075,7 @@ def _category_flags(body: SubmitRequest) -> dict:
         "uvvis_nroots": body.uvvis_nroots,
         "uvvis_tda": body.uvvis_tda,
         "nmr_nuclei": body.nmr_nuclei,
+        "nmr_method": body.nmr_method,
         "esd_tn_window_ev": body.esd_tn_window_ev,
         "esd_temperature_k": body.esd_temperature_k,
         "density_eldens": body.density_eldens,

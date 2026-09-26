@@ -46,9 +46,10 @@ _NATIVE_B88_RE = re.compile(
 # def2 puts an ECP on every element past Kr, and ORCA has no SOC integrals
 # for ECPs; a scalar-relativistic all-electron header is the way around it.
 ECP_MIN_Z = 37
-# NMR runs in Jensen's shielding basis, which ORCA 6.1 has for H-Kr only.
-NMR_BASIS = "pcSseg-2"
-NMR_BASIS_MAX_Z = 36
+# NMR methods: the singlepoint header's own, or a double hybrid in pcSseg-3,
+# which ORCA 6.1 has for H-Kr only.
+NMR_METHODS = ("singlepoint", "dh")
+NMR_DH_MAX_Z = 36
 _RELATIVISTIC_RE = re.compile(r"^\s*!.*\b(?:ZORA|DKH2?|X2C)\b", re.IGNORECASE | re.MULTILINE)
 _SP_CONFLICTS = (
     (re.compile(r"%tddft\b", re.IGNORECASE), "%tddft"),
@@ -78,7 +79,7 @@ _NBO_KEYWORDS_RE = re.compile(r"^[A-Za-z0-9 =_.,+-]{0,200}\Z")
 OPTIONS: dict[str, dict] = {
     ESD: {"esd_tn_window_ev": 0.3, "esd_temperature_k": 298.15},
     UVVIS: {"uvvis_nroots": 20, "uvvis_tda": False},
-    NMR: {"nmr_nuclei": ["H", "C", "F"]},
+    NMR: {"nmr_nuclei": ["H", "C", "F"], "nmr_method": "singlepoint"},
     DENSITIES: {
         "density_eldens": True,
         "density_spindens": True,
@@ -229,16 +230,14 @@ def rejection(
                 f"NMR nuclei must be a non-empty subset of "
                 f"{', '.join(NMR_NUCLEI)} (nmr_nuclei)."
             )
-        max_z = check.get("max_atomic_number") or 0
-        if max_z > NMR_BASIS_MAX_Z:
+        method = metadata.get("nmr_method", OPTIONS[NMR]["nmr_method"])
+        if method not in NMR_METHODS:
+            return f"The NMR method must be one of {', '.join(NMR_METHODS)} (nmr_method)."
+        if method == "dh" and (check.get("max_atomic_number") or 0) > NMR_DH_MAX_Z:
             return (
-                f"NMR runs in the {NMR_BASIS} basis, which ORCA only has for "
-                f"H to Kr; this molecule has an element past Kr (Z = {max_z})."
-            )
-        if re.search(r"%basis\b", header_singlepoint or "", re.IGNORECASE):
-            return (
-                f"The singlepoint header has a %basis block, which would override "
-                f"the {NMR_BASIS} basis NMR runs in; pick a header without one."
+                "High-accuracy NMR runs in the pcSseg-3 basis, which ORCA only "
+                "has for H to Kr; this molecule has an element past Kr "
+                f"(Z = {check.get('max_atomic_number')}). Use the singlepoint method instead."
             )
 
     if IR in wanted and not _FREQ_RE.search(header_optimization or ""):
