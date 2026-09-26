@@ -138,11 +138,13 @@ def _process_entrypoint_body(
     )
     if reason:
         raise ValueError(f"{reason} Nothing was submitted for this molecule.")
-    conflict = categories.existing_conflict(
-        session, metadata.get("project_name", "default"),
-        _canonicalize_smiles(smiles), categories.requested(metadata),
-        {**categories.options(metadata), categories.ESD_HT: bool(metadata.get(categories.ESD_HT))},
-    )
+    # Reference molecules get one S0 state per NMR method (see _create_state).
+    conflict = None if nmr_references.is_reference_project(metadata.get("project_name", "")) \
+        else categories.existing_conflict(
+            session, metadata.get("project_name", "default"),
+            _canonicalize_smiles(smiles), categories.requested(metadata),
+            {**categories.options(metadata), categories.ESD_HT: bool(metadata.get(categories.ESD_HT))},
+        )
     if conflict:
         raise ValueError(conflict)
 
@@ -562,7 +564,13 @@ def _create_state(
             MoleculeState.optimization_header_id == opt_hid,
             MoleculeState.singlepoint_header_id == sp_hid,
         )
-    ).first()
+    ).all()
+    if nmr_references.is_reference_project(metadata.get("project_name", "")):
+        # A reference at the same headers but another NMR method is a state of its own.
+        method = categories.options(metadata).get("nmr_method")
+        existing = [s for s in existing
+                    if nmr_references.method_key(json.loads(s.metadata_json or "{}")) == method]
+    existing = existing[0] if existing else None
 
     if existing is not None:
         logger.info("State '%s' already exists for molecule %d (state_id=%d)",

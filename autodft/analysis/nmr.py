@@ -2,7 +2,7 @@
 
 delta = sigma_ref - sigma, where sigma_ref is the reference compound's mean
 shielding for that element at the same optimisation and singlepoint headers
-(see autodft.engine.nmr_references).
+and NMR method (see autodft.engine.nmr_references).
 """
 
 from __future__ import annotations
@@ -82,20 +82,24 @@ def method_fingerprint(input_text: str) -> tuple[frozenset[str], str]:
 
 def reference_shieldings(
     session: Session, opt_header_id, sp_header_id, cache: Optional[dict] = None,
+    method: Optional[str] = None, fingerprint: Optional[tuple[frozenset[str], str]] = None,
 ) -> dict:
     """Per nucleus: the reference compound's mean shielding at these headers.
 
-    *cache*, when given, is keyed by ``(opt_header_id, sp_header_id)`` and
-    spares every molecule at the same method a repeat lookup.
+    Of the references at these headers, the one whose NMR input has
+    *fingerprint* is taken, else the one stored with NMR *method*
+    (``nmr_references.method_key``). *cache*, when given, spares every
+    molecule at the same method a repeat lookup.
     """
-    key = (opt_header_id, sp_header_id)
+    key = (opt_header_id, sp_header_id, method, fingerprint)
     if cache is not None and key in cache:
         return cache[key]
     from autodft.engine.entrypoint_processor import _canonicalize_smiles
 
     extractor = PipelineExtractor(nmr_references.REFERENCE_QUALIFIED)
     compounds = {
-        smiles: _reference(session, extractor, _canonicalize_smiles(smiles), opt_header_id, sp_header_id)
+        smiles: _reference(session, extractor, _canonicalize_smiles(smiles), opt_header_id, sp_header_id,
+                           method, fingerprint)
         for smiles in sorted(set(nmr_references.REFERENCES.values()))
     }
     out = {}
@@ -157,10 +161,11 @@ def molecule_nmr(
     else:
         out["equivalence"] = "topological"
 
+    fingerprint = first[1]
     reference = reference_shieldings(
         session, state.optimization_header_id, state.singlepoint_header_id, references,
+        nmr_references.method_key(metadata), fingerprint,
     )
-    fingerprint = first[1]
     for element in nuclei:
         groups: dict[int, list[int]] = defaultdict(list)
         for index, symbol in enumerate(elements):
@@ -194,7 +199,7 @@ def molecule_nmr(
     return out
 
 
-def _reference(session, extractor, canonical, opt_header_id, sp_header_id) -> dict:
+def _reference(session, extractor, canonical, opt_header_id, sp_header_id, method, fingerprint) -> dict:
     molecule = session.exec(
         select(Molecule).where(
             Molecule.smiles == canonical,
@@ -203,16 +208,26 @@ def _reference(session, extractor, canonical, opt_header_id, sp_header_id) -> di
     ).first()
     if molecule is None:
         return {"status": "missing"}
-    state = session.exec(
+    states = session.exec(
         select(MoleculeState).where(
             MoleculeState.molecule_id == molecule.id,
             MoleculeState.description == "S0",
             MoleculeState.optimization_header_id == opt_header_id,
             MoleculeState.singlepoint_header_id == sp_header_id,
-        )
-    ).first()
-    if state is None:
-        return {"status": "missing", "molecule_id": molecule.id}
+        ).order_by(col(MoleculeState.id))
+    ).all()
+    found = [(state, _reference_state(session, extractor, molecule, state)) for state in states]
+    # The jobs' own inputs decide first; the stored method covers references not run yet.
+    for _, ref in found:
+        if fingerprint is not None and ref["status"] == "ok" and ref["fingerprint"] == fingerprint:
+            return ref
+    for state, ref in found:
+        if nmr_references.method_key(json.loads(state.metadata_json or "{}")) == method:
+            return ref
+    return {"status": "missing", "molecule_id": molecule.id}
+
+
+def _reference_state(session, extractor, molecule, state) -> dict:
     task = session.exec(
         select(ComputationTask)
         .where(ComputationTask.state_id == state.id,

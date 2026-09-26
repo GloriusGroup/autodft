@@ -111,8 +111,9 @@ def db(tmp_path):
     reset_engine()
 
 
-def _glyoxal(session, tmp_path):
-    _, state = _state(session, "O=CC=O", "nho/p", {categories.NMR: True, "nmr_nuclei": ["H", "C", "F"]})
+def _glyoxal(session, tmp_path, method=None, inp=B3LYP_NMR):
+    metadata = {categories.NMR: True, "nmr_nuclei": ["H", "C", "F"], **({"nmr_method": method} if method else {})}
+    _, state = _state(session, "O=CC=O", "nho/p", metadata)
     geom = MoleculeGeometry(state_id=state.id, xyz_data=(FIXTURES / "glyoxal_s0.xyz").read_text())
     session.add(geom)
     session.commit()
@@ -121,16 +122,32 @@ def _glyoxal(session, tmp_path):
     sp = _task(session, state, TaskType.singlepoint, parent=opt.id)
     _job(session, sp, tmp_path, "g_sp", "FINAL SINGLE POINT ENERGY      -227.600000000")
     shield = _task(session, state, TaskType.singlepoint_nmr, parent=opt.id)
-    _job(session, shield, tmp_path, "g_nmr", GLYOXAL, B3LYP_NMR)
+    _job(session, shield, tmp_path, "g_nmr", GLYOXAL, inp)
     return state
 
 
-def _tms(session, tmp_path, inp=B3LYP_NMR):
-    _, state = _state(session, "C[Si](C)(C)C", nmr_references.REFERENCE_QUALIFIED, {categories.NMR: True})
+def _tms(session, tmp_path, inp=B3LYP_NMR, method=None, name="t", done=True):
+    """A TMS reference state; a second call adds another state at the same headers."""
+    mol = session.exec(select(Molecule).where(Molecule.project_name == nmr_references.REFERENCE_QUALIFIED)).first()
+    if mol is None:
+        mol = Molecule(smiles="C[Si](C)(C)C", project_name=nmr_references.REFERENCE_QUALIFIED)
+        session.add(mol)
+        session.commit()
+    state = MoleculeState(molecule_id=mol.id, description="S0", multiplicity=1, charge=0,
+                          metadata_json=json.dumps({categories.NMR: True,
+                                                    **({"nmr_method": method} if method else {})}),
+                          optimization_header_id=3, singlepoint_header_id=5)
+    session.add(state)
+    session.commit()
     opt = _task(session, state, TaskType.optimization)
-    _job(session, opt, tmp_path, "t_opt", "")
+    if not done:
+        opt.status = TaskStatus.pending
+        session.add(opt)
+        session.commit()
+        return
+    _job(session, opt, tmp_path, f"{name}_opt", "")
     shield = _task(session, state, TaskType.singlepoint_nmr, parent=opt.id)
-    _job(session, shield, tmp_path, "t_nmr", TMS, inp)
+    _job(session, shield, tmp_path, f"{name}_nmr", TMS, inp)
 
 
 def _detail(project="nho/p"):
@@ -286,3 +303,47 @@ def test_the_cache_notices_a_reference_finishing(db):
         _tms(session, db)
     second = analyze_spectra("nho/p")
     assert second["molecules"][0]["nmr"]["reference"]["H"]["status"] == "ok"
+
+
+PCSSEG2_NMR = "! B3LYP pcSseg-2 TightSCF NMR\n"
+DH_NMR = "!revDSD-PBEP86-D4/2021 PCSSEG-3 AUTOAUX NMR NOFROZENCORE TightSCF\n"
+
+
+class TestReferenceMethod:
+    def test_a_molecule_from_before_nmr_method_keeps_its_reference(self, db):
+        with get_session() as session:
+            _glyoxal(session, db, inp=PCSSEG2_NMR)
+            _tms(session, db, inp=PCSSEG2_NMR, name="old")
+            _tms(session, db, method="singlepoint", name="new")
+        ref = _detail()["reference"]["H"]
+        assert (ref["status"], ref["method_matches"]) == ("ok", True)
+
+    def test_a_singlepoint_molecule_never_takes_a_pcsseg2_reference(self, db):
+        with get_session() as session:
+            _glyoxal(session, db, method="singlepoint")
+            _tms(session, db, inp=PCSSEG2_NMR, name="old")
+        shifts = _detail()
+        assert shifts["reference"]["H"]["status"] == "missing"
+        assert shifts["nuclei"]["H"][0]["shift_ppm"] is None
+        with get_session() as session:
+            _tms(session, db, method="singlepoint", done=False)
+        assert _detail()["reference"]["H"]["status"] == "pending"
+
+    def test_each_method_takes_its_own_reference(self, db):
+        with get_session() as session:
+            _glyoxal(session, db, method="dh", inp=DH_NMR)
+            _tms(session, db, method="singlepoint", name="sp")
+        assert _detail()["reference"]["H"]["status"] == "missing"
+        with get_session() as session:
+            _tms(session, db, method="dh", inp=DH_NMR, name="dh")
+        ref = _detail()["reference"]["H"]
+        assert (ref["status"], ref["method_matches"]) == ("ok", True)
+
+    def test_a_reference_run_at_the_same_input_is_preferred(self, db):
+        # An old molecule whose NMR ran in the plain singlepoint header.
+        with get_session() as session:
+            _glyoxal(session, db)
+            _tms(session, db, inp=PCSSEG2_NMR, name="old")
+            _tms(session, db, method="singlepoint", name="new")
+        ref = _detail()["reference"]["H"]
+        assert (ref["status"], ref["method_matches"]) == ("ok", True)

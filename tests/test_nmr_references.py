@@ -183,6 +183,49 @@ class TestQueueing:
             sps = sorted(e.header_singlepoint for e in _reference_entries(session))
             assert sps == ["!B3LYP\n", "!PBE0\n"]
 
+    def test_each_nmr_method_gets_its_own_reference(self, engine, tmp_path, monkeypatch):
+        settings = _settings(tmp_path)
+        with Session(engine) as session:
+            _queue(session, "CCO", request_spec_nmr=True)
+            _queue(session, "CCN", request_spec_nmr=True, nmr_method="dh")
+            _queue(session, "CCC", request_spec_nmr=True, nmr_method="dh")
+            _expand_all(session, settings, monkeypatch)
+            methods = sorted(json.loads(e.request_metadata)["nmr_method"] for e in _reference_entries(session))
+            assert methods == ["dh", "singlepoint"]
+            tms = session.exec(
+                select(Molecule).where(Molecule.project_name == nmr_references.REFERENCE_QUALIFIED)
+            ).one()
+            states = session.exec(select(MoleculeState).where(MoleculeState.molecule_id == tms.id)).all()
+            assert len({(s.optimization_header_id, s.singlepoint_header_id) for s in states}) == 1
+            assert sorted(json.loads(s.metadata_json)["nmr_method"] for s in states) == ["dh", "singlepoint"]
+            assert all(e.processing_error is None for e in _reference_entries(session))
+
+    def test_a_reference_without_a_method_is_not_reused(self, engine, tmp_path, monkeypatch):
+        """References stored before nmr_method (pcSseg-2) serve only their own molecules."""
+        settings = _settings(tmp_path)
+        with Session(engine) as session:
+            _queue(session, "CCO", request_spec_nmr=True)
+            _expand_all(session, settings, monkeypatch)
+            tms = session.exec(
+                select(Molecule).where(Molecule.project_name == nmr_references.REFERENCE_QUALIFIED)
+            ).one()
+            (state,) = session.exec(select(MoleculeState).where(MoleculeState.molecule_id == tms.id)).all()
+            meta = json.loads(state.metadata_json)
+            del meta["nmr_method"]
+            state.metadata_json = json.dumps(meta)
+            session.add(state)
+            session.commit()
+
+            _queue(session, "CCN", request_spec_nmr=True)
+            _expand_all(session, settings, monkeypatch)
+            states = session.exec(select(MoleculeState).where(MoleculeState.molecule_id == tms.id)).all()
+            assert [nmr_references.method_key(json.loads(s.metadata_json)) for s in states] == [
+                None, "singlepoint",
+            ]
+            _queue(session, "CCC", request_spec_nmr=True)
+            _expand_all(session, settings, monkeypatch)
+            assert len(_reference_entries(session)) == 2
+
     def test_a_more_urgent_requester_raises_the_queued_references_priority(self, engine, tmp_path, monkeypatch):
         settings = _settings(tmp_path)
         with Session(engine) as session:

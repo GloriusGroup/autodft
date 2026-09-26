@@ -2,8 +2,8 @@
 
 A shift is sigma_ref - sigma. Each reference (TMS for 1H and 13C, CFCl3 for
 19F) is computed once per method -- the requester's optimisation and
-singlepoint headers -- in a project that nobody can submit to, wipe, archive
-or reassign.
+singlepoint headers and its ``nmr_method`` -- in a project that nobody can
+submit to, wipe, archive or reassign.
 """
 
 from __future__ import annotations
@@ -44,6 +44,11 @@ CFCL3 = "FC(Cl)(Cl)Cl"
 REFERENCES = {"H": TMS, "C": TMS, "F": CFCL3}
 
 
+def method_key(metadata: dict) -> Optional[str]:
+    """A state's stored ``nmr_method``; None for NMR stored before the option existed."""
+    return metadata.get("nmr_method")
+
+
 def references_for(smiles: str, nuclei: list[str]) -> list[str]:
     """The reference compounds needed for the requested nuclei present in *smiles*."""
     from rdkit import Chem
@@ -63,16 +68,17 @@ def ensure_references(
     """Queue the references this NMR submission needs at its method.
 
     A reference is identified by its optimisation and singlepoint header
-    texts; one already computed or queued at those texts is not queued again.
-    Never commits: the expansion step owns the transaction.
+    texts and its NMR method; one already computed or queued at those is not
+    queued again. Never commits: the expansion step owns the transaction.
     """
     if is_reference_project(metadata.get("project_name", "")):
         return []
-    nuclei = categories.options(metadata).get("nmr_nuclei", [])
+    options = categories.options(metadata)
+    nuclei, method = options.get("nmr_nuclei", []), options.get("nmr_method")
     queued = []
     for smiles in references_for(entrypoint.smiles, nuclei):
         known = _reference_known(
-            session, smiles, entrypoint.header_optimization, entrypoint.header_singlepoint,
+            session, smiles, entrypoint.header_optimization, entrypoint.header_singlepoint, method,
         )
         if known is not None:
             # A more urgent requester makes its reference more urgent too.
@@ -80,7 +86,7 @@ def ensure_references(
                 known.priority = entrypoint.priority
                 session.add(known)
             continue
-        session.add(_reference_entrypoint(smiles, entrypoint))
+        session.add(_reference_entrypoint(smiles, entrypoint, method))
         queued.append(smiles)
     if queued:
         _ensure_project(session)
@@ -88,9 +94,9 @@ def ensure_references(
     return queued
 
 
-def _reference_known(session, smiles, header_optimization, header_singlepoint):
-    """The reference row for *smiles* at these headers: a computed ``Molecule``,
-    else a queued ``CalculationEntrypoint``, else ``None``."""
+def _reference_known(session, smiles, header_optimization, header_singlepoint, method):
+    """The reference row for *smiles* at these headers and NMR *method*: a computed
+    ``Molecule``, else a queued ``CalculationEntrypoint``, else ``None``."""
     from autodft.engine.entrypoint_processor import _canonicalize_smiles
     from autodft.models import ComputationHeader, Molecule, MoleculeState
 
@@ -108,7 +114,8 @@ def _reference_known(session, smiles, header_optimization, header_singlepoint):
         ).all():
             opt = session.get(ComputationHeader, state.optimization_header_id) if state.optimization_header_id else None
             sp = session.get(ComputationHeader, state.singlepoint_header_id) if state.singlepoint_header_id else None
-            if opt and sp and (opt.header_text, sp.header_text) == (header_optimization, header_singlepoint):
+            if (opt and sp and (opt.header_text, sp.header_text) == (header_optimization, header_singlepoint)
+                    and method_key(json.loads(state.metadata_json or "{}")) == method):
                 return molecule
 
     for entry in session.exec(
@@ -117,13 +124,17 @@ def _reference_known(session, smiles, header_optimization, header_singlepoint):
             col(CalculationEntrypoint.time_started).is_(None),
         )
     ).all():
+        entry_metadata = json.loads(entry.request_metadata or "{}")
         if ((entry.header_optimization, entry.header_singlepoint) == (header_optimization, header_singlepoint)
-                and json.loads(entry.request_metadata or "{}").get("project_name") == REFERENCE_QUALIFIED):
+                and entry_metadata.get("project_name") == REFERENCE_QUALIFIED
+                and categories.options(entry_metadata).get("nmr_method") == method):
             return entry
     return None
 
 
-def _reference_entrypoint(smiles: str, requester: CalculationEntrypoint) -> CalculationEntrypoint:
+def _reference_entrypoint(
+    smiles: str, requester: CalculationEntrypoint, method: str,
+) -> CalculationEntrypoint:
     """A queue row computing *smiles* at the requester's method: optimisation, then NMR only."""
     metadata = {
         "project_name": REFERENCE_QUALIFIED,
@@ -140,6 +151,7 @@ def _reference_entrypoint(smiles: str, requester: CalculationEntrypoint) -> Calc
         "max_conformers_S0": 1,
         categories.NMR: True,
         "nmr_nuclei": sorted(n for n, ref in REFERENCES.items() if ref == smiles),
+        "nmr_method": method,
     }
     return CalculationEntrypoint(
         smiles=smiles,
