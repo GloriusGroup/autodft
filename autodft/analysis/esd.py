@@ -99,6 +99,8 @@ def molecule_esd(
                 out["flags"].append(f"τ(T1) and the T1 yields count k({label}) as 0.")
     if detail:
         out["flags"].extend(_optimisation_warnings(session, extractor, inputs))
+    # Sublevel jobs of one channel repeat the same warning.
+    out["flags"] = list(dict.fromkeys(out["flags"]))
     return out
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -458,3 +459,12 @@ def test_a_real_mixed_ht_and_fc_output(session, done):
     assert not t2["width_sensitive"]  # below 1 s-1: not judged
     assert isc["ht_reason"] == "T1: SOCME 0.00 cm-1 < 5; T2: SOCME 41.49 cm-1 >= 5"
     assert not any("incomplete" in f or "ORCA jobs" in f for f in result["flags"])
+
+
+def test_a_warning_repeated_by_sublevels_is_listed_once(session, done):
+    task = _rates(session, done)[TaskType.esd_phosp]
+    path = Path(session.exec(select(ComputationJob).where(ComputationJob.task_id == task.id)).one().job_path)
+    text = (path / "output.out").read_text()
+    (path / "output.out").write_text(re.sub(r"(The sum of K\*K is:\s+)\S+", r"\g<1>8.5", text))
+    flags = _analyse(session, done)["flags"]
+    assert sum("K*K" in f for f in flags) == 1
