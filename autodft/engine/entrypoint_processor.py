@@ -37,6 +37,13 @@ ESD_S1_METADATA = {
     "request_singlepoint_vertical_excitations": False,
 }
 ESD_T1_METADATA = {"esd_role": "T1"}
+# Beside a requested T1, ESD's own triplet only needs what the rates read.
+ESD_OWN_T1_DESCRIPTION = "T1_esd"
+ESD_OWN_T1_METADATA = {
+    "request_singlepoint_vertical_excitations": False,
+    categories.NBO: False,
+    categories.DENSITIES: False,
+}
 
 
 # ======================================================================
@@ -184,7 +191,8 @@ def _process_entrypoint_body(
         metadata, header_ids, base_path, initial_xyz,
     )
 
-    # A requested T1 below then finds this deferred T1 and adds nothing.
+    # ESD's triplet is the T1 state unless T1 is requested with its own
+    # conformer search; then ESD runs a separate one seeded from S0*.
     if metadata.get(categories.ESD):
         esd = categories.esd_settings(metadata)
         _create_state(
@@ -192,10 +200,14 @@ def _process_entrypoint_body(
             metadata, header_ids, base_path, initial_xyz,
             defer=True, extra_metadata={**ESD_S1_METADATA, **esd},
         )
+        if metadata.get("request_T1", False):
+            t1_description, t1_metadata = ESD_OWN_T1_DESCRIPTION, ESD_OWN_T1_METADATA
+        else:
+            t1_description, t1_metadata = "T1", {}
         _create_state(
-            session, molecule, smiles, "T1", multiplicity + 2, charge,
+            session, molecule, smiles, t1_description, multiplicity + 2, charge,
             metadata, header_ids, base_path, initial_xyz,
-            defer=True, extra_metadata={**ESD_T1_METADATA, **esd},
+            defer=True, extra_metadata={**ESD_T1_METADATA, **t1_metadata, **esd},
         )
 
     if metadata.get("request_T1", False):

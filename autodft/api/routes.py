@@ -920,7 +920,7 @@ def _combined_status(tasks: list[ComputationTask]) -> Optional[str]:
     return TaskStatus.successful.value
 
 
-_STATE_ORDER = {"S0": 0, "S1": 1, "T1": 2, "ox": 3, "red": 4}
+_STATE_ORDER = {"S0": 0, "S1": 1, "T1": 2, "T1_esd": 3, "ox": 4, "red": 5}
 
 
 def _state_sort_key(s: MoleculeState) -> tuple[int, str]:

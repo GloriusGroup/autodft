@@ -156,11 +156,18 @@ iroot 1 triplets true dosoc true tda true`, plus `cpcmeq true` when the
 header is solvated, so DELE compares equilibrium-solvated states) run on
 S0\*, S1 and T1. Every ESD TDDFT job uses TDA except IC, whose NACMEs the
 manual computes with full TDDFT; UV/Vis keeps its own `uvvis_tda`. Each
-rate job (five, six with `esd_ic`) starts as soon as its two states are ready. That T1
-state also gets the normal T1 follow-ups — the energy singlepoint (used
-for ΔE_ST(UKS)) and the vertical spin-change singlepoint — even without
-`request_t1`, so T1 rows appear in the molecule's CSV export and state
-analysis regardless.
+rate job (five, six with `esd_ic`) starts as soon as its two states are ready.
+
+**ESD's triplet.** Without `request_T1`, ESD's triplet is the molecule's T1
+state: it gets the normal T1 follow-ups — the energy singlepoint (used for
+ΔE_ST(UKS)) and the vertical spin-change singlepoint — so T1 rows appear
+in the CSV export and state analysis. With `request_T1`, the requested T1
+keeps its own conformer search and `max_conformers_T1` conformers, and
+ESD runs a separate triplet state, `T1_esd`, seeded from S0\*: its
+optimisation, energy singlepoint and SOC singlepoint only (no vertical,
+NBO or density jobs). That duplicates one T1 optimisation, but a
+requested conformer count is never overridden. The triplet gap and state
+analysis use the requested T1 only.
 
 **Energies.** ΔE and DELE use TDDFT-consistent energies: at each geometry
 the ground state is FINAL SINGLE POINT ENERGY minus the followed root's

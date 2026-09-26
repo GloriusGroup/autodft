@@ -229,6 +229,23 @@ def test_one_molecules_file_error_does_not_stop_the_rest(session, monkeypatch):
     assert "esd_seed" not in json.loads(molecules["bad"]["s1"].metadata_json)
 
 
+def test_partner_t1_is_esds_triplet_beside_a_requested_t1(session, esd):
+    esd["t1"].description = "T1_esd"
+    requested = MoleculeState(molecule_id=esd["s0"].molecule_id, description="T1", multiplicity=3,
+                              charge=0, metadata_json="{}",
+                              confsearch_header_id=esd["t1"].confsearch_header_id,
+                              optimization_header_id=esd["t1"].optimization_header_id,
+                              singlepoint_header_id=esd["t1"].singlepoint_header_id)
+    session.add_all([esd["t1"], requested])
+    session.commit()
+    assert photophysics.partner(session, esd["s1"], "T1").id == esd["t1"].id
+    assert photophysics.partner(session, esd["s0"], "T1").id == esd["t1"].id
+    photophysics.advance_photophysics(session, Settings())
+    assert _tasks(session, requested) == []
+    [opt] = _tasks(session, esd["t1"])
+    assert opt.task_type == TaskType.optimization
+
+
 def test_partner_matches_headers(session, esd):
     assert photophysics.partner(session, esd["s1"], "T1").id == esd["t1"].id
     other = ComputationHeader(header_text="!PBE0 Opt Freq\n")

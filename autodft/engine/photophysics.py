@@ -67,16 +67,21 @@ def advance_photophysics(session: Session, settings: Settings) -> None:
 
 
 def partner(session: Session, state: MoleculeState, description: str) -> Optional[MoleculeState]:
-    """The *description* state submitted together with *state*: same molecule, same headers."""
-    return session.exec(
-        select(MoleculeState).where(
-            MoleculeState.molecule_id == state.molecule_id,
-            MoleculeState.description == description,
-            MoleculeState.confsearch_header_id == state.confsearch_header_id,
-            MoleculeState.optimization_header_id == state.optimization_header_id,
-            MoleculeState.singlepoint_header_id == state.singlepoint_header_id,
-        )
-    ).first()
+    """The *description* state submitted together with *state*: same molecule, same headers.
+
+    "T1" is ESD's triplet, found by role: a requested T1 may sit beside it as "T1".
+    """
+    query = select(MoleculeState).where(
+        MoleculeState.molecule_id == state.molecule_id,
+        MoleculeState.confsearch_header_id == state.confsearch_header_id,
+        MoleculeState.optimization_header_id == state.optimization_header_id,
+        MoleculeState.singlepoint_header_id == state.singlepoint_header_id,
+    )
+    if description == "T1":
+        query = query.where(col(MoleculeState.metadata_json).contains('"esd_role": "T1"'))
+    else:
+        query = query.where(MoleculeState.description == description)
+    return session.exec(query).first()
 
 
 def _seed(

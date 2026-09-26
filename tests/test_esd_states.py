@@ -83,13 +83,22 @@ def test_ht_and_options_reach_the_excited_states(engine, tmp_path, monkeypatch):
         assert (t1[categories.ESD_HT], t1["esd_tn_window_ev"]) == (True, 0.4)
 
 
-def test_a_requested_t1_reuses_the_deferred_one(engine, tmp_path, monkeypatch):
+def test_a_requested_t1_keeps_its_conformer_search(engine, tmp_path, monkeypatch):
     with Session(engine) as session:
-        _queue_esd(session, "O=CC=O", request_T1=True)
+        _queue_esd(session, "O=CC=O", request_T1=True, max_conformers_T1=3,
+                   request_singlepoint_nbo=True, request_densities=True)
         _expand(session, tmp_path, monkeypatch)
-        t1_states = [s for s in session.exec(select(MoleculeState)).all() if s.description == "T1"]
-        assert len(t1_states) == 1
-        assert _task_count(session, t1_states[0]) == 0
+        states = _states(session)
+        assert set(states) == {"S0", "S1", "T1", "T1_esd"}
+        t1 = json.loads(states["T1"].metadata_json)
+        assert "esd_role" not in t1 and t1["max_conformers_T1"] == 3
+        assert _task_count(session, states["T1"]) == 1          # T1's own conformer search
+        own = json.loads(states["T1_esd"].metadata_json)
+        assert (states["T1_esd"].multiplicity, own["esd_role"]) == (3, "T1")
+        assert _task_count(session, states["T1_esd"]) == 0
+        assert own["request_singlepoint"] is True
+        assert own["request_singlepoint_vertical_excitations"] is False
+        assert own[categories.NBO] is False and own[categories.DENSITIES] is False
 
 
 def test_molecules_without_esd_are_unchanged(engine, tmp_path, monkeypatch):

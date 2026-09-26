@@ -18,7 +18,7 @@ from autodft.extraction import results
 from autodft.extraction.extractor import PipelineExtractor
 from autodft.models import MoleculeState, TaskStatus, TaskType
 
-_STATE_ORDER = {"S0": 0, "S1": 1, "T1": 2, "ox": 3, "red": 4}
+_STATE_ORDER = {"S0": 0, "S1": 1, "T1": 2, "T1_esd": 3, "ox": 4, "red": 5}
 
 
 def molecule_nbo(session: Session, extractor: PipelineExtractor, s0: MoleculeState, detail: bool) -> dict:
