@@ -368,11 +368,13 @@ Every submission path (CLI, REST, Python) ends up writing the same
 * `request_spec_uvvis` / `request_spec_ir` / `request_spec_nmr` / `request_esd`
   — UV/Vis (TDDFT singlepoint on every S0 conformer), IR (from the
   optimisation's frequencies), NMR (¹H/¹³C/¹⁹F shifts referenced to TMS /
-  CFCl₃, closed-shell molecules only; computed in the protected
+  CFCl₃, closed-shell molecules only; `nmr_method` / `--nmr-method`
+  `singlepoint` (default, the singlepoint header) or `dh`
+  (revDSD-PBEP86-D4/2021 / pcSseg-3, H–Kr); computed in the protected
   `admin/reference_systems` project — the bare name `reference_systems`
   is reserved for every owner, not just admin), and
-  ESD (S1/T1 excited-state dynamics — ISC, RISC, IC, fluorescence,
-  phosphorescence — via ORCA's ESD module, closed-shell molecules only,
+  ESD (S1/T1 excited-state dynamics — ISC, RISC, fluorescence,
+  phosphorescence, IC only with `esd_ic` / `--esd-ic` — via ORCA's ESD module, closed-shell molecules only,
   much more expensive: a numerical S1 Hessian; TDA throughout except IC,
   TightOpt for its optimisations, Herzberg–Teller only where the SOC is
   weak, FC reruns flagging width- and soft-mode-sensitive ISC rates;

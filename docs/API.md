@@ -194,12 +194,14 @@ package defaults in `autodft/qm/orca/defaults.py`.
 | `uvvis_nroots`                              | int    | `20`          | UV/Vis excited states (1–100). Stored only when UV/Vis is requested.                        |
 | `uvvis_tda`                                 | bool   | `false`       | Tamm–Dancoff approximation for the UV/Vis TDDFT. Stored only when UV/Vis is requested.      |
 | `request_spec_ir`                           | bool   | `false`       | IR: read from the S0 optimisation's frequency calculation — no extra job. Needs `Freq` in the optimisation header. |
-| `request_spec_nmr`                          | bool   | `false`       | NMR: a singlepoint on every optimised S0 conformer with the singlepoint header's orbital basis replaced by `pcSseg-2` and `NMR` added to its `!` line; refused for elements past Kr (no `pcSseg-2`). Shifts are referenced to TMS (¹H, ¹³C) and CFCl₃ (¹⁹F), which the pipeline computes itself — once per optimisation/singlepoint header pair — in the protected `admin/reference_systems` project. Closed-shell molecules only. |
+| `request_spec_nmr`                          | bool   | `false`       | NMR: a singlepoint on every optimised S0 conformer in the `nmr_method`. Shifts are referenced to TMS (¹H, ¹³C) and CFCl₃ (¹⁹F), which the pipeline computes itself — once per optimisation/singlepoint header pair and `nmr_method` — in the protected `admin/reference_systems` project. Closed-shell molecules only. |
 | `nmr_nuclei`                                | list   | `["H","C","F"]` | Nuclei to report; stored only with NMR.                                                  |
-| `request_esd` | bool | `false` | Excited-state dynamics: S1 and T1 optimised from the lowest S0 conformer, SOC TDDFT, ORCA ESD rates (ISC, RISC, IC, fluorescence, T1→S0 ISC, phosphorescence). Needs a closed-shell singlet, `Freq` in the optimisation header, the energy singlepoint, and a functional whose TDDFT gradients ORCA supports (native B88 functionals such as B3LYP need `LibXC(...)`). Molecules with an element past Kr (ECP in def2, e.g. I) need `ZORA`/`DKH`/`X2C` in the singlepoint header. |
+| `nmr_method`                                | string | `"singlepoint"` | `"singlepoint"`: the singlepoint header with `NMR` added to its `!` line. `"dh"`: `!revDSD-PBEP86-D4/2021 PCSSEG-3 AUTOAUX NMR NOFROZENCORE TightSCF` plus the singlepoint header's solvation keywords, `%cpcm`, `%maxcore` and `%pal` only; refused for elements past Kr (no `pcSseg-3`). Stored only with NMR. |
+| `request_esd` | bool | `false` | Excited-state dynamics: S1 and T1 optimised from the lowest S0 conformer, SOC TDDFT, ORCA ESD rates (ISC, RISC, fluorescence, T1→S0 ISC, phosphorescence; IC with `esd_ic`). Needs a closed-shell singlet, `Freq` in the optimisation header, the energy singlepoint, and a functional whose TDDFT gradients ORCA supports (native B88 functionals such as B3LYP need `LibXC(...)`). Molecules with an element past Kr (ECP in def2, e.g. I) need `ZORA`/`DKH`/`X2C` in the singlepoint header. |
 | `request_esd_ht` | bool | `false` | Herzberg–Teller where it matters: fluorescence, phosphorescence, and ISC channels whose SOCME is below 5 cm⁻¹ (RISC more than 10 kT uphill stays FC); only with `request_esd`. |
 | `esd_tn_window_ev` | float | `0.3` | S1→Tn ISC is summed over triplets up to this many eV above S1 (0–1). Stored only with ESD. |
 | `esd_temperature_k` | float | `298.15` | Temperature of the rates (0 < T ≤ 1000). Stored only with ESD. |
+| `esd_ic` | bool | `false` | Also run the S1→S0 internal-conversion rate (harmonic, often unreliable for large gaps). Stored only with ESD. |
 | `request_densities` | bool | `false` | Gaussian cube files (electron and/or spin density) from a `%plots` block added to every state's own energy singlepoint — S0, T1, ox, red, not only S0's (ESD's S1 has no energy singlepoint, so it never gets one). Needs the energy singlepoint stage; the singlepoint header must not already contain `%plots`. |
 | `density_eldens` | bool | `true` | Write the electron density cube. Stored only with Densities; at least one of `density_eldens` / `density_spindens` must be true. |
 | `density_spindens` | bool | `true` | Write the spin density cube — silently skipped on a closed-shell state (multiplicity 1), since ORCA's `orca_plot` cannot produce one there. Stored only with Densities. |
@@ -506,7 +508,9 @@ when atoms are grouped by the symmetry classes of the bonds perceived from
 the first counted conformer's geometry, else `"none"` (one signal per
 atom). `reference` names, per reported nucleus, the reference compound
 (TMS for H and C, CFCl₃ for F) at the molecule's optimisation and
-singlepoint headers in `admin/reference_systems`: `status` is `"ok"`,
+singlepoint headers and NMR method in `admin/reference_systems` — the one
+whose NMR input matches the molecule's, else the one stored with the same
+`nmr_method` (none for molecules from before the option): `status` is `"ok"`,
 `"pending"`, `"failed"` or `"missing"` (none at this method); `sigma_ppm`
 is its mean isotropic shielding for that element; `method_matches` says
 whether its NMR input's `!` keywords equal the molecule's (SCF convergence
@@ -545,10 +549,10 @@ An ESD molecule's entry adds `esd`:
 
 `status` is `"waiting"` before the S1/T1 states are seeded (or while
 seeding waits for every S0 conformer to finish), `"running"` while any
-rate is still open, `"done"` once all six have settled, or `"failed"`
+rate is still open, `"done"` once all six have settled (or are not requested), or `"failed"`
 (with `reason`) if seeding itself failed. Each entry of `rates` is one of
 `isc`, `risc`, `ic`, `fluorescence`, `isc_t1_s0`, `phosphorescence`, with
-its own `status`: `"successful"`, `"created"`, `"pending"`, `"failed"`
+its own `status`: `"not requested"` (`ic` without `esd_ic`), `"successful"`, `"created"`, `"pending"`, `"failed"`
 (with `reason`), `"waiting"`, `"blocked"` (with `reason` — an upstream
 optimisation or SOC singlepoint failure, named with the `!LibXC(<functional>)`
 fix when that is the cause, or an S1/T1 optimisation whose geometry lost
@@ -579,7 +583,8 @@ SOCME, often ~0, and is then not judged. These reruns never enter
 `delta_est_uks_ev` instead compares the TDDFT S1 against the T1 state's
 own (UKS) energy singlepoint at the T1 geometry. `derived` reports
 `tau_s1_ns` / `phi_fluorescence` / `phi_isc` / `phi_ic` once
-`fluorescence`, `isc` and `ic` are all in, and `tau_t1_us` /
+`fluorescence`, `isc` and `ic` are all in (with `ic` not requested:
+without `phi_ic`, from `fluorescence` and `isc`, flagged), and `tau_t1_us` /
 `phi_phosphorescence` / `phi_isc_t1_s0` / `phi_risc` once
 `phosphorescence`, `isc_t1_s0` and `risc` are all in. `flags` lists
 warnings: a negative rate clamped to 0, a job whose sum of K*K exceeds 7

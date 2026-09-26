@@ -10,14 +10,16 @@ Tick a category when you submit: the dashboard's checkboxes, the API's
 `request_esd` / `request_densities` / `request_singlepoint_nbo` fields
 (plus their options), or the CLI's `--uvvis` / `--ir` / `--nmr` / `--esd`
 / `--densities` / `--nbo` flags (with `--uvvis-nroots` / `--uvvis-tda` /
-`--nmr-nuclei` / `--esd-ht` / `--esd-tn-window` / `--esd-temperature` /
+`--nmr-nuclei` / `--nmr-method` / `--esd-ht` / `--esd-tn-window` /
+`--esd-temperature` / `--esd-ic` /
 `--density-grid` / `--eldens-file` / `--spindens-file` / `--nbo-keywords`).
 Categories only attach to new molecules — resubmitting an existing
 molecule with a category it doesn't already have is refused, and so is
 resubmitting it with different options for a category it already has
 (options apply to new molecules only, same as the categories themselves).
 A category's options (`uvvis_nroots`, `uvvis_tda`, `nmr_nuclei`,
-`request_esd_ht`, `esd_tn_window_ev`, `esd_temperature_k`, the `density_*`
+`nmr_method`, `request_esd_ht`, `esd_tn_window_ev`, `esd_temperature_k`,
+`esd_ic`, the `density_*`
 settings, `nbo_keywords`) are stored only when that category is requested.
 See [`docs/API.md`](API.md) for the field-level reference and the
 `GET /api/projects/{name}/photophysics` response shape. Densities and NBO
@@ -64,23 +66,37 @@ it never changes what's stored.
 
 ## NMR
 
-Each optimised S0 conformer gets one `singlepoint_nmr` task. Its header
-is the state's singlepoint header with the orbital basis on its `!` lines
-(`def2-*`, `cc-pV*`, `6-31G*`, `pcseg-*`, `x2c-*`, …) replaced by Jensen's
-shielding basis `pcSseg-2` (added if the header names none) and the `NMR`
-keyword appended to the first `!` line. Functional, grid, solvent and RI
-settings stay as they are, auxiliary bases included (`def2/J` works with
-`pcSseg-2` under RIJCOSX; shieldings within 0.2 ppm of `AutoAux`). ORCA
-has `pcSseg-2` for H–Kr only, so NMR for a molecule with a heavier
-element is refused. The reference compounds run through the same rule, so
-references and molecules share one NMR method. NMR needs a closed-shell
-singlet reference (multiplicity 1) — doublets and diradicals are refused.
+Each optimised S0 conformer gets one `singlepoint_nmr` task, in one of
+two methods (`nmr_method`):
+
+* `singlepoint` (default): the state's singlepoint header with the `NMR`
+  keyword appended to its first `!` line — its own functional, basis,
+  grid, solvent and RI settings.
+* `dh` (high accuracy, after the ORCA 6.1 NMR tutorial):
+  `!revDSD-PBEP86-D4/2021 PCSSEG-3 AUTOAUX NMR NOFROZENCORE TightSCF`
+  plus only the singlepoint header's solvation keywords (`CPCM(...)`,
+  `SMD(...)`), `%cpcm` block, `%maxcore` and `%pal`; its functional,
+  basis, auxiliary basis, RIJCOSX, grid and KeepDens are dropped.
+  NoFrozenCore because core electrons shape shieldings; ORCA reports the
+  shieldings from the relaxed MP2 density last, and that is what is read.
+  `pcSseg-3` covers H–Kr in ORCA 6.1, so `dh` is refused for a molecule
+  with a heavier element. Much more expensive than the default (CH₃F in
+  MeCN: 3 min on 2 cores); CPCM is accepted with it.
+
+The reference compounds run in the same method, so references and
+molecules share one NMR method. NMR needs a closed-shell singlet reference
+(multiplicity 1) — doublets and diradicals are refused.
 
 Shifts are δ = σ_ref − σ: σ_ref is the mean isotropic shielding of that
 element in a reference compound (TMS `C[Si](C)(C)C` for ¹H/¹³C, CFCl₃
 `FC(Cl)(Cl)Cl` for ¹⁹F), which the pipeline computes itself once per
-optimisation/singlepoint header pair, in the protected
-`admin/reference_systems` project. `method_matches` compares the `!`
+optimisation/singlepoint header pair and `nmr_method`, in the protected
+`admin/reference_systems` project (one S0 state per method there). A
+molecule takes the reference whose NMR input has the same `!` keywords
+and `%` blocks as its own, else the one stored with its `nmr_method`.
+Molecules and references stored before `nmr_method` existed (NMR in
+`pcSseg-2`) carry none and so only pair with each other; a new molecule
+never takes one of their references. `method_matches` compares the `!`
 keywords and `%` blocks of the molecule's and the reference's NMR inputs.
 
 Signals are grouped by topological symmetry from the optimised geometry:
@@ -103,10 +119,18 @@ the duration — avoid running one while references are outstanding.
 
 ## ESD
 
-Excited-state dynamics (ISC, RISC, IC, fluorescence, T1→S0 ISC,
-phosphorescence) via ORCA's `ESD` module. Tick `request_esd` (plus
-`request_esd_ht`, `esd_tn_window_ev`, `esd_temperature_k`); a closed-shell
-singlet only.
+Excited-state dynamics (ISC, RISC, fluorescence, T1→S0 ISC,
+phosphorescence, and IC on request) via ORCA's `ESD` module. Tick
+`request_esd` (plus `request_esd_ht`, `esd_tn_window_ev`,
+`esd_temperature_k`, `esd_ic`); a closed-shell singlet only.
+
+**IC is opt-in.** The S1→S0 internal-conversion rate job runs only with
+`esd_ic` (CLI `--esd-ic`, dashboard tick box in the ESD panel): harmonic IC
+rates are often unreliable for large gaps. Without it `rates.ic` is
+`"not requested"`, τ(S1) and the S1 yields are built from fluorescence and
+ISC alone (no `phi_ic`), and a flag says so. Molecules submitted before the
+option existed that already have an IC job keep reporting it; those whose
+IC job was not created yet no longer get one.
 
 **Flow.** Once every S0 confsearch/optimisation/energy-singlepoint task is
 terminal, the best S0 conformer (S0\*, picked by G like the
@@ -130,7 +154,7 @@ iroot 1 triplets true dosoc true tda true`, plus `cpcmeq true` when the
 header is solvated, so DELE compares equilibrium-solvated states) run on
 S0\*, S1 and T1. Every ESD TDDFT job uses TDA except IC, whose NACMEs the
 manual computes with full TDDFT; UV/Vis keeps its own `uvvis_tda`. Each
-of the six rate jobs starts as soon as its two states are ready. That T1
+rate job (five, six with `esd_ic`) starts as soon as its two states are ready. That T1
 state also gets the normal T1 follow-ups — the energy singlepoint (used
 for ΔE_ST(UKS)) and the vertical spin-change singlepoint — even without
 `request_t1`, so T1 rows appear in the molecule's CSV export and state
@@ -234,9 +258,9 @@ an `RI-` prefix) can't do TDDFT gradients in ORCA 6.1, so an optimisation
 header using one is refused for ESD at submission — the S1 optimisation
 would always fail. This list is a courtesy check: any other functional
 ORCA can't differentiate fails once with `LibXC Needed` and is not
-retried. A native B88 *singlepoint* header costs the IC rate and therefore
-τ(S1) and the S1 yields, which need k_IC; the other five rates are
-unaffected. Use `!LibXC(B3LYP)` etc. either way.
+retried. A native B88 *singlepoint* header costs the IC rate (when
+requested) and therefore τ(S1) and the S1 yields, which then need k_IC;
+the other five rates are unaffected. Use `!LibXC(B3LYP)` etc. either way.
 
 **Heavy elements.** def2 basis sets put an effective core potential on
 every element past Kr (Rb onwards, e.g. I), and ORCA has no spin-orbit
@@ -433,7 +457,8 @@ when it has rows:
 * `UV-Vis sticks` / `IR sticks` — one row per transition or mode, per
   conformer. IR frequencies are unscaled harmonic.
 * `NMR` — one row per signal (symmetry class) per requested nucleus.
-* `ESD` — one row per molecule: status, the six rates, ΔE_ST (TDDFT and
+* `ESD` — one row per molecule: status, the six rates (`not requested` for
+  an IC left out), ΔE_ST (TDDFT and
   UKS), the derived lifetimes/yields, and flags.
 * `ESD jobs` — one row per ORCA job behind a rate (FC/HT channel,
   sublevel or triplet).
