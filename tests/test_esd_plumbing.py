@@ -91,9 +91,9 @@ def test_double_hybrid_nmr_gets_the_long_stage():
 
 def test_stage_configs():
     settings = Settings()
-    assert settings.pipeline.excited_optimization.time_limit == "4-00:00:00"
+    assert settings.pipeline.excited_optimization.time_limit == "10-00:00:00"
     assert (settings.pipeline.esd.default_nprocs, settings.pipeline.esd.default_mem_per_core) == (1, 2000)
-    assert settings.pipeline.esd_tddft.time_limit == "4-00:00:00"
+    assert settings.pipeline.esd_tddft.time_limit == "10-00:00:00"
     s1 = MoleculeState(id=1, molecule_id=1, description="S1", charge=0, multiplicity=1,
                        metadata_json=json.dumps({"esd_role": "S1"}))
     s1_ht = MoleculeState(id=3, molecule_id=1, description="S1", charge=0, multiplicity=1,

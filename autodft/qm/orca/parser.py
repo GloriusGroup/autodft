@@ -95,6 +95,9 @@ class OrcaParser(QMEngine):
             logger.warning("orca_plot failed in %s; cube files missing or empty", job_path)
 
         main_jobs = _esd_main_jobs(job_path) if task_type.startswith("esd_") else None
+        if main_jobs == 0:
+            # An HT rate's FC tail with only diagnostics: every job must print its rate.
+            main_jobs = None
         main_content = _before_diagnostics(content, main_jobs)
         if main_content is not None:
             # FC diagnostics never cost the rate: whatever they do, judge the main jobs only.

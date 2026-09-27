@@ -244,15 +244,25 @@ for three roots above the highest one they read (`nroots 4` for S1→T1),
 fluorescence and IC for 5, phosphorescence for 10 (the SOC singlepoints
 keep 10); any `DEFGRIDn` on the header's `!` line becomes `DEFGRID2`
 (added when there is none) and `KeepDens` is dropped, since HT would write
-a density per displacement. `[pipeline.excited_optimization]` defaults to 4
-days (`4-00:00:00`); check it against the SLURM partition's `MaxTime`
+a density per displacement. `[pipeline.excited_optimization]` defaults to 10
+days (`10-00:00:00`); check it against the SLURM partition's `MaxTime`
 before submitting, since `sbatch` refuses a job asking for longer than the
 partition allows. FC ISC-type jobs (DELE and SOCME supplied, no electronic
 structure) run under `[pipeline.esd]` — 1 core, 1 day, never escalated on a
 timeout. IC, fluorescence, phosphorescence and every HT job run TDDFT on
-the singlepoint header and use `[pipeline.esd_tddft]` instead — 4 days, the
+the singlepoint header and use `[pipeline.esd_tddft]` instead — 10 days, the
 singlepoint header's own `%pal`, escalated on a timeout like any
-singlepoint. Category jobs (UV/Vis, NMR, SOC, the six rate jobs) do not
+singlepoint; an escalated retry never shortens a stage limit longer than
+`[pipeline.retry] increased_time_limit`. A rate with two or more HT sublevel
+jobs runs as parts: one task per sublevel job (3N−6 displaced TDDFT+SOC
+singlepoints each; days for a 45-atom acridine) and, for ISC types, one
+more for its FC channels and FC diagnostics. The parts run side by side,
+retry independently (a crashed sublevel reruns alone), and the analysis
+combines them like the jobs of one input (`"parts"` in the rate entry, a
+`part` per job row). Rates built before parts existed stay one task.
+A retried optimisation (any state) starts from the failed attempt's last
+geometry — ORCA's `input.xyz`, copied back after a crash or stall and
+synced every `sync_output_minutes` — except after an `Excited Root` failure. Category jobs (UV/Vis, NMR, SOC, the six rate jobs) do not
 count toward the global failure circuit breaker; ESD S1/T1 optimisations
 do, like every optimisation. An S1 optimisation whose root collapsed
 (`Excited Root`) is not retried — re-running the same input from the same
@@ -555,7 +565,7 @@ the old code.
 
 1. Stop the controller; back up the database as above.
 2. Cancel the SLURM jobs of the tasks the next step deletes or fails —
-   `esd_role` optimisations can run up to 4 days, and a killed controller
+   `esd_role` optimisations can run up to 10 days, and a killed controller
    does not stop them:
 
 ```bash

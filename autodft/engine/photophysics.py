@@ -22,7 +22,7 @@ from autodft.engine.state_machine import _create_singlepoint_task, paused_projec
 from autodft.extraction import connectivity, results
 from autodft.extraction.extractor import PipelineExtractor
 from autodft.models import (
-    ComputationTask, Molecule, MoleculeGeometry, MoleculeState, TaskStatus, TaskType,
+    ComputationHeader, ComputationTask, Molecule, MoleculeGeometry, MoleculeState, TaskStatus, TaskType,
 )
 from autodft.qm.orca import esd_inputs
 
@@ -208,21 +208,22 @@ def _join(session: Session, s0: MoleculeState, s1: MoleculeState, t1: MoleculeSt
             continue
         if any(results.broken_bonds(session, inputs[name][0]) for name in (initial, final)):
             continue  # a dissociated S1/T1 geometry gets no rates
-        session.add(ComputationTask(
-            task_type=task_type,
-            state_id=states[initial].id,
-            header_id=states[initial].singlepoint_header_id,
-            input_geometry_id=inputs[final][0].output_geometry_id,
-            depends_on_task_id=inputs[initial][0].id,
-            has_followups=False,
-            status=TaskStatus.created,
-            inputs_json=json.dumps({
-                name: {"opt": inputs[name][0].id, "soc": inputs[name][1].id}
-                for name in (initial, final)
-            }),
-        ))
+        roles = {name: {"opt": inputs[name][0].id, "soc": inputs[name][1].id} for name in (initial, final)}
+        count = _part_count(session, rate, states[initial], roles)
+        for part in range(1, count + 1):
+            session.add(ComputationTask(
+                task_type=task_type,
+                state_id=states[initial].id,
+                header_id=states[initial].singlepoint_header_id,
+                input_geometry_id=inputs[final][0].output_geometry_id,
+                depends_on_task_id=inputs[initial][0].id,
+                has_followups=False,
+                status=TaskStatus.created,
+                inputs_json=json.dumps({**roles, "part": part, "parts": count} if count > 1 else roles),
+            ))
         created.add(task_type)
-        logger.info("Molecule %d: created %s", s1.molecule_id, rate)
+        logger.info("Molecule %d: created %s (%d part%s)", s1.molecule_id, rate, count,
+                    "" if count == 1 else "s")
     if {TaskType(rate) for rate in wanted} <= created:
         _mark(session, s1, esd_done=True)
 
@@ -239,10 +240,39 @@ def prepare_rate_job(
 
     What went into it (energies, DELE, SOCME) is kept under ``inputs_json["computed"]``.
     """
-    roles = {name: ids for name, ids in json.loads(task.inputs_json or "{}").items()
-             if name != "computed"}
+    stored = json.loads(task.inputs_json or "{}")
+    roles = {name: stored[name] for name in ("S0", "S1", "T1") if name in stored}
     molecule = session.get(Molecule, state.molecule_id)
     extractor = PipelineExtractor(molecule.project_name if molecule is not None else "")
+    data = _rate_data(session, roles)
+    _, _, hessians = esd_inputs.RATES[task.task_type.value]
+    job_path.mkdir(parents=True, exist_ok=True)
+    for filename, name in hessians.items():
+        folder = extractor.successful_job_path(session, roles[name]["opt"])
+        source = folder / "input.hess" if folder is not None else None
+        if source is None or not source.exists():
+            raise esd_inputs.EsdInputError(
+                f"the {name} optimisation (task {roles[name]['opt']}) left no input.hess"
+            )
+        shutil.copyfile(source, job_path / filename)
+    rate = task.task_type.value
+    if "part" in stored:
+        split = esd_inputs.parts(rate, data, _metadata(state), sp_header, state.charge)
+        if len(split) != stored["parts"]:
+            raise esd_inputs.EsdInputError(
+                f"the rate now splits into {len(split)} parts, not the {stored['parts']} it was created with"
+            )
+        text, computed = split[stored["part"] - 1]
+        roles = {**roles, "part": stored["part"], "parts": stored["parts"]}
+    else:
+        text, computed = esd_inputs.build(rate, data, _metadata(state), sp_header, state.charge)
+    task.inputs_json = json.dumps({**roles, "computed": computed})
+    session.add(task)
+    return text, list(hessians)
+
+
+def _rate_data(session: Session, roles: dict) -> dict[str, esd_inputs.StateData]:
+    """Each role's SOC singlepoint results, as the rate builders read them."""
     data = {}
     for name, ids in roles.items():
         soc_task = session.get(ComputationTask, ids["soc"])
@@ -257,22 +287,19 @@ def prepare_rate_job(
                 "the SOC singlepoint output lacks its roots or its SOC matrix"
             )
         data[name] = state_data
-    _, _, hessians = esd_inputs.RATES[task.task_type.value]
-    job_path.mkdir(parents=True, exist_ok=True)
-    for filename, name in hessians.items():
-        folder = extractor.successful_job_path(session, roles[name]["opt"])
-        source = folder / "input.hess" if folder is not None else None
-        if source is None or not source.exists():
-            raise esd_inputs.EsdInputError(
-                f"the {name} optimisation (task {roles[name]['opt']}) left no input.hess"
-            )
-        shutil.copyfile(source, job_path / filename)
-    text, computed = esd_inputs.build(
-        task.task_type.value, data, _metadata(state), sp_header, state.charge,
-    )
-    task.inputs_json = json.dumps({**roles, "computed": computed})
-    session.add(task)
-    return text, list(hessians)
+    return data
+
+
+def _part_count(session: Session, rate: str, state: MoleculeState, roles: dict) -> int:
+    """How many tasks *rate* runs as (``esd_inputs.parts``); 1 when its inputs cannot be read yet."""
+    header = session.get(ComputationHeader, state.singlepoint_header_id)
+    if header is None:
+        return 1
+    try:
+        data = _rate_data(session, roles)
+        return len(esd_inputs.parts(rate, data, _metadata(state), header.header_text, state.charge))
+    except esd_inputs.EsdInputError:
+        return 1  # the job build reports the problem
 
 
 def _metadata(state: MoleculeState) -> dict:

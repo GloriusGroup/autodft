@@ -70,14 +70,14 @@ def molecule_esd(
     data = _state_data(session, extractor, inputs)
     _energies(out, session, extractor, data, inputs, detail)
 
-    tasks = {
-        t.task_type.value: t for t in session.exec(
-            select(ComputationTask).where(
-                col(ComputationTask.state_id).in_([s1.id, t1.id]),
-                col(ComputationTask.task_type).in_([TaskType(r) for r in esd_inputs.RATES]),
-            )
-        ).all()
-    }
+    tasks: dict[str, list[ComputationTask]] = {}
+    for t in session.exec(
+        select(ComputationTask).where(
+            col(ComputationTask.state_id).in_([s1.id, t1.id]),
+            col(ComputationTask.task_type).in_([TaskType(r) for r in esd_inputs.RATES]),
+        ).order_by(col(ComputationTask.id))
+    ).all():
+        tasks.setdefault(t.task_type.value, []).append(t)
     # Molecules from before the esd_ic option always asked for IC.
     wanted = photophysics.wanted_rates(metadata) if "esd_ic" in metadata else tuple(esd_inputs.RATES)
     for rate, (initial, final, _) in esd_inputs.RATES.items():
@@ -158,9 +158,10 @@ def _uks_t1(session, extractor, opt: Optional[ComputationTask]) -> Optional[floa
     return record["energy"] if record else None
 
 
-def _rate(session, extractor, rate, task, inputs, states, flags, detail, herzberg_teller) -> dict:
+def _rate(session, extractor, rate, tasks, inputs, states, flags, detail, herzberg_teller) -> dict:
+    """One rate from its tasks: one, or one per part (``esd_inputs.parts``) combined in order."""
     name = NAMES[rate]
-    if task is None:
+    if not tasks:
         for state in states:
             if photophysics.input_status(inputs[state]) == "failed":
                 return {"status": "blocked", "reason": _blocker(session, state, inputs[state])}
@@ -171,39 +172,32 @@ def _rate(session, extractor, rate, task, inputs, states, flags, detail, herzber
                 return {"status": "blocked", "reason": f"{label} geometry {broken} "
                         f"(optimisation task {inputs[state][0].id}); no rates on a broken geometry"}
         return {"status": "waiting"}
-    if task.status != TaskStatus.successful:
-        entry = {"status": task.status.value}
-        if task.status == TaskStatus.failed:
-            entry["reason"] = _last_failure(session, task)
+    unfinished = [t for t in tasks if t.status != TaskStatus.successful]
+    if unfinished:
+        failed = next((t for t in unfinished if t.status == TaskStatus.failed), None)
+        entry = {"status": (failed or unfinished[0]).status.value}
+        if failed is not None:
+            part = f"part {tasks.index(failed) + 1} of {len(tasks)}: " if len(tasks) > 1 else ""
+            entry["reason"] = part + _last_failure(session, failed)
         return entry
-    record = results.for_task(session, task)
-    found = results.rates(record) if record else []
-    if not found:
-        return {"status": "unavailable"}
-    computed = json.loads(task.inputs_json or "{}").get("computed", {})
-    jobs = computed.get("jobs") or []
-    diagnostics = computed.get("diagnostics") or []
-    total = max([len(jobs), *(d["job"] for d in diagnostics)])
-    if all(r.job is not None for r in found):
-        by_job = {r.job: r for r in found}
-    elif len(found) == total:
-        by_job = dict(enumerate(found, 1))
-    else:
-        by_job = {}
-    # The main jobs come first; diagnostics' rates never enter the rate.
-    main = [by_job[i] for i in range(1, len(jobs) + 1) if i in by_job]
-    incomplete = None
-    if not jobs:
-        flags.append(f"{name}: {len(found)} rates for 0 jobs; per-job inputs not shown.")
-        pairs = [({}, r) for r in found]
-    elif len(main) != len(jobs):
-        incomplete = _incomplete(jobs, main if by_job else found)
-        flags.append(f"{name}: {incomplete}")
-        # Unnumbered and short: which job printed which rate is unknown.
-        pairs = [(jobs[i - 1], r) for i, r in sorted(by_job.items()) if i <= len(jobs)] if by_job \
-            else [({}, r) for r in found]
-    else:
-        pairs = list(zip(jobs, main))
+    parts = []
+    for task in tasks:
+        record = results.for_task(session, task)
+        found = results.rates(record) if record else []
+        if not found:
+            return {"status": "unavailable"}
+        parts.append((json.loads(task.inputs_json or "{}").get("computed", {}), found))
+
+    pairs, checks, incomplete, n_jobs = [], [], [], 0
+    for k, (computed, found) in enumerate(parts, 1):
+        part_pairs, by_job, missing = _part_pairs(name, computed, found, flags)
+        if len(parts) > 1:
+            part_pairs = [({**job, "part": k}, r) for job, r in part_pairs]
+        pairs += part_pairs
+        n_jobs += len(computed.get("jobs") or [])
+        checks += _diagnostics(name, computed.get("diagnostics") or [], by_job, flags)
+        if missing is not None:
+            incomplete.append(missing)
     values, rows, zero_socme = [], [], 0
     for job, found_rate in pairs:
         label = name + (f" T{job['triplet']}" if "triplet" in job else "")
@@ -234,24 +228,55 @@ def _rate(session, extractor, rate, task, inputs, states, flags, detail, herzber
             if found_rate.socme_cm is not None:
                 row["socme_cm"] = found_rate.socme_cm
         rows.append(row)
-    checks = _diagnostics(name, diagnostics, by_job, flags)
-    if incomplete is not None:
-        entry: dict = {"status": "incomplete", "rate_s": None, "reason": incomplete}
+    computed = parts[0][0]
+    if incomplete:
+        reason = "; ".join(incomplete)
+        entry: dict = {"status": "incomplete", "rate_s": None, "reason": reason}
     else:
         combined = sum(values) if computed.get("combine") == "sum" else sum(values) / len(values)
         entry = {"status": "successful", "rate_s": combined}
-        if jobs and zero_socme == len(jobs):
+        if n_jobs and zero_socme == n_jobs:
             entry["socme_zero"] = True
         e00 = [r.e00_cm for _, r in pairs if r.e00_cm is not None]
         if e00:
             entry["e00_ev"] = e00[0] * CM_TO_EV
     if "ht" in computed:
-        entry.update(ht=computed["ht"], ht_reason=computed["ht_reason"])
+        entry.update(ht=any(c.get("ht") for c, _ in parts), ht_reason=computed["ht_reason"])
+    if len(parts) > 1:
+        entry["parts"] = len(parts)
     if checks:
         entry["diagnostics"] = checks
     if detail:
         entry["jobs"] = rows
     return entry
+
+
+def _part_pairs(name, computed, found, flags):
+    """One task's (job record, rate) pairs, its rates by ORCA job number, and what is missing."""
+    jobs = computed.get("jobs") or []
+    diagnostics = computed.get("diagnostics") or []
+    total = max([len(jobs), *(d["job"] for d in diagnostics)])
+    if all(r.job is not None for r in found):
+        by_job = {r.job: r for r in found}
+    elif len(found) == total:
+        by_job = dict(enumerate(found, 1))
+    else:
+        by_job = {}
+    # The main jobs come first; diagnostics' rates never enter the rate.
+    main = [by_job[i] for i in range(1, len(jobs) + 1) if i in by_job]
+    if not jobs:
+        if diagnostics:
+            return [], by_job, None  # an HT rate's FC tail: diagnostics only
+        flags.append(f"{name}: {len(found)} rates for 0 jobs; per-job inputs not shown.")
+        return [({}, r) for r in found], by_job, None
+    if len(main) != len(jobs):
+        incomplete = _incomplete(jobs, main if by_job else found)
+        flags.append(f"{name}: {incomplete}")
+        # Unnumbered and short: which job printed which rate is unknown.
+        pairs = [(jobs[i - 1], r) for i, r in sorted(by_job.items()) if i <= len(jobs)] if by_job \
+            else [({}, r) for r in found]
+        return pairs, by_job, incomplete
+    return list(zip(jobs, main)), by_job, None
 
 
 def _diagnostics(name: str, diagnostics: list[dict], by_job: dict, flags: list) -> list[dict]:

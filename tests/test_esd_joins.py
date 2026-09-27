@@ -85,9 +85,18 @@ def esd(session, tmp_path):
 
 
 def _rates(session, esd) -> dict:
+    """Each rate's first task (its part 1 when split)."""
+    out = {}
+    for t in _rate_tasks(session, esd):
+        out.setdefault(t.task_type, t)
+    return out
+
+
+def _rate_tasks(session, esd) -> list:
     ids = [esd["states"]["S1"].id, esd["states"]["T1"].id]
-    tasks = session.exec(select(ComputationTask).where(col(ComputationTask.state_id).in_(ids))).all()
-    return {t.task_type: t for t in tasks if t.task_type in RATE_TYPES}
+    tasks = session.exec(select(ComputationTask).where(col(ComputationTask.state_id).in_(ids))
+                         .order_by(col(ComputationTask.id))).all()
+    return [t for t in tasks if t.task_type in RATE_TYPES]
 
 
 def _meta(state) -> dict:

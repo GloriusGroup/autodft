@@ -140,6 +140,42 @@ def build(
 
     *options* is the rate task's state metadata (``categories.esd_settings`` keys).
     """
+    jobs, computed = _jobs(rate, data, options, sp_header, standalone_fc=False)
+    return _join(jobs, charge), computed
+
+
+def parts(
+    rate: str, data: dict[str, StateData], options: dict, sp_header: str, charge: int,
+) -> list[tuple[str, dict]]:
+    """A rate split into separately run parts: one per HT sublevel job, then its FC jobs.
+
+    HT sublevel jobs run for days each; as parts they run side by side and a crash
+    reruns only its own. Without two or more of them the rate stays one part.
+    """
+    jobs, computed = _jobs(rate, data, options, sp_header, standalone_fc=True)
+    record = computed["jobs"]
+    heavy = [i for i, job in enumerate(record)
+             if job.get("ht", computed["ht"]) and (rate == "esd_phosp" or "sublevel" in job)]
+    if len(heavy) < 2:
+        return [build(rate, data, options, sp_header, charge)]
+    # The builders put the HT jobs first: part k is job k, the rest is the FC tail.
+    assert heavy == list(range(len(heavy)))
+    common = {key: value for key, value in computed.items() if key not in ("jobs", "diagnostics")}
+    out = [(_join([jobs[i]], charge), {**common, "jobs": [record[i]], "ht": True}) for i in heavy]
+    tail = jobs[len(heavy):]
+    if tail:
+        shifted = [{**d, "job": d["job"] - len(heavy)} for d in computed.get("diagnostics", [])]
+        rest = {**common, "jobs": record[len(heavy):], "ht": False}
+        if shifted:
+            rest["diagnostics"] = shifted
+        out.append((_join(tail, charge), rest))
+    return out
+
+
+def _jobs(
+    rate: str, data: dict[str, StateData], options: dict, sp_header: str, standalone_fc: bool,
+) -> tuple[list[str], dict]:
+    """The ORCA jobs of *rate* and what went into them; *standalone_fc* FC jobs carry %maxcore."""
     settings = categories.esd_settings(options)
     initial, final, hessians = RATES[rate]
     files = {_HESSIAN_KEYS[name]: f'"{name}"' for name in hessians}
@@ -161,7 +197,9 @@ def build(
                 else (data["S0"].socme[(1, 0)], 0)
             channels = [(1, sroot, energies["T1"] - energies[final], socme, 1 / math.sqrt(3))]
             combine = "mean"
-        jobs, record, diagnostics = _isc(rate, channels, settings, files, temperature, sp_header)
+        jobs, record, diagnostics = _isc(
+            rate, channels, settings, files, temperature, sp_header, standalone_fc,
+        )
         ht = any(job["ht"] for job in record)
         reasons = {job["triplet"]: job["ht_reason"] for job in record}
         ht_reason = next(iter(reasons.values())) if len(set(reasons.values())) == 1 \
@@ -201,10 +239,10 @@ def build(
                 "ht": ht, "ht_reason": ht_reason}
     if diagnostics:
         computed["diagnostics"] = diagnostics
-    return _join(jobs, charge), computed
+    return jobs, computed
 
 
-def _isc(rate, channels, settings, files, temperature, sp_header):
+def _isc(rate, channels, settings, files, temperature, sp_header, standalone_fc):
     """ISC-type jobs per channel, then its FC diagnostics.
 
     Each channel is ``(triplet, sroot, gap (Eh), SOCME (cm-1), FC SOCME factor)``.
@@ -220,7 +258,7 @@ def _isc(rate, channels, settings, files, temperature, sp_header):
     fc_main = []
     decided = [(*channel, *ht_decision(rate, channel[3], channel[2] * EH_TO_CM, settings))
                for channel in channels]
-    fc_header = FC_AFTER_TDDFT if any(d[5] for d in decided) else FC_HEADER
+    fc_header = FC_AFTER_TDDFT if any(d[5] for d in decided) and not standalone_fc else FC_HEADER
     for n, sroot, gap, socme, factor, ht, reason in decided:
         dele = _cm(gap * EH_TO_CM)
         common = {"triplet": n, "dele_cm": gap * EH_TO_CM, "ht": ht, "ht_reason": reason}

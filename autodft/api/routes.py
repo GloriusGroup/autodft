@@ -784,9 +784,10 @@ def api_project_molecules_detail(
                     "singlepoint_vert_spin_change":  _status_of(deps.get(TaskType.singlepoint_vert_spin_change)),
                     "singlepoint_uvvis":             _status_of(deps.get(TaskType.singlepoint_uvvis)),
                     "singlepoint_nmr":                _status_of(deps.get(TaskType.singlepoint_nmr)),
+                    # Every task, not one per type: an HT rate runs as several parts.
                     "esd": _combined_status([
-                        d for t, d in deps.items()
-                        if t == TaskType.singlepoint_soc or t.value.startswith("esd_")
+                        d for d in deps_by_parent.get(opt.id, [])
+                        if d.task_type == TaskType.singlepoint_soc or d.task_type.value.startswith("esd_")
                     ]),
                     # Only optimisations judged since the bond check existed carry one.
                     **({"connectivity": checks[opt.id]} if opt.id in checks else {}),
