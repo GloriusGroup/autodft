@@ -53,3 +53,11 @@ def test_escalation_never_shortens_a_longer_stage_limit():
     _, short_submit = strategy.modify("%pal nprocs 8 end\n", "#SBATCH --time=1-00:00:00\n", failure)
     assert "#SBATCH --time=10-00:00:00" in long_submit
     assert "#SBATCH --time=4-00:00:00" in short_submit
+
+
+def test_slurm_time_formats():
+    from autodft.qm.orca.retry import _slurm_seconds
+
+    assert [_slurm_seconds(t) for t in ("30", "30:15", "2:00:00", "1-12", "1-12:30", "10-00:00:00")] == [
+        1800, 1815, 7200, 129600, 131400, 864000]
+    assert _slurm_seconds("UNLIMITED") == float("inf")

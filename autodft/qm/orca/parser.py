@@ -42,6 +42,9 @@ def _esd_main_jobs(job_path: Path) -> Optional[int]:
     except OSError:
         return None
     main, marker, _ = text.partition(DIAGNOSTICS_MARKER)
+    if marker and not main.strip():
+        # An HT rate's FC tail with diagnostics only: every job must print its rate.
+        return text.count("$new_job") + 1
     # The $new_job right before the marker closes the last main job.
     return main.count("$new_job") + (0 if marker else 1)
 
@@ -95,9 +98,6 @@ class OrcaParser(QMEngine):
             logger.warning("orca_plot failed in %s; cube files missing or empty", job_path)
 
         main_jobs = _esd_main_jobs(job_path) if task_type.startswith("esd_") else None
-        if main_jobs == 0:
-            # An HT rate's FC tail with only diagnostics: every job must print its rate.
-            main_jobs = None
         main_content = _before_diagnostics(content, main_jobs)
         if main_content is not None:
             # FC diagnostics never cost the rate: whatever they do, judge the main jobs only.

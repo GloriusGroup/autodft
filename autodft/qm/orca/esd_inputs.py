@@ -159,7 +159,8 @@ def parts(
     if len(heavy) < 2:
         return [build(rate, data, options, sp_header, charge)]
     # The builders put the HT jobs first: part k is job k, the rest is the FC tail.
-    assert heavy == list(range(len(heavy)))
+    if heavy != list(range(len(heavy))):
+        raise EsdInputError(f"{rate}: the HT jobs are not the leading jobs; cannot split into parts")
     common = {key: value for key, value in computed.items() if key not in ("jobs", "diagnostics")}
     out = [(_join([jobs[i]], charge), {**common, "jobs": [record[i]], "ht": True}) for i in heavy]
     tail = jobs[len(heavy):]

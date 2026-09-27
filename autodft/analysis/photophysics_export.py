@@ -77,7 +77,7 @@ def build_xlsx(payload: dict) -> bytes:
                 entry = rates.get(r, {})
                 for j in entry.get("jobs", []):
                     ht = j.get("ht", entry.get("ht"))
-                    esd_jobs.append((m["id"], m["state_id"], r, j.get("triplet"), j.get("sublevel"),
+                    esd_jobs.append((m["id"], m["state_id"], r, j.get("part"), j.get("triplet"), j.get("sublevel"),
                                      j.get("rate_s"), j.get("dele_cm"), j.get("socme_cm"), j.get("fc_percent"),
                                      j.get("ht_percent"), j.get("k_squared"), j.get("e00_cm"), ht,
                                      j.get("ht_reason", entry.get("ht_reason"))))
@@ -106,7 +106,7 @@ def build_xlsx(payload: dict) -> bytes:
                        "dEST_UKS_eV", "k_ISC", "k_RISC", "k_IC", "k_F", "k_ISC_T1S0", "k_P", "tau_S1_ns",
                        "phi_F", "phi_ISC", "phi_IC", "tau_T1_us", "phi_P", "phi_ISC_T1S0", "phi_RISC",
                        "flags"), esd)
-    _sheet(wb, "ESD jobs", ("mol_id", "state_id", "rate", "triplet", "sublevel", "rate_s", "dele_cm",
+    _sheet(wb, "ESD jobs", ("mol_id", "state_id", "rate", "part", "triplet", "sublevel", "rate_s", "dele_cm",
                             "socme_cm", "fc_percent", "ht_percent", "k_squared", "e00_cm", "HT",
                             "HT_reason"), esd_jobs)
     _sheet(wb, "ESD diagnostics", ("mol_id", "state_id", "rate", "triplet", "k_FC_INLINEW100",

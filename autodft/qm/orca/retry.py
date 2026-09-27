@@ -469,14 +469,24 @@ class PerturbImaginaryMode(RetryStrategy):
         return input_content, submit_content
 
 
-def _slurm_seconds(limit: str) -> int:
-    """A SLURM ``[D-]HH:MM:SS`` time limit in seconds."""
-    days, _, clock = limit.rpartition("-")
+def _slurm_seconds(limit: str) -> float:
+    """A SLURM time limit in seconds; ``UNLIMITED``/``infinite`` is infinite.
+
+    SLURM reads ``MM``, ``MM:SS``, ``HH:MM:SS``, ``D-HH``, ``D-HH:MM`` and ``D-HH:MM:SS``.
+    """
+    if limit.lower() in ("unlimited", "infinite"):
+        return float("inf")
+    days, dash, clock = limit.partition("-")
+    if not dash:
+        clock, days = days, "0"
     parts = [int(p) for p in clock.split(":")]
-    while len(parts) < 3:
-        parts.insert(0, 0)
-    hours, minutes, seconds = parts
-    return ((int(days or 0) * 24 + hours) * 60 + minutes) * 60 + seconds
+    if dash:
+        hours, minutes, seconds = (parts + [0, 0])[:3]
+    elif len(parts) == 3:
+        hours, minutes, seconds = parts
+    else:
+        hours, (minutes, seconds) = 0, (parts + [0])[:2]
+    return ((int(days) * 24 + hours) * 60 + minutes) * 60 + seconds
 
 
 class RecoverSinglepointSCF(RetryStrategy):

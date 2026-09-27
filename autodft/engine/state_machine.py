@@ -1047,9 +1047,11 @@ def _restart_geometry(failed: ComputationJob, seed_xyz: str) -> str:
 
     ORCA rewrites ``input.xyz`` every cycle and the job script copies it back,
     so a crash or stall resumes where it stopped instead of from the seed. A
-    collapsed S1 (``Excited Root``) or an unreadable file keeps the seed.
+    collapsed S1 (``Excited Root``), an SCF that failed at a possibly runaway
+    geometry, or an unreadable file keeps the seed.
     """
-    if "Excited Root" in (failed.fail_reason or "") or not failed.job_path:
+    reason = failed.fail_reason or ""
+    if "Excited Root" in reason or "SCF Convergence" in reason or not failed.job_path:
         return seed_xyz
     try:
         last = (Path(failed.job_path) / "input.xyz").read_text(encoding="utf-8")

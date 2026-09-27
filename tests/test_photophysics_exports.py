@@ -367,7 +367,7 @@ def test_build_xlsx_has_a_sheet_per_category_plus_sticks_and_esd_jobs():
         "phi_ISC", "phi_IC", "tau_T1_us", "phi_P", "phi_ISC_T1S0", "phi_RISC", "flags",
     ]
     assert _header(wb["ESD jobs"]) == [
-        "mol_id", "state_id", "rate", "triplet", "sublevel", "rate_s", "dele_cm", "socme_cm",
+        "mol_id", "state_id", "rate", "part", "triplet", "sublevel", "rate_s", "dele_cm", "socme_cm",
         "fc_percent", "ht_percent", "k_squared", "e00_cm", "HT", "HT_reason",
     ]
     assert _header(wb["ESD diagnostics"]) == [

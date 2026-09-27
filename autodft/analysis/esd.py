@@ -172,6 +172,12 @@ def _rate(session, extractor, rate, tasks, inputs, states, flags, detail, herzbe
                 return {"status": "blocked", "reason": f"{label} geometry {broken} "
                         f"(optimisation task {inputs[state][0].id}); no rates on a broken geometry"}
         return {"status": "waiting"}
+    # An HT rate's FC tail with diagnostics only never costs the rate, as in one input.
+    lost = [t for t in tasks if t.status == TaskStatus.failed and _diagnostics_only(t)]
+    for t in lost:
+        flags.append(f"{name}: the FC diagnostics (part {tasks.index(t) + 1} of {len(tasks)}) "
+                     f"failed; the rate stands without them.")
+    tasks = [t for t in tasks if t not in lost]
     unfinished = [t for t in tasks if t.status != TaskStatus.successful]
     if unfinished:
         failed = next((t for t in unfinished if t.status == TaskStatus.failed), None)
@@ -249,6 +255,12 @@ def _rate(session, extractor, rate, tasks, inputs, states, flags, detail, herzbe
     if detail:
         entry["jobs"] = rows
     return entry
+
+
+def _diagnostics_only(task: ComputationTask) -> bool:
+    """Whether *task* is an HT rate's part that runs FC diagnostics and no rate job."""
+    stored = json.loads(task.inputs_json or "{}")
+    return "part" in stored and stored.get("plan") == []
 
 
 def _part_pairs(name, computed, found, flags):

@@ -503,10 +503,12 @@ class PipelineExtractor:
                 continue
 
             cubes = densities_flagged and task.task_type == TaskType.singlepoint
-            plan.append(
-                (job_path, dest / str(mol.id) / state.description, conf_idx,
-                 task.task_type.value, cubes)
-            )
+            folder = dest / str(mol.id) / state.description
+            part = json.loads(task.inputs_json or "{}").get("part")
+            if part is not None:
+                # The parts of one HT rate share its file names.
+                folder = folder / f"{task.task_type.value}_part{part}"
+            plan.append((job_path, folder, conf_idx, task.task_type.value, cubes))
 
         return plan
 

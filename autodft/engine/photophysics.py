@@ -209,8 +209,10 @@ def _join(session: Session, s0: MoleculeState, s1: MoleculeState, t1: MoleculeSt
         if any(results.broken_bonds(session, inputs[name][0]) for name in (initial, final)):
             continue  # a dissociated S1/T1 geometry gets no rates
         roles = {name: {"opt": inputs[name][0].id, "soc": inputs[name][1].id} for name in (initial, final)}
-        count = _part_count(session, rate, states[initial], roles)
-        for part in range(1, count + 1):
+        plans = _part_plans(session, rate, states[initial], roles)
+        stored = [{**roles, "part": k, "parts": len(plans), "plan": plan} for k, plan in enumerate(plans, 1)] \
+            if len(plans) > 1 else [roles]
+        for inputs_json in stored:
             session.add(ComputationTask(
                 task_type=task_type,
                 state_id=states[initial].id,
@@ -219,11 +221,11 @@ def _join(session: Session, s0: MoleculeState, s1: MoleculeState, t1: MoleculeSt
                 depends_on_task_id=inputs[initial][0].id,
                 has_followups=False,
                 status=TaskStatus.created,
-                inputs_json=json.dumps({**roles, "part": part, "parts": count} if count > 1 else roles),
+                inputs_json=json.dumps(inputs_json),
             ))
         created.add(task_type)
-        logger.info("Molecule %d: created %s (%d part%s)", s1.molecule_id, rate, count,
-                    "" if count == 1 else "s")
+        logger.info("Molecule %d: created %s (%d part%s)", s1.molecule_id, rate, len(stored),
+                    "" if len(stored) == 1 else "s")
     if {TaskType(rate) for rate in wanted} <= created:
         _mark(session, s1, esd_done=True)
 
@@ -263,7 +265,11 @@ def prepare_rate_job(
                 f"the rate now splits into {len(split)} parts, not the {stored['parts']} it was created with"
             )
         text, computed = split[stored["part"] - 1]
-        roles = {**roles, "part": stored["part"], "parts": stored["parts"]}
+        if json.loads(json.dumps(computed["jobs"])) != stored["plan"]:
+            raise esd_inputs.EsdInputError(
+                f"part {stored['part']} no longer runs the jobs it was created with (its SOC inputs changed)"
+            )
+        roles = {**roles, **{key: stored[key] for key in ("part", "parts", "plan")}}
     else:
         text, computed = esd_inputs.build(rate, data, _metadata(state), sp_header, state.charge)
     task.inputs_json = json.dumps({**roles, "computed": computed})
@@ -290,16 +296,17 @@ def _rate_data(session: Session, roles: dict) -> dict[str, esd_inputs.StateData]
     return data
 
 
-def _part_count(session: Session, rate: str, state: MoleculeState, roles: dict) -> int:
-    """How many tasks *rate* runs as (``esd_inputs.parts``); 1 when its inputs cannot be read yet."""
+def _part_plans(session: Session, rate: str, state: MoleculeState, roles: dict) -> list[list]:
+    """Each part's job records (``esd_inputs.parts``); one part when the inputs cannot be read."""
     header = session.get(ComputationHeader, state.singlepoint_header_id)
     if header is None:
-        return 1
+        return [[]]
     try:
         data = _rate_data(session, roles)
-        return len(esd_inputs.parts(rate, data, _metadata(state), header.header_text, state.charge))
-    except esd_inputs.EsdInputError:
-        return 1  # the job build reports the problem
+        split = esd_inputs.parts(rate, data, _metadata(state), header.header_text, state.charge)
+    except (OSError, KeyError, ValueError):  # EsdInputError is a ValueError
+        return [[]]  # one task; its job build reports the problem
+    return [json.loads(json.dumps(computed["jobs"])) for _, computed in split]
 
 
 def _metadata(state: MoleculeState) -> dict:

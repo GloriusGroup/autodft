@@ -56,3 +56,7 @@ def test_the_retry_job_writes_the_last_geometry(session, tmp_path):
     session.commit()
     job = _create_job_for_task(session, task, 2, Settings(), qm_engine=OrcaParser(), previous_failed_job=failed)
     assert (tmp_path / "opt" / f"job_{job.id}" / "input.xyz").read_text() == last
+
+
+def test_an_scf_failure_restarts_from_the_seed(tmp_path):
+    assert _restart_geometry(_failed(tmp_path, "['Termination', 'SCF Convergence']"), SEED) == SEED

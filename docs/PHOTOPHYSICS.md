@@ -259,10 +259,15 @@ singlepoints each; days for a 45-atom acridine) and, for ISC types, one
 more for its FC channels and FC diagnostics. The parts run side by side,
 retry independently (a crashed sublevel reruns alone), and the analysis
 combines them like the jobs of one input (`"parts"` in the rate entry, a
-`part` per job row). Rates built before parts existed stay one task.
+`part` per job row and XLSX column; file exports put each part in
+`<state>/<rate>_part<k>/`). Each part stores the jobs it was planned with
+and refuses to build if its SOC inputs changed since. A tail that runs only
+FC diagnostics never costs the rate: if it fails, the rate stands and is
+flagged. Rates built before parts existed stay one task.
 A retried optimisation (any state) starts from the failed attempt's last
 geometry — ORCA's `input.xyz`, copied back after a crash or stall and
-synced every `sync_output_minutes` — except after an `Excited Root` failure. Category jobs (UV/Vis, NMR, SOC, the six rate jobs) do not
+synced every `sync_output_minutes` — except after an `Excited Root` or
+`SCF Convergence` failure, which restart from the seed. Category jobs (UV/Vis, NMR, SOC, the six rate jobs) do not
 count toward the global failure circuit breaker; ESD S1/T1 optimisations
 do, like every optimisation. An S1 optimisation whose root collapsed
 (`Excited Root`) is not retried — re-running the same input from the same
