@@ -202,6 +202,12 @@ Headers 5 and 6 are the package defaults (`autodft/qm/orca/defaults.py`)
 applied when a submission sets neither `header_*` nor `header_*_id`; 3
 and 4 are the same method on the larger def2-TZVP/def2-QZVPD basis pair,
 kept as a seeded alternative. All four DFT headers run in CPCM(MeCN).
+The defaults request 12 cores × 2000 MB (optimisation) and 8 cores × 1500 MB
+(singlepoint), below the CPU nodes' ~2600 MB/core. Measured on a 45-atom
+acridine: opt+Freq is 8 % faster at 2000 than at 1250 MB, UV/Vis and SOC
+TDDFT are unchanged between 1000 and 2500 MB, and singlepoints peak at
+2–8 GB. The double-hybrid NMR option inherits the singlepoint `%maxcore`;
+give it a larger singlepoint header if it runs short.
 
 The headers can be edited / extended in the dashboard's **Headers** page
 or via the `/api/headers` endpoints. All six belong to `admin`; anyone

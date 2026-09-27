@@ -19,7 +19,7 @@ DEFAULT_HEADER_CONFSEARCH = (
 
 DEFAULT_HEADER_OPTIMIZATION = (
     "!wB97X-D3 def2-SVP def2/J RIJCOSX DEFGRID3 Opt TightSCF CPCM(MeCN) Freq\n"
-    "%maxcore 1250\n"
+    "%maxcore 2000\n"
     "%pal nprocs 12 end\n"
 )
 
@@ -28,7 +28,7 @@ DEFAULT_HEADER_SINGLEPOINT = (
     # turn the supposedly cheap singlepoint into a re-optimization or a
     # full Hessian calculation on the produced geometry.
     "!wB97X-D3 def2-TZVP def2/J RIJCOSX DEFGRID3 TightSCF CPCM(MeCN) KeepDens\n"
-    "%maxcore 2000\n"
+    "%maxcore 1500\n"
     "%pal nprocs 8 end\n"
 )
 
