@@ -67,7 +67,7 @@ class StageConfig:
 @dataclass
 class RetryConfig:
     increased_time_limit: str = "4-00:00:00"
-    increased_nprocs: int = 32
+    increased_nprocs: int = 24
     # Per-core memory (%maxcore, MB) an escalated retry targets -- but ONLY
     # for an explicit memory failure (SLURM OUT_OF_MEMORY or an ORCA
     # out-of-memory message), and clamped to MAX_MAXCORE_MB. A retry for any

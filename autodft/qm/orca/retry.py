@@ -139,13 +139,13 @@ class IncreaseResources(RetryStrategy):
     Every other failure keeps the header's own ``%maxcore`` -- more cores, not
     more memory.
 
-    Default target: 32 cores, extended time limit, and up to
+    Default target: 24 cores, extended time limit, and up to
     ``mem_per_core`` (clamped to the ceiling) per rank on a memory failure.
     """
 
     def __init__(
         self,
-        nprocs: int = 32,
+        nprocs: int = 24,
         mem_per_core: int = MAX_MAXCORE_MB,
         time_limit: str = INCREASED_TIME,
         # 0 = no ceiling. Set from [pipeline.retry] in the config; see
