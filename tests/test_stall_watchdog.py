@@ -17,6 +17,7 @@ def test_watchdog_renders_valid_bash(tmp_path):
     assert "STALL_SEC=14400" in text
     assert "TICK % 10" in text
     assert ".input.xyz.part" in text
+    assert '$1 == "orca_esd"' in text and "touch .autodft_busy" in text
     assert STALL_MARKER in text
     subprocess.run(["bash", "-n", str(path)], check=True)
 

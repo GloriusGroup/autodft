@@ -41,6 +41,7 @@ trap 'pkill -TERM -s "$ORCA_PID"' TERM
 STALL_SEC={{ stall_minutes * 60 }}
 STALLED=0
 TICK=0
+ESD_CPU=0
 while kill -0 "$ORCA_PID" 2>/dev/null; do
     # Poll every 5 s so a finished job frees its allocation promptly; act once a minute.
     for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
@@ -53,7 +54,12 @@ while kill -0 "$ORCA_PID" 2>/dev/null; do
         # The current geometry, so a retry after a timeout resumes from it.
         cp input.xyz "$WORK_DIR"/.input.xyz.part 2>/dev/null && mv -f "$WORK_DIR"/.input.xyz.part "$WORK_DIR"/input.xyz
     fi
-{% endif %}    if kill -0 "$ORCA_PID" 2>/dev/null \
+{% endif %}    # orca_esd computes correlation functions serially for hours without writing:
+    # while it burns CPU, that is progress. (Hung MPI ranks spin in other programs.)
+    NOW_CPU=$(ps -s "$ORCA_PID" -o comm=,times= 2>/dev/null | awk '$1 == "orca_esd" {s += $2} END {print s + 0}')
+    [ "$NOW_CPU" -ge $((ESD_CPU + 30)) ] && touch .autodft_busy
+    ESD_CPU=$NOW_CPU
+    if kill -0 "$ORCA_PID" 2>/dev/null \
             && [ -z "$(find . -newermt "@$(( $(date +%s) - STALL_SEC ))" -print -quit)" ]; then
         STALLED=1
         STALL_PS=$(ps -o pid,etime,time,args -s "$ORCA_PID")
