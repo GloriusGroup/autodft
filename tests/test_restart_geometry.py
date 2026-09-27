@@ -60,3 +60,7 @@ def test_the_retry_job_writes_the_last_geometry(session, tmp_path):
 
 def test_an_scf_failure_restarts_from_the_seed(tmp_path):
     assert _restart_geometry(_failed(tmp_path, "['Termination', 'SCF Convergence']"), SEED) == SEED
+
+
+def test_a_saddle_point_restarts_from_the_seed(tmp_path):
+    assert _restart_geometry(_failed(tmp_path, "['Imaginary Frequencies']"), SEED) == SEED
