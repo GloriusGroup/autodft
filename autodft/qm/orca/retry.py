@@ -479,9 +479,10 @@ class RecoverSinglepointSCF(RetryStrategy):
     IncreaseResources -- the only strategy that fired for singlepoints -- just
     re-ran them identically. This one actually changes the SCF:
 
-      * always: bypass LEANSCF (``%scf UseLeanSCF false``), which sidesteps
-        the early-abort crashes; raise ``MaxIter``; and add a level shift to
-        break the near-degeneracy that stalls the anion SCFs.
+      * always: raise ``MaxIter`` and add a level shift to break the
+        near-degeneracy that stalls the anion SCFs. (``UseLeanSCF false``
+        is gone: ORCA 6 no longer ships the old SCF program, so it aborted
+        every retry.)
       * attempt >= 3: also relax ``TightSCF`` -> ``NormalSCF`` and add
         ``SlowConv``, so a near-degenerate anion already converged to uEh is
         accepted rather than failed on the density criterion alone.
@@ -500,6 +501,8 @@ class RecoverSinglepointSCF(RetryStrategy):
         "the scf has not converged",
         "not fully converged",
     )
+
+    _MARKER = "# autodft: SCF recovery"
 
     def _is_scf_failure(self, failure: FailureInfo) -> bool:
         if "SCF Convergence" in (failure.fail_reason or ""):
@@ -524,16 +527,15 @@ class RecoverSinglepointSCF(RetryStrategy):
         failure: FailureInfo,
     ) -> tuple[str, str]:
         # Idempotent: the retry builder replays strategies over every prior
-        # failure, so modify() can run more than once per rebuild. Our marker
-        # is the UseLeanSCF directive -- if it is already there, do nothing.
-        if re.search(r"UseLeanSCF", input_content, re.IGNORECASE):
+        # failure, so modify() can run more than once per rebuild.
+        if self._MARKER in input_content:
             return input_content, submit_content
 
         relax = failure.attempt >= 3
         shift = 0.3 if relax else 0.2
         scf_block = (
+            f"{self._MARKER}\n"
             "%scf\n"
-            "  UseLeanSCF false\n"
             "  MaxIter 500\n"
             f"  Shift Shift {shift} ErrOff 0.1 end\n"
             "end\n"

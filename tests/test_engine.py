@@ -1055,13 +1055,14 @@ class TestRetryStrategies:
             "singlepoint",
         )
 
-    def test_scf_recovery_bypasses_leanscf_and_shifts(self):
+    def test_scf_recovery_shifts_without_the_removed_scf_program(self):
         from autodft.qm.orca.retry import FailureInfo, RecoverSinglepointSCF
 
         inp = "!M062X def2-TZVPD RIJCOSX TightSCF\n*xyzfile 0 -1 input.xyz\n"
         failure = FailureInfo(fail_reason="['SCF Convergence']", previous_job_path="", attempt=2)
         new_input, _ = RecoverSinglepointSCF().modify(inp, "", failure)
-        assert re.search(r"UseLeanSCF\s+false", new_input, re.IGNORECASE)
+        # ORCA 6 aborts on UseLeanSCF false: the pre-6.0 SCF program is gone.
+        assert "useleanscf" not in new_input.lower()
         assert "Shift Shift 0.2" in new_input
         assert "MaxIter 500" in new_input
         assert "TightSCF" in new_input          # not relaxed on attempt 2
@@ -1088,7 +1089,7 @@ class TestRetryStrategies:
         once, _ = s.modify(inp, "", failure)
         twice, _ = s.modify(once, "", failure)
         assert once == twice
-        assert twice.lower().count("useleanscf") == 1
+        assert twice.count("%scf") == 1
 
     def test_scf_recovery_detects_leanscf_crash_from_output(self, tmp_path):
         """A LEANSCF abort records only ['Termination'] in fail_reason, but the
@@ -1105,7 +1106,7 @@ class TestRetryStrategies:
         assert s.applies(failure, "singlepoint")
         inp = "!M062X def2-TZVPD RIJCOSX TightSCF\n*xyzfile 0 1 input.xyz\n"
         new_input, _ = s.modify(inp, "", failure)
-        assert re.search(r"UseLeanSCF\s+false", new_input, re.IGNORECASE)
+        assert "Shift Shift 0.2" in new_input
 
 
 # ======================================================================
