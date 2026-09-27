@@ -274,11 +274,14 @@ class IncreaseResources(RetryStrategy):
             f"#SBATCH --mem={total_mem}",
             submit_content,
         )
-        submit_content = re.sub(
-            r"#SBATCH --time=\S+",
-            f"#SBATCH --time={self.time_limit}",
-            submit_content,
-        )
+        # Never shorten a stage whose own limit is already longer.
+        current = re.search(r"#SBATCH --time=(\S+)", submit_content)
+        if current is None or _slurm_seconds(self.time_limit) > _slurm_seconds(current.group(1)):
+            submit_content = re.sub(
+                r"#SBATCH --time=\S+",
+                f"#SBATCH --time={self.time_limit}",
+                submit_content,
+            )
 
         return input_content, submit_content
 
@@ -464,6 +467,16 @@ class PerturbImaginaryMode(RetryStrategy):
             logger.warning("Could not find *xyzfile line to replace.")
 
         return input_content, submit_content
+
+
+def _slurm_seconds(limit: str) -> int:
+    """A SLURM ``[D-]HH:MM:SS`` time limit in seconds."""
+    days, _, clock = limit.rpartition("-")
+    parts = [int(p) for p in clock.split(":")]
+    while len(parts) < 3:
+        parts.insert(0, 0)
+    hours, minutes, seconds = parts
+    return ((int(days or 0) * 24 + hours) * 60 + minutes) * 60 + seconds
 
 
 class RecoverSinglepointSCF(RetryStrategy):

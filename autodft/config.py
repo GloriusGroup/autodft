@@ -132,14 +132,14 @@ class PipelineConfig:
     # S1 optimisations: TDDFT gradients plus (often numerical) excited-state
     # Hessians take far longer than a ground-state optimisation.
     excited_optimization: StageConfig = field(
-        default_factory=lambda: StageConfig(time_limit="4-00:00:00"))
+        default_factory=lambda: StageConfig(time_limit="10-00:00:00"))
     # FC ESD rate jobs: DELE and SOCME supplied, seconds on one core.
     esd: StageConfig = field(
         default_factory=lambda: StageConfig(time_limit="1-00:00:00", default_nprocs=1,
                                             default_mem_per_core=2000))
     # TDDFT ESD rate jobs (IC, fluorescence, phosphorescence, every HT job):
     # the singlepoint header's %pal; HT runs 3N-6+ displaced TDDFT singlepoints per sublevel.
-    esd_tddft: StageConfig = field(default_factory=lambda: StageConfig(time_limit="4-00:00:00"))
+    esd_tddft: StageConfig = field(default_factory=lambda: StageConfig(time_limit="10-00:00:00"))
     # Double-hybrid NMR (nmr_method "dh"): relaxed MP2 densities in pcSseg-3 take days for aromatics.
     nmr_dh: StageConfig = field(default_factory=lambda: StageConfig(time_limit="4-00:00:00"))
     retry: RetryConfig = field(default_factory=RetryConfig)

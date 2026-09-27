@@ -50,6 +50,8 @@ while kill -0 "$ORCA_PID" 2>/dev/null; do
     TICK=$((TICK + 1))
 {% if tmp_dir and sync_minutes %}    if [ $((TICK % {{ sync_minutes }})) -eq 0 ]; then
         cp output.out "$WORK_DIR"/.output.out.part 2>/dev/null && mv -f "$WORK_DIR"/.output.out.part "$WORK_DIR"/output.out
+        # The current geometry, so a retry after a timeout resumes from it.
+        cp input.xyz "$WORK_DIR"/.input.xyz.part 2>/dev/null && mv -f "$WORK_DIR"/.input.xyz.part "$WORK_DIR"/input.xyz
     fi
 {% endif %}    if kill -0 "$ORCA_PID" 2>/dev/null \
             && [ -z "$(find . -newermt "@$(( $(date +%s) - STALL_SEC ))" -print -quit)" ]; then

@@ -16,6 +16,7 @@ def test_watchdog_renders_valid_bash(tmp_path):
     assert "setsid -w /o/orca input.inp > output.out &" in text
     assert "STALL_SEC=14400" in text
     assert "TICK % 10" in text
+    assert ".input.xyz.part" in text
     assert STALL_MARKER in text
     subprocess.run(["bash", "-n", str(path)], check=True)
 
@@ -43,3 +44,12 @@ def test_stalled_job_is_resubmitted_without_escalation():
     failure = FailureInfo(fail_reason="['Stalled']", attempt=1, previous_job_path="")
     assert not IncreaseResources(nprocs=32, mem_per_core=2500, time_limit="4-00:00:00") \
         .applies(failure, "optimization")
+
+
+def test_escalation_never_shortens_a_longer_stage_limit():
+    failure = FailureInfo(fail_reason="['Termination']", attempt=1, previous_job_path="")
+    strategy = IncreaseResources(nprocs=24, mem_per_core=2500, time_limit="4-00:00:00")
+    _, long_submit = strategy.modify("%pal nprocs 8 end\n", "#SBATCH --time=10-00:00:00\n", failure)
+    _, short_submit = strategy.modify("%pal nprocs 8 end\n", "#SBATCH --time=1-00:00:00\n", failure)
+    assert "#SBATCH --time=10-00:00:00" in long_submit
+    assert "#SBATCH --time=4-00:00:00" in short_submit

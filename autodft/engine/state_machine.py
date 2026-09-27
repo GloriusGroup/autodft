@@ -1042,6 +1042,40 @@ def _create_job_for_task(
     return job
 
 
+def _restart_geometry(failed: ComputationJob, seed_xyz: str) -> str:
+    """Where a retried optimisation starts: the failed attempt's last geometry.
+
+    ORCA rewrites ``input.xyz`` every cycle and the job script copies it back,
+    so a crash or stall resumes where it stopped instead of from the seed. A
+    collapsed S1 (``Excited Root``) or an unreadable file keeps the seed.
+    """
+    if "Excited Root" in (failed.fail_reason or "") or not failed.job_path:
+        return seed_xyz
+    try:
+        last = (Path(failed.job_path) / "input.xyz").read_text(encoding="utf-8")
+    except OSError:
+        return seed_xyz
+    seed_atoms, last_atoms = _xyz_atoms(seed_xyz), _xyz_atoms(last)
+    if not last_atoms or last_atoms != seed_atoms:
+        return seed_xyz
+    return last
+
+
+def _xyz_atoms(xyz_data: str) -> Optional[list[str]]:
+    """The element sequence of an XYZ block with numeric coordinates, else None."""
+    lines = xyz_data.strip().splitlines()
+    try:
+        count = int(lines[0])
+        rows = [line.split() for line in lines[2:2 + count]]
+        if len(rows) != count or any(len(r) < 4 for r in rows):
+            return None
+        for r in rows:
+            [float(v) for v in r[1:4]]
+    except (ValueError, IndexError):
+        return None
+    return [r[0] for r in rows]
+
+
 def _generate_job_files(
     session: Session,
     job: ComputationJob,
@@ -1113,13 +1147,17 @@ def _generate_job_files(
     if geom is None:
         return _fail_task(session, task, job, f"Input geometry {task.input_geometry_id} not found")
 
+    xyz_data = geom.xyz_data
+    if task.task_type == TaskType.optimization and previous_failed_job is not None:
+        xyz_data = _restart_geometry(previous_failed_job, xyz_data)
+
     # Write QM input
     qm_engine.generate_input(
         job_path=job_path,
         header=header_text,
         charge=charge,
         multiplicity=multiplicity,
-        xyz_data=geom.xyz_data,
+        xyz_data=xyz_data,
     )
 
     # --- Gap 3 fix: Parse resources from header, fall back to config ---
