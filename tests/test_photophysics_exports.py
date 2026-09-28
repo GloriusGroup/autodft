@@ -98,7 +98,7 @@ def db(tmp_path):
     reset_engine()
 
 
-def test_cleanup_keeps_the_hessians_esd_needs(db):
+def test_cleanup_keeps_every_optimisations_hessian(db):
     with get_session() as session:
         kept = [
             _job_dir(session, db, "esd_s0", {"request_esd": True}),
@@ -109,11 +109,11 @@ def test_cleanup_keeps_the_hessians_esd_needs(db):
         esd_false = _job_dir(session, db, "esd_off", {"request_esd": False})
         esd_sp = _job_dir(session, db, "esd_sp", {"request_esd": True}, task_type=TaskType.singlepoint_soc)
     deleted = PipelineExtractor("__all__").cleanup_large_files()
-    for path in kept:
+    # Extend may add ESD to any molecule later, so no optimisation loses its Hessian.
+    for path in (*kept, plain, esd_false):
         assert sorted(p.name for p in path.iterdir()) == ["input.hess", "output.out"]
-    for path in (plain, esd_false, esd_sp):
-        assert sorted(p.name for p in path.iterdir()) == ["output.out"]
-    assert deleted == 3 + 2 * 3
+    assert sorted(p.name for p in esd_sp.iterdir()) == ["output.out"]
+    assert deleted == 5 + 2
 
 
 def test_cleanup_drops_a_rate_jobs_by_products_but_not_the_opt_hessian(db):
@@ -132,7 +132,7 @@ def test_a_dry_run_counts_the_same_files(db):
     with get_session() as session:
         _job_dir(session, db, "esd_s1", {"esd_role": "S1"}, description="S1")
         _job_dir(session, db, "plain", {})
-    assert PipelineExtractor("__all__").cleanup_large_files(dry_run=True) == 1 + 2
+    assert PipelineExtractor("__all__").cleanup_large_files(dry_run=True) == 1 + 1
 
 
 def test_cleanup_keeps_cubes_for_densities_singlepoints(db):
@@ -145,9 +145,9 @@ def test_cleanup_keeps_cubes_for_densities_singlepoints(db):
         (plain / "ElDens.cube").write_text("cube")
     deleted = PipelineExtractor("__all__").cleanup_large_files()
     assert sorted(p.name for p in kept.iterdir()) == ["ElDens.cube", "output.out"]
-    for path in (opt, plain):
-        assert sorted(p.name for p in path.iterdir()) == ["output.out"]
-    assert deleted == 2 + 3 + 3
+    assert sorted(p.name for p in opt.iterdir()) == ["input.hess", "output.out"]
+    assert sorted(p.name for p in plain.iterdir()) == ["output.out"]
+    assert deleted == 2 + 2 + 3
 
 
 def test_singlepoint_cubes_are_copied_with_the_sp_prefix(tmp_path):

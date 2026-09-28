@@ -75,13 +75,14 @@ def test_extend_queues_one_extend_entrypoint_per_molecule(api):
         assert meta["extend"] is True and meta["project_name"] == "nho/p" and meta["request_ox"] is True
 
 
-def test_extend_rejects_changed_options_and_foreign_molecules(api):
+def test_extend_skips_molecules_with_nothing_to_add_and_rejects_foreign_ones(api):
     client, key = api
     r = client.post("/api/projects/p/extend", headers=key, json={
-        "smiles_list": ["CCO", "c1ccccc1"], "request_spec_uvvis": True, "uvvis_nroots": 40})
-    details = {x["smiles"]: x["detail"] for x in r.json()["rejected"]}
-    assert "uvvis_nroots" in details["CCO"]
-    assert "not an unarchived molecule" in details["c1ccccc1"]
+        "smiles_list": ["CCO", "CC=O", "c1ccccc1"], "request_t1": True, "request_spec_uvvis": True, "uvvis_nroots": 40})
+    body = r.json()
+    assert body["skipped"] == ["CCO"]  # UV/Vis and T1 are there already
+    assert [q["smiles"] for q in body["queued"]] == ["CC=O"]
+    assert "not an unarchived molecule" in body["rejected"][0]["detail"]
 
 
 def test_extend_refuses_densities_later(api):

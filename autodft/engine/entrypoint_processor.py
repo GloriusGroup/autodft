@@ -38,6 +38,8 @@ ESD_S1_METADATA = {
     "request_singlepoint_vertical_excitations": False,
 }
 ESD_T1_METADATA = {"esd_role": "T1"}
+# On S0 when Extend added ESD: its optimisations keep the header's Opt level.
+ESD_ADDED_LATER = "esd_added_later"
 # Beside a requested T1, ESD's own triplet only needs what the rates read.
 ESD_OWN_T1_DESCRIPTION = "T1_esd"
 ESD_OWN_T1_METADATA = {
@@ -156,9 +158,7 @@ def _process_entrypoint_body(
         )).first():
             raise ValueError(f"{smiles} is not in {project}; only its molecules can be extended.")
         # Extending a finished molecule adds only the categories it lacks.
-        conflict, added = categories.extension(
-            session, project, _canonicalize_smiles(smiles), wanted, requested_options,
-        )
+        conflict, added = categories.extension(session, project, _canonicalize_smiles(smiles), wanted)
     elif nmr_references.is_reference_project(project):
         conflict = None  # reference molecules get one S0 state per NMR method (see _create_state)
     else:
@@ -177,7 +177,8 @@ def _process_entrypoint_body(
     # cross-state quantity -- adiabatic IP/EA, the S0->T1 gap -- becomes a
     # difference between two different conformers rather than between two
     # states of one conformer. It also embeds 4x more often than needed.
-    initial_xyz = _generate_initial_xyz(smiles)
+    # An extension reuses S0's initial geometry (below) instead.
+    initial_xyz = None if metadata.get("extend") else _generate_initial_xyz(smiles)
 
     # 2. Create / find molecule -- the first write of the transaction.
     molecule = _get_or_create_molecule(
@@ -198,6 +199,8 @@ def _process_entrypoint_body(
 
     base_path = settings.comp_data_path
     s0 = _check_extension(session, molecule, header_ids, added) if metadata.get("extend") else None
+    if s0 is not None:
+        initial_xyz = _initial_geometry(session, s0) or _generate_initial_xyz(smiles)
 
     # 4. Create states.
     _create_state(
@@ -214,7 +217,7 @@ def _process_entrypoint_body(
             metadata, header_ids, base_path, initial_xyz,
             defer=True, extra_metadata={**ESD_S1_METADATA, **esd},
         )
-        if metadata.get("request_T1", False) or _state(session, molecule, "T1", header_ids) is not None:
+        if metadata.get("request_T1", False) or _regular_t1(session, molecule, header_ids):
             t1_description, t1_metadata = ESD_OWN_T1_DESCRIPTION, ESD_OWN_T1_METADATA
         else:
             t1_description, t1_metadata = "T1", {}
@@ -275,6 +278,19 @@ def _state(session: Session, molecule: Molecule, description: str, header_ids: d
     ).first()
 
 
+def _regular_t1(session: Session, molecule: Molecule, header_ids: dict) -> bool:
+    """Whether *molecule* has a T1 state of its own (not ESD's triplet) with these headers."""
+    state = _state(session, molecule, "T1", header_ids)
+    return state is not None and not json.loads(state.metadata_json or "{}").get("esd_role")
+
+
+def _initial_geometry(session: Session, state: MoleculeState) -> Optional[str]:
+    geometry = session.exec(
+        select(MoleculeGeometry).where(MoleculeGeometry.state_id == state.id, MoleculeGeometry.label == "initial")
+    ).first()
+    return geometry.xyz_data if geometry is not None else None
+
+
 def _check_extension(
     session: Session, molecule: Molecule, header_ids: dict, added: set[str],
 ) -> MoleculeState:
@@ -316,6 +332,9 @@ def _extend_s0(session: Session, s0: MoleculeState, metadata: dict, added: set[s
                           for name in categories.OPTIONS.get(key, {}) if name in metadata}}
     state_metadata = json.loads(s0.metadata_json) if s0.metadata_json else {}
     state_metadata.update(categories.snapshot(subset))
+    if categories.ESD in added:
+        # Its conformers ran at the header's own Opt level; later ones stay there too (no TightOpt).
+        state_metadata[ESD_ADDED_LATER] = True
     s0.metadata_json = json.dumps(state_metadata)
     session.add(s0)
     for opt in _finished_optimisations(session, s0):
@@ -345,7 +364,7 @@ def _job_file(session: Session, task: ComputationTask, name: str) -> bool:
     """Whether *task*'s latest successful job left *name* in its directory."""
     job = session.exec(
         select(ComputationJob).where(ComputationJob.task_id == task.id, ComputationJob.success == True)  # noqa: E712
-        .order_by(col(ComputationJob.attempt).desc())
+        .order_by(col(ComputationJob.attempt).desc(), col(ComputationJob.id).desc())
     ).first()
     return bool(job and job.job_path and (Path(job.job_path) / name).exists())
 

@@ -212,7 +212,9 @@ def compose_header(
         # state in equilibrium only for analytic gradients, so cpcmeq is explicit.
         solvated = {"cpcmeq": True} if _SOLVATION_RE.search(header) else {}
         return with_tddft(with_tight_opt(header), nroots=S1_NROOTS, iroot=1, tda=True, **solvated)
-    if task_type == "optimization" and (options.get("esd_role") == "T1" or options.get(categories.ESD)):
+    if task_type == "optimization" and (
+        options.get("esd_role") == "T1" or (options.get(categories.ESD) and not options.get("esd_added_later"))
+    ):
         # ESD Hessians of T1 and of the S0 conformers (request_esd sits on S0 only).
         return with_tight_opt(header)
     if task_type == "singlepoint":

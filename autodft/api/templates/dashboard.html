@@ -3099,12 +3099,13 @@
             fb.textContent = '';
             fb.className = 'submit-feedback';
             var resp = await fetch('/api/projects/' + projectPath(project) + '/extend-info');
-            var info = await resp.json();
+            var info; try { info = await resp.json(); } catch (_) { info = { detail: 'HTTP ' + resp.status }; }
             if (!resp.ok || !info.extendable) {
                 fb.textContent = info.reason || info.detail || ('HTTP ' + resp.status);
                 fb.className = 'submit-feedback error';
                 return;
             }
+            if (extendMode) exitExtendMode();  // another project's locks must not carry over
             var form = document.getElementById('submitForm');
             if (!extendSnapshot) {
                 extendSnapshot = [].map.call(form.elements, function (el) {
@@ -3113,6 +3114,7 @@
             }
             extendMode = { project: info.project, info: info };
             var smiles = document.getElementById('smiles');
+            extendSnapshot.placeholder = smiles.placeholder;
             smiles.value = '';
             smiles.readOnly = true;
             smiles.placeholder = 'All ' + info.molecules + ' molecules of ' + info.project;
@@ -3139,7 +3141,8 @@
                 if (share === 'all') {
                     setField(id, true, true);
                 } else if (submitOnly) {
-                    setField(id, share === 'some', true);
+                    // Cannot be added later; ticked it would refuse every molecule without it.
+                    setField(id, false, true);
                     box.title = 'Runs inside the energy singlepoints: can only be chosen at the first submission.';
                 } else {
                     setField(id, false, false);
@@ -3170,10 +3173,10 @@
                 s.el.title = s.el.title && s.el.title.indexOf('first submission') !== -1 ? '' : s.el.title;
             });
             extendSnapshot.forEach(function (s) { s.el.dispatchEvent(new Event('change')); });
+            var smiles = document.getElementById('smiles');
+            smiles.placeholder = extendSnapshot.placeholder || '';
             extendSnapshot = null;
             extendMode = null;
-            var smiles = document.getElementById('smiles');
-            smiles.placeholder = '';
             smiles.dispatchEvent(new Event('input'));
             document.getElementById('extendBanner').style.display = 'none';
             document.getElementById('extendHeaders').style.display = 'none';
@@ -3196,7 +3199,9 @@
                     feedback.className = 'submit-feedback error';
                 } else {
                     var rejected = data.rejected || [];
+                    var skipped = (data.skipped || []).length;
                     feedback.textContent = 'Extended ' + (data.queued || []).length + ' molecule(s) of ' + project
+                        + (skipped ? ' (' + skipped + ' already had everything)' : '')
                         + (rejected.length ? ' — not extended: ' + rejected.map(function (r) {
                             return r.smiles + ' (' + r.detail + ')';
                         }).join('; ') : '');

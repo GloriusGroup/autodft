@@ -2271,9 +2271,11 @@ def _extend_scope(session, name: str) -> dict:
     conformers: dict[str, int] = {"S0": first.get("max_conformers_S0", 1)}
     for st in states:
         metadata = json.loads(st.metadata_json) if st.metadata_json else {}
-        if st.description in ("T1", "ox", "red") and not metadata.get("esd_role"):
+        # ESD's own triplet "T1" (ESD without request_T1) is the molecule's T1 as well.
+        if st.description in ("T1", "ox", "red"):
             counts[st.description] = counts.get(st.description, 0) + 1
-            conformers.setdefault(st.description, metadata.get(f"max_conformers_{st.description}", 1))
+            if not metadata.get("esd_role"):
+                conformers.setdefault(st.description, metadata.get(f"max_conformers_{st.description}", 1))
     n = len(live)
 
     def share(count: int) -> str:
@@ -2295,8 +2297,10 @@ def _extend_scope(session, name: str) -> dict:
         "options": options,
         "states": {d: share(counts.get(d, 0)) for d in ("T1", "ox", "red")},
         "max_conformers": conformers,
-        "settings": {key: first.get(key, default) for key, default in (
-            ("request_singlepoint_vertical_excitations", True), ("request_confsearch", True))},
+        "settings": {
+            "request_singlepoint_vertical_excitations": first.get("request_singlepoint_vertical_excitations", True),
+            "request_confsearch": bool(headers and headers["confsearch"]),
+        },
         "submit_only": list(categories.SUBMIT_ONLY),
         "smiles": [m.smiles for m in live],
     }
@@ -2336,23 +2340,22 @@ def api_extend(name: str, body: SubmitBatchRequest, identity: Identity = Depends
             return JSONResponse(status_code=409, content={"detail": str(exc)})
         headers = tuple(h["text"] if h else None for h in (scope["headers"][k] for k in
                                                             ("confsearch", "optimization", "singlepoint")))
-        flags = _category_flags(body)
-        wanted = categories.requested(flags)
-        if categories.NBO in wanted:
-            unavailable = categories.nbo_unavailable(get_active_settings())
-            if unavailable:
-                return JSONResponse(status_code=400, content={"detail": unavailable})
-        requested_options = {**categories.options(flags), categories.ESD_HT: bool(flags.get(categories.ESD_HT))}
+        wanted = categories.requested(_category_flags(body))
+        states = {d for d, on in (("T1", body.request_t1), ("ox", body.request_ox), ("red", body.request_red)) if on}
         known = set(scope["smiles"])
-        accepted, rejected = [], []
+        accepted, rejected, skipped = [], [], []
         for smiles in body.smiles_list or scope["smiles"]:
             detail, check = _reject_reason(body, smiles, headers)
             if detail is None and check["canonical"] not in known:
                 detail = f"{smiles} is not an unarchived molecule of {name}."
+            added: set = set()
             if detail is None:
-                detail, _ = categories.extension(session, name, check["canonical"], wanted, requested_options)
+                detail, added = categories.extension(session, name, check["canonical"], wanted)
             if detail is not None:
                 rejected.append({"smiles": smiles, "detail": detail})
+                continue
+            if not added and states <= _state_descriptions(session, name, check["canonical"]):
+                skipped.append(smiles)
                 continue
             entry = _new_entrypoint(session, body, check["canonical"], name, identity.username, headers)
             entry.request_metadata = json.dumps({**json.loads(entry.request_metadata), "extend": True})
@@ -2363,7 +2366,16 @@ def api_extend(name: str, body: SubmitBatchRequest, identity: Identity = Depends
             "project": name,
             "queued": [{"id": entry.id, "smiles": smiles} for smiles, entry in accepted],
             "rejected": rejected,
+            "skipped": skipped,
         }
+
+
+def _state_descriptions(session, project: str, canonical: str) -> set[str]:
+    """The state descriptions *canonical* already has in *project*."""
+    return set(session.exec(
+        select(MoleculeState.description).join(Molecule, Molecule.id == MoleculeState.molecule_id)
+        .where(Molecule.project_name == project, Molecule.smiles == canonical)
+    ).all())
 
 
 @router.post("/api/submit-batch")

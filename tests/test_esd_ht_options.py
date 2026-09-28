@@ -91,3 +91,12 @@ def test_unknown_ht_options_are_refused(name, value):
     metadata = {categories.ESD: True, categories.ESD_HT: True, name: value}
     reason = categories.rejection({"multiplicity": 1}, metadata, "!wB97X-D3 Opt Freq\n", "!wB97X-D3\n")
     assert reason is not None and name in reason
+
+
+def test_opt_level_ht_for_heavy_atoms_needs_a_relativistic_optimisation_header():
+    metadata = {categories.ESD: True, categories.ESD_HT: True, "esd_ht_method": "opt"}
+    check = {"multiplicity": 1, "max_atomic_number": 53}
+    reason = categories.rejection(check, metadata, "!wB97X-D3 def2-SVP Opt Freq\n", "!wB97X-D3 ZORA\n")
+    assert reason is not None and "esd_ht_method sp" in reason
+    assert categories.rejection(check, {**metadata, "esd_ht_method": "sp"},
+                                "!wB97X-D3 def2-SVP Opt Freq\n", "!wB97X-D3 ZORA\n") is None

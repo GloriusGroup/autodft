@@ -119,6 +119,14 @@ def _seed(
         })
         logger.warning("Molecule %d: no S0 conformer to seed ESD from", molecule.id)
         return
+    folder = extractor.successful_job_path(session, opt.id)
+    if folder is None or not (folder / "input.hess").exists():
+        # Every rate job copies it: stop here, not after days of S1 and T1 work.
+        _mark(session, s1, esd_seed={
+            "error": f"The lowest S0 conformer's optimisation (task {opt.id}) kept no Hessian (input.hess).",
+        })
+        logger.warning("Molecule %d: S0* optimisation %d kept no Hessian", molecule.id, opt.id)
+        return
 
     for state in (s1, t1):
         seed = MoleculeGeometry(

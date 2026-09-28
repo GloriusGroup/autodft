@@ -108,13 +108,58 @@ def test_extend_refuses_what_it_cannot_add(engine, tmp_path, monkeypatch, extra,
         assert _states(session) == ["S0"]
 
 
-def test_extend_keeps_the_options_of_present_categories(engine, tmp_path, monkeypatch):
+def test_present_categories_keep_their_options(engine, tmp_path, monkeypatch):
     with Session(engine) as session:
         _queue(session, **{categories.UVVIS: True, "uvvis_nroots": 20})
         _expand(session, tmp_path, monkeypatch)
         entry = _queue(session, extend=True, **{categories.UVVIS: True, "uvvis_nroots": 30})
         _expand(session, tmp_path, monkeypatch)
-        assert "uvvis_nroots" in (_error(session, entry) or "")
+        assert _error(session, entry) is None
+        s0 = session.exec(select(MoleculeState).where(MoleculeState.description == "S0")).one()
+        assert json.loads(s0.metadata_json)["uvvis_nroots"] == 20
+
+
+def test_a_plain_resubmission_of_an_esd_molecule_adds_no_triplet(engine, tmp_path, monkeypatch):
+    with Session(engine) as session:
+        for _ in range(2):
+            _queue(session, **{categories.ESD: True})
+            _expand(session, tmp_path, monkeypatch)
+        assert _states(session) == ["S0", "S1", "T1"]
+
+
+def test_t1_on_an_esd_only_molecule_is_already_there(engine, tmp_path, monkeypatch):
+    with Session(engine) as session:
+        _queue(session, **{categories.ESD: True})
+        _expand(session, tmp_path, monkeypatch)
+        entry = _queue(session, extend=True, request_T1=True, **{categories.ESD: True})
+        _expand(session, tmp_path, monkeypatch)
+        assert _error(session, entry) is None
+        assert _states(session) == ["S0", "S1", "T1"]
+
+
+def test_new_states_start_from_s0s_initial_geometry(engine, tmp_path, monkeypatch):
+    from autodft.engine import entrypoint_processor as ep
+
+    with Session(engine) as session:
+        _queue(session)
+        _expand(session, tmp_path, monkeypatch)
+        monkeypatch.setattr(ep, "_generate_initial_xyz", lambda s: pytest.fail("extend re-embedded"))
+        entry = _queue(session, extend=True, request_ox=True)
+        ep.process_next_entrypoint(session, _settings(tmp_path))
+        session.commit()
+        assert _error(session, entry) is None
+        s0, ox = (session.exec(select(MoleculeState).where(MoleculeState.description == d)).one() for d in ("S0", "ox"))
+        geometry = lambda st: session.exec(select(MoleculeGeometry).where(
+            MoleculeGeometry.state_id == st.id, MoleculeGeometry.label == "initial")).one().xyz_data
+        assert geometry(ox) == geometry(s0)
+
+
+def test_esd_added_later_keeps_the_s0_opt_level():
+    from autodft.qm.orca import blocks
+
+    header = "!wB97X-D3 def2-SVP Opt Freq\n"
+    assert "TightOpt" in blocks.compose_header("optimization", header, {categories.ESD: True})
+    assert blocks.compose_header("optimization", header, {categories.ESD: True, "esd_added_later": True}) == header
 
 
 def test_extend_needs_an_existing_unarchived_molecule(engine, tmp_path, monkeypatch):

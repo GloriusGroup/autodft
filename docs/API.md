@@ -694,14 +694,18 @@ the project's own are used. Each molecule gains only what it lacks:
 T1/ox/red states (with their conformer search), UV/Vis and NMR singlepoints
 for its finished S0 conformers (running ones get them when they finish),
 IR, and ESD (S1 plus a triplet seeded from the lowest S0 conformer —
-`T1_esd` when the molecule has its own T1). A molecule is rejected when it
-is archived, not in the project, would change the options of a category it
-has, asks for densities or NBO it does not have (they run inside the
-energy singlepoints: first submission only), or asks for ESD without the
-S0 Hessians (every optimisation keeps its `input.hess` since 2026-09-28;
-older ones did not). Answers `{project, queued: [{id, smiles}], rejected:
-[{smiles, detail}]}`; 400 when the project is not extendable, 409 while an
-archive or export job runs. The dashboard's project page opens it as
+`T1_esd` when the molecule has its own T1). Categories a molecule already
+has stay as they are, whatever options the body carries; added ones take the
+body's options. ESD added this way keeps the S0 conformers' own `Opt` level
+(no TightOpt). A molecule is rejected when it is archived, not in the
+project, or asks for densities or NBO it does not have (they run inside the
+energy singlepoints: first submission only); one with nothing to add is
+`skipped`. ESD needs the S0 Hessians: every optimisation keeps its
+`input.hess` since 2026-09-28, and a lowest S0 conformer without one stops
+the molecule's ESD before S1 and T1 start, with that reason. Answers
+`{project, queued: [{id, smiles}], rejected: [{smiles, detail}], skipped:
+[smiles]}`; 400 when the project is not extendable, 409 while an archive or
+export job runs. The dashboard's project page opens it as
 "Add calculations…": the submission form with the project's molecules and
 headers, present items greyed out. Owner or admin.
 

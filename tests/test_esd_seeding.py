@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from sqlmodel import select
@@ -12,15 +13,24 @@ from autodft.config import Settings
 from autodft.engine import photophysics
 from autodft.extraction.extractor import ConformerResult, PipelineExtractor
 from autodft.models import (
-    ComputationHeader, ComputationTask, Molecule, MoleculeGeometry, MoleculeState,
+    ComputationHeader, ComputationJob, ComputationTask, Molecule, MoleculeGeometry, MoleculeState,
     TaskStatus, TaskType,
 )
 
 XYZ = "2\n\nC 0 0 {z}\nH 1 0 0\n"
 
 
+def _kept_hessian(session, opt, tmp_path):
+    """A successful job for *opt* that left its input.hess, as every optimisation does."""
+    folder = tmp_path / f"opt_{opt.id}"
+    folder.mkdir()
+    (folder / "input.hess").write_text("$orca_hessian_file\n")
+    session.add(ComputationJob(task_id=opt.id, attempt=1, success=True, job_path=str(folder)))
+    session.commit()
+
+
 @pytest.fixture()
-def esd(session, monkeypatch):
+def esd(session, monkeypatch, tmp_path):
     """An ESD molecule with two finished S0 conformers; conformer 2 is lower in G."""
     header = ComputationHeader(header_text="!B3LYP Opt Freq\n")
     session.add(header)
@@ -43,6 +53,7 @@ def esd(session, monkeypatch):
                               state_id=s0.id, header_id=header.id, has_followups=False)
         session.add(opt)
         session.commit()
+        _kept_hessian(session, opt, tmp_path)
         geom = MoleculeGeometry(state_id=s0.id, xyz_data=XYZ.format(z=z), origin_task_id=opt.id)
         session.add(geom)
         session.commit()
@@ -176,7 +187,7 @@ def test_paused_and_archived_projects_wait(session, esd, monkeypatch):
     assert _tasks(session, esd["s1"]) == []
 
 
-def test_one_molecules_file_error_does_not_stop_the_rest(session, monkeypatch):
+def test_one_molecules_file_error_does_not_stop_the_rest(session, monkeypatch, tmp_path):
     """M4: step 4b isolates each molecule, so one raising extractor call does
     not roll back the whole step."""
     header = ComputationHeader(header_text="!B3LYP Opt Freq\n")
@@ -201,6 +212,7 @@ def test_one_molecules_file_error_does_not_stop_the_rest(session, monkeypatch):
                               state_id=s0.id, header_id=header.id, has_followups=False)
         session.add(opt)
         session.commit()
+        _kept_hessian(session, opt, tmp_path)
         geom = MoleculeGeometry(state_id=s0.id, xyz_data=XYZ.format(z=0.0), origin_task_id=opt.id)
         session.add(geom)
         session.commit()
@@ -275,3 +287,12 @@ def test_the_tick_advances_photophysics_after_the_followups(tmp_path, monkeypatc
     finally:
         reset_engine()
     assert labels.index("4b: advance photophysics") == labels.index("4: start follow-up tasks") + 1
+
+
+def test_no_s0_hessian_stops_esd_before_s1_and_t1(session, esd):
+    for opt in esd["opts"]:
+        for job in session.exec(select(ComputationJob).where(ComputationJob.task_id == opt.id)).all():
+            (Path(job.job_path) / "input.hess").unlink()
+    photophysics.advance_photophysics(session, Settings())
+    assert _tasks(session, esd["s1"]) == [] and _tasks(session, esd["t1"]) == []
+    assert "kept no Hessian" in json.loads(esd["s1"].metadata_json)["esd_seed"]["error"]

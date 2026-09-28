@@ -226,6 +226,14 @@ def rejection(
                 "element past Kr, e.g. I). Use a singlepoint header with a "
                 "scalar-relativistic all-electron setup (ZORA/DKH/X2C) instead."
             )
+        if ((check.get("max_atomic_number") or 0) >= ECP_MIN_Z and metadata.get(ESD_HT)
+                and metadata.get("esd_ht_method") == "opt"
+                and not _RELATIVISTIC_RE.search(header_optimization or "")):
+            return (
+                "Herzberg-Teller at the optimisation level runs spin-orbit coupling on the "
+                "optimisation header, which has no scalar-relativistic all-electron setup "
+                "for the elements past Kr; use esd_ht_method sp."
+            )
         window = metadata.get("esd_tn_window_ev", OPTIONS[ESD]["esd_tn_window_ev"])
         if not _number(window) or not 0 <= window <= 1:
             return "The ESD triplet window must be between 0 and 1 eV (esd_tn_window_ev)."
@@ -342,20 +350,18 @@ SUBMIT_ONLY = (DENSITIES, NBO)
 
 def extension(
     session: Session, project_name: str, canonical_smiles: str, wanted: set[str],
-    requested_options: Optional[dict] = None,
 ) -> tuple[Optional[str], set[str]]:
     """What extending an existing molecule with *wanted* adds, or why it cannot.
 
-    Categories it already has must keep their options; densities and NBO only
-    come with the first submission.
+    Categories it already has stay as they are, whatever options the request
+    carries; densities and NBO only come with the first submission.
     """
-    have = present(session, project_name, canonical_smiles)
-    added = wanted - have
+    added = wanted - present(session, project_name, canonical_smiles)
     late = sorted(LABELS[key] for key in added & set(SUBMIT_ONLY))
     if late:
         return (f"{', '.join(late)} run inside the energy singlepoints and can only be chosen "
                 f"when the molecule is first submitted."), set()
-    return existing_conflict(session, project_name, canonical_smiles, wanted & have, requested_options), added
+    return None, added
 
 
 def present(session: Session, project_name: str, canonical_smiles: str) -> set[str]:
