@@ -2239,6 +2239,133 @@ class SubmitBatchRequest(SubmitRequest):
     smiles_list: list[str] = Field(default_factory=list, max_length=10000)
 
 
+def _extend_scope(session, name: str) -> dict:
+    """What a project's molecules already have, for Extend: headers, categories, states, options."""
+    from autodft import categories
+
+    molecules = session.exec(select(Molecule).where(Molecule.project_name == name)).all()
+    live = [m for m in molecules if not m.archived]
+    ids = [m.id for m in live]
+    states = session.exec(select(MoleculeState).where(col(MoleculeState.molecule_id).in_(ids))).all() if ids else []
+    s0 = [st for st in states if st.description == "S0"]
+    header_sets = {(st.confsearch_header_id, st.optimization_header_id, st.singlepoint_header_id) for st in s0}
+    headers = None
+    if len(header_sets) == 1:
+        rows = [session.get(ComputationHeader, hid) if hid is not None else None for hid in next(iter(header_sets))]
+        headers = dict(zip(("confsearch", "optimization", "singlepoint"),
+                           ({"id": r.id, "text": r.header_text} if r else None for r in rows)))
+    have: dict[str, int] = {}
+    options: dict = {}
+    first: dict = {}
+    for st in s0:
+        metadata = json.loads(st.metadata_json) if st.metadata_json else {}
+        first = first or metadata
+        for key in categories.requested(metadata):
+            have[key] = have.get(key, 0) + 1
+            if key not in options:
+                options[key] = {name: metadata.get(name, default)
+                                for name, default in categories.OPTIONS.get(key, {}).items()}
+                if key == categories.ESD:
+                    options[key][categories.ESD_HT] = bool(metadata.get(categories.ESD_HT))
+    counts: dict[str, int] = {}
+    conformers: dict[str, int] = {"S0": first.get("max_conformers_S0", 1)}
+    for st in states:
+        metadata = json.loads(st.metadata_json) if st.metadata_json else {}
+        if st.description in ("T1", "ox", "red") and not metadata.get("esd_role"):
+            counts[st.description] = counts.get(st.description, 0) + 1
+            conformers.setdefault(st.description, metadata.get(f"max_conformers_{st.description}", 1))
+    n = len(live)
+
+    def share(count: int) -> str:
+        return "all" if n and count == n else "some" if count else "none"
+
+    reason = None
+    if not live:
+        reason = "The project has no molecules left to extend (all archived)." if molecules else "The project is empty."
+    elif headers is None:
+        reason = "The project's molecules use more than one header set; extend is only possible with one."
+    return {
+        "project": name,
+        "molecules": n,
+        "archived": len(molecules) - n,
+        "extendable": reason is None,
+        "reason": reason,
+        "headers": headers,
+        "categories": {key: share(have.get(key, 0)) for key in categories.CATEGORIES},
+        "options": options,
+        "states": {d: share(counts.get(d, 0)) for d in ("T1", "ox", "red")},
+        "max_conformers": conformers,
+        "settings": {key: first.get(key, default) for key, default in (
+            ("request_singlepoint_vertical_excitations", True), ("request_confsearch", True))},
+        "submit_only": list(categories.SUBMIT_ONLY),
+        "smiles": [m.smiles for m in live],
+    }
+
+
+@router.get("/api/projects/{name}/extend-info")
+def api_extend_info(name: str, identity: Identity = Depends(current_identity)):
+    """What the project's molecules already have, so Extend can offer only the rest."""
+    bad = _reject_bad_project(name)
+    if bad is not None:
+        return bad
+    with get_session() as session:
+        name = resolve_project(session, identity, name)
+        return _extend_scope(session, name)
+
+
+@router.post("/api/projects/{name}/extend")
+def api_extend(name: str, body: SubmitBatchRequest, identity: Identity = Depends(current_identity)):
+    """Queue an extension of the project's molecules (all, or ``smiles_list``) with *body*'s categories and states.
+
+    Runs under the project's own headers; each molecule gains only what it lacks.
+    """
+    from autodft import categories
+    from autodft.api import project_jobs
+
+    bad = _reject_bad_project(name)
+    if bad is not None:
+        return bad
+    with get_session() as session:
+        name = resolve_project(session, identity, name)
+        scope = _extend_scope(session, name)
+        if not scope["extendable"]:
+            return JSONResponse(status_code=400, content={"detail": scope["reason"]})
+        try:
+            project_jobs.assert_no_active_job(session, name)
+        except project_jobs.JobInProgress as exc:
+            return JSONResponse(status_code=409, content={"detail": str(exc)})
+        headers = tuple(h["text"] if h else None for h in (scope["headers"][k] for k in
+                                                            ("confsearch", "optimization", "singlepoint")))
+        flags = _category_flags(body)
+        wanted = categories.requested(flags)
+        if categories.NBO in wanted:
+            unavailable = categories.nbo_unavailable(get_active_settings())
+            if unavailable:
+                return JSONResponse(status_code=400, content={"detail": unavailable})
+        requested_options = {**categories.options(flags), categories.ESD_HT: bool(flags.get(categories.ESD_HT))}
+        known = set(scope["smiles"])
+        accepted, rejected = [], []
+        for smiles in body.smiles_list or scope["smiles"]:
+            detail, check = _reject_reason(body, smiles, headers)
+            if detail is None and check["canonical"] not in known:
+                detail = f"{smiles} is not an unarchived molecule of {name}."
+            if detail is None:
+                detail, _ = categories.extension(session, name, check["canonical"], wanted, requested_options)
+            if detail is not None:
+                rejected.append({"smiles": smiles, "detail": detail})
+                continue
+            entry = _new_entrypoint(session, body, check["canonical"], name, identity.username, headers)
+            entry.request_metadata = json.dumps({**json.loads(entry.request_metadata), "extend": True})
+            session.add(entry)
+            accepted.append((smiles, entry))
+        session.commit()
+        return {
+            "project": name,
+            "queued": [{"id": entry.id, "smiles": smiles} for smiles, entry in accepted],
+            "rejected": rejected,
+        }
+
+
 @router.post("/api/submit-batch")
 def api_submit_batch(
     body: SubmitBatchRequest, identity: Identity = Depends(current_identity),
