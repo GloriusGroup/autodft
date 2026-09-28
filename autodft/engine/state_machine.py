@@ -1440,11 +1440,8 @@ def _check_type(session: Session, task: ComputationTask) -> str:
 
 
 def _keeps_hessian(state: MoleculeState, task: ComputationTask) -> bool:
-    """Whether an optimisation's Hessian feeds ESD rates."""
-    if task.task_type != TaskType.optimization:
-        return False
-    metadata = json.loads(state.metadata_json) if state.metadata_json else {}
-    return bool(metadata.get("esd_role") or categories.on_s0(state.description, metadata, categories.ESD))
+    """Whether a job copies its Hessian back: every optimisation, so ESD can be added later (Extend)."""
+    return task.task_type == TaskType.optimization
 
 
 def _keeps_cubes(state: MoleculeState, task: ComputationTask) -> bool:

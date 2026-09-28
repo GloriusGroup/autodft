@@ -164,8 +164,8 @@ def test_esd_optimisations_keep_their_hessian(session, tmp_path):
     assert "cp *.hess" in _opt_job_script(session, tmp_path, {categories.ESD: True})
 
 
-def test_other_optimisations_do_not(session, tmp_path):
-    assert "cp *.hess" not in _opt_job_script(session, tmp_path, {})
+def test_every_optimisation_keeps_its_hessian_for_a_later_extend(session, tmp_path):
+    assert "cp *.hess" in _opt_job_script(session, tmp_path, {})
 
 
 def test_only_rate_jobs_keep_the_esd_by_products(session, tmp_path):

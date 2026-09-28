@@ -336,6 +336,46 @@ def nbo_unavailable(settings) -> Optional[str]:
     return None
 
 
+# Run inside the energy singlepoints, so a finished molecule cannot gain them.
+SUBMIT_ONLY = (DENSITIES, NBO)
+
+
+def extension(
+    session: Session, project_name: str, canonical_smiles: str, wanted: set[str],
+    requested_options: Optional[dict] = None,
+) -> tuple[Optional[str], set[str]]:
+    """What extending an existing molecule with *wanted* adds, or why it cannot.
+
+    Categories it already has must keep their options; densities and NBO only
+    come with the first submission.
+    """
+    have = present(session, project_name, canonical_smiles)
+    added = wanted - have
+    late = sorted(LABELS[key] for key in added & set(SUBMIT_ONLY))
+    if late:
+        return (f"{', '.join(late)} run inside the energy singlepoints and can only be chosen "
+                f"when the molecule is first submitted."), set()
+    return existing_conflict(session, project_name, canonical_smiles, wanted & have, requested_options), added
+
+
+def present(session: Session, project_name: str, canonical_smiles: str) -> set[str]:
+    """The categories the molecule's S0 states already ask for (empty if it does not exist)."""
+    from autodft.models.molecule import Molecule
+    from autodft.models.state import MoleculeState
+
+    molecule = session.exec(
+        select(Molecule).where(Molecule.smiles == canonical_smiles, Molecule.project_name == project_name)
+    ).first()
+    if molecule is None:
+        return set()
+    have: set[str] = set()
+    for state in session.exec(
+        select(MoleculeState).where(MoleculeState.molecule_id == molecule.id, MoleculeState.description == "S0")
+    ).all():
+        have |= requested(json.loads(state.metadata_json) if state.metadata_json else {})
+    return have
+
+
 def existing_conflict(
     session: Session, project_name: str, canonical_smiles: str, wanted: set[str],
     requested_options: Optional[dict] = None,
@@ -377,8 +417,8 @@ def existing_conflict(
     if missing:
         return (
             f"{canonical_smiles} already exists in {project_name} (molecule "
-            f"{molecule.id}) without {', '.join(missing)}. Categories are only added "
-            f"to new molecules; submit it into another project."
+            f"{molecule.id}) without {', '.join(missing)}. Add them with the project's "
+            f"Extend, or submit it into another project."
         )
 
     if requested_options is not None:

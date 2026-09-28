@@ -22,6 +22,7 @@ from autodft.engine import nmr_references
 from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.models.geometry import MoleculeGeometry
 from autodft.models.header import ComputationHeader
+from autodft.models.job import ComputationJob
 from autodft.models.molecule import Molecule
 from autodft.models.state import MoleculeState
 from autodft.models.task import ComputationTask
@@ -145,12 +146,24 @@ def _process_entrypoint_body(
     )
     if reason:
         raise ValueError(f"{reason} Nothing was submitted for this molecule.")
-    # Reference molecules get one S0 state per NMR method (see _create_state).
-    conflict = None if nmr_references.is_reference_project(metadata.get("project_name", "")) \
-        else categories.existing_conflict(
-            session, metadata.get("project_name", "default"),
-            _canonicalize_smiles(smiles), categories.requested(metadata),
-            {**categories.options(metadata), categories.ESD_HT: bool(metadata.get(categories.ESD_HT))},
+    project = metadata.get("project_name", "default")
+    wanted = categories.requested(metadata)
+    requested_options = {**categories.options(metadata), categories.ESD_HT: bool(metadata.get(categories.ESD_HT))}
+    added = wanted
+    if metadata.get("extend"):
+        if not session.exec(select(Molecule.id).where(
+            Molecule.smiles == _canonicalize_smiles(smiles), Molecule.project_name == project,
+        )).first():
+            raise ValueError(f"{smiles} is not in {project}; only its molecules can be extended.")
+        # Extending a finished molecule adds only the categories it lacks.
+        conflict, added = categories.extension(
+            session, project, _canonicalize_smiles(smiles), wanted, requested_options,
+        )
+    elif nmr_references.is_reference_project(project):
+        conflict = None  # reference molecules get one S0 state per NMR method (see _create_state)
+    else:
+        conflict = categories.existing_conflict(
+            session, project, _canonicalize_smiles(smiles), wanted, requested_options,
         )
     if conflict:
         raise ValueError(conflict)
@@ -184,6 +197,7 @@ def _process_entrypoint_body(
     }
 
     base_path = settings.comp_data_path
+    s0 = _check_extension(session, molecule, header_ids, added) if metadata.get("extend") else None
 
     # 4. Create states.
     _create_state(
@@ -192,15 +206,15 @@ def _process_entrypoint_body(
     )
 
     # ESD's triplet is the T1 state unless T1 is requested with its own
-    # conformer search; then ESD runs a separate one seeded from S0*.
-    if metadata.get(categories.ESD):
+    # conformer search (or already has one); then ESD runs a separate one seeded from S0*.
+    if categories.ESD in added:
         esd = categories.esd_settings(metadata)
         _create_state(
             session, molecule, smiles, "S1", 1, charge,
             metadata, header_ids, base_path, initial_xyz,
             defer=True, extra_metadata={**ESD_S1_METADATA, **esd},
         )
-        if metadata.get("request_T1", False):
+        if metadata.get("request_T1", False) or _state(session, molecule, "T1", header_ids) is not None:
             t1_description, t1_metadata = ESD_OWN_T1_DESCRIPTION, ESD_OWN_T1_METADATA
         else:
             t1_description, t1_metadata = "T1", {}
@@ -232,8 +246,11 @@ def _process_entrypoint_body(
             metadata, header_ids, base_path, initial_xyz,
         )
 
+    if s0 is not None:
+        _extend_s0(session, s0, metadata, added)
+
     # NMR shifts need reference shieldings at the same method.
-    if metadata.get(categories.NMR):
+    if categories.NMR in added:
         nmr_references.ensure_references(session, entrypoint, metadata)
 
     # 5. Mark entrypoint as started
@@ -243,6 +260,94 @@ def _process_entrypoint_body(
 
     logger.info("Entrypoint %d processed successfully", entrypoint.id)
     return True
+
+
+def _state(session: Session, molecule: Molecule, description: str, header_ids: dict) -> Optional[MoleculeState]:
+    """*molecule*'s *description* state with these headers, if it exists."""
+    return session.exec(
+        select(MoleculeState).where(
+            MoleculeState.molecule_id == molecule.id,
+            MoleculeState.description == description,
+            MoleculeState.confsearch_header_id == header_ids["confsearch"],
+            MoleculeState.optimization_header_id == header_ids["optimization"],
+            MoleculeState.singlepoint_header_id == header_ids["singlepoint"],
+        )
+    ).first()
+
+
+def _check_extension(
+    session: Session, molecule: Molecule, header_ids: dict, added: set[str],
+) -> MoleculeState:
+    """The S0 state an extension adds to; raises when the molecule cannot be extended."""
+    if molecule.archived:
+        raise ValueError(
+            f"Molecule {molecule.id} is archived: its calculation files are gone, so it cannot be extended."
+        )
+    s0 = _state(session, molecule, "S0", header_ids)
+    if s0 is None:
+        raise ValueError(
+            f"Molecule {molecule.id} has no S0 state with these headers; extend with the project's headers."
+        )
+    if categories.ESD in added:
+        missing = [opt.id for opt in _finished_optimisations(session, s0)
+                   if not _job_file(session, opt, "input.hess")]
+        if missing:
+            raise ValueError(
+                f"ESD needs the S0 Hessians, which optimisation task(s) {missing} did not keep "
+                f"(they ran before Hessians were kept); submit the molecule into a new project."
+            )
+    return s0
+
+
+def _extend_s0(session: Session, s0: MoleculeState, metadata: dict, added: set[str]) -> None:
+    """Record *added* on S0 and give its finished conformers their UV/Vis and NMR tasks.
+
+    Conformers still optimising get them from their follow-ups, which read the
+    updated metadata.
+    """
+    from autodft.engine.state_machine import _category_followups, _create_singlepoint_task
+
+    if not added:
+        return
+    flags = {key: True for key in added}
+    if categories.ESD in added:
+        flags[categories.ESD_HT] = bool(metadata.get(categories.ESD_HT))
+    subset = {**flags, **{name: metadata[name] for key in added
+                          for name in categories.OPTIONS.get(key, {}) if name in metadata}}
+    state_metadata = json.loads(s0.metadata_json) if s0.metadata_json else {}
+    state_metadata.update(categories.snapshot(subset))
+    s0.metadata_json = json.dumps(state_metadata)
+    session.add(s0)
+    for opt in _finished_optimisations(session, s0):
+        if opt.has_followups or opt.output_geometry_id is None:
+            continue
+        have = {t.task_type for t in session.exec(
+            select(ComputationTask).where(ComputationTask.depends_on_task_id == opt.id)
+        ).all()}
+        for task_type in _category_followups("S0", subset):
+            if task_type not in have:
+                _create_singlepoint_task(session, s0.id, s0.singlepoint_header_id,
+                                         opt.output_geometry_id, opt.id, task_type)
+    logger.info("Extended S0 state %d with %s", s0.id, ", ".join(sorted(added)))
+
+
+def _finished_optimisations(session: Session, state: MoleculeState) -> list[ComputationTask]:
+    return session.exec(
+        select(ComputationTask).where(
+            ComputationTask.state_id == state.id,
+            ComputationTask.task_type == TaskType.optimization,
+            ComputationTask.status == TaskStatus.successful,
+        )
+    ).all()
+
+
+def _job_file(session: Session, task: ComputationTask, name: str) -> bool:
+    """Whether *task*'s latest successful job left *name* in its directory."""
+    job = session.exec(
+        select(ComputationJob).where(ComputationJob.task_id == task.id, ComputationJob.success == True)  # noqa: E712
+        .order_by(col(ComputationJob.attempt).desc())
+    ).first()
+    return bool(job and job.job_path and (Path(job.job_path) / name).exists())
 
 
 # ======================================================================
