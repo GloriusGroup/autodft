@@ -341,7 +341,8 @@ sees the whole database:
 * **Admin** — wipe one of your projects or a single molecule (each
   shows a preview and wants the exact name typed back), and, for admin
   only, the **Users** section (create an account, rotate a key,
-  deactivate), the failure circuit breaker and the database reset.
+  deactivate), the submission hold, the failure circuit breaker and the
+  database reset.
 
 **"Export all files" / project archive** — opens a confirmation modal
 listing the destructive steps it will take and lets you edit the
@@ -589,12 +590,15 @@ is either scoped to the caller's own projects or deliberately shared
 | GET    | `/api/projects/{name}`              | per-project molecules + progress + success rate               |
 | GET    | `/api/projects/{name}/molecules-detail` | per-conformer status for every molecule                   |
 | GET    | `/api/projects/{name}/state-analysis` | triplet / redox / reorganisation energies                   |
-| GET    | `/api/projects/{name}/state-analysis/export` | the same, as a multi-sheet XLSX                      |
+| POST   | `/api/projects/{name}/state-analysis/export` | the same, as a multi-sheet XLSX (background job)    |
 | GET    | `/api/projects/{name}/photophysics` | UV/Vis, IR, NMR and ESD results per molecule (`?molecule_id=`) |
 | GET    | `/api/projects/{name}/extend-info`  | what the project's molecules already have (for Extend)        |
 | POST   | `/api/projects/{name}/extend`       | add categories / states to the project's molecules            |
 | POST   | `/api/projects/{name}/export`       | trigger CSV/JSON/files/photophysics export (`?format=&all_conformers=`)    |
 | POST   | `/api/projects/{name}/archive`      | **destructive**: CSV+filtered files, then wipe `comp_data`     |
+| GET    | `/api/projects/{name}/jobs`         | the project's background jobs (exports, archive), newest first |
+| GET    | `/api/jobs/{id}`                    | one background job                                            |
+| GET    | `/api/jobs/{id}/download`           | the file a finished export produced                           |
 | GET    | `/api/projects/{name}/wipe-preview` | what a project wipe would delete — counts only                |
 | POST   | `/api/projects/{name}/wipe`         | **destructive**: a project's rows, `comp_data`, exports        |
 | GET    | `/api/molecules/{id}/wipe-preview`  | what a molecule wipe would delete — counts only               |
@@ -602,6 +606,9 @@ is either scoped to the caller's own projects or deliberately shared
 | GET    | `/api/wipe-status`                  | progress of a deletion still running in the background        |
 | GET    | `/api/admin/circuit-breaker`        | breaker state with the failure ratio behind it (admin)        |
 | POST   | `/api/admin/circuit-breaker/reset`  | clear the breaker and resume submissions (admin)              |
+| GET    | `/api/admin/submission-hold`        | whether submission is paused by hand (admin)                  |
+| POST   | `/api/admin/submission-hold`        | pause `sbatch` submission (`{"reason": …}`); results keep being processed (admin) |
+| POST   | `/api/admin/submission-hold/release`| resume submission on the next tick (admin)                    |
 | GET    | `/api/admin/reset-preview`          | everything a database reset would delete — row counts, no files |
 | POST   | `/api/admin/reset-database`         | **destructive**: every pipeline table and data directory       |
 | GET    | `/api/admin/disk-usage`             | the last disk measurement, or `null` — never starts one (admin) |

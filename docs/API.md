@@ -449,9 +449,12 @@ header text; without it, redox values are reported as ΔG only. A pick
 whose optimisation has a broken-bond check adds `connectivity` (same shape
 as in `molecules-detail`).
 
-### `GET /api/projects/{name}/state-analysis/export`
+### `POST /api/projects/{name}/state-analysis/export`
 
-The same payload as a multi-sheet XLSX attachment (Summary, Lowest
+Builds the same payload as a multi-sheet XLSX in a background job: returns
+`202` with the job (`409` while one is already running). Poll
+`GET /api/projects/{name}/jobs`, then fetch the file from
+`GET /api/jobs/{id}/download`. Sheets: Summary, Lowest
 Energy, RMSD Matched, Conformers). Energies in Hartree, potentials in V
 vs SCE. When any pick has a broken-bond check, the mode sheets add a last
 column `broken_bonds` (`<state>: ok`, `<state>: <detail>` or
@@ -996,3 +999,19 @@ retry budget.
 Admin only. Clears the breaker and lets the pipeline resume. Deliberately
 manual: once submission stops, no new tasks are judged, so the failure
 ratio cannot recover on its own. Fix the cause first.
+
+### `GET /api/admin/submission-hold`
+
+Admin only. A manual pause of `sbatch` submission, independent of the
+breaker: `{"held": false, "state": null}`, or `held: true` with
+`state = {"held_at", "held_by", "reason"}`.
+
+### `POST /api/admin/submission-hold`
+
+Admin only. Body `{"reason": "…"}` (optional, ≤ 500 chars). Stops submitting
+jobs; finished jobs are still parsed and followups prepared, so they queue
+up until release.
+
+### `POST /api/admin/submission-hold/release`
+
+Admin only. Submission resumes on the next tick.

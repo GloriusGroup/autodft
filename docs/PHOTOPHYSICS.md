@@ -10,13 +10,15 @@ Tick a category when you submit: the dashboard's checkboxes, the API's
 `request_esd` / `request_densities` / `request_singlepoint_nbo` fields
 (plus their options), or the CLI's `--uvvis` / `--ir` / `--nmr` / `--esd`
 / `--densities` / `--nbo` flags (with `--uvvis-nroots` / `--uvvis-tda` /
-`--nmr-nuclei` / `--nmr-method` / `--esd-ht` / `--esd-tn-window` /
+`--nmr-nuclei` / `--nmr-method` / `--esd-ht` / `--esd-ht-scope` /
+`--esd-ht-method` / `--esd-tn-window` /
 `--esd-temperature` / `--esd-ic` /
 `--density-grid` / `--eldens-file` / `--spindens-file` / `--nbo-keywords`).
-Categories only attach to new molecules — resubmitting an existing
-molecule with a category it doesn't already have is refused, and so is
-resubmitting it with different options for a category it already has
-(options apply to new molecules only, same as the categories themselves).
+Resubmitting an existing molecule with a category it doesn't already have
+is refused, and so is resubmitting it with different options for a
+category it already has. To add categories or states to a project's
+molecules, use the project's Extend (see [`docs/API.md`](API.md#post-apiprojectsnameextend));
+Densities and NBO can only be requested at first submission.
 A category's options (`uvvis_nroots`, `uvvis_tda`, `nmr_nuclei`,
 `nmr_method`, `request_esd_ht`, `esd_tn_window_ev`, `esd_temperature_k`,
 `esd_ic`, the `density_*`
@@ -548,40 +550,6 @@ nothing reads them back, so `cleanup-files` deletes them from successful
 rate jobs like any other large file. `--dry-run` now counts every file it would delete, not only the
 ones it actually removes.
 
-## Deploy
-
-1. Stop the controller (pipeline and API) on its node. The dashboard
-   template is read on every request, so a merged template would
-   otherwise talk to the old API, which silently drops the new fields.
-2. Back up the database: copy `autodft.db` (and `-wal`/`-shm` if present)
-   while the controller is stopped.
-3. Check that no project is already named `reference_systems`: on the
-   controller host, with the repository's Python, all three of these must
-   print `[]` (rename or reassign such a project/entrypoint first):
-
-```bash
-.venv/bin/python - <<'EOF'
-import sqlite3
-db = sqlite3.connect("/path/to/autodft.db")
-print(db.execute(
-    "SELECT project_name, COUNT(*) FROM molecules WHERE project_name LIKE "
-    "'%/reference_systems' OR project_name = 'reference_systems' GROUP BY 1"
-).fetchall())
-print(db.execute(
-    "SELECT qualified_name FROM projects WHERE qualified_name LIKE "
-    "'%/reference_systems' OR name = 'reference_systems'"
-).fetchall())
-print(db.execute(
-    "SELECT id FROM calculation_entrypoints WHERE time_started IS NULL "
-    "AND request_metadata LIKE '%reference_systems%'"
-).fetchall())
-EOF
-```
-4. Merge the branch into `main` in `/mnt/share/dft_calculations/autodft`.
-5. Start the controller again; reload the dashboard.
-
-See **Stored results** below for the backfill step.
-
 ## Roll back
 
 Code from before this feature raises `LookupError` on any query that
@@ -700,9 +668,9 @@ The broken-bond check is made only when a job is judged — neither
 re-parsing nor `backfill-results` adds it, so jobs judged before it stay
 unchecked; a record without `connectivity` means unchecked.
 
-**Deploy.** Once the controller is up on the new code, run
-`autodft admin backfill-results --config <config>` on the controller
-host. It reads and parses each chunk before writing it, in a short
+**Backfill.** `autodft admin backfill-results --config <config>`, run on
+the controller host, stores records for jobs judged before records
+existed. It reads and parses each chunk before writing it, in a short
 transaction, so it is safe to run while the controller keeps going.
 
 **Archive.** Records outlive an archive: once a job has one, exporting an
