@@ -183,6 +183,8 @@ class OrcaConfig:
     extra_args: str = ""
     # Optional NBO executable; exported as NBOEXE when set.
     nbo_exe: Optional[str] = None
+    # Optional script sourced before ORCA starts (e.g. an alternative Open MPI).
+    mpi_env: str = ""
     # Per-job temp directory parent. "" disables the TMP_DIR copy-out
     # pattern and runs ORCA directly inside the job_path.
     tmp_dir: str = "/tmp"

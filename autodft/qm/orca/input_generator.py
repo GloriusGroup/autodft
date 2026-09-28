@@ -89,6 +89,7 @@ def generate_submit_script(
     orca_path: str = "orca",
     orca_extra_args: str = "",
     nbo_exe: str | None = None,
+    mpi_env: str = "",
     tmp_dir: str = "/tmp",
     keep_wavefunction: bool = False,
     keep_densities: bool = False,
@@ -117,6 +118,7 @@ def generate_submit_script(
         orca_extra_args: String passed as ORCA's second argument
                          (e.g. ``"--bind-to none"`` for MPI binding).
         nbo_exe: Optional NBO executable path; exported as NBOEXE.
+        mpi_env: Optional script sourced before ORCA runs.
         tmp_dir: Parent directory for the per-job scratch directory.
                  Empty string disables the TMP_DIR copy-out pattern and
                  runs ORCA directly inside ``job_path``.
@@ -154,6 +156,7 @@ def generate_submit_script(
         orca_path=orca_path,
         orca_extra_args=orca_extra_args,
         nbo_exe=nbo_exe,
+        mpi_env=mpi_env,
         tmp_dir=tmp_dir,
         keep_wavefunction=keep_wavefunction,
         keep_densities=keep_densities,

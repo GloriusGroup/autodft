@@ -57,6 +57,8 @@ nice = 1000
 path       = "orca"
 extra_args = ""
 # nbo_exe  = "/path/to/nbo7.i8.exe"
+# Script sourced before ORCA runs (e.g. to select an Open MPI install).
+# mpi_env  = "/path/to/env.sh"
 tmp_dir    = "/tmp"
 # Copy the SCF wavefunction (*.gbw) and electron-density scratch
 # (*.densities/*.densitiesinfo/*.cube) back from tmp_dir to the shared job

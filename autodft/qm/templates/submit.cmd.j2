@@ -16,6 +16,7 @@ WORK_DIR="{{ job_path }}"
 {% if tmp_dir %}TMP_DIR="{{ tmp_dir }}/{{ job_name }}.${SLURM_JOB_ID:-$$}"
 {% endif %}
 {% if nbo_exe %}export NBOEXE={{ nbo_exe }}
+{% endif %}{% if mpi_env %}source {{ mpi_env }}
 {% endif %}
 {% if tmp_dir %}
 mkdir -p "$TMP_DIR"

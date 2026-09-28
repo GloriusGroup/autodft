@@ -38,6 +38,13 @@ def test_default_rendering_is_byte_identical_to_main(tmp_dir, keep):
         old.get_template("submit_cmd_main.j2").render(**params)
 
 
+def test_mpi_env_is_sourced_before_orca(tmp_path):
+    text = generate_submit_script(tmp_path, "j", 1, 2000, "1-00:00:00", "CPU", mpi_env="/opt/ompi4/env.sh").read_text()
+    assert "source /opt/ompi4/env.sh\n" in text
+    assert text.index("source /opt/ompi4/env.sh") < text.index("input.inp >")
+    assert "\nsource " not in generate_submit_script(tmp_path, "j", 1, 2000, "1-00:00:00", "CPU").read_text()
+
+
 def test_hessians_are_staged_and_copied_back(tmp_path):
     path = generate_submit_script(tmp_path, "j", 1, 2000, "1-00:00:00", "CPU",
                                   keep_hessian=True, extra_inputs=["initial.hess", "final.hess"])
