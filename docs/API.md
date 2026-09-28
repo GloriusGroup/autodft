@@ -462,9 +462,10 @@ Conformers a last column `connectivity`.
 UV/Vis, IR, NMR, ESD and NBO for every molecule submitted with those
 categories (Densities has no payload of its own — see
 [`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md#densities-and-nbo) for its cube
-files). Categories are only added to new molecules: resubmitting an
-existing molecule with a category it does not have, or with different
-options for one it already has, answers 400.
+files). A plain resubmission of an existing molecule with a category it
+does not have, or with different options for one it already has, answers
+400; add categories to existing molecules with
+[`POST /api/projects/{name}/extend`](#post-apiprojectsnameextend).
 
 Without `molecule_id`, one summary per molecule (this view is cached, and
 refreshed when this project or the NMR reference project changes — true
@@ -669,6 +670,40 @@ flagged by the broken-bond check adds `connectivity_ok: false`; see
 A molecule any of whose state family's optimisations lost bonds adds
 `broken_bonds` (summary and detail): `[{"state": "T1", "state_id": 23,
 "conformer_index": 1, "opt_task_id": 95, "detail": "dissociated: ..."}]`.
+
+### `GET /api/projects/{name}/extend-info`
+
+What the project's unarchived molecules already have, for Extend:
+`molecules`, `archived`, `extendable` (with a `reason` when not: an empty or
+fully archived project, or molecules on more than one header set),
+`headers` (`confsearch` / `optimization` / `singlepoint`: `{id, text}`),
+`categories` and `states` (`T1`, `ox`, `red`) as `"all"` / `"some"` /
+`"none"` of the molecules, the `options` of each present category (ESD
+also carries `request_esd_ht`), `max_conformers` per existing state,
+`settings` (`request_confsearch`,
+`request_singlepoint_vertical_excitations`), `submit_only` (categories that
+cannot be added later) and `smiles`. Owner or admin.
+
+### `POST /api/projects/{name}/extend`
+
+Adds calculations to the project's molecules — all unarchived ones, or
+those in `smiles_list` — without recomputing anything. The body is a
+[`submit-batch`](#post-apisubmit-batch) body: tick the categories and states
+to have (present ones may stay ticked); headers in the body are ignored and
+the project's own are used. Each molecule gains only what it lacks:
+T1/ox/red states (with their conformer search), UV/Vis and NMR singlepoints
+for its finished S0 conformers (running ones get them when they finish),
+IR, and ESD (S1 plus a triplet seeded from the lowest S0 conformer —
+`T1_esd` when the molecule has its own T1). A molecule is rejected when it
+is archived, not in the project, would change the options of a category it
+has, asks for densities or NBO it does not have (they run inside the
+energy singlepoints: first submission only), or asks for ESD without the
+S0 Hessians (every optimisation keeps its `input.hess` since 2026-09-28;
+older ones did not). Answers `{project, queued: [{id, smiles}], rejected:
+[{smiles, detail}]}`; 400 when the project is not extendable, 409 while an
+archive or export job runs. The dashboard's project page opens it as
+"Add calculations…": the submission form with the project's molecules and
+headers, present items greyed out. Owner or admin.
 
 ### `POST /api/projects/{name}/export` `?format=csv|json|files|xlsx|photophysics&all_conformers=true|false`
 

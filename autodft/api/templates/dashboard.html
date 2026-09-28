@@ -1107,6 +1107,11 @@
                 <span class="collapse-icon" id="collapseIcon">&#9660;</span>
             </div>
             <div class="collapsible-body" id="submitBody">
+                <div id="extendBanner" class="project-status-banner" style="display: none; margin-bottom: 14px;">
+                    <span id="extendBannerText"></span>
+                    <button type="button" class="btn" id="extendExitBtn" style="margin-left: auto;">Leave extend</button>
+                </div>
+                <div id="extendHeaders" class="cat-detail-note" style="display: none; white-space: pre-wrap; margin-bottom: 10px;"></div>
                 <form id="submitForm">
                     <!-- Row 1: SMILES, Project, Priority -->
                     <div class="form-row">
@@ -1735,6 +1740,15 @@
                 </label>
             </div>
             <div class="submit-feedback" id="projectExportFeedback"></div>
+        </div>
+
+        <div class="submit-section" id="projectExtendSection" style="display: none;">
+            <h2 style="font-size:0.95rem; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em;">Extend</h2>
+            <div class="form-row" style="gap: 10px; margin-top: 12px; align-items: center;">
+                <button type="button" class="btn" id="extendBtn">Add calculations…</button>
+                <span style="font-size:0.85rem; color:var(--text-secondary);">Opens the submission form with this project's molecules and headers; what is already calculated is greyed out, tick more to add it. Nothing is recomputed. Only until the project is archived.</span>
+            </div>
+            <div class="submit-feedback" id="projectExtendFeedback"></div>
         </div>
 
         <!-- Archive confirmation modal (hidden by default) -->
@@ -3031,6 +3045,176 @@
 
         // ── Submit form ──────────────────────────────────────────────────
 
+        // ── Extend: add calculations to a project's existing molecules ──
+        // The form is filled from /extend-info: what every molecule already has
+        // is ticked and greyed out, options of present categories are fixed, and
+        // only the rest can be ticked. The server adds what each molecule lacks.
+        var extendMode = null;          // { project, info } while extending
+        var extendSnapshot = null;      // the form as it was before
+        var EXTEND_BOXES = {
+            request_spec_uvvis: 'requestUvvis', request_spec_ir: 'requestIr', request_spec_nmr: 'requestNmr',
+            request_esd: 'requestEsd', request_densities: 'requestDensities', request_singlepoint_nbo: 'requestNbo'
+        };
+        var EXTEND_STATES = { T1: ['requestT1', 'maxConfT1'], ox: ['requestOx', 'maxConfOx'], red: ['requestRed', 'maxConfRed'] };
+
+        function setField(id, value, locked) {
+            var el = document.getElementById(id);
+            if (!el) return;
+            if (value !== undefined && value !== null) {
+                if (el.type === 'checkbox') el.checked = !!value; else el.value = value;
+            }
+            if (locked) el.disabled = true;
+            el.dispatchEvent(new Event('change'));
+        }
+
+        function lockCategoryOptions(key, options) {
+            if (!options) return;
+            if (key === 'request_spec_uvvis') {
+                setField('uvvisNroots', options.uvvis_nroots, true);
+                setField('uvvisTda', options.uvvis_tda, true);
+            } else if (key === 'request_spec_nmr') {
+                ['H', 'C', 'F'].forEach(function (n) {
+                    setField('nmrNuc' + n, (options.nmr_nuclei || []).indexOf(n) !== -1, true);
+                });
+                setField('nmrMethod', options.nmr_method, true);
+            } else if (key === 'request_esd') {
+                setField('esdTnWindow', options.esd_tn_window_ev, true);
+                setField('esdTemperature', options.esd_temperature_k, true);
+                setField('esdIc', options.esd_ic, true);
+                setField('esdHtMode', options.request_esd_ht
+                    ? options.esd_ht_scope + ':' + options.esd_ht_method : 'none', true);
+            } else if (key === 'request_densities') {
+                ['densityEldens', 'densitySpindens', 'densityGrid', 'densityEldensFile', 'densitySpindensFile'].forEach(function (id) {
+                    var name = { densityEldens: 'density_eldens', densitySpindens: 'density_spindens', densityGrid: 'density_grid',
+                                 densityEldensFile: 'density_eldens_file', densitySpindensFile: 'density_spindens_file' }[id];
+                    setField(id, options[name], true);
+                });
+            } else if (key === 'request_singlepoint_nbo') {
+                setField('nboKeywords', options.nbo_keywords, true);
+            }
+        }
+
+        async function enterExtendMode(project) {
+            var fb = document.getElementById('projectExtendFeedback');
+            fb.textContent = '';
+            fb.className = 'submit-feedback';
+            var resp = await fetch('/api/projects/' + projectPath(project) + '/extend-info');
+            var info = await resp.json();
+            if (!resp.ok || !info.extendable) {
+                fb.textContent = info.reason || info.detail || ('HTTP ' + resp.status);
+                fb.className = 'submit-feedback error';
+                return;
+            }
+            var form = document.getElementById('submitForm');
+            if (!extendSnapshot) {
+                extendSnapshot = [].map.call(form.elements, function (el) {
+                    return { el: el, checked: el.checked, value: el.value, disabled: el.disabled, readOnly: el.readOnly };
+                });
+            }
+            extendMode = { project: info.project, info: info };
+            var smiles = document.getElementById('smiles');
+            smiles.value = '';
+            smiles.readOnly = true;
+            smiles.placeholder = 'All ' + info.molecules + ' molecules of ' + info.project;
+            window.lastSmilesResults = null;
+            smiles.dispatchEvent(new Event('input'));
+            setField('project', info.project, true);
+            setField('skipConfsearch', !info.settings.request_confsearch, true);
+            setField('requestVertEx', info.settings.request_singlepoint_vertical_excitations, true);
+            setField('maxConfS0', info.max_conformers.S0, true);
+            ['headerConfsearch', 'headerOptimization', 'headerSinglepoint'].forEach(function (id) { setField(id, null, true); });
+            Object.keys(EXTEND_STATES).forEach(function (state) {
+                var ids = EXTEND_STATES[state];
+                var share = info.states[state];
+                setField(ids[0], share === 'all', share === 'all');
+                if (share !== 'none' && info.max_conformers[state] !== undefined) {
+                    setField(ids[1], info.max_conformers[state], true);
+                }
+            });
+            Object.keys(EXTEND_BOXES).forEach(function (key) {
+                var id = EXTEND_BOXES[key];
+                var share = info.categories[key];
+                var submitOnly = info.submit_only.indexOf(key) !== -1;
+                var box = document.getElementById(id);
+                if (share === 'all') {
+                    setField(id, true, true);
+                } else if (submitOnly) {
+                    setField(id, share === 'some', true);
+                    box.title = 'Runs inside the energy singlepoints: can only be chosen at the first submission.';
+                } else {
+                    setField(id, false, false);
+                }
+                if (share !== 'none') lockCategoryOptions(key, info.options[key]);
+            });
+            var h = info.headers;
+            document.getElementById('extendHeaders').textContent = 'Headers of ' + info.project + ' (used for every added job):\n'
+                + ['confsearch', 'optimization', 'singlepoint'].map(function (k) {
+                    return k + ': ' + (h[k] ? h[k].text.trim().split('\n')[0] + (h[k].text.trim().indexOf('\n') !== -1 ? ' …' : '') : '—');
+                }).join('\n');
+            document.getElementById('extendHeaders').style.display = 'block';
+            document.getElementById('extendBannerText').innerHTML = '<strong>Extending ' + escHtml(info.project) + '</strong> — '
+                + info.molecules + ' molecule(s)' + (info.archived ? ' (' + info.archived + ' archived, skipped)' : '')
+                + '. Greyed out: already calculated for every molecule. Tick more to add it; partly present items are added to the molecules without them.';
+            document.getElementById('extendBanner').style.display = 'flex';
+            document.getElementById('submitBtn').textContent = 'Extend project';
+            location.hash = 'submit';
+        }
+
+        function exitExtendMode() {
+            if (!extendSnapshot) return;
+            extendSnapshot.forEach(function (s) {
+                s.el.checked = s.checked;
+                s.el.value = s.value;
+                s.el.disabled = s.disabled;
+                s.el.readOnly = s.readOnly;
+                s.el.title = s.el.title && s.el.title.indexOf('first submission') !== -1 ? '' : s.el.title;
+            });
+            extendSnapshot.forEach(function (s) { s.el.dispatchEvent(new Event('change')); });
+            extendSnapshot = null;
+            extendMode = null;
+            var smiles = document.getElementById('smiles');
+            smiles.placeholder = '';
+            smiles.dispatchEvent(new Event('input'));
+            document.getElementById('extendBanner').style.display = 'none';
+            document.getElementById('extendHeaders').style.display = 'none';
+            document.getElementById('submitBtn').textContent = 'Submit';
+        }
+
+        async function submitExtend(body, btn, feedback) {
+            var project = extendMode.project;
+            feedback.textContent = 'Extending ' + project + ' …';
+            try {
+                var resp = await fetch('/api/projects/' + projectPath(project) + '/extend', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                var text = await resp.text();
+                var data; try { data = JSON.parse(text); } catch (_) { data = { detail: text.slice(0, 200) }; }
+                if (!resp.ok) {
+                    feedback.textContent = data.detail || ('HTTP ' + resp.status);
+                    feedback.className = 'submit-feedback error';
+                } else {
+                    var rejected = data.rejected || [];
+                    feedback.textContent = 'Extended ' + (data.queued || []).length + ' molecule(s) of ' + project
+                        + (rejected.length ? ' — not extended: ' + rejected.map(function (r) {
+                            return r.smiles + ' (' + r.detail + ')';
+                        }).join('; ') : '');
+                    feedback.className = 'submit-feedback ' + (rejected.length ? 'error' : 'success');
+                    if ((data.queued || []).length) exitExtendMode();
+                }
+            } catch (err) {
+                feedback.textContent = err.message;
+                feedback.className = 'submit-feedback error';
+            }
+            btn.disabled = false;
+        }
+
+        document.getElementById('extendBtn').addEventListener('click', function () {
+            if (currentProject) enterExtendMode(currentProject);
+        });
+        document.getElementById('extendExitBtn').addEventListener('click', exitExtendMode);
+
         document.getElementById('submitForm').addEventListener('submit', async function (e) {
             e.preventDefault();
             var btn = document.getElementById('submitBtn');
@@ -3044,7 +3228,9 @@
             var lines = smilesArea.value.split(/\r?\n/)
                 .map(function (s) { return s.trim(); })
                 .filter(function (s) { return s.length > 0; });
-            if (lines.length === 0) {
+            if (extendMode) {
+                lines = [];  // every molecule of the project; the server checks each
+            } else if (lines.length === 0) {
                 feedback.textContent = 'Enter at least one SMILES.';
                 feedback.className = 'submit-feedback error';
                 btn.disabled = false;
@@ -3055,8 +3241,8 @@
             // validator. The server re-validates too, but this avoids
             // a partial-submit race when the user edits during checking.
             var results = window.lastSmilesResults;
-            if (!results || results.length !== lines.length
-                || results.some(function (x) { return !x.result.valid; })) {
+            if (!extendMode && (!results || results.length !== lines.length
+                || results.some(function (x) { return !x.result.valid; }))) {
                 feedback.textContent = 'Fix the SMILES first — at least one line failed validation.';
                 feedback.className = 'submit-feedback error';
                 btn.disabled = false;
@@ -3137,6 +3323,11 @@
             }
             if (commonBody.request_singlepoint_nbo) {
                 commonBody.nbo_keywords = document.getElementById('nboKeywords').value.trim();
+            }
+
+            if (extendMode) {
+                await submitExtend(commonBody, btn, feedback);
+                return;
             }
 
             // ── One request for the whole textarea. ───────────────────
@@ -3376,6 +3567,7 @@
 
                 document.getElementById('projectCards').style.display = 'grid';
                 document.getElementById('projectExportSection').style.display = 'block';
+                document.getElementById('projectExtendSection').style.display = 'block';
                 document.getElementById('projectMoleculesSection').style.display = 'block';
 
                 // ── Status banner: running / complete / complete_with_failures ──
@@ -3414,6 +3606,9 @@
                 csvBtn.disabled  = isArchived;
                 jsonBtn.disabled = isArchived;
                 allBtn.disabled  = isArchived || isProtected;
+                var extendBtn = document.getElementById('extendBtn');
+                extendBtn.disabled = isArchived;
+                extendBtn.title = isArchived ? 'Project is archived — its calculation files are gone.' : '';
                 csvBtn.title  = isArchived  ? 'Project is archived — source files are gone.' : '';
                 jsonBtn.title = isArchived  ? 'Project is archived — source files are gone.' : '';
                 allBtn.title  = isArchived  ? 'Project is already archived.'

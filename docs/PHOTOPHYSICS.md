@@ -125,6 +125,10 @@ Excited-state dynamics (ISC, RISC, fluorescence, T1→S0 ISC,
 phosphorescence, and IC on request) via ORCA's `ESD` module. Tick
 `request_esd` (plus `request_esd_ht`, `esd_ht_scope`, `esd_ht_method`,
 `esd_tn_window_ev`, `esd_temperature_k`, `esd_ic`); a closed-shell singlet only.
+ESD, UV/Vis, IR and NMR can also be added to finished molecules with the
+project's Extend (`POST /api/projects/{name}/extend`): ESD then seeds from
+the existing S0 conformers, whose optimisations ran at the header's own
+`Opt` (not promoted to `TightOpt`) and kept their Hessians.
 
 **HT modes.** The dashboard's Herzberg–Teller menu sets three fields:
 None (`request_esd_ht` false, all FC); all rates or S1 rates only

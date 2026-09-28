@@ -352,6 +352,16 @@ flagged `archived`, so the project stays browsable in Project Overview
 project can no longer be exported (409). Refused for the protected
 `admin/default` project and for a project that is already archived.
 
+**"Add calculations…" (Extend)** — on the project page, before the project
+is archived. It opens the submission form with the project's molecules and
+headers: what every molecule already has is ticked and greyed out, and
+anything else can be ticked — T1/ox/red, UV/Vis, IR, NMR, ESD with any
+Herzberg–Teller mode. Each molecule gains only what it lacks; nothing is
+recomputed. A large library can so run its ground states first and its
+spectroscopy or ESD later. Densities and NBO run inside the energy
+singlepoints and can only be chosen at the first submission; ESD needs the
+S0 Hessians, which every optimisation keeps.
+
 Refresh poll is every 5 s; the sidebar footer shows connectivity and
 last-refresh time.
 
@@ -579,6 +589,8 @@ is either scoped to the caller's own projects or deliberately shared
 | GET    | `/api/projects/{name}/state-analysis` | triplet / redox / reorganisation energies                   |
 | GET    | `/api/projects/{name}/state-analysis/export` | the same, as a multi-sheet XLSX                      |
 | GET    | `/api/projects/{name}/photophysics` | UV/Vis, IR, NMR and ESD results per molecule (`?molecule_id=`) |
+| GET    | `/api/projects/{name}/extend-info`  | what the project's molecules already have (for Extend)        |
+| POST   | `/api/projects/{name}/extend`       | add categories / states to the project's molecules            |
 | POST   | `/api/projects/{name}/export`       | trigger CSV/JSON/files/photophysics export (`?format=&all_conformers=`)    |
 | POST   | `/api/projects/{name}/archive`      | **destructive**: CSV+filtered files, then wipe `comp_data`     |
 | GET    | `/api/projects/{name}/wipe-preview` | what a project wipe would delete — counts only                |

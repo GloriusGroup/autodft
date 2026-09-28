@@ -256,3 +256,12 @@ def test_broken_geometries_are_badged():
     assert "brokenBadge(c.connectivity)" in html
     assert "p.connectivity && !p.connectivity.ok" in html
     assert "(m.broken_bonds || []).forEach" in html
+
+
+def test_a_project_can_be_extended_from_its_page(client):
+    c, headers = client
+    html = c.get("/", headers=headers).text
+    for needle in ('id="projectExtendSection"', 'id="extendBtn"', 'id="extendBanner"', 'id="extendExitBtn"',
+                   "async function enterExtendMode(", "function exitExtendMode(", "async function submitExtend(",
+                   "/extend-info", "'/extend'", "await submitExtend(commonBody, btn, feedback);"):
+        assert needle in html, needle
