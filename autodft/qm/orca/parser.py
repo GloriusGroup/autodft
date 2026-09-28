@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 # routinely produce -20 to -50 cm^-1 modes that no amount of re-optimisation
 # removes; failing on them burns the whole retry budget for nothing.
 IMAGINARY_FREQ_THRESHOLD = -50.0
+# S1's Hessian is numerical: floppy aryl/tBu/CF3 rotors land at -50 to -65 cm^-1,
+# and a retry repeats the day-long Hessian. ESD reads them as real (flagged).
+IMAGINARY_FREQ_THRESHOLD_S1 = -100.0
 # Written into output.out by submit.cmd when its watchdog kills a hung ORCA.
 STALL_MARKER = "AUTODFT STALLED:"
 # A densities singlepoint's requested cubes are missing or empty.
@@ -108,7 +111,10 @@ class OrcaParser(QMEngine):
                 content, task_type
             ),
             "SCF Convergence": self._check_scf_convergence(content),
-            "Imaginary Frequencies": self._check_for_imaginary_frequencies(content),
+            "Imaginary Frequencies": self._check_for_imaginary_frequencies(
+                content,
+                IMAGINARY_FREQ_THRESHOLD_S1 if task_type == "optimization_excited" else IMAGINARY_FREQ_THRESHOLD,
+            ),
             # ORCA prints its normal-termination banner even after an
             # internal module has given up, so the banner alone is not
             # evidence of a usable result.
@@ -597,7 +603,9 @@ class OrcaParser(QMEngine):
         return False
 
     @classmethod
-    def _check_for_imaginary_frequencies(cls, content: str) -> bool:
+    def _check_for_imaginary_frequencies(
+        cls, content: str, threshold: float = IMAGINARY_FREQ_THRESHOLD,
+    ) -> bool:
         """Return ``True`` if there are no *significant* imaginary frequencies.
 
         Modes softer than ``IMAGINARY_FREQ_THRESHOLD`` are numerical noise on
@@ -609,7 +617,7 @@ class OrcaParser(QMEngine):
             return True
         significant = [
             f for f in cls.extract_imaginary_frequencies(content)
-            if f < IMAGINARY_FREQ_THRESHOLD
+            if f < threshold
         ]
         if significant:
             logger.warning("Significant imaginary frequencies: %s", significant)
