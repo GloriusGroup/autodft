@@ -123,8 +123,20 @@ the duration — avoid running one while references are outstanding.
 
 Excited-state dynamics (ISC, RISC, fluorescence, T1→S0 ISC,
 phosphorescence, and IC on request) via ORCA's `ESD` module. Tick
-`request_esd` (plus `request_esd_ht`, `esd_tn_window_ev`,
-`esd_temperature_k`, `esd_ic`); a closed-shell singlet only.
+`request_esd` (plus `request_esd_ht`, `esd_ht_scope`, `esd_ht_method`,
+`esd_tn_window_ev`, `esd_temperature_k`, `esd_ic`); a closed-shell singlet only.
+
+**HT modes.** The dashboard's Herzberg–Teller menu sets three fields:
+None (`request_esd_ht` false, all FC); all rates or S1 rates only
+(`esd_ht_scope` `all` / `s1`: with `s1` fluorescence and S1→Tn ISC get HT,
+phosphorescence, T1→S0 ISC and RISC stay FC); at the singlepoint or the
+optimisation level (`esd_ht_method` `sp` / `opt`: with `opt` the HT jobs
+run the optimisation header's method with its Opt/Freq keywords removed —
+e.g. ωB97X-D3/def2-SVP on its own `%pal` — while DELE, the FC SOCMEs and
+every non-HT job stay at the singlepoint level). Measured on
+9-phenylacridine, def2-SVP HT was 3–6× faster than def2-TZVP, with
+fluorescence −6 % and T1→S0 ISC −17 %, but the weakest phosphorescence
+sublevel came out 11× too high: prefer `s1` scope with `opt`.
 
 **IC is opt-in.** The S1→S0 internal-conversion rate job runs only with
 `esd_ic` (CLI `--esd-ic`, dashboard tick box in the ESD panel): harmonic IC

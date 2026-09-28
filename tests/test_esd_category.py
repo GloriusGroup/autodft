@@ -102,16 +102,19 @@ class TestRejection:
 def test_esd_settings_for_the_excited_states():
     assert categories.esd_settings({**ESD, "esd_temperature_k": 77}) == {
         categories.ESD_HT: False, "esd_tn_window_ev": 0.3, "esd_temperature_k": 77, "esd_ic": False,
+        "esd_ht_scope": "all", "esd_ht_method": "sp",
     }
     assert categories.esd_settings({**ESD, "esd_ic": True})["esd_ic"] is True
     assert categories.esd_settings({**ESD, categories.ESD_HT: True})[categories.ESD_HT] is True
 
 
 def test_options_default_and_ride_with_the_category():
-    assert categories.options(ESD) == {"esd_tn_window_ev": 0.3, "esd_temperature_k": 298.15, "esd_ic": False}
+    assert categories.options(ESD) == {"esd_tn_window_ev": 0.3, "esd_temperature_k": 298.15, "esd_ic": False,
+                                       "esd_ht_scope": "all", "esd_ht_method": "sp"}
     assert categories.snapshot({**ESD, categories.ESD_HT: True, "esd_tn_window_ev": 0.1}) == {
         categories.ESD: True, categories.ESD_HT: True,
         "esd_tn_window_ev": 0.1, "esd_temperature_k": 298.15, "esd_ic": False,
+        "esd_ht_scope": "all", "esd_ht_method": "sp",
     }
     assert categories.snapshot({"esd_tn_window_ev": 0.1, "esd_ic": True}) == {}
 

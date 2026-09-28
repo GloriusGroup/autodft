@@ -80,6 +80,7 @@ def _category_options_to_flags(
     uvvis_nroots: int = 20, uvvis_tda: bool = False, nmr_nuclei: Optional[list] = None,
     esd_tn_window_ev: float = 0.3, esd_temperature_k: float = 298.15,
     nmr_method: str = "singlepoint", esd_ic: bool = False,
+    esd_ht_scope: str = "all", esd_ht_method: str = "sp",
     densities: bool = False, density_eldens: bool = True, density_spindens: bool = True,
     density_grid: int = 75, density_eldens_file: str = "ElDens.cube",
     density_spindens_file: str = "SpinDens.cube",
@@ -103,6 +104,8 @@ def _category_options_to_flags(
         "esd_temperature_k": esd_temperature_k,
         "nmr_method": nmr_method,
         "esd_ic": esd_ic,
+        "esd_ht_scope": esd_ht_scope,
+        "esd_ht_method": esd_ht_method,
         "density_eldens": density_eldens,
         "density_spindens": density_spindens,
         "density_grid": density_grid,
@@ -268,6 +271,8 @@ def submit(
     esd_ic: bool = typer.Option(
         False, "--esd-ic", help="Also compute the S1->S0 internal conversion rate (harmonic, often unreliable for large gaps)"
     ),
+    esd_ht_scope: str = typer.Option("all", "--esd-ht-scope", help="With --esd-ht: all (every rate) or s1 (fluorescence and S1->Tn ISC only)"),
+    esd_ht_method: str = typer.Option("sp", "--esd-ht-method", help="With --esd-ht: sp (singlepoint header level) or opt (optimisation header level, cheaper)"),
     nmr_method: str = typer.Option(
         "singlepoint", "--nmr-method",
         help="NMR method: singlepoint (the singlepoint header's) or dh (revDSD-PBEP86-D4/2021 / pcSseg-3; H-Kr only)",
@@ -293,7 +298,7 @@ def submit(
         uvvis, ir, esd, esd_ht, nmr, uvvis_nroots, uvvis_tda,
         nmr_nuclei=[n.strip() for n in nmr_nuclei.split(",") if n.strip()],
         esd_tn_window_ev=esd_tn_window_ev, esd_temperature_k=esd_temperature_k,
-        nmr_method=nmr_method, esd_ic=esd_ic,
+        nmr_method=nmr_method, esd_ic=esd_ic, esd_ht_scope=esd_ht_scope, esd_ht_method=esd_ht_method,
         densities=densities, density_eldens=not no_eldens, density_spindens=not no_spindens,
         density_grid=density_grid, density_eldens_file=eldens_file, density_spindens_file=spindens_file,
         nbo=nbo, nbo_keywords=nbo_keywords,
@@ -396,6 +401,8 @@ def submit_batch(
     esd_ic: bool = typer.Option(
         False, "--esd-ic", help="Also compute the S1->S0 internal conversion rate (harmonic, often unreliable for large gaps)"
     ),
+    esd_ht_scope: str = typer.Option("all", "--esd-ht-scope", help="With --esd-ht: all (every rate) or s1 (fluorescence and S1->Tn ISC only)"),
+    esd_ht_method: str = typer.Option("sp", "--esd-ht-method", help="With --esd-ht: sp (singlepoint header level) or opt (optimisation header level, cheaper)"),
     nmr_method: str = typer.Option(
         "singlepoint", "--nmr-method",
         help="NMR method: singlepoint (the singlepoint header's) or dh (revDSD-PBEP86-D4/2021 / pcSseg-3; H-Kr only)",
@@ -424,7 +431,7 @@ def submit_batch(
         uvvis, ir, esd, esd_ht, nmr, uvvis_nroots, uvvis_tda,
         nmr_nuclei=[n.strip() for n in nmr_nuclei.split(",") if n.strip()],
         esd_tn_window_ev=esd_tn_window_ev, esd_temperature_k=esd_temperature_k,
-        nmr_method=nmr_method, esd_ic=esd_ic,
+        nmr_method=nmr_method, esd_ic=esd_ic, esd_ht_scope=esd_ht_scope, esd_ht_method=esd_ht_method,
         densities=densities, density_eldens=not no_eldens, density_spindens=not no_spindens,
         density_grid=density_grid, density_eldens_file=eldens_file, density_spindens_file=spindens_file,
         nbo=nbo, nbo_keywords=nbo_keywords,

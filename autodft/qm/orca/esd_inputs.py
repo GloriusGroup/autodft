@@ -37,6 +37,8 @@ FC_AFTER_TDDFT = "! ESD(ISC) NOITER\n"
 DIAGNOSTICS_MARKER = "# autodft: FC diagnostics from here on, not part of the rate\n"
 
 FC_RATES = ("esd_isc", "esd_risc", "esd_isc_t1s0")
+# Rates starting from T1; esd_ht_scope "s1" keeps them Franck-Condon.
+T1_RATES = ("esd_risc", "esd_isc_t1s0", "esd_phosp")
 # TDDFT roots of a rate job: ISC types reach this many past the highest root they read.
 ROOTS_ABOVE = 3
 NROOTS = {"esd_fluor": 5, "esd_ic": 5, "esd_phosp": 10}
@@ -71,6 +73,8 @@ def ht_decision(rate: str, socme_cm: float, dele_cm: float, settings: dict) -> t
         return False, "Herzberg-Teller not requested"
     if rate == "esd_ic":
         return False, "no Herzberg-Teller for IC"
+    if settings["esd_ht_scope"] == "s1" and rate in T1_RATES:
+        return False, "Herzberg-Teller only for the S1 rates"
     if rate in ("esd_fluor", "esd_phosp"):
         return True, "always for emission"
     if rate == "esd_risc":
@@ -135,29 +139,32 @@ def esd_block(**settings) -> str:
 
 def build(
     rate: str, data: dict[str, StateData], options: dict, sp_header: str, charge: int,
+    ht_header: Optional[str] = None,
 ) -> tuple[str, dict]:
     """The input of one rate task (without its last geometry line) and what went into it.
 
-    *options* is the rate task's state metadata (``categories.esd_settings`` keys).
+    *options* is the rate task's state metadata (``categories.esd_settings`` keys);
+    HT jobs run *ht_header* (the optimisation level) when given, else *sp_header*.
     """
-    jobs, computed = _jobs(rate, data, options, sp_header, standalone_fc=False)
+    jobs, computed = _jobs(rate, data, options, sp_header, ht_header, standalone_fc=False)
     return _join(jobs, charge), computed
 
 
 def parts(
     rate: str, data: dict[str, StateData], options: dict, sp_header: str, charge: int,
+    ht_header: Optional[str] = None,
 ) -> list[tuple[str, dict]]:
     """A rate split into separately run parts: one per HT sublevel job, then its FC jobs.
 
     HT sublevel jobs run for days each; as parts they run side by side and a crash
     reruns only its own. Without two or more of them the rate stays one part.
     """
-    jobs, computed = _jobs(rate, data, options, sp_header, standalone_fc=True)
+    jobs, computed = _jobs(rate, data, options, sp_header, ht_header, standalone_fc=True)
     record = computed["jobs"]
     heavy = [i for i, job in enumerate(record)
              if job.get("ht", computed["ht"]) and (rate == "esd_phosp" or "sublevel" in job)]
     if len(heavy) < 2:
-        return [build(rate, data, options, sp_header, charge)]
+        return [build(rate, data, options, sp_header, charge, ht_header)]
     # The builders put the HT jobs first: part k is job k, the rest is the FC tail.
     if heavy != list(range(len(heavy))):
         raise EsdInputError(f"{rate}: the HT jobs are not the leading jobs; cannot split into parts")
@@ -174,7 +181,8 @@ def parts(
 
 
 def _jobs(
-    rate: str, data: dict[str, StateData], options: dict, sp_header: str, standalone_fc: bool,
+    rate: str, data: dict[str, StateData], options: dict, sp_header: str,
+    ht_header: Optional[str], standalone_fc: bool,
 ) -> tuple[list[str], dict]:
     """The ORCA jobs of *rate* and what went into them; *standalone_fc* FC jobs carry %maxcore."""
     settings = categories.esd_settings(options)
@@ -183,6 +191,7 @@ def _jobs(
     temperature = {"TEMP": f"{settings['esd_temperature_k']:g}"}
     energies = {state: energy(state, data[state]) for state in (initial, final)}
     sp_header = blocks.rate_header(sp_header)
+    ht_header = blocks.rate_header(ht_header) if ht_header else sp_header
     diagnostics: list[dict] = []
 
     if rate in FC_RATES:
@@ -199,7 +208,7 @@ def _jobs(
             channels = [(1, sroot, energies["T1"] - energies[final], socme, 1 / math.sqrt(3))]
             combine = "mean"
         jobs, record, diagnostics = _isc(
-            rate, channels, settings, files, temperature, sp_header, standalone_fc,
+            rate, channels, settings, files, temperature, ht_header, standalone_fc,
         )
         ht = any(job["ht"] for job in record)
         reasons = {job["triplet"]: job["ht_reason"] for job in record}
@@ -215,7 +224,7 @@ def _jobs(
         else:
             keyword, tddft, lineshape = "ESD(FLUOR)", {"tda": True}, {}
         jobs = [_tddft_job(
-            sp_header, keyword,
+            ht_header if ht else sp_header, keyword,
             {"nroots": NROOTS[rate], "iroot": 1, **tddft},
             {**files, "DELE": _cm(dele), "USEJ": "TRUE", **doht, **lineshape, **temperature},
         )]
@@ -227,7 +236,7 @@ def _jobs(
         doht = {"DOHT": "TRUE"} if ht else {}
         jobs = [
             _tddft_job(
-                sp_header, "ESD(PHOSP)",
+                ht_header if ht else sp_header, "ESD(PHOSP)",
                 {"nroots": NROOTS[rate], "iroot": k, "triplets": True, "dosoc": True, "tda": True},
                 {**files, "DELE": _cm(dele), "USEJ": "TRUE", **doht, **temperature},
             )
@@ -243,7 +252,7 @@ def _jobs(
     return jobs, computed
 
 
-def _isc(rate, channels, settings, files, temperature, sp_header, standalone_fc):
+def _isc(rate, channels, settings, files, temperature, ht_header, standalone_fc):
     """ISC-type jobs per channel, then its FC diagnostics.
 
     Each channel is ``(triplet, sroot, gap (Eh), SOCME (cm-1), FC SOCME factor)``.
@@ -269,7 +278,7 @@ def _isc(rate, channels, settings, files, temperature, sp_header, standalone_fc)
             continue
         for ms in SUBLEVELS:
             jobs.append(_tddft_job(
-                sp_header, "ESD(ISC)",
+                ht_header, "ESD(ISC)",
                 {"nroots": max(sroot, n) + ROOTS_ABOVE, "sroot": sroot, "troot": n, "trootssl": ms,
                  "triplets": True, "dosoc": True, "tda": True},
                 {**files, "DELE": dele, "USEJ": "TRUE", "DOHT": "TRUE", **LINESHAPE, **temperature},

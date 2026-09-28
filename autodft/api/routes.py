@@ -203,6 +203,10 @@ class SubmitRequest(BaseModel):
     esd_tn_window_ev: float = 0.3
     esd_temperature_k: float = 298.15
     esd_ic: bool = False
+    # With request_esd_ht: "all" rates or only the S1 ones ("s1"); HT jobs at the
+    # singlepoint ("sp") or the optimisation ("opt") level.
+    esd_ht_scope: str = "all"
+    esd_ht_method: str = "sp"
     density_eldens: bool = True
     density_spindens: bool = True
     density_grid: int = 75
@@ -2081,6 +2085,8 @@ def _category_flags(body: SubmitRequest) -> dict:
         "esd_tn_window_ev": body.esd_tn_window_ev,
         "esd_temperature_k": body.esd_temperature_k,
         "esd_ic": body.esd_ic,
+        "esd_ht_scope": body.esd_ht_scope,
+        "esd_ht_method": body.esd_ht_method,
         "density_eldens": body.density_eldens,
         "density_spindens": body.density_spindens,
         "density_grid": body.density_grid,

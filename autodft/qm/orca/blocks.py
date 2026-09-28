@@ -21,6 +21,9 @@ _OPT_RE = re.compile(r"(?<![\w-])Opt(?![\w-])", re.IGNORECASE)
 _OPT_LEVEL_RE = re.compile(r"\b(?:Tight|VeryTight|Loose|Normal|Sloppy)Opt\b", re.IGNORECASE)
 _GRID_RE = re.compile(r"\bDEFGRID\d\b", re.IGNORECASE)
 _KEEPDENS_RE = re.compile(r"\s*\bKeepDens\b", re.IGNORECASE)
+_JOB_TYPE_RE = re.compile(
+    r"\s*(?<![\w-])(?:(?:Tight|VeryTight|Loose|Normal|Sloppy)?Opt|Freq|NumFreq|AnFreq)(?![\w-])", re.IGNORECASE,
+)
 # High-accuracy NMR (ORCA 6.1 NMR tutorial): NoFrozenCore, as core electrons shape shieldings.
 NMR_DH_ROUTE = "!revDSD-PBEP86-D4/2021 PCSSEG-3 AUTOAUX NMR NOFROZENCORE TightSCF"
 _SOLVENT_TOKEN_RE = re.compile(r"(?:CPCMC?|SMD)(?:\(.*\))?", re.IGNORECASE)
@@ -105,6 +108,11 @@ def with_tight_opt(header: str) -> str:
     if any(_OPT_LEVEL_RE.search(line) for line in _keyword_lines(header)):
         return header
     return _on_keyword_lines(header, lambda body: _OPT_RE.sub("TightOpt", body))
+
+
+def singlepoint_of(header: str) -> str:
+    """*header* without its optimisation and frequency keywords."""
+    return _on_keyword_lines(header, lambda body: _JOB_TYPE_RE.sub("", body))
 
 
 def rate_header(header: str) -> str:

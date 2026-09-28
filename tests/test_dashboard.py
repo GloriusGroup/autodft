@@ -172,7 +172,7 @@ def test_the_dashboard_offers_nmr(client):
 def test_the_dashboard_offers_esd(client):
     c, headers = client
     html = c.get("/", headers=headers).text
-    for needle in ('id="requestEsd"', 'id="requestEsdHt"', 'id="esdTnWindow"', 'id="esdTemperature"',
+    for needle in ('id="requestEsd"', 'id="esdHtMode"', "commonBody.esd_ht_scope =", 'id="esdTnWindow"', 'id="esdTemperature"',
                    'id="esdHeaderNote"', "request_esd:", "commonBody.request_esd_ht =",
                    "'requestEsd'", "var B88_RE", "function ppEsdSummary(", "function ppEsd(",
                    "<th>ESD</th>", 'id="esdIc"', "commonBody.esd_ic =", "r.status !== 'not requested'"):

@@ -70,7 +70,8 @@ def build_xlsx(payload: dict) -> bytes:
             e, d = m["esd"], m["esd"].get("derived") or {}
             rates = e.get("rates", {})
             esd.append((m["id"], m["smiles"], m["state_id"], e["status"], e.get("temperature_k"),
-                        e.get("herzberg_teller"), e.get("delta_est_ev"), e.get("delta_est_uks_ev"),
+                        e.get("herzberg_teller"), e.get("ht_scope"), e.get("ht_method"),
+                        e.get("delta_est_ev"), e.get("delta_est_uks_ev"),
                         *(_rate_cell(rates.get(r, {})) for r in RATES),
                         *(d.get(k) for k in DERIVED), " | ".join(e.get("flags", []))))
             for r in RATES:
@@ -102,7 +103,7 @@ def build_xlsx(payload: dict) -> bytes:
                              "intensity_km_mol"), ir_sticks)
     _sheet(wb, "NMR", ("mol_id", "smiles", "state_id", "nucleus", "shift_ppm", "shielding_ppm", "count",
                        "atoms_1based", "reference", "reference_status", "method_matches", "equivalence"), nmr)
-    _sheet(wb, "ESD", ("mol_id", "smiles", "state_id", "status", "temperature_K", "HT", "dEST_eV",
+    _sheet(wb, "ESD", ("mol_id", "smiles", "state_id", "status", "temperature_K", "HT", "HT_scope", "HT_method", "dEST_eV",
                        "dEST_UKS_eV", "k_ISC", "k_RISC", "k_IC", "k_F", "k_ISC_T1S0", "k_P", "tau_S1_ns",
                        "phi_F", "phi_ISC", "phi_IC", "tau_T1_us", "phi_P", "phi_ISC_T1S0", "phi_RISC",
                        "flags"), esd)

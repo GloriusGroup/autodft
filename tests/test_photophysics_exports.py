@@ -362,7 +362,7 @@ def test_build_xlsx_has_a_sheet_per_category_plus_sticks_and_esd_jobs():
         "reference", "reference_status", "method_matches", "equivalence",
     ]
     assert _header(wb["ESD"]) == [
-        "mol_id", "smiles", "state_id", "status", "temperature_K", "HT", "dEST_eV", "dEST_UKS_eV",
+        "mol_id", "smiles", "state_id", "status", "temperature_K", "HT", "HT_scope", "HT_method", "dEST_eV", "dEST_UKS_eV",
         "k_ISC", "k_RISC", "k_IC", "k_F", "k_ISC_T1S0", "k_P", "tau_S1_ns", "phi_F",
         "phi_ISC", "phi_IC", "tau_T1_us", "phi_P", "phi_ISC_T1S0", "phi_RISC", "flags",
     ]

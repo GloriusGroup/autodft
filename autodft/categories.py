@@ -82,7 +82,9 @@ _NBO_KEYWORDS_RE = re.compile(r"^[A-Za-z0-9 =_.,+-]{0,200}\Z")
 # Settings each category takes, with defaults. Stored -- defaults filled in --
 # only when the category is requested.
 OPTIONS: dict[str, dict] = {
-    ESD: {"esd_tn_window_ev": 0.3, "esd_temperature_k": 298.15, "esd_ic": False},
+    ESD: {"esd_tn_window_ev": 0.3, "esd_temperature_k": 298.15, "esd_ic": False,
+          # With request_esd_ht: which rates get Herzberg-Teller, and at which level.
+          "esd_ht_scope": "all", "esd_ht_method": "sp"},
     UVVIS: {"uvvis_nroots": 20, "uvvis_tda": False},
     NMR: {"nmr_nuclei": ["H", "C", "F"], "nmr_method": "singlepoint"},
     DENSITIES: {
@@ -94,6 +96,10 @@ OPTIONS: dict[str, dict] = {
     },
     NBO: {"nbo_keywords": ""},
 }
+# "all": every rate may get HT; "s1": fluorescence and S1->Tn ISC only.
+ESD_HT_SCOPES = ("all", "s1")
+# "sp": HT jobs at the singlepoint level; "opt": at the optimisation level.
+ESD_HT_METHODS = ("sp", "opt")
 UVVIS_NROOTS_MAX = 100
 NMR_NUCLEI = ("H", "C", "F")
 
@@ -228,6 +234,10 @@ def rejection(
             return "The ESD temperature must be above 0 and at most 1000 K (esd_temperature_k)."
         if not isinstance(metadata.get("esd_ic", False), bool):
             return "esd_ic must be true or false."
+        if metadata.get("esd_ht_scope", OPTIONS[ESD]["esd_ht_scope"]) not in ESD_HT_SCOPES:
+            return f"esd_ht_scope must be one of {', '.join(ESD_HT_SCOPES)}."
+        if metadata.get("esd_ht_method", OPTIONS[ESD]["esd_ht_method"]) not in ESD_HT_METHODS:
+            return f"esd_ht_method must be one of {', '.join(ESD_HT_METHODS)}."
 
     if UVVIS in wanted:
         nroots = metadata.get("uvvis_nroots", OPTIONS[UVVIS]["uvvis_nroots"])

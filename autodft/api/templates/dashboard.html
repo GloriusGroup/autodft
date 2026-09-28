@@ -1243,9 +1243,15 @@
                         <div class="cat-detail" data-requires="requestEsd" style="display:none;">
                             <div class="cat-detail-title">ESD</div>
                             <div class="cat-detail-body">
-                                <div class="checkbox-group" title="Herzberg-Teller vibronic coupling, for transitions that are forbidden at the Franck-Condon level. Much more expensive: 3N-6 or more displaced TDDFT+SOC singlepoints for every triplet sublevel. Applied where it matters: fluorescence, phosphorescence, and ISC channels whose SOCME is below 5 cm⁻¹ (not RISC more than 10 kT uphill).">
-                                    <input type="checkbox" id="requestEsdHt">
-                                    <label for="requestEsdHt">Herzberg–Teller</label>
+                                <div class="form-group" style="min-width: 260px;" title="Herzberg-Teller vibronic coupling, for transitions that are forbidden at the Franck-Condon level. Much more expensive: 3N-6 or more displaced TDDFT+SOC singlepoints for every triplet sublevel. Applied where it matters: fluorescence, phosphorescence, and ISC channels whose SOCME is below 5 cm⁻¹ (not RISC more than 10 kT uphill). S1 only: fluorescence and S1→Tn ISC; the T1 rates stay Franck-Condon. Optimisation level: the HT jobs run the optimisation header's method (e.g. def2-SVP, several times cheaper); energies and FC couplings stay at the singlepoint level.">
+                                    <label for="esdHtMode">Herzberg–Teller</label>
+                                    <select id="esdHtMode">
+                                        <option value="none" selected>None (Franck–Condon)</option>
+                                        <option value="all:sp">All rates, singlepoint level</option>
+                                        <option value="all:opt">All rates, optimisation level</option>
+                                        <option value="s1:sp">S1 rates only, singlepoint level</option>
+                                        <option value="s1:opt">S1 rates only, optimisation level</option>
+                                    </select>
                                 </div>
                                 <div class="form-group" style="min-width: 160px;">
                                     <label for="esdTnWindow">Tn window above S1 (eV)</label>
@@ -1260,7 +1266,7 @@
                                     <label for="esdIc">Internal conversion rate (S1→S0; harmonic, often unreliable for large gaps)</label>
                                 </div>
                             </div>
-                            <div class="cat-detail-note">S1 and T1 start from the lowest S0 conformer once every S0 conformer is done. Franck-Condon rates unless Herzberg-Teller is ticked; S1→Tn channels within the window use the T1 geometry and Hessian. ISC channels also get cheap FC reruns flagging width-sensitive and soft-mode-dominated rates.</div>
+                            <div class="cat-detail-note">S1 and T1 start from the lowest S0 conformer once every S0 conformer is done. Franck-Condon rates unless Herzberg-Teller is chosen; S1→Tn channels within the window use the T1 geometry and Hessian. ISC channels also get cheap FC reruns flagging width-sensitive and soft-mode-dominated rates.</div>
                             <div class="cat-detail-note" id="esdHeaderNote"></div>
                         </div>
                         <div class="cat-detail" data-requires="requestDensities" style="display:none;">
@@ -3112,7 +3118,12 @@
             if (commonBody.request_esd) {
                 var esdWindow = parseFloat(document.getElementById('esdTnWindow').value);
                 var esdTemperature = parseFloat(document.getElementById('esdTemperature').value);
-                commonBody.request_esd_ht = document.getElementById('requestEsdHt').checked;
+                var htMode = document.getElementById('esdHtMode').value;
+                commonBody.request_esd_ht = htMode !== 'none';
+                if (htMode !== 'none') {
+                    commonBody.esd_ht_scope = htMode.split(':')[0];
+                    commonBody.esd_ht_method = htMode.split(':')[1];
+                }
                 commonBody.esd_tn_window_ev = isFinite(esdWindow) ? esdWindow : 0.3;
                 commonBody.esd_temperature_k = isFinite(esdTemperature) ? esdTemperature : 298.15;
                 commonBody.esd_ic = document.getElementById('esdIc').checked;

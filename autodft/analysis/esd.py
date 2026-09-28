@@ -53,6 +53,8 @@ def molecule_esd(
         "status": "waiting",
         "temperature_k": settings["esd_temperature_k"],
         "herzberg_teller": settings[categories.ESD_HT],
+        **({"ht_scope": settings["esd_ht_scope"], "ht_method": settings["esd_ht_method"]}
+           if settings[categories.ESD_HT] else {}),
         "tn_window_ev": settings["esd_tn_window_ev"],
         "rates": {},
         "flags": [],

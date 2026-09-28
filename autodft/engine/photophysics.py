@@ -17,6 +17,7 @@ from typing import Optional
 from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, col, select
 
+from autodft import categories
 from autodft.config import Settings
 from autodft.engine.state_machine import _create_singlepoint_task, paused_project_names
 from autodft.extraction import connectivity, results
@@ -24,7 +25,7 @@ from autodft.extraction.extractor import PipelineExtractor
 from autodft.models import (
     ComputationHeader, ComputationTask, Molecule, MoleculeGeometry, MoleculeState, TaskStatus, TaskType,
 )
-from autodft.qm.orca import esd_inputs
+from autodft.qm.orca import blocks, esd_inputs
 
 logger = logging.getLogger(__name__)
 
@@ -258,8 +259,9 @@ def prepare_rate_job(
             )
         shutil.copyfile(source, job_path / filename)
     rate = task.task_type.value
+    ht_header = _ht_header(session, state)
     if "part" in stored:
-        split = esd_inputs.parts(rate, data, _metadata(state), sp_header, state.charge)
+        split = esd_inputs.parts(rate, data, _metadata(state), sp_header, state.charge, ht_header)
         if len(split) != stored["parts"]:
             raise esd_inputs.EsdInputError(
                 f"the rate now splits into {len(split)} parts, not the {stored['parts']} it was created with"
@@ -271,7 +273,7 @@ def prepare_rate_job(
             )
         roles = {**roles, **{key: stored[key] for key in ("part", "parts", "plan")}}
     else:
-        text, computed = esd_inputs.build(rate, data, _metadata(state), sp_header, state.charge)
+        text, computed = esd_inputs.build(rate, data, _metadata(state), sp_header, state.charge, ht_header)
     task.inputs_json = json.dumps({**roles, "computed": computed})
     session.add(task)
     return text, list(hessians)
@@ -303,10 +305,22 @@ def _part_plans(session: Session, rate: str, state: MoleculeState, roles: dict) 
         return [[]]
     try:
         data = _rate_data(session, roles)
-        split = esd_inputs.parts(rate, data, _metadata(state), header.header_text, state.charge)
+        split = esd_inputs.parts(
+            rate, data, _metadata(state), header.header_text, state.charge, _ht_header(session, state),
+        )
     except (OSError, KeyError, ValueError):  # EsdInputError is a ValueError
         return [[]]  # one task; its job build reports the problem
     return [json.loads(json.dumps(computed["jobs"])) for _, computed in split]
+
+
+def _ht_header(session: Session, state: MoleculeState) -> Optional[str]:
+    """The optimisation header as a singlepoint, for HT jobs at ``esd_ht_method`` "opt"."""
+    if categories.esd_settings(_metadata(state))["esd_ht_method"] != "opt":
+        return None
+    header = session.get(ComputationHeader, state.optimization_header_id)
+    if header is None:
+        raise esd_inputs.EsdInputError(f"optimisation header {state.optimization_header_id} not found")
+    return blocks.singlepoint_of(header.header_text)
 
 
 def _metadata(state: MoleculeState) -> dict:
