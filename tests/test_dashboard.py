@@ -265,3 +265,11 @@ def test_a_project_can_be_extended_from_its_page(client):
                    "async function enterExtendMode(", "function exitExtendMode(", "async function submitExtend(",
                    "/extend-info", "'/extend'", "await submitExtend(commonBody, btn, feedback);"):
         assert needle in html, needle
+
+
+def test_the_submit_form_offers_strict_convergence(client):
+    c, headers = client
+    html = c.get("/", headers=headers).text
+    for needle in ('id="submitOptions"', 'id="strictConvergence" checked',
+                   "strict_convergence: document.getElementById('strictConvergence').checked"):
+        assert needle in html, needle

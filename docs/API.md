@@ -201,6 +201,7 @@ package defaults in `autodft/qm/orca/defaults.py`.
 | `request_esd_ht` | bool | `false` | Herzberg–Teller where it matters: fluorescence, phosphorescence, and ISC channels whose SOCME is below 5 cm⁻¹ (RISC more than 10 kT uphill stays FC); only with `request_esd`. |
 | `esd_ht_scope` | string | `"all"` | With `request_esd_ht`: `"all"` rates, or `"s1"` — fluorescence and S1→Tn ISC only (phosphorescence, T1→S0 ISC and RISC stay FC). Stored only with ESD. |
 | `esd_ht_method` | string | `"sp"` | With `request_esd_ht`: HT jobs at the singlepoint header's level (`"sp"`) or the optimisation header's (`"opt"`, e.g. def2-SVP; several times cheaper). Energies and FC couplings stay at the singlepoint level. Stored only with ESD. |
+| `strict_convergence` | bool | `true` | Retry every optimisation with an imaginary mode below −50 cm⁻¹. `false`: ESD's S1 optimisation (numerical Hessian; floppy ortho-aryl/tBu/CF₃ rotors land at −50 to −65 cm⁻¹) accepts modes down to −100 cm⁻¹, flagged in the ESD result; ground states keep −50 cm⁻¹. Stored on the states only when `false`. Dashboard: "Options" above Submit. |
 | `esd_tn_window_ev` | float | `0.3` | S1→Tn ISC is summed over triplets up to this many eV above S1 (0–1). Stored only with ESD. |
 | `esd_temperature_k` | float | `298.15` | Temperature of the rates (0 < T ≤ 1000). Stored only with ESD. |
 | `esd_ic` | bool | `false` | Also run the S1→S0 internal-conversion rate (harmonic, often unreliable for large gaps). Stored only with ESD. |

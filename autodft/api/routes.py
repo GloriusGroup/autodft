@@ -207,6 +207,9 @@ class SubmitRequest(BaseModel):
     # singlepoint ("sp") or the optimisation ("opt") level.
     esd_ht_scope: str = "all"
     esd_ht_method: str = "sp"
+    # Retry any optimisation with an imaginary mode below -50 cm^-1. Off: ESD's
+    # S1 optimisation (numerical Hessian) accepts down to -100 cm^-1, flagged.
+    strict_convergence: bool = True
     density_eldens: bool = True
     density_spindens: bool = True
     density_grid: int = 75
@@ -2515,6 +2518,7 @@ def _new_entrypoint(
         "request_singlepoint": body.request_singlepoint,
         "request_singlepoint_vertical_excitations": body.request_singlepoint_vertical_excitations,
         "request_singlepoint_nbo": False,
+        "strict_convergence": body.strict_convergence,
         "max_conformers_S0": n_s0,
         "max_conformers_T1": n_t1,
         "max_conformers_ox": n_ox,

@@ -189,6 +189,7 @@ def _build_request_metadata(
     max_conformers_ox: int,
     max_conformers_red: int,
     category_flags: Optional[dict] = None,
+    strict_convergence: bool = True,
 ) -> str:
     """Build the request_metadata JSON string."""
     metadata = {
@@ -207,6 +208,7 @@ def _build_request_metadata(
         "max_conformers_T1": max_conformers_t1,
         "max_conformers_ox": max_conformers_ox,
         "max_conformers_red": max_conformers_red,
+        "strict_convergence": strict_convergence,
     }
 
     from autodft import categories
@@ -273,6 +275,10 @@ def submit(
     ),
     esd_ht_scope: str = typer.Option("all", "--esd-ht-scope", help="With --esd-ht: all (every rate) or s1 (fluorescence and S1->Tn ISC only)"),
     esd_ht_method: str = typer.Option("sp", "--esd-ht-method", help="With --esd-ht: sp (singlepoint header level) or opt (optimisation header level, cheaper)"),
+    strict_convergence: bool = typer.Option(
+        True, "--strict-convergence/--no-strict-convergence",
+        help="Retry optimisations with imaginary modes below -50 cm-1; off, ESD's S1 accepts down to -100 cm-1 (flagged)",
+    ),
     nmr_method: str = typer.Option(
         "singlepoint", "--nmr-method",
         help="NMR method: singlepoint (the singlepoint header's) or dh (revDSD-PBEP86-D4/2021 / pcSseg-3; H-Kr only)",
@@ -324,6 +330,7 @@ def submit(
         max_conformers_ox=max_conformers_ox,
         max_conformers_red=max_conformers_red,
         category_flags=flags,
+        strict_convergence=strict_convergence,
     )
 
     entry = CalculationEntrypoint(
@@ -403,6 +410,10 @@ def submit_batch(
     ),
     esd_ht_scope: str = typer.Option("all", "--esd-ht-scope", help="With --esd-ht: all (every rate) or s1 (fluorescence and S1->Tn ISC only)"),
     esd_ht_method: str = typer.Option("sp", "--esd-ht-method", help="With --esd-ht: sp (singlepoint header level) or opt (optimisation header level, cheaper)"),
+    strict_convergence: bool = typer.Option(
+        True, "--strict-convergence/--no-strict-convergence",
+        help="Retry optimisations with imaginary modes below -50 cm-1; off, ESD's S1 accepts down to -100 cm-1 (flagged)",
+    ),
     nmr_method: str = typer.Option(
         "singlepoint", "--nmr-method",
         help="NMR method: singlepoint (the singlepoint header's) or dh (revDSD-PBEP86-D4/2021 / pcSseg-3; H-Kr only)",
@@ -450,6 +461,7 @@ def submit_batch(
         max_conformers_ox=max_conformers_ox,
         max_conformers_red=max_conformers_red,
         category_flags=flags,
+        strict_convergence=strict_convergence,
     )
 
     h_cs = _read_header_file(header_confsearch) if header_confsearch else (None if skip_confsearch else DEFAULT_HEADER_CONFSEARCH)

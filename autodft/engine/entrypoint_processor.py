@@ -739,6 +739,10 @@ def _create_state(
     if description == "S0":
         state_metadata.update(categories.snapshot(metadata))
 
+    # Stored only when off, so a default submission's metadata stays as it was.
+    if metadata.get("strict_convergence") is False:
+        state_metadata["strict_convergence"] = False
+
     # Densities and NBO apply to every state's own energy singlepoint, not
     # only S0's -- harmless for S1, which has none. {} when neither is
     # requested, so this never contradicts the snapshot above.

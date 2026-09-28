@@ -25,9 +25,12 @@ logger = logging.getLogger(__name__)
 # routinely produce -20 to -50 cm^-1 modes that no amount of re-optimisation
 # removes; failing on them burns the whole retry budget for nothing.
 IMAGINARY_FREQ_THRESHOLD = -50.0
-# S1's Hessian is numerical: floppy aryl/tBu/CF3 rotors land at -50 to -65 cm^-1,
-# and a retry repeats the day-long Hessian. ESD reads them as real (flagged).
+# Without strict convergence: S1's Hessian is numerical, floppy aryl/tBu/CF3 rotors
+# land at -50 to -65 cm^-1, and a retry repeats the day-long Hessian. ESD reads
+# them as real (flagged).
 IMAGINARY_FREQ_THRESHOLD_S1 = -100.0
+# Check types of an ESD S1 optimisation, with and without strict convergence.
+EXCITED_OPTIMIZATION = ("optimization_excited", "optimization_excited_relaxed")
 # Written into output.out by submit.cmd when its watchdog kills a hung ORCA.
 STALL_MARKER = "AUTODFT STALLED:"
 # A densities singlepoint's requested cubes are missing or empty.
@@ -113,7 +116,8 @@ class OrcaParser(QMEngine):
             "SCF Convergence": self._check_scf_convergence(content),
             "Imaginary Frequencies": self._check_for_imaginary_frequencies(
                 content,
-                IMAGINARY_FREQ_THRESHOLD_S1 if task_type == "optimization_excited" else IMAGINARY_FREQ_THRESHOLD,
+                IMAGINARY_FREQ_THRESHOLD_S1 if task_type == "optimization_excited_relaxed"
+                else IMAGINARY_FREQ_THRESHOLD,
             ),
             # ORCA prints its normal-termination banner even after an
             # internal module has given up, so the banner alone is not
@@ -138,7 +142,7 @@ class OrcaParser(QMEngine):
 
             checks["Shieldings"] = bool(parse_shieldings(content))
         if task_type == "singlepoint_soc" or task_type.startswith("esd_") \
-                or task_type == "optimization_excited":
+                or task_type in EXCITED_OPTIMIZATION:
             from autodft.qm.orca import esd_parser
 
             if task_type == "singlepoint_soc":
@@ -156,7 +160,7 @@ class OrcaParser(QMEngine):
                 checks["ESD Rate"] = bool(found) and all(math.isfinite(r.rate) for r in found) and (
                     main_jobs is None or len(found) == main_jobs
                 )
-            if task_type == "optimization_excited":
+            if task_type in EXCITED_OPTIMIZATION:
                 # Below 0.1 eV the followed root has collapsed onto S0.
                 gap = esd_parser.followed_root_energy(content)
                 checks["Excited Root"] = gap is not None and gap >= 0.1 * esd_parser.EV_TO_EH

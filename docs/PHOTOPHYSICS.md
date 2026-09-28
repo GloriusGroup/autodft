@@ -320,7 +320,11 @@ elements are all-electron in def2 and need nothing extra.
 (sum of K\*K over 7) is flagged as unreliable rather than dropped. A
 negative rate is clamped to 0 and flagged. Soft imaginary modes that the
 optimisation's checks let through are flagged — ORCA's ESD module treats
-them as real. IC rates are order-of-magnitude at best. SOCMEs come from
+them as real. The checks retry anything below −50 cm⁻¹; with
+`strict_convergence` off, the S1 optimisation (numerical Hessian, where
+ortho-substituted 9-aryl rotors end at −50 to −65 cm⁻¹ in about a third of
+the acridines) accepts modes down to −100 cm⁻¹ instead of repeating its
+day-long Hessian. IC rates are order-of-magnitude at best. SOCMEs come from
 ORCA's two-decimal printout, so a tiny coupling (T1→S0 at S0\*, ~0.02
 cm⁻¹) carries up to ~±50% rounding error in its FC rate. When an FC
 ISC-type channel's SOCME prints as exactly `0.00` cm⁻¹ (below ORCA's

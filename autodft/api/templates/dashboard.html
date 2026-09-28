@@ -1336,6 +1336,17 @@
                         </div>
                     </div>
 
+                    <!-- Further options -->
+                    <details id="submitOptions" style="margin: 4px 0 12px;">
+                        <summary style="cursor: pointer; font-size: 0.9rem; color: var(--text-secondary);">Options</summary>
+                        <div class="form-row" style="margin-top: 10px;">
+                            <div class="checkbox-group" title="On: every optimisation with an imaginary mode below -50 cm⁻¹ is retried. Off: ESD's S1 optimisation (numerical Hessian, where floppy aryl/tBu/CF₃ rotors land at -50 to -65 cm⁻¹ and a retry repeats a day-long Hessian) accepts modes down to -100 cm⁻¹ and flags them; ESD reads them as real. Ground states keep -50 cm⁻¹ either way.">
+                                <input type="checkbox" id="strictConvergence" checked>
+                                <label for="strictConvergence">Strict convergence (retry imaginary modes below −50 cm⁻¹; off: S1 accepts down to −100 cm⁻¹)</label>
+                            </div>
+                        </div>
+                    </details>
+
                     <!-- Submit button -->
                     <div class="form-row">
                         <button type="submit" class="btn" id="submitBtn">Submit</button>
@@ -3283,6 +3294,7 @@
                 request_esd:        document.getElementById('requestEsd').checked,
                 request_densities:  document.getElementById('requestDensities').checked,
                 request_singlepoint_nbo: document.getElementById('requestNbo').checked,
+                strict_convergence: document.getElementById('strictConvergence').checked,
                 max_conformers_S0:  intOrDefault('maxConfS0',  1),
                 max_conformers_T1:  intOrDefault('maxConfT1',  1),
                 max_conformers_ox:  intOrDefault('maxConfOx',  1),
