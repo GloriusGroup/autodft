@@ -143,6 +143,8 @@ tmp_dir    = "/tmp"
 # Stall watchdog: kill ORCA once nothing in its scratch dir changed for
 # this many minutes; the job fails as "Stalled" and is resubmitted with
 # the same resources. 0 (the default) runs ORCA without a watchdog.
+# (A failed job whose process segfaulted fails as "Crashed" and is
+# resubmitted unchanged the same way, watchdog or not.)
 stall_minutes       = 240
 # Copy output.out back from scratch this often while ORCA runs (needs
 # the watchdog), so running jobs show progress. 0 disables.

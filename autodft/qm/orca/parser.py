@@ -33,6 +33,8 @@ IMAGINARY_FREQ_THRESHOLD_S1 = -100.0
 EXCITED_OPTIMIZATION = ("optimization_excited", "optimization_excited_relaxed")
 # Written into output.out by submit.cmd when its watchdog kills a hung ORCA.
 STALL_MARKER = "AUTODFT STALLED:"
+# A rank killed by SIGSEGV/SIGBUS, as mpirun/ORCA report it on stderr.
+CRASH_RE = re.compile(r"Segmentation fault|Bus error")
 # A densities singlepoint's requested cubes are missing or empty.
 DENSITY_CUBES = "Density Cubes"
 _PLOTS_RE = re.compile(r"^\s*%plots\b(.*?)^\s*end\b", re.IGNORECASE | re.MULTILINE | re.DOTALL)
@@ -169,6 +171,9 @@ class OrcaParser(QMEngine):
                     or not esd_parser.s1_dissociates(content)
 
         success = all(checks.values())
+        if not success and self._crashed(job_path):
+            # A segfault says nothing about the input: resubmit it unchanged.
+            return QMResult(success=False, checks={"Crashed": False})
 
         energy = self.extract_electronic_energy(content)
         # Only optimisations have this block; a singlepoint never did anyway.
@@ -273,6 +278,12 @@ class OrcaParser(QMEngine):
     # ------------------------------------------------------------------
     # File loading
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _crashed(job_path: Path) -> bool:
+        """Whether a process of this job died of SIGSEGV/SIGBUS."""
+        return any(CRASH_RE.search(err.read_text(encoding="utf-8", errors="replace"))
+                   for err in job_path.glob("slurm-*.err"))
 
     @staticmethod
     def _load_output(job_path: Path) -> str:
