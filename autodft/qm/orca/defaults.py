@@ -1,11 +1,16 @@
 """Default ORCA input headers for common calculation types.
 
-Also holds the larger-basis and g-xTB alternates, and the ``SEED_HEADERS``
+Also holds the larger-basis and GFN2-xTB alternates, and the ``SEED_HEADERS``
 rows a fresh database is seeded with.
 """
 
+# Conformer search at g-xTB through ORCA's GOAT driver: the bare "!GOAT XTB"
+# tag plus ``%xtb XTBInputString "--gxtb" end``.
 DEFAULT_HEADER_CONFSEARCH = (
-    "!GOAT XTB2\n"
+    "!GOAT XTB\n"
+    "%xtb\n"
+    '  XTBInputString "--gxtb"\n'
+    "end\n"
     "%maxcore 500\n"
     "%pal nprocs 32 end\n"
     "%GOAT\n"
@@ -48,14 +53,9 @@ QZVPD_MECN_HEADER_SINGLEPOINT = (
 )
 
 
-# Additional conformer search variant using g-xTB through ORCA's GOAT
-# driver. Useful for systems where GFN2-xTB struggles. Activated via
-# ``%xtb XTBInputString "--gxtb" end`` and the bare "!GOAT XTB" tag.
-GXTB_HEADER_CONFSEARCH = (
-    "!GOAT XTB\n"
-    "%xtb\n"
-    '  XTBInputString "--gxtb"\n'
-    "end\n"
+# The same conformer search at GFN2-xTB, kept as the alternate.
+GFN2_HEADER_CONFSEARCH = (
+    "!GOAT XTB2\n"
     "%maxcore 500\n"
     "%pal nprocs 32 end\n"
     "%GOAT\n"
@@ -76,12 +76,12 @@ SEED_HEADERS = [
     {
         "kind": "confsearch",
         "description": "GOAT GFN2-xTB conformer ensemble",
-        "header_text": DEFAULT_HEADER_CONFSEARCH,
+        "header_text": GFN2_HEADER_CONFSEARCH,
     },
     {
         "kind": "confsearch",
         "description": "GOAT g-xTB conformer ensemble",
-        "header_text": GXTB_HEADER_CONFSEARCH,
+        "header_text": DEFAULT_HEADER_CONFSEARCH,
     },
     {
         "kind": "optimization",

@@ -1243,8 +1243,8 @@ def api_headers(
     defaults = [
         {
             "id": "default_confsearch",
-            "label": "GOAT XTB2 (default)",
-            "description": "GOAT conformer ensemble at GFN2-xTB; MAXEN 10, ENDIFF 0.2, RMSD 0.15.",
+            "label": "GOAT g-xTB (default)",
+            "description": "GOAT conformer ensemble at g-xTB; MAXEN 10, ENDIFF 0.2, RMSD 0.15.",
             "kind": "confsearch",
             "text": DEFAULT_HEADER_CONFSEARCH,
         },

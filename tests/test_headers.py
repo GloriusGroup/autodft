@@ -13,7 +13,7 @@ from autodft.qm.orca.defaults import (
     DEFAULT_HEADER_CONFSEARCH,
     DEFAULT_HEADER_OPTIMIZATION,
     DEFAULT_HEADER_SINGLEPOINT,
-    GXTB_HEADER_CONFSEARCH,
+    GFN2_HEADER_CONFSEARCH,
     QZVPD_MECN_HEADER_SINGLEPOINT,
     SEED_HEADERS,
     TZVP_MECN_HEADER_OPTIMIZATION,
@@ -27,6 +27,11 @@ def test_default_optimization_header_is_svp_with_cpcm():
     )
 
 
+def test_default_confsearch_header_is_goat_gxtb():
+    assert DEFAULT_HEADER_CONFSEARCH.startswith('!GOAT XTB\n%xtb\n  XTBInputString "--gxtb"\nend\n')
+    assert GFN2_HEADER_CONFSEARCH.startswith("!GOAT XTB2\n")
+
+
 def test_default_singlepoint_header_is_tzvp_with_cpcm():
     assert DEFAULT_HEADER_SINGLEPOINT == (
         "!wB97X-D3 def2-TZVP def2/J RIJCOSX DEFGRID3 TightSCF CPCM(MeCN) KeepDens\n"
@@ -36,8 +41,8 @@ def test_default_singlepoint_header_is_tzvp_with_cpcm():
 
 def test_seed_headers_contains_exactly_these_six_headers():
     assert [(h["kind"], h["description"], h["header_text"]) for h in SEED_HEADERS] == [
-        ("confsearch", "GOAT GFN2-xTB conformer ensemble", DEFAULT_HEADER_CONFSEARCH),
-        ("confsearch", "GOAT g-xTB conformer ensemble", GXTB_HEADER_CONFSEARCH),
+        ("confsearch", "GOAT GFN2-xTB conformer ensemble", GFN2_HEADER_CONFSEARCH),
+        ("confsearch", "GOAT g-xTB conformer ensemble", DEFAULT_HEADER_CONFSEARCH),
         ("optimization", "wB97X-D3 / def2-TZVP TightOpt + Freq + CPCM(MeCN)",
          TZVP_MECN_HEADER_OPTIMIZATION),
         ("singlepoint", "wB97X-D3 / def2-QZVPD KeepDens + CPCM(MeCN)",

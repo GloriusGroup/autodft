@@ -202,7 +202,7 @@ first run:
 | 5 | optimization | wB97X-D3 / def2-SVP Opt + Freq + CPCM(MeCN)          |
 | 6 | singlepoint  | wB97X-D3 / def2-TZVP KeepDens + CPCM(MeCN)           |
 
-Headers 5 and 6 are the package defaults (`autodft/qm/orca/defaults.py`)
+Headers 2, 5 and 6 are the package defaults (`autodft/qm/orca/defaults.py`)
 applied when a submission sets neither `header_*` nor `header_*_id`; 3
 and 4 are the same method on the larger def2-TZVP/def2-QZVPD basis pair,
 kept as a seeded alternative. All four DFT headers run in CPCM(MeCN).
@@ -686,10 +686,10 @@ from autodft.db import get_session, init_db
 from autodft.engine.entrypoint_processor import validate_smiles
 from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.qm.orca.defaults import (
-    DEFAULT_HEADER_CONFSEARCH,        # GOAT GFN2-xTB
+    DEFAULT_HEADER_CONFSEARCH,        # GOAT g-xTB
     DEFAULT_HEADER_OPTIMIZATION,      # wB97X-D3 / def2-SVP + CPCM(MeCN)
     DEFAULT_HEADER_SINGLEPOINT,       # wB97X-D3 / def2-TZVP + CPCM(MeCN)
-    GXTB_HEADER_CONFSEARCH,           # GOAT g-xTB variant
+    GFN2_HEADER_CONFSEARCH,           # GOAT GFN2-xTB alternate
     TZVP_MECN_HEADER_OPTIMIZATION,    # larger-basis alternate
     QZVPD_MECN_HEADER_SINGLEPOINT,    # larger-basis alternate
 )

@@ -812,11 +812,11 @@ present, addressed by the string ids `default_confsearch` /
 {
   "defaults": [ { "id": "default_confsearch", "label": "...",
                   "description": "...", "kind": "confsearch",
-                  "text": "!GOAT XTB2\n..." } ],
-  "custom":  [ { "id": 2, "label": "GOAT g-xTB conformer ensemble",
+                  "text": "!GOAT XTB\n%xtb\n  XTBInputString \"--gxtb\"\nend\n..." } ],
+  "custom":  [ { "id": 1, "label": "GOAT GFN2-xTB conformer ensemble",
                  "description": "...", "kind": "confsearch",
                  "validated": true, "deleted": false,
-                 "text": "!GOAT XTB\n%xtb\n  XTBInputString \"--gxtb\"\nend\n..." } ]
+                 "text": "!GOAT XTB2\n..." } ]
 }
 ```
 

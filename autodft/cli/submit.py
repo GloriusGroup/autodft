@@ -239,7 +239,7 @@ def submit(
         help="Disable singlepoint vertical excitations (ox/red/spin-flip). On by default.",
     ),
     header_confsearch: Optional[Path] = typer.Option(
-        None, "--header-confsearch", help="ORCA header file for conformer search (default: GOAT XTB2)"
+        None, "--header-confsearch", help="ORCA header file for conformer search (default: GOAT g-xTB)"
     ),
     header_opt: Optional[Path] = typer.Option(
         None, "--header-opt", help="ORCA header file for optimization (default: wB97X-D3 / def2-SVP CPCM(MeCN))"
@@ -374,7 +374,7 @@ def submit_batch(
         help="Disable singlepoint vertical excitations (ox/red/spin-flip). On by default.",
     ),
     header_confsearch: Optional[Path] = typer.Option(
-        None, "--header-confsearch", help="ORCA header file for conformer search (default: GOAT XTB2)"
+        None, "--header-confsearch", help="ORCA header file for conformer search (default: GOAT g-xTB)"
     ),
     header_opt: Optional[Path] = typer.Option(
         None, "--header-opt", help="ORCA header file for optimization (default: wB97X-D3 / def2-SVP CPCM(MeCN))"
