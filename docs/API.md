@@ -194,9 +194,10 @@ package defaults in `autodft/qm/orca/defaults.py`.
 | `uvvis_nroots`                              | int    | `20`          | UV/Vis excited states (1–100). Stored only when UV/Vis is requested.                        |
 | `uvvis_tda`                                 | bool   | `false`       | Tamm–Dancoff approximation for the UV/Vis TDDFT. Stored only when UV/Vis is requested.      |
 | `request_spec_ir`                           | bool   | `false`       | IR: read from the S0 optimisation's frequency calculation — no extra job. Needs `Freq` in the optimisation header. |
-| `request_spec_nmr`                          | bool   | `false`       | NMR: a singlepoint on every optimised S0 conformer in the `nmr_method`. Shifts are referenced to TMS (¹H, ¹³C) and CFCl₃ (¹⁹F), which the pipeline computes itself — once per optimisation/singlepoint header pair and `nmr_method` — in the protected `admin/reference_systems` project. Closed-shell molecules only. |
+| `request_spec_nmr`                          | bool   | `false`       | NMR: a singlepoint on every optimised S0 conformer in the `nmr_method`. Shifts are referenced to chloroform or TMS (`nmr_reference`, ¹H/¹³C) and CFCl₃ (¹⁹F), which the pipeline computes itself — once per optimisation/singlepoint header pair and `nmr_method` — in the protected `admin/reference_systems` project. Closed-shell molecules only. |
 | `nmr_nuclei`                                | list   | `["H","C","F"]` | Nuclei to report; stored only with NMR.                                                  |
 | `nmr_method`                                | string | `"singlepoint"` | `"singlepoint"`: the singlepoint header with `NMR` added to its `!` line. `"dh"`: `!revDSD-PBEP86-D4/2021 PCSSEG-3 AUTOAUX NMR NOFROZENCORE TightSCF` plus the singlepoint header's solvation keywords and `%cpcm` only, on its own `nmr_dh_nprocs` × `nmr_dh_maxcore`; refused for elements past Kr (no `pcSseg-3`). Stored only with NMR. |
+| `nmr_reference`                             | string | `"chcl3"`       | ¹H/¹³C reference compound: `"chcl3"` (chloroform; its experimental shift in the calculation's solvent is added, Fulmer et al. 2010, e.g. 7.58 / 79.17 ppm in MeCN) or `"tms"`. ¹⁹F always CFCl₃. Stored only with NMR; molecules from before the option read as `"chcl3"`; a different value is no conflict with an existing molecule. |
 | `nmr_dh_nprocs`                             | int    | `12`            | Cores of a `dh` NMR job (1–64). Stored only with `nmr_method` `"dh"`; a different value is no conflict with an existing molecule. |
 | `nmr_dh_maxcore`                            | int    | `6000`          | MB per core of a `dh` NMR job (1000–16000; cores × (MB + 50) at most 400 GB). The MP2 response needs about 5.8 GB per core already at 30 atoms, whatever the core count; a retry raises it by what ORCA reports missing. Stored only with `nmr_method` `"dh"`. |
 | `request_esd` | bool | `false` | Excited-state dynamics: S1 and T1 optimised from the lowest S0 conformer, SOC TDDFT, ORCA ESD rates (ISC, RISC, fluorescence, T1→S0 ISC, phosphorescence; IC with `esd_ic`). Needs a closed-shell singlet, `Freq` in the optimisation header, the energy singlepoint, and a functional whose TDDFT gradients ORCA supports (native B88 functionals such as B3LYP need `LibXC(...)`). Molecules with an element past Kr (ECP in def2, e.g. I) need `ZORA`/`DKH`/`X2C` in the singlepoint header. |
@@ -516,12 +517,15 @@ An NMR molecule's entry adds `nmr`, with the same counts and no `peak`:
 when atoms are grouped by the symmetry classes of the bonds perceived from
 the first counted conformer's geometry, else `"none"` (one signal per
 atom). `reference` names, per reported nucleus, the reference compound
-(TMS for H and C, CFCl₃ for F) at the molecule's optimisation and
+(chloroform or TMS for H and C per `nmr_reference`, CFCl₃ for F) at the molecule's optimisation and
 singlepoint headers and NMR method in `admin/reference_systems` — the one
 whose NMR input matches the molecule's, else the one stored with the same
 `nmr_method` (none for molecules from before the option): `status` is `"ok"`,
 `"pending"`, `"failed"` or `"missing"` (none at this method); `sigma_ppm`
-is its mean isotropic shielding for that element; `method_matches` says
+is its mean isotropic shielding for that element; `delta_ref_ppm` the
+reference's experimental shift added to σ_ref − σ (0 for TMS and CFCl₃) and
+`delta_ref_solvent` the NMR solvent it was taken in (`null` for TMS/CFCl₃);
+`method_matches` says
 whether its NMR input's `!` keywords equal the molecule's (SCF convergence
 and `PALn` ignored), `null` if either input is missing. `signals` and
 `reference` stay empty until a conformer is counted. `reference_systems`

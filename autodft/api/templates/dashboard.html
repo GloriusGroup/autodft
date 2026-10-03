@@ -1165,7 +1165,7 @@
                             <input type="checkbox" id="requestIr" name="request_spec_ir">
                             <label for="requestIr">IR</label>
                         </div>
-                        <div class="checkbox-group" title="NMR shifts (1H/13C/19F) on every optimised S0 conformer, referenced to TMS / CFCl3 computed automatically at the same method. Closed-shell molecules only.">
+                        <div class="checkbox-group" title="NMR shifts (1H/13C/19F) on every optimised S0 conformer, referenced to chloroform (or TMS) / CFCl3 computed automatically at the same method. Closed-shell molecules only.">
                             <input type="checkbox" id="requestNmr" name="request_spec_nmr">
                             <label for="requestNmr">NMR</label>
                         </div>
@@ -1241,6 +1241,13 @@
                                         <option value="dh">High accuracy: revDSD-PBEP86-D4/2021 / pcSseg-3 (double hybrid, NMR-optimised basis)</option>
                                     </select>
                                 </div>
+                                <div class="form-group" style="min-width: 170px;" title="Chloroform: δ = σ(CHCl₃) − σ + δ(CHCl₃ in the calculation's solvent; Fulmer et al. 2010, e.g. 7.58 / 79.17 ppm in MeCN). TMS: δ = σ(TMS) − σ. ¹⁹F is always referenced to CFCl₃.">
+                                    <label for="nmrReference">¹H/¹³C reference</label>
+                                    <select id="nmrReference">
+                                        <option value="chcl3" selected>Chloroform (default)</option>
+                                        <option value="tms">TMS</option>
+                                    </select>
+                                </div>
                                 <div class="form-group" id="nmrDhResources" style="min-width: 130px; display: none;" title="The MP2 response needs about 5.8 GB per core already at 30 atoms; more cores do not lower that. A retry raises the memory by what ORCA reports missing.">
                                     <label for="nmrDhNprocs">Cores (recommended 12)</label>
                                     <input type="number" id="nmrDhNprocs" min="1" max="64" step="1" value="12" style="width: 100px;">
@@ -1250,7 +1257,7 @@
                                     <input type="number" id="nmrDhMaxcore" min="1000" max="16000" step="500" value="6000" style="width: 100px;">
                                 </div>
                             </div>
-                            <div class="cat-detail-note">An NMR singlepoint on every optimised S0 conformer, with the singlepoint header's method or, for high accuracy, the double hybrid revDSD-PBEP86-D4/2021 / pcSseg-3 (NoFrozenCore; keeps only the header's solvent and runs on its own cores and memory, recommended 12 × 6000 MB; much more expensive; H–Kr only). Shifts are referenced to TMS (¹H, ¹³C) and CFCl₃ (¹⁹F), computed once per method in the protected reference_systems project; closed-shell molecules only.</div>
+                            <div class="cat-detail-note">An NMR singlepoint on every optimised S0 conformer, with the singlepoint header's method or, for high accuracy, the double hybrid revDSD-PBEP86-D4/2021 / pcSseg-3 (NoFrozenCore; keeps only the header's solvent and runs on its own cores and memory, recommended 12 × 6000 MB; much more expensive; H–Kr only). Shifts are referenced to chloroform (default; its experimental shift in the calculation's solvent is added) or TMS for ¹H/¹³C, and to CFCl₃ for ¹⁹F, computed once per method in the protected reference_systems project; closed-shell molecules only.</div>
                             <div class="cat-detail-note" id="nmrHeaderNote"></div>
                         </div>
                         <div class="cat-detail" data-requires="requestEsd" style="display:none;">
@@ -3110,6 +3117,7 @@
                 setField('nmrMethod', options.nmr_method, true);
                 setField('nmrDhNprocs', options.nmr_dh_nprocs, true);
                 setField('nmrDhMaxcore', options.nmr_dh_maxcore, true);
+                setField('nmrReference', options.nmr_reference, true);
             } else if (key === 'request_esd') {
                 setField('esdTnWindow', options.esd_tn_window_ev, true);
                 setField('esdTemperature', options.esd_temperature_k, true);
@@ -3339,6 +3347,7 @@
                     return document.getElementById('nmrNuc' + n).checked;
                 });
                 commonBody.nmr_method = document.getElementById('nmrMethod').value;
+                commonBody.nmr_reference = document.getElementById('nmrReference').value;
                 if (commonBody.nmr_method === 'dh') {
                     commonBody.nmr_dh_nprocs = intOrDefault('nmrDhNprocs', 12);
                     commonBody.nmr_dh_maxcore = intOrDefault('nmrDhMaxcore', 6000);
@@ -4450,6 +4459,7 @@
 
         var NMR_LABELS = { H: '¹H', C: '¹³C', F: '¹⁹F' };
 
+        var NMR_REFERENCE_NAMES = { 'C[Si](C)(C)C': 'TMS', 'ClC(Cl)Cl': 'CHCl₃', 'FC(Cl)(Cl)Cl': 'CFCl₃' };
         function ppNmr(nmr) {
             var parts = [];
             ['H', 'C', 'F'].forEach(function (el) {
@@ -4458,7 +4468,8 @@
                 var ref = (nmr.reference || {})[el] || {};
                 var head = NMR_LABELS[el] + ' NMR · ';
                 if (ref.status === 'ok') {
-                    head += 'δ vs ' + escHtml(ref.compound) +
+                    head += 'δ vs ' + escHtml(NMR_REFERENCE_NAMES[ref.compound] || ref.compound) +
+                            (ref.delta_ref_ppm ? ' (δ ' + ref.delta_ref_ppm.toFixed(2) + ' ppm, ' + escHtml(ref.delta_ref_solvent || '') + ')' : '') +
                             (ref.method_matches === false ? ' — reference computed at a different method!' : '');
                 } else {
                     head += 'reference ' + escHtml(ref.status || 'missing') + ' — shieldings σ shown';

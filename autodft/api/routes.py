@@ -203,6 +203,8 @@ class SubmitRequest(BaseModel):
     # Cores and MB per core of a dh NMR job (recommended 12 x 6000).
     nmr_dh_nprocs: int = 12
     nmr_dh_maxcore: int = 6000
+    # 1H/13C reference compound: "chcl3" (default) or "tms".
+    nmr_reference: str = "chcl3"
     esd_tn_window_ev: float = 0.3
     esd_temperature_k: float = 298.15
     esd_ic: bool = False
@@ -2090,6 +2092,7 @@ def _category_flags(body: SubmitRequest) -> dict:
         "nmr_method": body.nmr_method,
         "nmr_dh_nprocs": body.nmr_dh_nprocs,
         "nmr_dh_maxcore": body.nmr_dh_maxcore,
+        "nmr_reference": body.nmr_reference,
         "esd_tn_window_ev": body.esd_tn_window_ev,
         "esd_temperature_k": body.esd_temperature_k,
         "esd_ic": body.esd_ic,

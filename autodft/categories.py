@@ -87,7 +87,9 @@ OPTIONS: dict[str, dict] = {
           "esd_ht_scope": "all", "esd_ht_method": "sp"},
     UVVIS: {"uvvis_nroots": 20, "uvvis_tda": False},
     # nmr_dh_*: cores and MB per core of a dh NMR job; its MP2 response needs ~6 GB per core at 30 atoms.
-    NMR: {"nmr_nuclei": ["H", "C", "F"], "nmr_method": "singlepoint", "nmr_dh_nprocs": 12, "nmr_dh_maxcore": 6000},
+    # nmr_reference: the 1H/13C reference compound, chloroform or TMS (19F always CFCl3).
+    NMR: {"nmr_nuclei": ["H", "C", "F"], "nmr_method": "singlepoint", "nmr_dh_nprocs": 12, "nmr_dh_maxcore": 6000,
+          "nmr_reference": "chcl3"},
     DENSITIES: {
         "density_eldens": True,
         "density_spindens": True,
@@ -107,8 +109,11 @@ NMR_DH_NPROCS_MAX = 64
 NMR_DH_MAXCORE_RANGE = (1000, 16000)
 # A job must fit the smallest CPU node (~470 GB).
 NMR_DH_MAX_JOB_MB = 400000
-# Resources, not science: a different value is no conflict with an existing molecule.
+NMR_REFERENCES = ("chcl3", "tms")
+# Stored only with nmr_method "dh".
 RESOURCE_OPTIONS = ("nmr_dh_nprocs", "nmr_dh_maxcore")
+# Resources and analysis choices: a different value is no conflict with an existing molecule.
+FREE_OPTIONS = (*RESOURCE_OPTIONS, "nmr_reference")
 
 
 def requested(metadata: dict) -> set[str]:
@@ -274,6 +279,8 @@ def rejection(
         method = metadata.get("nmr_method", OPTIONS[NMR]["nmr_method"])
         if method not in NMR_METHODS:
             return f"The NMR method must be one of {', '.join(NMR_METHODS)} (nmr_method)."
+        if metadata.get("nmr_reference", OPTIONS[NMR]["nmr_reference"]) not in NMR_REFERENCES:
+            return f"The NMR reference must be one of {', '.join(NMR_REFERENCES)} (nmr_reference)."
         nprocs = metadata.get("nmr_dh_nprocs", OPTIONS[NMR]["nmr_dh_nprocs"])
         maxcore = metadata.get("nmr_dh_maxcore", OPTIONS[NMR]["nmr_dh_maxcore"])
         low, high = NMR_DH_MAXCORE_RANGE
@@ -458,7 +465,7 @@ def existing_conflict(
             return sorted(found) if isinstance(found, list) else found
 
         for key in sorted(wanted):
-            names = (*(n for n in OPTIONS.get(key, {}) if n not in RESOURCE_OPTIONS),
+            names = (*(n for n in OPTIONS.get(key, {}) if n not in FREE_OPTIONS),
                      *((ESD_HT,) if key == ESD else ()))
             for name in names:
                 old = value(name, stored_options, stored_metadata)

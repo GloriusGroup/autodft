@@ -65,6 +65,7 @@ def build_xlsx(payload: dict) -> bytes:
                 for s in signals:
                     nmr.append((m["id"], m["smiles"], m["state_id"], element, s["shift_ppm"], s["shielding_ppm"],
                                 s["count"], ", ".join(str(a + 1) for a in s["atoms"]), ref.get("compound"),
+                                ref.get("delta_ref_ppm"), ref.get("delta_ref_solvent"),
                                 ref.get("status"), ref.get("method_matches"), e.get("equivalence")))
         if m.get("esd"):
             e, d = m["esd"], m["esd"].get("derived") or {}
@@ -102,7 +103,8 @@ def build_xlsx(payload: dict) -> bytes:
     _sheet(wb, "IR sticks", ("mol_id", "state_id", "conformer", "weight", "frequency_cm_unscaled",
                              "intensity_km_mol"), ir_sticks)
     _sheet(wb, "NMR", ("mol_id", "smiles", "state_id", "nucleus", "shift_ppm", "shielding_ppm", "count",
-                       "atoms_1based", "reference", "reference_status", "method_matches", "equivalence"), nmr)
+                       "atoms_1based", "reference", "reference_delta_ppm", "reference_solvent", "reference_status",
+                       "method_matches", "equivalence"), nmr)
     _sheet(wb, "ESD", ("mol_id", "smiles", "state_id", "status", "temperature_K", "HT", "HT_scope", "HT_method", "dEST_eV",
                        "dEST_UKS_eV", "k_ISC", "k_RISC", "k_IC", "k_F", "k_ISC_T1S0", "k_P", "tau_S1_ns",
                        "phi_F", "phi_ISC", "phi_IC", "tau_T1_us", "phi_P", "phi_ISC_T1S0", "phi_RISC",

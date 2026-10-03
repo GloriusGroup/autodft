@@ -39,7 +39,7 @@ class TestRejection:
 class TestOptions:
     def test_nuclei_default_to_all_three(self):
         assert categories.options({categories.NMR: True}) == {
-            "nmr_nuclei": ["H", "C", "F"], "nmr_method": "singlepoint",
+            "nmr_nuclei": ["H", "C", "F"], "nmr_method": "singlepoint", "nmr_reference": "chcl3",
         }
 
     def test_the_default_list_is_never_shared(self):

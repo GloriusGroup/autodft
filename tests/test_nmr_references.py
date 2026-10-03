@@ -135,9 +135,9 @@ def _reference_entries(session):
 
 class TestReferencesFor:
     def test_only_what_the_molecule_and_nuclei_need(self):
-        assert nmr_references.references_for("CCF", ["H", "C", "F"]) == [nmr_references.TMS, nmr_references.CFCL3]
-        assert nmr_references.references_for("CCO", ["H", "C", "F"]) == [nmr_references.TMS]
-        assert nmr_references.references_for("CCF", ["H", "C"]) == [nmr_references.TMS]
+        assert nmr_references.references_for("CCF", ["H", "C", "F"]) == [nmr_references.CHCL3, nmr_references.CFCL3]
+        assert nmr_references.references_for("CCO", ["H", "C", "F"], "tms") == [nmr_references.TMS]
+        assert nmr_references.references_for("CCF", ["H", "C"]) == [nmr_references.CHCL3]
         assert nmr_references.references_for("CCF", ["F"]) == [nmr_references.CFCL3]
 
 
@@ -147,7 +147,7 @@ class TestQueueing:
             requester = _queue(session, "CCF", request_spec_nmr=True)
             _expand_one(session, _settings(tmp_path), monkeypatch)
             refs = _reference_entries(session)
-            assert sorted(e.smiles for e in refs) == [nmr_references.TMS, nmr_references.CFCL3]
+            assert sorted(e.smiles for e in refs) == [nmr_references.CHCL3, nmr_references.CFCL3]
             for e in refs:
                 meta = json.loads(e.request_metadata)
                 assert e.time_started is None
@@ -165,10 +165,10 @@ class TestQueueing:
             _queue(session, "CCO", request_spec_nmr=True)
             _expand_one(session, settings, monkeypatch)
             _queue(session, "CCN", request_spec_nmr=True)
-            _expand_all(session, settings, monkeypatch)       # includes the queued TMS
+            _expand_all(session, settings, monkeypatch)       # includes the queued CHCl3
             _queue(session, "CCC", request_spec_nmr=True)
             _expand_all(session, settings, monkeypatch)
-            assert [e.smiles for e in _reference_entries(session)] == [nmr_references.TMS]
+            assert [e.smiles for e in _reference_entries(session)] == [nmr_references.CHCL3]
 
     def test_another_method_gets_its_own_reference(self, engine, tmp_path, monkeypatch):
         settings = _settings(tmp_path)
@@ -230,7 +230,7 @@ class TestQueueing:
         settings = _settings(tmp_path)
         with Session(engine) as session:
             _queue(session, "CCO", request_spec_nmr=True, priority=10)
-            _expand_one(session, settings, monkeypatch)  # queues TMS at priority 10
+            _expand_one(session, settings, monkeypatch)  # queues CHCl3 at priority 10
             second = _queue(session, "CCN", request_spec_nmr=True, priority=20)
             nmr_references.ensure_references(session, second, json.loads(second.request_metadata))
             session.commit()
@@ -241,7 +241,7 @@ class TestQueueing:
         settings = _settings(tmp_path)
         with Session(engine) as session:
             _queue(session, "CCO", request_spec_nmr=True, priority=20)
-            _expand_one(session, settings, monkeypatch)  # queues TMS at priority 20
+            _expand_one(session, settings, monkeypatch)  # queues CHCl3 at priority 20
             second = _queue(session, "CCN", request_spec_nmr=True, priority=10)
             nmr_references.ensure_references(session, second, json.loads(second.request_metadata))
             session.commit()
@@ -273,8 +273,8 @@ class TestEndToEnd:
         settings = _settings(tmp_path)
         with Session(engine) as session:
             _queue(session, "CCO", request_spec_nmr=True)
-            _expand_one(session, settings, monkeypatch)  # the requester: queues TMS
-            _expand_one(session, settings, monkeypatch)  # the queued TMS entrypoint itself
+            _expand_one(session, settings, monkeypatch)  # the requester: queues CHCl3
+            _expand_one(session, settings, monkeypatch)  # the queued CHCl3 entrypoint itself
 
             tms = session.exec(
                 select(Molecule).where(Molecule.project_name == nmr_references.REFERENCE_QUALIFIED)

@@ -388,8 +388,9 @@ Every submission path (CLI, REST, Python) ends up writing the same
   blanket override.
 * `request_spec_uvvis` / `request_spec_ir` / `request_spec_nmr` / `request_esd`
   — UV/Vis (TDDFT singlepoint on every S0 conformer), IR (from the
-  optimisation's frequencies), NMR (¹H/¹³C/¹⁹F shifts referenced to TMS /
-  CFCl₃, closed-shell molecules only; `nmr_method` / `--nmr-method`
+  optimisation's frequencies), NMR (¹H/¹³C/¹⁹F shifts referenced to chloroform
+  (default, its shift in the calculation's solvent added) or TMS
+  (`nmr_reference` / `--nmr-reference`) and CFCl₃, closed-shell molecules only; `nmr_method` / `--nmr-method`
   `singlepoint` (default, the singlepoint header) or `dh`
   (revDSD-PBEP86-D4/2021 / pcSseg-3, H–Kr; own cores × memory
   `nmr_dh_nprocs` × `nmr_dh_maxcore`, default 12 × 6000 MB); computed in the protected

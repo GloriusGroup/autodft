@@ -101,9 +101,17 @@ The reference compounds run in the same method, so references and
 molecules share one NMR method. NMR needs a closed-shell singlet reference
 (multiplicity 1) — doublets and diradicals are refused.
 
-Shifts are δ = σ_ref − σ: σ_ref is the mean isotropic shielding of that
-element in a reference compound (TMS `C[Si](C)(C)C` for ¹H/¹³C, CFCl₃
-`FC(Cl)(Cl)Cl` for ¹⁹F), which the pipeline computes itself once per
+Shifts are δ = σ_ref − σ + δ_ref: σ_ref is the mean isotropic shielding of
+that element in a reference compound — for ¹H/¹³C chloroform `ClC(Cl)Cl`
+(`nmr_reference` `"chcl3"`, the default; molecules stored before the option
+take it too) or TMS `C[Si](C)(C)C` (`"tms"`), for ¹⁹F always CFCl₃
+`FC(Cl)(Cl)Cl` — and δ_ref its experimental shift vs TMS: 0 for TMS and
+CFCl₃; for chloroform its shift dissolved in the NMR solvent matching the
+calculation's implicit solvent (Fulmer et al., Organometallics 2010, 29,
+2176: CD₃CN 7.58 / 79.17, CDCl₃ 7.26 / 77.36, DMSO-d₆ 8.32 / 79.16,
+acetone-d₆, CD₂Cl₂, THF-d₈, toluene-d₈, C₆D₆, C₆D₅Cl, CD₃OD, TFE-d₃), the
+CDCl₃ values without one (gas phase, water). The pipeline computes the
+reference compounds itself once per
 optimisation/singlepoint header pair and `nmr_method`, in the protected
 `admin/reference_systems` project (one S0 state per method there). A
 molecule takes the reference whose NMR input has the same `!` keywords

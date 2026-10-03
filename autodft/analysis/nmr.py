@@ -1,8 +1,9 @@
 """NMR shifts per molecule: Boltzmann-weighted, symmetry-averaged, referenced.
 
-delta = sigma_ref - sigma, where sigma_ref is the reference compound's mean
-shielding for that element at the same optimisation and singlepoint headers
-and NMR method (see autodft.engine.nmr_references).
+delta = sigma_ref - sigma + delta_ref, where sigma_ref is the reference compound's
+mean shielding for that element at the same optimisation and singlepoint headers
+and NMR method, and delta_ref its experimental shift vs TMS in the calculation's
+solvent (see autodft.engine.nmr_references).
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from autodft.analysis.spectroscopy import Conformer, ensemble
 from autodft.engine import nmr_references
 from autodft.extraction import results as stored
 from autodft.extraction.extractor import PipelineExtractor
-from autodft.models import ComputationTask, Molecule, MoleculeGeometry, MoleculeState, TaskStatus, TaskType
+from autodft.models import ComputationHeader, ComputationTask, Molecule, MoleculeGeometry, MoleculeState, TaskStatus, TaskType
 from autodft.qm.orca.spectra_parser import Shielding
 
 _OPEN = (TaskStatus.created, TaskStatus.pending)
@@ -83,27 +84,30 @@ def method_fingerprint(input_text: str) -> tuple[frozenset[str], str]:
 def reference_shieldings(
     session: Session, opt_header_id, sp_header_id, cache: Optional[dict] = None,
     method: Optional[str] = None, fingerprint: Optional[tuple[frozenset[str], str]] = None,
+    choice: Optional[str] = None,
 ) -> dict:
     """Per nucleus: the reference compound's mean shielding at these headers.
 
     Of the references at these headers, the one whose NMR input has
     *fingerprint* is taken, else the one stored with NMR *method*
     (``nmr_references.method_key``). *cache*, when given, spares every
-    molecule at the same method a repeat lookup.
+    molecule at the same method a repeat lookup. *choice* is the
+    ``nmr_reference`` (chloroform or TMS for 1H/13C).
     """
-    key = (opt_header_id, sp_header_id, method, fingerprint)
+    key = (opt_header_id, sp_header_id, method, fingerprint, choice)
     if cache is not None and key in cache:
         return cache[key]
     from autodft.engine.entrypoint_processor import _canonicalize_smiles
 
     extractor = PipelineExtractor(nmr_references.REFERENCE_QUALIFIED)
+    by_element = nmr_references.reference_compounds(choice)
     compounds = {
         smiles: _reference(session, extractor, _canonicalize_smiles(smiles), opt_header_id, sp_header_id,
                            method, fingerprint)
-        for smiles in sorted(set(nmr_references.REFERENCES.values()))
+        for smiles in sorted(set(by_element.values()))
     }
     out = {}
-    for element, smiles in nmr_references.REFERENCES.items():
+    for element, smiles in by_element.items():
         ref = compounds[smiles]
         values = [s.isotropic for s in ref.get("shieldings") or [] if s.element == element]
         out[element] = {
@@ -164,8 +168,9 @@ def molecule_nmr(
     fingerprint = first[1]
     reference = reference_shieldings(
         session, state.optimization_header_id, state.singlepoint_header_id, references,
-        nmr_references.method_key(metadata), fingerprint,
+        nmr_references.method_key(metadata), fingerprint, categories.options(metadata).get("nmr_reference"),
     )
+    sp_header = session.get(ComputationHeader, state.singlepoint_header_id) if state.singlepoint_header_id else None
     for element in nuclei:
         groups: dict[int, list[int]] = defaultdict(list)
         for index, symbol in enumerate(elements):
@@ -175,12 +180,15 @@ def molecule_nmr(
             continue
         ref = reference[element]
         sigma_ref = ref["sigma_ppm"] if ref["status"] == "ok" else None
+        delta_ref, solvent = nmr_references.reference_shift(
+            ref["compound"], element, sp_header.header_text if sp_header else None,
+        )
         signals = []
         for atoms in groups.values():
             mean = sum(sigma[i] for i in atoms) / len(atoms)
             signals.append({
                 "atoms": atoms, "count": len(atoms), "shielding_ppm": mean,
-                "shift_ppm": sigma_ref - mean if sigma_ref is not None else None,
+                "shift_ppm": sigma_ref - mean + delta_ref if sigma_ref is not None else None,
             })
         signals.sort(key=lambda s: s["shielding_ppm"])
         out["signals"][element] = len(signals)
@@ -191,6 +199,8 @@ def molecule_nmr(
             "status": ref["status"],
             "molecule_id": ref["molecule_id"],
             "sigma_ppm": ref["sigma_ppm"],
+            "delta_ref_ppm": delta_ref,
+            "delta_ref_solvent": solvent,
             "method_matches": (
                 ref["fingerprint"] == fingerprint
                 if ref["fingerprint"] is not None and fingerprint is not None else None

@@ -111,8 +111,9 @@ def db(tmp_path):
     reset_engine()
 
 
-def _glyoxal(session, tmp_path, method=None, inp=B3LYP_NMR):
-    metadata = {categories.NMR: True, "nmr_nuclei": ["H", "C", "F"], **({"nmr_method": method} if method else {})}
+def _glyoxal(session, tmp_path, method=None, inp=B3LYP_NMR, reference="tms"):
+    metadata = {categories.NMR: True, "nmr_nuclei": ["H", "C", "F"], "nmr_reference": reference,
+                **({"nmr_method": method} if method else {})}
     _, state = _state(session, "O=CC=O", "nho/p", metadata)
     geom = MoleculeGeometry(state_id=state.id, xyz_data=(FIXTURES / "glyoxal_s0.xyz").read_text())
     session.add(geom)
@@ -126,11 +127,12 @@ def _glyoxal(session, tmp_path, method=None, inp=B3LYP_NMR):
     return state
 
 
-def _tms(session, tmp_path, inp=B3LYP_NMR, method=None, name="t", done=True):
-    """A TMS reference state; a second call adds another state at the same headers."""
-    mol = session.exec(select(Molecule).where(Molecule.project_name == nmr_references.REFERENCE_QUALIFIED)).first()
+def _tms(session, tmp_path, inp=B3LYP_NMR, method=None, name="t", done=True, smiles="C[Si](C)(C)C"):
+    """A TMS reference state (TMS's shieldings under *smiles*); a second call adds another state."""
+    mol = session.exec(select(Molecule).where(Molecule.project_name == nmr_references.REFERENCE_QUALIFIED,
+                                              Molecule.smiles == smiles)).first()
     if mol is None:
-        mol = Molecule(smiles="C[Si](C)(C)C", project_name=nmr_references.REFERENCE_QUALIFIED)
+        mol = Molecule(smiles=smiles, project_name=nmr_references.REFERENCE_QUALIFIED)
         session.add(mol)
         session.commit()
     state = MoleculeState(molecule_id=mol.id, description="S0", multiplicity=1, charge=0,
@@ -164,6 +166,20 @@ def test_the_summary_counts_and_carries_no_signals(db):
     assert summary["signals"] == {"H": 1, "C": 1}
     assert summary["reference"]["H"]["status"] == "ok"
     assert "nuclei" not in summary and "conformers" not in summary
+
+
+def test_shifts_against_chloroform_add_its_shift_in_the_solvent(db):
+    with get_session() as session:
+        _glyoxal(session, db, reference="chcl3")
+        _tms(session, db, smiles=nmr_references.CHCL3)
+    shifts = _detail()
+    (h,) = shifts["nuclei"]["H"]
+    (c,) = shifts["nuclei"]["C"]
+    # The test headers run in CPCM(MeCN): CHCl3 in CD3CN, 7.58 / 79.17 ppm.
+    assert h["shift_ppm"] == pytest.approx(_mean(TMS, "H") - 22.614 + 7.58, abs=1e-3)
+    assert c["shift_ppm"] == pytest.approx(_mean(TMS, "C") - 6.3235 + 79.17, abs=1e-3)
+    assert shifts["reference"]["H"]["compound"] == nmr_references.CHCL3
+    assert (shifts["reference"]["C"]["delta_ref_ppm"], shifts["reference"]["C"]["delta_ref_solvent"]) == (79.17, "CD3CN")
 
 
 def test_shifts_are_referenced_to_tms(db):
@@ -261,7 +277,8 @@ def test_references_are_looked_up_once_per_method(db, monkeypatch):
     monkeypatch.setattr(nmr, "_reference", counting)
     with get_session() as session:
         _glyoxal(session, db)
-        _, state2 = _state(session, "CC=O", "nho/p", {categories.NMR: True, "nmr_nuclei": ["H", "C", "F"]})
+        _, state2 = _state(session, "CC=O", "nho/p", {categories.NMR: True, "nmr_nuclei": ["H", "C", "F"],
+                                                      "nmr_reference": "tms"})
         geom = MoleculeGeometry(state_id=state2.id, xyz_data=(FIXTURES / "glyoxal_s0.xyz").read_text())
         session.add(geom)
         session.commit()
