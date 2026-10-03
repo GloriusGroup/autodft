@@ -200,6 +200,9 @@ class SubmitRequest(BaseModel):
     uvvis_tda: bool = False
     nmr_nuclei: list[str] = Field(default_factory=lambda: ["H", "C", "F"])
     nmr_method: str = "singlepoint"
+    # Cores and MB per core of a dh NMR job (recommended 12 x 6000).
+    nmr_dh_nprocs: int = 12
+    nmr_dh_maxcore: int = 6000
     esd_tn_window_ev: float = 0.3
     esd_temperature_k: float = 298.15
     esd_ic: bool = False
@@ -2085,6 +2088,8 @@ def _category_flags(body: SubmitRequest) -> dict:
         "uvvis_tda": body.uvvis_tda,
         "nmr_nuclei": body.nmr_nuclei,
         "nmr_method": body.nmr_method,
+        "nmr_dh_nprocs": body.nmr_dh_nprocs,
+        "nmr_dh_maxcore": body.nmr_dh_maxcore,
         "esd_tn_window_ev": body.esd_tn_window_ev,
         "esd_temperature_k": body.esd_temperature_k,
         "esd_ic": body.esd_ic,

@@ -9,6 +9,7 @@ together for a given task type and failure.
 """
 
 import logging
+import math
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -17,7 +18,8 @@ from typing import Optional
 
 import numpy as np
 
-from autodft.qm.orca.parser import OrcaParser
+from autodft.qm.orca.blocks import is_nmr_dh
+from autodft.qm.orca.parser import MP2_RESPONSE_MEMORY, OrcaParser, mp2_response_memory_short
 
 __all__ = [
     "FailureInfo",
@@ -45,6 +47,11 @@ INCREASED_TIME: str = "4-00:00:00"
 # campaign ended up with 32-rank, 129 GB jobs. A molecule that genuinely
 # needs more than this per rank will fail rather than escalate without limit.
 MAX_MAXCORE_MB: int = 2500
+# An NMR MP2 response retry: ORCA leaves the response ~83 % of %maxcore, so a
+# shortfall of N MB needs N / 0.8 more; capped per rank and per job (smallest CPU node ~470 GB).
+MP2_RESPONSE_USABLE: float = 0.8
+MP2_RESPONSE_MAX_MAXCORE_MB: int = 16000
+MAX_JOB_MEM_MB: int = 400000
 
 # Substrings (lower-cased) that identify an explicit ORCA out-of-memory
 # failure in output.out. A SLURM OUT_OF_MEMORY kill is detected separately,
@@ -183,6 +190,9 @@ class IncreaseResources(RetryStrategy):
         if task_type.startswith("esd_") and _fc_rate_job(failure.previous_job_path):
             # An FC rate job takes seconds; it fails on its inputs, not on resources.
             return False
+        if MP2_RESPONSE_MEMORY in (failure.fail_reason or ""):
+            # Memory per rank, not more ranks: IncreaseMP2ResponseMemory's case.
+            return False
         return "Termination" in (failure.fail_reason or "") or self.is_memory_failure(failure)
 
     def modify(
@@ -210,10 +220,12 @@ class IncreaseResources(RetryStrategy):
         # hard cap: even a header that asks for more is clamped down to it.
         current_match = re.search(r"%maxcore\s+(\d+)", input_content, re.IGNORECASE)
         base_maxcore = int(current_match.group(1)) if current_match else 1000
+        # A dh NMR job's MP2 response needs its own %maxcore, so it is never clamped down.
+        ceiling = max(MAX_MAXCORE_MB, base_maxcore) if is_nmr_dh(input_content) else MAX_MAXCORE_MB
         if memory_failure:
-            target_maxcore = min(max(self.mem_per_core, base_maxcore), MAX_MAXCORE_MB)
+            target_maxcore = min(max(self.mem_per_core, base_maxcore), ceiling)
         else:
-            target_maxcore = min(base_maxcore, MAX_MAXCORE_MB)
+            target_maxcore = min(base_maxcore, ceiling)
 
         # The escalated allocation must fit on a real node. If a max_mem ceiling
         # is configured, reduce the *core count* to fit rather than the per-rank
@@ -588,6 +600,44 @@ class RecoverSinglepointSCF(RetryStrategy):
         return input_content, submit_content
 
 
+class IncreaseMP2ResponseMemory(RetryStrategy):
+    """Raise %maxcore by what an NMR job's MP2 response said it lacked.
+
+    ORCA states it in the response log ("not enough memory to treat a single
+    MO (need N MB more)"); the retry gets N / 0.8 more, rounded up to 500 MB
+    and capped, and SLURM's --mem to match. Without the number: 1.5x.
+    """
+
+    def applies(self, failure: FailureInfo, task_type: str) -> bool:
+        return MP2_RESPONSE_MEMORY in (failure.fail_reason or "")
+
+    def modify(
+        self,
+        input_content: str,
+        submit_content: str,
+        failure: FailureInfo,
+    ) -> tuple[str, str]:
+        match = re.search(r"%maxcore\s+(\d+)", input_content, re.IGNORECASE)
+        base = int(match.group(1)) if match else 1000
+        short = mp2_response_memory_short(Path(failure.previous_job_path)) if failure.previous_job_path else None
+        wanted = base + short / MP2_RESPONSE_USABLE if short is not None else base * 1.5
+        ntasks = re.search(r"#SBATCH --ntasks-per-node=(\d+)", submit_content)
+        nprocs = int(ntasks.group(1)) if ntasks else 1
+        cap = min(MP2_RESPONSE_MAX_MAXCORE_MB, MAX_JOB_MEM_MB // nprocs - 50)
+        # Never below what the job already had.
+        target = max(base, min(math.ceil(wanted / 500) * 500, cap))
+        if match is not None:
+            input_content = re.sub(r"%maxcore\s+\d+", f"%maxcore {target}", input_content, flags=re.IGNORECASE)
+        else:
+            input_content = re.sub(r"^(!.*\n)", rf"\g<1>%maxcore {target}\n", input_content,
+                                   count=1, flags=re.MULTILINE)
+        submit_content = re.sub(
+            r"#SBATCH --mem=\d+", f"#SBATCH --mem={nprocs * (target + 50)}", submit_content,
+        )
+        logger.info("IncreaseMP2ResponseMemory: %%maxcore %d -> %d (short by %s MB)", base, target, short)
+        return input_content, submit_content
+
+
 # ---------------------------------------------------------------------------
 # Top-level dispatch
 # ---------------------------------------------------------------------------
@@ -599,6 +649,7 @@ _DEFAULT_STRATEGIES: list[RetryStrategy] = [
     TightenConvergence(),
     PerturbImaginaryMode(),
     RecoverSinglepointSCF(),
+    IncreaseMP2ResponseMemory(),
 ]
 
 
@@ -625,6 +676,7 @@ def build_strategies(settings=None) -> list[RetryStrategy]:
         TightenConvergence(),
         PerturbImaginaryMode(displacement=opt_cfg.displacement),
         RecoverSinglepointSCF(),
+        IncreaseMP2ResponseMemory(),
     ]
 
 

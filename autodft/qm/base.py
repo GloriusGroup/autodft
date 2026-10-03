@@ -89,6 +89,7 @@ class QMEngine(ABC):
         keep_hessian: bool = False,
         keep_cubes: bool = False,
         keep_nbo_archive: bool = False,
+        keep_mp2resp: bool = False,
         keep_esd_files: bool = False,
         extra_inputs: Optional[list[str]] = None,
     ) -> None:
@@ -105,6 +106,7 @@ class QMEngine(ABC):
             keep_hessian: Copy ``*.hess`` back from scratch when True.
             keep_cubes: Copy ``*.cube`` back from scratch when True.
             keep_nbo_archive: Copy NBO's ``*.47`` archive back from scratch when True.
+            keep_mp2resp: Copy an NMR job's MP2 response logs back from scratch when True.
             keep_esd_files: Copy ESD's derivative Hessians, spectra and
                             correlation functions back from scratch when True.
             extra_inputs: Files in *job_path* to stage into scratch next to

@@ -35,6 +35,9 @@ EXCITED_OPTIMIZATION = ("optimization_excited", "optimization_excited_relaxed")
 STALL_MARKER = "AUTODFT STALLED:"
 # A rank killed by SIGSEGV/SIGBUS, as mpirun/ORCA report it on stderr.
 CRASH_RE = re.compile(r"Segmentation fault|Bus error")
+# An NMR job whose MP2 response lacked memory per rank; its log names the shortfall.
+MP2_RESPONSE_MEMORY = "MP2 Response Memory"
+_MP2_SHORT_RE = re.compile(r"not enough memory to treat a single MO \(need ([\d.]+) MB more\)")
 # A densities singlepoint's requested cubes are missing or empty.
 DENSITY_CUBES = "Density Cubes"
 _PLOTS_RE = re.compile(r"^\s*%plots\b(.*?)^\s*end\b", re.IGNORECASE | re.MULTILINE | re.DOTALL)
@@ -63,6 +66,13 @@ def _before_diagnostics(content: str, main_jobs: Optional[int]) -> Optional[str]
         return None
     start = re.search(rf"^.*JOB NUMBER\s+{main_jobs + 1}\b", content, re.MULTILINE)
     return content[:start.start()] if start else None
+
+
+def mp2_response_memory_short(job_path: Path) -> Optional[float]:
+    """MB per rank an MP2 response in *job_path* said it lacked, or None."""
+    found = [float(m) for log in Path(job_path).glob("*.mp2resp_*")
+             for m in _MP2_SHORT_RE.findall(log.read_text(encoding="utf-8", errors="replace"))]
+    return max(found) if found else None
 
 
 class OrcaParser(QMEngine):
@@ -171,6 +181,9 @@ class OrcaParser(QMEngine):
                     or not esd_parser.s1_dissociates(content)
 
         success = all(checks.values())
+        if not success and task_type == "singlepoint_nmr" and mp2_response_memory_short(job_path) is not None:
+            # More memory per rank fixes it, not more ranks: see IncreaseMP2ResponseMemory.
+            return QMResult(success=False, checks={MP2_RESPONSE_MEMORY: False})
         if not success and self._crashed(job_path):
             # A segfault says nothing about the input: resubmit it unchanged.
             return QMResult(success=False, checks={"Crashed": False})
@@ -225,6 +238,7 @@ class OrcaParser(QMEngine):
         keep_hessian: bool = False,
         keep_cubes: bool = False,
         keep_nbo_archive: bool = False,
+        keep_mp2resp: bool = False,
         keep_esd_files: bool = False,
         extra_inputs: Optional[list[str]] = None,
     ) -> None:
@@ -254,6 +268,7 @@ class OrcaParser(QMEngine):
             keep_hessian=keep_hessian,
             keep_cubes=keep_cubes,
             keep_nbo_archive=keep_nbo_archive,
+            keep_mp2resp=keep_mp2resp,
             keep_esd_files=keep_esd_files,
             extra_inputs=extra_inputs,
             stall_minutes=self.orca.stall_minutes,

@@ -391,7 +391,8 @@ Every submission path (CLI, REST, Python) ends up writing the same
   optimisation's frequencies), NMR (¹H/¹³C/¹⁹F shifts referenced to TMS /
   CFCl₃, closed-shell molecules only; `nmr_method` / `--nmr-method`
   `singlepoint` (default, the singlepoint header) or `dh`
-  (revDSD-PBEP86-D4/2021 / pcSseg-3, H–Kr); computed in the protected
+  (revDSD-PBEP86-D4/2021 / pcSseg-3, H–Kr; own cores × memory
+  `nmr_dh_nprocs` × `nmr_dh_maxcore`, default 12 × 6000 MB); computed in the protected
   `admin/reference_systems` project — the bare name `reference_systems`
   is reserved for every owner, not just admin), and
   ESD (S1/T1 excited-state dynamics — ISC, RISC, fluorescence,

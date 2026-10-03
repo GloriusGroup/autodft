@@ -1241,8 +1241,16 @@
                                         <option value="dh">High accuracy: revDSD-PBEP86-D4/2021 / pcSseg-3 (double hybrid, NMR-optimised basis)</option>
                                     </select>
                                 </div>
+                                <div class="form-group" id="nmrDhResources" style="min-width: 130px; display: none;" title="The MP2 response needs about 5.8 GB per core already at 30 atoms; more cores do not lower that. A retry raises the memory by what ORCA reports missing.">
+                                    <label for="nmrDhNprocs">Cores (recommended 12)</label>
+                                    <input type="number" id="nmrDhNprocs" min="1" max="64" step="1" value="12" style="width: 100px;">
+                                </div>
+                                <div class="form-group" id="nmrDhMemory" style="min-width: 190px; display: none;" title="The MP2 response needs about 5.8 GB per core already at 30 atoms; more cores do not lower that. A retry raises the memory by what ORCA reports missing.">
+                                    <label for="nmrDhMaxcore">MB per core (recommended 6000)</label>
+                                    <input type="number" id="nmrDhMaxcore" min="1000" max="16000" step="500" value="6000" style="width: 100px;">
+                                </div>
                             </div>
-                            <div class="cat-detail-note">An NMR singlepoint on every optimised S0 conformer, with the singlepoint header's method or, for high accuracy, the double hybrid revDSD-PBEP86-D4/2021 / pcSseg-3 (NoFrozenCore; keeps only the header's solvent, %maxcore and %pal; much more expensive; H–Kr only). Shifts are referenced to TMS (¹H, ¹³C) and CFCl₃ (¹⁹F), computed once per method in the protected reference_systems project; closed-shell molecules only.</div>
+                            <div class="cat-detail-note">An NMR singlepoint on every optimised S0 conformer, with the singlepoint header's method or, for high accuracy, the double hybrid revDSD-PBEP86-D4/2021 / pcSseg-3 (NoFrozenCore; keeps only the header's solvent and runs on its own cores and memory, recommended 12 × 6000 MB; much more expensive; H–Kr only). Shifts are referenced to TMS (¹H, ¹³C) and CFCl₃ (¹⁹F), computed once per method in the protected reference_systems project; closed-shell molecules only.</div>
                             <div class="cat-detail-note" id="nmrHeaderNote"></div>
                         </div>
                         <div class="cat-detail" data-requires="requestEsd" style="display:none;">
@@ -2603,6 +2611,18 @@
             refresh();
         })();
 
+        // High-accuracy NMR runs on its own cores and memory.
+        (function () {
+            var method = document.getElementById('nmrMethod');
+            function refresh() {
+                var dh = method.value === 'dh';
+                document.getElementById('nmrDhResources').style.display = dh ? '' : 'none';
+                document.getElementById('nmrDhMemory').style.display = dh ? '' : 'none';
+            }
+            method.addEventListener('change', refresh);
+            refresh();
+        })();
+
         // ── Show/hide the settings of ticked categories ─────────────────
         // Same rule as the conformer inputs: a .cat-detail panel is visible
         // iff its category is ticked. The header notes warn about a choice
@@ -3088,6 +3108,8 @@
                     setField('nmrNuc' + n, (options.nmr_nuclei || []).indexOf(n) !== -1, true);
                 });
                 setField('nmrMethod', options.nmr_method, true);
+                setField('nmrDhNprocs', options.nmr_dh_nprocs, true);
+                setField('nmrDhMaxcore', options.nmr_dh_maxcore, true);
             } else if (key === 'request_esd') {
                 setField('esdTnWindow', options.esd_tn_window_ev, true);
                 setField('esdTemperature', options.esd_temperature_k, true);
@@ -3317,6 +3339,10 @@
                     return document.getElementById('nmrNuc' + n).checked;
                 });
                 commonBody.nmr_method = document.getElementById('nmrMethod').value;
+                if (commonBody.nmr_method === 'dh') {
+                    commonBody.nmr_dh_nprocs = intOrDefault('nmrDhNprocs', 12);
+                    commonBody.nmr_dh_maxcore = intOrDefault('nmrDhMaxcore', 6000);
+                }
             }
             if (commonBody.request_esd) {
                 var esdWindow = parseFloat(document.getElementById('esdTnWindow').value);

@@ -1187,6 +1187,8 @@ def _generate_job_files(
         keep_hessian=_keeps_hessian(state, task),
         keep_cubes=_keeps_cubes(state, task),
         keep_nbo_archive=_keeps_nbo_archive(state, task),
+        # Its log names how much memory per rank an MP2 response lacked.
+        keep_mp2resp=task.task_type == TaskType.singlepoint_nmr,
         keep_esd_files=task.task_type.value.startswith("esd_"),
         extra_inputs=extra_inputs,
     )

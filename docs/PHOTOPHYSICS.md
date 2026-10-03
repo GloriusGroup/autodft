@@ -77,15 +77,25 @@ two methods (`nmr_method`):
 * `dh` (high accuracy, after the ORCA 6.1 NMR tutorial):
   `!revDSD-PBEP86-D4/2021 PCSSEG-3 AUTOAUX NMR NOFROZENCORE TightSCF`
   plus only the singlepoint header's solvation keywords (`CPCM(...)`,
-  `SMD(...)`), `%cpcm` block, `%maxcore` and `%pal`; its functional,
-  basis, auxiliary basis, RIJCOSX, grid and KeepDens are dropped.
+  `SMD(...)`) and `%cpcm` block; its functional, basis, auxiliary basis,
+  RIJCOSX, grid, KeepDens, `%maxcore` and `%pal` are dropped. It runs on
+  its own `nmr_dh_nprocs` × `nmr_dh_maxcore` (default and recommended
+  12 × 6000 MB, `--nmr-dh-nprocs` / `--nmr-dh-maxcore`).
   NoFrozenCore because core electrons shape shieldings; ORCA reports the
   shieldings from the relaxed MP2 density last, and that is what is read.
   `pcSseg-3` covers H–Kr in ORCA 6.1, so `dh` is refused for a molecule
   with a heavier element. Much more expensive than the default (CH₃F in
   MeCN: 3 min on 2 cores); CPCM is accepted with it. These jobs run on
   the `[pipeline.nmr_dh]` stage (4 days by default) instead of the
-  singlepoint one.
+  singlepoint one. Its MP2 response needs memory per rank, not more
+  ranks: a 30-atom pyrrole (1575 basis functions) aborted at 1500 and
+  4000 MB per core ("not enough memory to treat a single MO (need N MB
+  more)") and ran at 6000. Such a failure is judged `MP2 Response Memory`
+  from the response log, which NMR jobs copy back, and retried with
+  `%maxcore` raised to current + N / 0.8 (ORCA leaves the response about
+  83 % of it), rounded up to 500 MB, capped at 16000 MB per core and
+  400 GB per job and never lowered, with the same cores; an escalated
+  retry for any other reason never lowers a `dh` job's `%maxcore`.
 
 The reference compounds run in the same method, so references and
 molecules share one NMR method. NMR needs a closed-shell singlet reference

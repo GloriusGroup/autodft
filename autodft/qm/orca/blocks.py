@@ -26,8 +26,10 @@ _JOB_TYPE_RE = re.compile(
 )
 # High-accuracy NMR (ORCA 6.1 NMR tutorial): NoFrozenCore, as core electrons shape shieldings.
 NMR_DH_ROUTE = "!revDSD-PBEP86-D4/2021 PCSSEG-3 AUTOAUX NMR NOFROZENCORE TightSCF"
+# A dh NMR input, whatever SCF keyword a retry swapped in.
+_NMR_DH_RE = re.compile(r"^\s*!.*\brevDSD-PBEP86\S*\s.*\bPCSSEG-3\b.*\bNMR\b", re.IGNORECASE | re.MULTILINE)
 _SOLVENT_TOKEN_RE = re.compile(r"(?:CPCMC?|SMD)(?:\(.*\))?", re.IGNORECASE)
-_DH_KEPT_BLOCKS_RE = re.compile(r"%(?:cpcm|pal)\b.*?\bend\b|%maxcore\s+\S+", re.IGNORECASE | re.DOTALL)
+_DH_KEPT_BLOCKS_RE = re.compile(r"%cpcm\b.*?\bend\b", re.IGNORECASE | re.DOTALL)
 
 
 class HeaderConflict(ValueError):
@@ -82,14 +84,20 @@ def with_keyword(header: str, keyword: str) -> str:
     return f"! {keyword}\n" + header
 
 
-def nmr_dh_header(header: str) -> str:
-    """The double-hybrid NMR route with *header*'s solvation, %maxcore and %pal."""
+def is_nmr_dh(text: str) -> bool:
+    """Whether *text* (a header or input) runs the dh NMR route."""
+    return bool(_NMR_DH_RE.search(text))
+
+
+def nmr_dh_header(header: str, nprocs: int, maxcore: int) -> str:
+    """The double-hybrid NMR route with *header*'s solvation, on its own cores and memory."""
     solvent = [token for line in _keyword_lines(header)
                for token in line.lstrip()[1:].split() if _SOLVENT_TOKEN_RE.fullmatch(token)]
     rest = "\n".join(line.partition("#")[0] for line in header.splitlines()
                      if not line.lstrip().startswith("!"))
     kept = [match.group(0) for match in _DH_KEPT_BLOCKS_RE.finditer(rest)]
-    return "\n".join([" ".join([NMR_DH_ROUTE, *solvent]), *kept]) + "\n"
+    return "\n".join([" ".join([NMR_DH_ROUTE, *solvent]), *kept,
+                      f"%maxcore {maxcore}", f"%pal nprocs {nprocs} end"]) + "\n"
 
 
 def _on_keyword_lines(header: str, change) -> str:
@@ -198,7 +206,12 @@ def compose_header(
         )
     if task_type == "singlepoint_nmr":
         if options.get("nmr_method") == "dh":
-            return nmr_dh_header(header)
+            defaults = categories.OPTIONS[categories.NMR]
+            return nmr_dh_header(
+                header,
+                nprocs=options.get("nmr_dh_nprocs", defaults["nmr_dh_nprocs"]),
+                maxcore=options.get("nmr_dh_maxcore", defaults["nmr_dh_maxcore"]),
+            )
         return with_keyword(header, "NMR")
     if task_type == "singlepoint_soc":
         # Equilibrium solvation, as in the S1 optimisation, keeps DELE consistent.

@@ -86,7 +86,8 @@ OPTIONS: dict[str, dict] = {
           # With request_esd_ht: which rates get Herzberg-Teller, and at which level.
           "esd_ht_scope": "all", "esd_ht_method": "sp"},
     UVVIS: {"uvvis_nroots": 20, "uvvis_tda": False},
-    NMR: {"nmr_nuclei": ["H", "C", "F"], "nmr_method": "singlepoint"},
+    # nmr_dh_*: cores and MB per core of a dh NMR job; its MP2 response needs ~6 GB per core at 30 atoms.
+    NMR: {"nmr_nuclei": ["H", "C", "F"], "nmr_method": "singlepoint", "nmr_dh_nprocs": 12, "nmr_dh_maxcore": 6000},
     DENSITIES: {
         "density_eldens": True,
         "density_spindens": True,
@@ -102,6 +103,12 @@ ESD_HT_SCOPES = ("all", "s1")
 ESD_HT_METHODS = ("sp", "opt")
 UVVIS_NROOTS_MAX = 100
 NMR_NUCLEI = ("H", "C", "F")
+NMR_DH_NPROCS_MAX = 64
+NMR_DH_MAXCORE_RANGE = (1000, 16000)
+# A job must fit the smallest CPU node (~470 GB).
+NMR_DH_MAX_JOB_MB = 400000
+# Resources, not science: a different value is no conflict with an existing molecule.
+RESOURCE_OPTIONS = ("nmr_dh_nprocs", "nmr_dh_maxcore")
 
 
 def requested(metadata: dict) -> set[str]:
@@ -117,6 +124,9 @@ def options(metadata: dict) -> dict:
             value = metadata.get(name, default)
             # Lists are copied so no caller can mutate a shared default.
             out[name] = list(value) if isinstance(value, list) else value
+    if out.get("nmr_method") != "dh":
+        for name in RESOURCE_OPTIONS:
+            out.pop(name, None)
     return out
 
 
@@ -264,6 +274,16 @@ def rejection(
         method = metadata.get("nmr_method", OPTIONS[NMR]["nmr_method"])
         if method not in NMR_METHODS:
             return f"The NMR method must be one of {', '.join(NMR_METHODS)} (nmr_method)."
+        nprocs = metadata.get("nmr_dh_nprocs", OPTIONS[NMR]["nmr_dh_nprocs"])
+        maxcore = metadata.get("nmr_dh_maxcore", OPTIONS[NMR]["nmr_dh_maxcore"])
+        low, high = NMR_DH_MAXCORE_RANGE
+        if method == "dh" and not (_integer(nprocs) and 1 <= nprocs <= NMR_DH_NPROCS_MAX):
+            return f"High-accuracy NMR cores must be an integer from 1 to {NMR_DH_NPROCS_MAX} (nmr_dh_nprocs)."
+        if method == "dh" and not (_integer(maxcore) and low <= maxcore <= high):
+            return f"High-accuracy NMR memory must be {low}-{high} MB per core (nmr_dh_maxcore)."
+        if method == "dh" and nprocs * (maxcore + 50) > NMR_DH_MAX_JOB_MB:
+            return (f"High-accuracy NMR asks for {nprocs} x {maxcore} MB; one job must stay within "
+                    f"{NMR_DH_MAX_JOB_MB // 1000} GB (nmr_dh_nprocs x nmr_dh_maxcore).")
         if method == "dh" and (check.get("max_atomic_number") or 0) > NMR_DH_MAX_Z:
             return (
                 "High-accuracy NMR runs in the pcSseg-3 basis, which ORCA only "
@@ -438,7 +458,8 @@ def existing_conflict(
             return sorted(found) if isinstance(found, list) else found
 
         for key in sorted(wanted):
-            names = (*OPTIONS.get(key, {}), *((ESD_HT,) if key == ESD else ()))
+            names = (*(n for n in OPTIONS.get(key, {}) if n not in RESOURCE_OPTIONS),
+                     *((ESD_HT,) if key == ESD else ()))
             for name in names:
                 old = value(name, stored_options, stored_metadata)
                 new = value(name, requested_options, requested_options)
@@ -449,6 +470,10 @@ def existing_conflict(
                         f"molecules only, so submit it into another project."
                     )
     return None
+
+
+def _integer(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _number(value) -> bool:

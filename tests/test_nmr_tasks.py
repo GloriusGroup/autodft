@@ -60,27 +60,32 @@ class TestMethod:
             '!PBE0 x2c-TZVPall NMR\n%basis\n  NewGTO I "x2c-TZVPall" end\nend\n'
         )
 
-    def test_dh_keeps_only_solvent_and_resources(self):
+    def test_dh_keeps_only_solvent_and_runs_on_its_own_resources(self):
         assert blocks.compose_header("singlepoint_nmr", self.DEFAULT_SP, {"nmr_method": "dh"}) == (
             "!revDSD-PBEP86-D4/2021 PCSSEG-3 AUTOAUX NMR NOFROZENCORE TightSCF CPCM(MeCN)\n"
-            "%maxcore 2000\n%pal nprocs 8 end\n"
+            "%maxcore 6000\n%pal nprocs 12 end\n"
         )
 
-    def test_dh_carries_a_cpcm_block_and_multiline_pal(self):
+    def test_dh_resources_come_from_the_options(self):
+        header = blocks.compose_header("singlepoint_nmr", self.DEFAULT_SP,
+                                       {"nmr_method": "dh", "nmr_dh_nprocs": 16, "nmr_dh_maxcore": 8000})
+        assert header.endswith("%maxcore 8000\n%pal nprocs 16 end\n")
+
+    def test_dh_carries_a_cpcm_block_and_drops_the_headers_resources(self):
         header = (
             "!B3LYP def2-SVP # comment CPCM(Water)\n! SMD(water) DEFGRID2\n"
             '%cpcm\n  smd true\n  SMDsolvent "water"\nend\n'
             "%scf maxiter 300 end\n%basis NewGTO C \"def2-QZVP\" end end\n"
             "%pal\n  nprocs 4\nend\n%MaxCore 1500\n"
         )
-        assert blocks.nmr_dh_header(header) == (
+        assert blocks.nmr_dh_header(header, nprocs=12, maxcore=6000) == (
             "!revDSD-PBEP86-D4/2021 PCSSEG-3 AUTOAUX NMR NOFROZENCORE TightSCF SMD(water)\n"
-            '%cpcm\n  smd true\n  SMDsolvent "water"\nend\n%pal\n  nprocs 4\nend\n%MaxCore 1500\n'
+            '%cpcm\n  smd true\n  SMDsolvent "water"\nend\n%maxcore 6000\n%pal nprocs 12 end\n'
         )
 
     def test_dh_in_the_gas_phase(self):
         assert blocks.compose_header("singlepoint_nmr", "!PBE0 def2-TZVP RIJCOSX\n", {"nmr_method": "dh"}) == (
-            "!revDSD-PBEP86-D4/2021 PCSSEG-3 AUTOAUX NMR NOFROZENCORE TightSCF\n"
+            "!revDSD-PBEP86-D4/2021 PCSSEG-3 AUTOAUX NMR NOFROZENCORE TightSCF\n%maxcore 6000\n%pal nprocs 12 end\n"
         )
 
     def test_the_fingerprints_tell_the_methods_apart(self):
