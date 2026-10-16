@@ -392,8 +392,10 @@ ORCA's NBO 7. Needs `[orca].nbo_exe` configured on the controller (exported as
 `NBOEXE` in the job's submit script); a submission requesting NBO without
 it configured is refused, from the dashboard, the REST API and the CLI
 alike. NBO's archive, `FILE.47` (ORCA's default keyword list writes it;
-a custom list replaces that list, hence the added `ARCHIVE`), is copied
-back into the job directory, and `cleanup` keeps `*.47` files.
+a custom list replaces that list, hence the added `ARCHIVE`), stays in
+scratch: at 80-100 MB per job it is not copied back. The job raises the
+stack limit (`ulimit -s unlimited`); NBO7 overflows the default 8 MB on
+larger systems and dies silently while writing that archive.
 
 **Natural charges.** Each NBO singlepoint's output is parsed for its
 first "Summary of Natural Population Analysis" table (stopped at that

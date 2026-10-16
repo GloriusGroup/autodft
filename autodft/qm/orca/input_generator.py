@@ -95,7 +95,7 @@ def generate_submit_script(
     keep_densities: bool = False,
     keep_hessian: bool = False,
     keep_cubes: bool = False,
-    keep_nbo_archive: bool = False,
+    runs_nbo: bool = False,
     keep_mp2resp: bool = False,
     keep_esd_files: bool = False,
     extra_inputs: Optional[list[str]] = None,
@@ -128,7 +128,7 @@ def generate_submit_script(
                         back from scratch when True.
         keep_hessian: Copy ``*.hess`` back from scratch when True.
         keep_cubes: Copy ``*.cube`` back from scratch when True.
-        keep_nbo_archive: Copy NBO's ``*.47`` archive back from scratch when True.
+        runs_nbo: The job runs NBO, which needs an unlimited stack.
         keep_mp2resp: Copy an NMR job's MP2 response logs back from scratch when True.
         keep_esd_files: Copy ESD's derivative Hessians, spectra and correlation
                         functions back from scratch when True.
@@ -164,7 +164,7 @@ def generate_submit_script(
         keep_densities=keep_densities,
         keep_hessian=keep_hessian,
         keep_cubes=keep_cubes,
-        keep_nbo_archive=keep_nbo_archive,
+        runs_nbo=runs_nbo,
         keep_mp2resp=keep_mp2resp,
         keep_esd_files=keep_esd_files,
         extra_inputs=extra_inputs or [],

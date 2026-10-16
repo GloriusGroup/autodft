@@ -16,6 +16,8 @@ WORK_DIR="{{ job_path }}"
 {% if tmp_dir %}TMP_DIR="{{ tmp_dir }}/{{ job_name }}.${SLURM_JOB_ID:-$$}"
 {% endif %}
 {% if nbo_exe %}export NBOEXE={{ nbo_exe }}
+{% endif %}{% if runs_nbo %}# NBO7 overflows the default 8 MB stack on larger systems and dies silently.
+ulimit -s unlimited
 {% endif %}{% if mpi_env %}source {{ mpi_env }}
 {% endif %}
 {% if tmp_dir %}
@@ -88,7 +90,6 @@ cp *.out *.txt *.xyz "$WORK_DIR"/ 2>/dev/null || true
 {% endif %}{% if keep_densities %}cp *.densities *.densitiesinfo *.cube   "$WORK_DIR"/ 2>/dev/null || true
 {% endif %}{% if keep_hessian %}cp *.hess                               "$WORK_DIR"/ 2>/dev/null || true
 {% endif %}{% if keep_cubes %}cp *.cube "$WORK_DIR"/ 2>/dev/null || true
-{% endif %}{% if keep_nbo_archive %}cp *.47 "$WORK_DIR"/ 2>/dev/null || true
 {% endif %}{% if keep_mp2resp %}cp *.mp2resp_* "$WORK_DIR"/ 2>/dev/null || true
 {% endif %}{% if keep_esd_files %}cp *.FS.hess *.GS.hess *.ES.hess *.spectrum* *.corrfunc "$WORK_DIR"/ 2>/dev/null || true
 {% endif %}cp input.finalensemble.xyz              "$WORK_DIR"/ 2>/dev/null || true

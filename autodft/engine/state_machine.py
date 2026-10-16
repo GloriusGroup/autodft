@@ -1186,7 +1186,7 @@ def _generate_job_files(
         nice=settings.slurm.nice,
         keep_hessian=_keeps_hessian(state, task),
         keep_cubes=_keeps_cubes(state, task),
-        keep_nbo_archive=_keeps_nbo_archive(state, task),
+        runs_nbo=_runs_nbo(state, task),
         # Its log names how much memory per rank an MP2 response lacked.
         keep_mp2resp=task.task_type == TaskType.singlepoint_nmr,
         keep_esd_files=task.task_type.value.startswith("esd_"),
@@ -1456,8 +1456,8 @@ def _keeps_cubes(state: MoleculeState, task: ComputationTask) -> bool:
     return bool(metadata.get(categories.DENSITIES))
 
 
-def _keeps_nbo_archive(state: MoleculeState, task: ComputationTask) -> bool:
-    """Whether a singlepoint runs NBO, whose archive (``FILE.47``) is kept."""
+def _runs_nbo(state: MoleculeState, task: ComputationTask) -> bool:
+    """Whether a singlepoint runs NBO."""
     if task.task_type != TaskType.singlepoint:
         return False
     metadata = json.loads(state.metadata_json) if state.metadata_json else {}

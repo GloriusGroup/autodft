@@ -55,7 +55,7 @@ class TestDensities:
             blocks.compose_header("singlepoint", edited, {categories.DENSITIES: True})
 
 
-NBO_COPY = 'cp *.47 "$WORK_DIR"/ 2>/dev/null || true'
+NBO_STACK = "ulimit -s unlimited"
 
 
 class TestNbo:
@@ -124,7 +124,8 @@ def test_singlepoint_job_input_has_both_blocks(session, tmp_path):
     assert "SpinDens" not in text  # S0 is closed shell
     submit = (job_dir / "submit.cmd").read_text()
     assert 'cp *.cube "$WORK_DIR"/ 2>/dev/null || true' in submit
-    assert NBO_COPY in submit
+    assert NBO_STACK in submit
+    assert ".47" not in submit
 
 
 def test_open_shell_state_singlepoint_gets_spindens(session, tmp_path):
@@ -163,7 +164,7 @@ def test_unflagged_singlepoint_job_has_no_new_blocks_and_no_keep_cubes(session, 
     assert "NBO" not in text.splitlines()[0]
     submit = (job_dir / "submit.cmd").read_text()
     assert 'cp *.cube "$WORK_DIR"/ 2>/dev/null || true' not in submit
-    assert NBO_COPY not in submit
+    assert "ulimit" not in submit
 
 
 def test_nbo_without_a_configured_executable_fails_the_job(session, tmp_path):

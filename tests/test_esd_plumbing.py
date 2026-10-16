@@ -75,14 +75,15 @@ def test_esd_by_products_are_copied_back_only_when_requested(tmp_path):
     assert without == with_esd.replace(ESD_COPY + "\n", "").replace(str(tmp_path / "b"), str(tmp_path / "a"))
 
 
-def test_nbo_archive_is_copied_back_only_when_requested(tmp_path):
-    copy = 'cp *.47 "$WORK_DIR"/ 2>/dev/null || true'
+def test_nbo_raises_the_stack_limit_and_keeps_no_archive(tmp_path):
     without = generate_submit_script(tmp_path / "a", "j", 1, 2000, "1-00:00:00", "CPU").read_text()
     with_nbo = generate_submit_script(
-        tmp_path / "b", "j", 1, 2000, "1-00:00:00", "CPU", keep_nbo_archive=True,
+        tmp_path / "b", "j", 1, 2000, "1-00:00:00", "CPU", runs_nbo=True,
     ).read_text()
-    assert copy not in without
-    assert without == with_nbo.replace(copy + "\n", "").replace(str(tmp_path / "b"), str(tmp_path / "a"))
+    stack = "# NBO7 overflows the default 8 MB stack on larger systems and dies silently.\nulimit -s unlimited\n"
+    assert "ulimit" not in without
+    assert ".47" not in with_nbo
+    assert without == with_nbo.replace(stack, "").replace(str(tmp_path / "b"), str(tmp_path / "a"))
 
 
 def test_double_hybrid_nmr_gets_the_long_stage():
