@@ -52,7 +52,6 @@ from autodft.models.geometry import MoleculeGeometry
 
 
 HARTREE_TO_EV = 27.211386245988
-HARTREE_TO_KCAL_PER_MOL = 627.5094740631
 SCE_ABS_MECN = 4.42  # V, absolute SCE potential in MeCN (Pavlishchuk & Addison 2000)
 
 
@@ -299,14 +298,6 @@ def _cache_signature(project_name: str) -> tuple:
             .where(Molecule.project_name == project_name)
         ).one()
     return (molecules, tasks, str(latest))
-
-
-def invalidate_cache(project_name: Optional[str] = None) -> None:
-    """Drop cached analyses (all of them, or one project's)."""
-    if project_name is None:
-        _ANALYSIS_CACHE.clear()
-    else:
-        _ANALYSIS_CACHE.pop(project_name, None)
 
 
 def analyze_project(project_name: str, use_cache: bool = True) -> dict:

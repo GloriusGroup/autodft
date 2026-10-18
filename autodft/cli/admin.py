@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import csv
-import io
-import json
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -20,7 +17,6 @@ from autodft.models.enums import TaskStatus
 from autodft.models.job import ComputationJob
 from autodft.models.molecule import Molecule
 from autodft.models.state import MoleculeState
-from autodft.models.geometry import MoleculeGeometry
 from autodft.models.task import ComputationTask
 
 logger = logging.getLogger(__name__)

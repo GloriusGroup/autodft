@@ -223,9 +223,7 @@ default, so what you see selected is what will actually run.
 The same first run also **creates the `admin` account and logs its API
 key once**, in a banner. That key is stored only as a hash, so copy it
 out of the log — if you miss it, run
-`autodft admin rotate-key admin --config config/reaction.toml`. See
-[`docs/UPGRADE-user-accounts.md`](docs/UPGRADE-user-accounts.md) when the
-database predates accounts.
+`autodft admin rotate-key admin --config config/reaction.toml`.
 
 After upgrading to a build that stores job results, run
 `autodft admin backfill-results --config config/reaction.toml [--project P]`
@@ -337,7 +335,7 @@ sees the whole database:
   `%xtb XTBInputString "--gxtb" end`, `%cpcm SMD true SMDsolvent "water" end`,
   or `%pal nprocs N end` are supported verbatim. Headers referenced
   by `created` or `pending` tasks can't be deleted; finished
-  (successful / failed) references no longer block the delete. Anyone
+  (successful / failed) references don't block the delete. Anyone
   may create and use a header; only its owner (or admin) may edit or
   delete one — someone else's answers 403 with a hint to copy it.
 * **Admin** — wipe one of your projects or a single molecule (each
@@ -635,8 +633,7 @@ Projects are namespaced per owner — stored as `owner/project`, written
 `owner:project` in a URL, and submitted as a bare name that lands in the
 caller's namespace. Two people can each have a `screening`.
 
-The shared `X-AutoDFT-Password` header has been removed: every caller
-now presents a key that names them. Full detail, including account
+Every caller presents a key that names them. Full detail, including account
 management, is in [`docs/API.md`](docs/API.md) §0.
 
 End to end, as a new user (`$K` is the key admin handed you):

@@ -16,7 +16,7 @@ from autodft.analysis.spectroscopy import analyze_spectra, boltzmann_weights, ra
 from autodft.config import Settings
 from autodft.db import get_session, init_db, reset_engine
 from autodft.extraction import results
-from autodft.extraction.extractor import ConformerResult, PipelineExtractor
+from autodft.extraction.extractor import ConformerResult
 from autodft.models import (
     ComputationJob,
     ComputationTask,

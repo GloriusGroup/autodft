@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 import pytest
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from autodft.models import (
     CalculationEntrypoint,

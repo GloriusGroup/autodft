@@ -567,8 +567,8 @@ ESD states — S0 with `request_esd`, and every state carrying `esd_role`
 (re)run. Rate jobs copy ESD's by-products back from scratch
 (`*.FS.hess`, `*.GS.hess`, `*.ES.hess`, `*.spectrum*`, `*.corrfunc`);
 nothing reads them back, so `cleanup-files` deletes them from successful
-rate jobs like any other large file. `--dry-run` now counts every file it would delete, not only the
-ones it actually removes.
+rate jobs like any other large file. `--dry-run` counts every file it
+would delete.
 
 ## Roll back
 

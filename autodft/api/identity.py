@@ -207,20 +207,6 @@ def visible_entrypoints(entries, session: Session, identity: Identity) -> list:
     return [e for e in entries if entrypoint_project(e) in allowed]
 
 
-def visible_molecule_ids(session: Session, identity: Identity) -> Optional[list[int]]:
-    """Molecule ids in scope; None means unrestricted."""
-    names = visible_projects(session, identity)
-    if names is None:
-        return None
-    if not names:
-        return []
-    return [
-        m for m in session.exec(
-            select(Molecule.id).where(col(Molecule.project_name).in_(names))
-        ).all() if m is not None
-    ]
-
-
 def resolve_project(session: Session, identity: Identity, name: str) -> str:
     """Turn a name the caller typed into a qualified name they may use.
 

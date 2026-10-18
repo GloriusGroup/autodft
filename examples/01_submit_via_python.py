@@ -34,7 +34,7 @@ from autodft.qm.orca.defaults import (
     DEFAULT_HEADER_CONFSEARCH,
     DEFAULT_HEADER_OPTIMIZATION,
     DEFAULT_HEADER_SINGLEPOINT,
-    GXTB_HEADER_CONFSEARCH,
+    GFN2_HEADER_CONFSEARCH,
 )
 from sqlmodel import select
 
@@ -196,7 +196,7 @@ if __name__ == "__main__":
     print(f"#{eid}  CCO  (defaults, project={USER}/alcohols)")
 
     # 2) Full coverage: T1 / ox / red, per-state conformer caps,
-    #    vertical excitations off, non-default priority, g-xTB
+    #    vertical excitations off, non-default priority, GFN2-xTB
     #    conformer-search header.
     eid = submit(
         "c1ccc(O)cc1",
@@ -210,9 +210,9 @@ if __name__ == "__main__":
         max_conformers_T1=3,
         max_conformers_ox=2,
         max_conformers_red=2,
-        header_confsearch=GXTB_HEADER_CONFSEARCH,
+        header_confsearch=GFN2_HEADER_CONFSEARCH,
     )
-    print(f"#{eid}  c1ccc(O)cc1  (T1/ox/red, per-state confs, g-xTB)")
+    print(f"#{eid}  c1ccc(O)cc1  (T1/ox/red, per-state confs, GFN2-xTB)")
 
     # 3) Skip-confsearch path — RDKit's geometry feeds optimization directly.
     eid = submit(

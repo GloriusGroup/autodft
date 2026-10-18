@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -717,7 +716,6 @@ def api_project_molecules_detail(
         return bad
     with get_session() as session:
         name = resolve_project(session, identity, name)
-    from autodft.models.geometry import MoleculeGeometry
 
     # Build the molecule list and gather all the related rows in a few
     # bulk queries — avoid the N+1 trap when a project has many mols.
@@ -743,17 +741,6 @@ def api_project_molecules_detail(
             if state_ids else []
         )
 
-        # Look up the conformer index for every input geometry the
-        # optimisation tasks reference, so we can render them in a
-        # stable order.
-        geom_ids = [t.input_geometry_id for t in tasks
-                    if t.task_type == TaskType.optimization and t.input_geometry_id is not None]
-        geoms = (
-            session.exec(
-                select(MoleculeGeometry).where(col(MoleculeGeometry.id).in_(geom_ids))
-            ).all()
-            if geom_ids else []
-        )
         from autodft.extraction import results as stored
 
         checks = stored.connectivity_by_task(
@@ -767,7 +754,6 @@ def api_project_molecules_detail(
     tasks_by_state: dict[int, list[ComputationTask]] = {}
     for t in tasks:
         tasks_by_state.setdefault(t.state_id, []).append(t)
-    geom_by_id = {g.id: g for g in geoms}
 
     # task -> dependent tasks (singlepoint family hangs off the opt task)
     deps_by_parent: dict[int, list[ComputationTask]] = {}

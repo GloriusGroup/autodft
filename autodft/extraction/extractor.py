@@ -21,7 +21,6 @@ from autodft import categories
 from autodft.db import get_session
 from autodft.extraction import results as stored
 from autodft.models.enums import TaskStatus, TaskType
-from autodft.models.geometry import MoleculeGeometry
 from autodft.models.job import ComputationJob
 from autodft.models.molecule import Molecule
 from autodft.models.state import MoleculeState
@@ -540,7 +539,6 @@ class PipelineExtractor:
         Designed to be triggered from the dashboard's "Export all files"
         button. The caller is responsible for the user confirmation.
         """
-        from autodft.models.entrypoint import CalculationEntrypoint
 
         export_root = Path(export_root)
         comp_root = Path(comp_root)
@@ -672,7 +670,7 @@ class PipelineExtractor:
         Returns:
             Number of files deleted.
         """
-        extensions = {".out", ".xyz", ".inp", ".47"}
+        extensions = {".out", ".xyz", ".inp"}
         if keep_extensions:
             extensions.update(keep_extensions)
 

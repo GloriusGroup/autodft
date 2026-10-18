@@ -215,7 +215,7 @@ package defaults in `autodft/qm/orca/defaults.py`.
 | `density_eldens_file` | str | `"ElDens.cube"` | Cube file name: `NAME.cube`, letters/digits/`_.-` only, max 64 characters; must differ from `density_spindens_file`. Stored only with Densities. |
 | `density_spindens_file` | str | `"SpinDens.cube"` | Same rule as `density_eldens_file`, for the spin density cube. Stored only with Densities. |
 | `request_singlepoint_nbo` | bool | `false` | Natural population analysis via ORCA's NBO 7: the `NBO` keyword plus a `%nbo` block on every state's own energy singlepoint (same states as Densities, above). Needs the energy singlepoint stage, a singlepoint header that does not already contain the `NBO` keyword or a `%nbo` block, and `[orca].nbo_exe` configured on the server — refused with `400` otherwise (see [`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md#densities-and-nbo)). |
-| `nbo_keywords` | str | `""` | Extra keywords placed inside `NBOKEYLIST = "$NBO ... $END"`, e.g. `"BNDIDX"`; `ARCHIVE` is added so NBO's `FILE.47` is still written (copied back to the job directory). Letters, digits, spaces and `=_.,+-` only (max 200 characters) — no `$`, quotes or newlines. Stored only with NBO. |
+| `nbo_keywords` | str | `""` | Extra keywords placed inside `NBOKEYLIST = "$NBO ... $END"`, e.g. `"BNDIDX"`; `ARCHIVE` is added, as ORCA's default list has it; the `FILE.47` it writes stays in scratch. Letters, digits, spaces and `=_.,+-` only (max 200 characters) — no `$`, quotes or newlines. Stored only with NBO. |
 
 `request_S1` is **not** exposed: the S1 state exists only as part of ESD (`request_esd`).
 
@@ -904,8 +904,7 @@ Saved headers are never touched by a project or molecule wipe.
 Four properties worth knowing:
 
 * **One at a time.** A destructive operation started while another is
-  running is refused with **409**, not queued. Two deleters walking the
-  same tree used to abort each other partway through.
+  running is refused with **409**, not queued.
 * **Rows first, files second.** The database rows are deleted and
   committed before anything is unlinked, so a failure mid-rmtree leaves
   orphaned directories — named in the log and in `orphaned_dirs` — rather
@@ -935,8 +934,8 @@ files took **5m14s** to walk. So no request measures without a bound.
   the response is a *lower* bound and the dialog says "at least" — better
   than under-reporting what is about to be deleted.
 * `GET /api/admin/reset-preview` **reads no files at all**. It returns
-  `projects`, `rows` and `confirmation_required`; the `files` object it
-  used to carry is gone. The reset does not need it either — it stages
+  `projects`, `rows` and `confirmation_required`. The reset does not need
+  file counts — it stages
   directories with a rename, so what is on disk does not change what it
   does.
 * The exact figure is `POST /api/admin/disk-usage`, which starts a walk on

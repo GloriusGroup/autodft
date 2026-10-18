@@ -8,7 +8,6 @@ exactly why the hole survived casual testing.
 
 from __future__ import annotations
 
-from pathlib import Path
 
 import pytest
 

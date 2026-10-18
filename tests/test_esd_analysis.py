@@ -16,7 +16,7 @@ from autodft.engine import photophysics
 from autodft.engine.state_machine import _create_job_for_task
 from autodft.extraction import results
 from autodft.extraction.extractor import PipelineExtractor
-from autodft.models import ComputationJob, ComputationTask, MoleculeGeometry, TaskStatus, TaskType
+from autodft.models import ComputationJob, ComputationTask, TaskStatus, TaskType
 from autodft.qm.orca import esd_inputs
 from autodft.qm.orca.parser import OrcaParser
 from tests.test_esd_joins import FIXTURES, _job, _rates, esd  # noqa: F401 - fixture

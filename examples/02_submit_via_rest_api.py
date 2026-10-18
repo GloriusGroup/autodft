@@ -162,7 +162,7 @@ if __name__ == "__main__":
 
     id_gxtb = first_custom_header("confsearch", "g-xTB")
     id_default_opt = first_custom_header("optimization", "def2-SVP")
-    id_default_sp = first_custom_header("singlepoint", "def2-TZVPD")
+    id_default_sp = first_custom_header("singlepoint", "def2-TZVP KeepDens")
 
     # 3) Minimal submission — defaults everywhere.
     r = submit("CCO", project=DEFAULT_PROJECT)

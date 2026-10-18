@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from sqlmodel import Session, select
+from sqlmodel import select
 
 from autodft import categories
 from autodft.config import Settings

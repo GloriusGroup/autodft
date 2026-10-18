@@ -101,8 +101,6 @@ class PipelineConfig:
     # queue short by design, so gating expansion on queue length either never
     # fired or (when squeue was slow) stalled the whole campaign.
     max_unsubmitted_jobs: int = 500
-    # Retained for older configs; no longer consulted.
-    max_queue_length: int = 20
     loop_interval_seconds: int = 30
     max_attempts: int = 3
     # Global failure circuit breaker. max_attempts bounds retries per task,

@@ -321,7 +321,6 @@ class TestSubmission:
         with get_session() as session:
             from autodft.models import CalculationEntrypoint
             import json as _json
-            from sqlmodel import select
             entry = session.get(CalculationEntrypoint, response.json()["id"])
             metadata = _json.loads(entry.request_metadata)
         assert metadata["project_author"] == "owner"
