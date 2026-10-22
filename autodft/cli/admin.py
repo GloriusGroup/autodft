@@ -286,9 +286,13 @@ def export_files(
     settings = load_settings(config)
     settings.ensure_directories()
 
-    summary = PipelineExtractor(project).export_tree(
-        output_dir or settings.export_data_path, all_conformers=all_conformers, keep_gbw=keep_gbw,
-    )
+    try:
+        summary = PipelineExtractor(project).export_tree(
+            output_dir or settings.export_data_path, all_conformers=all_conformers, keep_gbw=keep_gbw,
+        )
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
     console.print(
         f"[green]Exported {summary['files_copied']} files of {summary['molecules']} molecules "
         f"to {summary['root']}[/green]"

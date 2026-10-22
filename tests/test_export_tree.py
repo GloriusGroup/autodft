@@ -372,6 +372,32 @@ def test_archived_state_analysis_reads_every_conformer(db):
     assert payload["archive_source"].endswith("p_all_conformers.csv")
 
 
+def test_an_archived_project_is_not_re_exported(db):
+    _standard(db)
+    PipelineExtractor(PROJECT).archive_project(db.export_data_path, db.comp_data_path, False, False)
+    root = _root(db)
+    before = {p.name: p.read_bytes() for p in root.iterdir() if p.is_file()}
+    assert {"p.csv", "p_all_conformers.csv", "p_state_analysis.xlsx"} <= set(before)
+    with pytest.raises(ValueError, match="archived"):
+        _export(db)
+    with pytest.raises(ValueError, match="archived"):
+        PipelineExtractor(PROJECT).archive_project(db.export_data_path, db.comp_data_path, False, False)
+    assert {p.name: p.read_bytes() for p in root.iterdir() if p.is_file()} == before
+
+
+def test_export_files_cli_reports_an_archived_project(db, monkeypatch):
+    from typer.testing import CliRunner
+
+    from autodft.cli import admin
+
+    _standard(db)
+    PipelineExtractor(PROJECT).archive_project(db.export_data_path, db.comp_data_path, False, False)
+    monkeypatch.setattr("autodft.config.load_settings", lambda config=None: db)
+    result = CliRunner().invoke(admin.app, ["export-files", "--project", PROJECT])
+    assert result.exit_code == 1
+    assert "archived" in result.output
+
+
 # ----------------------------------------------------------------------
 # The job kinds and routes
 # ----------------------------------------------------------------------

@@ -407,6 +407,7 @@ class PipelineExtractor:
         """Write the summary files and ``molecules/`` tree into ``<export_root>/<project>/``.
 
         Replaces a previous export there; archived molecules keep their folders.
+        Raises ValueError, touching nothing, when every molecule is archived.
         Returns ``{molecules, files_copied, root}``.
         """
         return self._export_tree(export_root, all_conformers, keep_gbw)[0]
@@ -418,7 +419,6 @@ class PipelineExtractor:
         from autodft.paths import project_file_stem, safe_subdirectory
 
         root = safe_subdirectory(Path(export_root), self.project_name)
-        root.mkdir(parents=True, exist_ok=True)
         stem = project_file_stem(self.project_name)
 
         # Planned under a short session, copied with none open (see db.py).
@@ -427,8 +427,12 @@ class PipelineExtractor:
                 select(Molecule).where(Molecule.project_name == self.project_name)
                 .order_by(col(Molecule.id))
             ).all()
+            if molecules and all(m.archived for m in molecules):
+                # Its export is the only copy of its energies.
+                raise ValueError(f"Project {self.project_name!r} is archived; its export is kept as is.")
             plans = [self._plan_molecule(session, m, all_conformers, keep_gbw)
                      for m in molecules if not m.archived]
+        root.mkdir(parents=True, exist_ok=True)
         exported = [manifest["molecule_id"] for manifest, _ in plans]
 
         _clear_export(root, stem, exported)
