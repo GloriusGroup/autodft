@@ -25,12 +25,24 @@ logger = logging.getLogger(__name__)
 # routinely produce -20 to -50 cm^-1 modes that no amount of re-optimisation
 # removes; failing on them burns the whole retry budget for nothing.
 IMAGINARY_FREQ_THRESHOLD = -50.0
+# Strict convergence (default) on a ground-state optimisation.
+IMAGINARY_FREQ_THRESHOLD_STRICT = -10.0
 # Without strict convergence: S1's Hessian is numerical, floppy aryl/tBu/CF3 rotors
 # land at -50 to -65 cm^-1, and a retry repeats the day-long Hessian. ESD reads
 # them as real (flagged).
 IMAGINARY_FREQ_THRESHOLD_S1 = -100.0
 # Check types of an ESD S1 optimisation, with and without strict convergence.
 EXCITED_OPTIMIZATION = ("optimization_excited", "optimization_excited_relaxed")
+
+
+def _imaginary_threshold(task_type: str) -> float:
+    if task_type == "optimization_excited_relaxed":
+        return IMAGINARY_FREQ_THRESHOLD_S1
+    if task_type == "optimization_strict":
+        return IMAGINARY_FREQ_THRESHOLD_STRICT
+    return IMAGINARY_FREQ_THRESHOLD
+
+
 # Written into output.out by submit.cmd when its watchdog kills a hung ORCA.
 STALL_MARKER = "AUTODFT STALLED:"
 # A rank killed by SIGSEGV/SIGBUS, as mpirun/ORCA report it on stderr.
@@ -128,8 +140,7 @@ class OrcaParser(QMEngine):
             "SCF Convergence": self._check_scf_convergence(content),
             "Imaginary Frequencies": self._check_for_imaginary_frequencies(
                 content,
-                IMAGINARY_FREQ_THRESHOLD_S1 if task_type == "optimization_excited_relaxed"
-                else IMAGINARY_FREQ_THRESHOLD,
+                _imaginary_threshold(task_type),
             ),
             # ORCA prints its normal-termination banner even after an
             # internal module has given up, so the banner alone is not
