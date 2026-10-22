@@ -644,7 +644,7 @@
         }
         .header-row {
             display: grid;
-            grid-template-columns: 56px 130px 1fr 90px auto;
+            grid-template-columns: 56px 130px 1fr 160px auto;
             gap: 10px;
             align-items: center;
             padding: 10px 0;
@@ -655,6 +655,7 @@
         .header-row .kind  { color: var(--text-secondary); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; }
         .header-row .desc  { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .header-row .actions { display: flex; gap: 6px; justify-content: flex-end; }
+        .header-row .badges { display: flex; gap: 4px; flex-wrap: wrap; }
 
         .btn-mini {
             background: transparent;
@@ -1023,6 +1024,10 @@
         .cat-detail-note { font-size: 0.78rem; color: var(--text-muted); margin-top: 6px; }
         .cat-detail-note:empty { display: none; }
         .cat-detail-note.warn { color: var(--yellow); }
+        .adv-table td { padding: 4px 8px; }
+        .adv-table th { padding: 6px 8px; position: static; }
+        .adv-table select, .adv-table input { padding: 6px 10px; font-size: 0.85rem; }
+        .adv-table select { padding-right: 32px; }
         .pp-nmr { border-collapse: collapse; font-size: 0.8rem; margin-top: 4px; }
         .pp-nmr th, .pp-nmr td { padding: 2px 10px; border-bottom: 1px solid var(--border); text-align: left; }
         .pp-nmr td.num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -1143,7 +1148,7 @@
                             <input type="checkbox" id="requestUvvis" name="request_spec_uvvis">
                             <label for="requestUvvis">UV/Vis</label>
                         </div>
-                        <div class="checkbox-group" title="IR spectrum read from the optimisation's frequency calculation (needs Freq in the optimisation header). No extra jobs.">
+                        <div class="checkbox-group" title="IR spectrum read from the optimisation's frequency calculation. No extra jobs.">
                             <input type="checkbox" id="requestIr" name="request_spec_ir">
                             <label for="requestIr">IR</label>
                         </div>
@@ -1212,7 +1217,6 @@
                         <div class="cat-detail" data-requires="requestIr" style="display:none;">
                             <div class="cat-detail-title">IR</div>
                             <div class="cat-detail-note">No extra calculation: the spectrum is read from the S0 optimisation's frequency run and Boltzmann-weighted over conformers.</div>
-                            <div class="cat-detail-note" id="irHeaderNote"></div>
                         </div>
                         <div class="cat-detail" data-requires="requestNmr" style="display:none;">
                             <div class="cat-detail-title">NMR</div>
@@ -1243,7 +1247,7 @@
                                     <input type="number" id="nmrDhMaxcore" min="1000" max="16000" step="500" value="6000" style="width: 100px;">
                                 </div>
                             </div>
-                            <div class="cat-detail-note">An NMR singlepoint on every optimised S0 conformer, with the singlepoint header's method or, for high accuracy, the double hybrid revDSD-PBEP86-D4/2021 / pcSseg-3 (NoFrozenCore; keeps only the header's solvent and runs on its own cores and memory, recommended 12 × 6000 MB; much more expensive; H–Kr only). Shifts are referenced to chloroform (default; its experimental shift in the calculation's solvent is added) or TMS for ¹H/¹³C, and to CFCl₃ for ¹⁹F, computed once per method in the protected reference_systems project; closed-shell molecules only.</div>
+                            <div class="cat-detail-note">An NMR singlepoint on every optimised S0 conformer, with the singlepoint header's method or, for high accuracy, the double hybrid revDSD-PBEP86-D4/2021 / pcSseg-3 (NoFrozenCore; keeps only the singlepoint's solvation and runs on its own cores and memory, recommended 12 × 6000 MB; much more expensive; H–Kr only). Shifts are referenced to chloroform (default; its experimental shift in the calculation's solvent is added) or TMS for ¹H/¹³C, and to CFCl₃ for ¹⁹F, computed once per method in the protected reference_systems project; closed-shell molecules only.</div>
                             <div class="cat-detail-note" id="nmrHeaderNote"></div>
                         </div>
                         <div class="cat-detail" data-requires="requestEsd" style="display:none;">
@@ -1342,9 +1346,27 @@
                         </div>
                     </div>
 
-                    <!-- Further options -->
-                    <details id="submitOptions" style="margin: 4px 0 12px;">
-                        <summary style="cursor: pointer; font-size: 0.9rem; color: var(--text-secondary);">Options</summary>
+                    <!-- Advanced: per-stage settings added to the method-only headers -->
+                    <details id="submitAdvanced" style="margin: 4px 0 12px;">
+                        <summary id="advSummary" style="cursor: pointer; font-size: 0.9rem; color: var(--text-secondary);">Advanced</summary>
+                        <div class="form-group adv-table" style="margin-top: 10px; overflow-x: auto;">
+                            <table>
+                                <thead><tr><th></th><th>Conformer search</th><th>Optimisation</th><th>Singlepoint</th></tr></thead>
+                                <tbody>
+                                    <tr><td>Grid</td><td></td><td><select id="adv-optimization-grid"></select></td><td><select id="adv-singlepoint-grid"></select></td></tr>
+                                    <tr><td>SCF convergence</td><td></td><td><select id="adv-optimization-scf_convergence"></select></td><td><select id="adv-singlepoint-scf_convergence"></select></td></tr>
+                                    <tr><td>Geometry convergence</td><td></td><td><select id="adv-optimization-geom_convergence"></select></td><td></td></tr>
+                                    <tr><td>RI</td><td></td><td><select id="adv-optimization-ri"></select></td><td><select id="adv-singlepoint-ri"></select></td></tr>
+                                    <tr><td>Auxiliary basis</td><td></td><td><select id="adv-optimization-aux_basis"></select></td><td><select id="adv-singlepoint-aux_basis"></select></td></tr>
+                                    <tr><td>Solvation</td><td></td><td><select id="adv-optimization-solvation"></select></td><td><select id="adv-singlepoint-solvation"></select></td></tr>
+                                    <tr><td>Solvent</td><td></td><td><input type="text" id="adv-optimization-solvent" list="advSolvents" maxlength="40" style="width: 120px;"></td><td><input type="text" id="adv-singlepoint-solvent" list="advSolvents" maxlength="40" style="width: 120px;"></td></tr>
+                                    <tr><td>Cores</td><td><input type="number" id="adv-confsearch-nprocs" min="1" max="64" step="1" style="width: 100px;"></td><td><input type="number" id="adv-optimization-nprocs" min="1" max="64" step="1" style="width: 100px;"></td><td><input type="number" id="adv-singlepoint-nprocs" min="1" max="64" step="1" style="width: 100px;"></td></tr>
+                                    <tr><td>Memory per core (MB)</td><td><input type="number" id="adv-confsearch-maxcore" min="250" max="16000" step="50" style="width: 100px;"></td><td><input type="number" id="adv-optimization-maxcore" min="250" max="16000" step="50" style="width: 100px;"></td><td><input type="number" id="adv-singlepoint-maxcore" min="250" max="16000" step="50" style="width: 100px;"></td></tr>
+                                </tbody>
+                            </table>
+                            <datalist id="advSolvents"><option value="MeCN"><option value="Water"><option value="DMSO"><option value="DMF"><option value="THF"><option value="Toluene"><option value="CH2Cl2"><option value="Chloroform"><option value="Methanol"><option value="Ethanol"><option value="Acetone"><option value="Hexane"></datalist>
+                            <div class="cat-detail-note">Added to the headers, which hold only functional and basis; optimisations run Opt Freq. "ORCA default" leaves the setting out of the input. Cores × memory per core at most 400 000 MB per stage. Extend runs at the project's own settings.</div>
+                        </div>
                         <div class="form-row" style="margin-top: 10px;">
                             <div class="form-group" style="min-width: 220px;">
                                 <label for="imagFreqTolerance">Imaginary-frequency tolerance (cm⁻¹)</label>
@@ -1409,14 +1431,13 @@
                         <label for="headerText" style="font-size: 0.8rem; color: var(--text-muted);">
                             Header text (raw ORCA block, gets prepended above the geometry section)
                         </label>
-                        <textarea id="headerText" spellcheck="false" placeholder="! B3LYP def2-SVP OPT FREQ&#10;%maxcore 4000&#10;%pal nprocs 16 end"></textarea>
+                        <textarea id="headerText" spellcheck="false" placeholder="! B3LYP D4 def2-SVP"></textarea>
                         <div class="header-text-hint">
-                            Multiline ORCA blocks are supported verbatim. Examples:
-                            <code>%pal nprocs 16 end</code>,
-                            <code>%maxcore 4000</code>,
-                            <code>%cpcm SMD true SMDsolvent "water" end</code>,
-                            or for g-xTB:
+                            Functional and basis only: grid, convergence, RI, solvation, cores and memory are
+                            Advanced settings on the submit form, and optimisations get Opt Freq themselves.
+                            Other ORCA blocks are kept verbatim, e.g. for g-xTB:
                             <code>%xtb XTBINPUTSTRING "--alpb water" end</code>.
+                            Headers marked legacy set those themselves; running projects keep them, the submit form does not offer them.
                         </div>
                     </div>
                     <div class="form-row">
@@ -2612,7 +2633,10 @@
         // ── Skip Conformer Search toggle ─────────────────────────────────
 
         document.getElementById('skipConfsearch').addEventListener('change', function () {
-            document.getElementById('headerConfsearch').disabled = this.checked;
+            var skip = this.checked;
+            ['headerConfsearch', 'adv-confsearch-nprocs', 'adv-confsearch-maxcore'].forEach(function (id) {
+                document.getElementById(id).disabled = skip;
+            });
         });
 
         // ── Show/hide per-state conformer inputs ────────────────────────
@@ -2652,7 +2676,6 @@
 
         (function () {
             var panels = document.querySelectorAll('.cat-detail[data-requires]');
-            var FREQ_RE = /^\s*!.*\b(Freq|NumFreq|AnFreq)\b/im;
             // Same rules as categories._SP_CONFLICTS.
             var SP_CONFLICT_RE = /%tddft\b|%cis\b|%eprnmr\b|%esd\b|^\s*!.*\bNMR\b|^\s*!.*\b(Freq|NumFreq|AnFreq)\b|^\s*!.*\b\w*Opt(TS|H)?\b/im;
             var TDDFT_RE = /%(tddft|cis)\b/i;
@@ -2694,10 +2717,6 @@
                     var cb = document.getElementById(el.dataset.requires);
                     el.style.display = (cb && cb.checked) ? '' : 'none';
                 });
-                setNote('irHeaderNote',
-                        FREQ_RE.test(chosenHeaderText('headerOptimization', 'optimization')),
-                        'The chosen optimisation header runs Freq.',
-                        'The chosen optimisation header has no Freq keyword — IR will be refused.');
                 setNote('uvvisHeaderNote',
                         !SP_CONFLICT_RE.test(chosenHeaderText('headerSinglepoint', 'singlepoint')),
                         '',
@@ -2709,7 +2728,6 @@
                 var optText = chosenHeaderText('headerOptimization', 'optimization');
                 var spText = chosenHeaderText('headerSinglepoint', 'singlepoint');
                 var esdProblems = [];
-                if (!FREQ_RE.test(optText)) esdProblems.push('the optimisation header has no Freq (ESD needs Hessians)');
                 if (TDDFT_RE.test(optText)) esdProblems.push('the optimisation header already has a %tddft block');
                 if (B88_RE.test(optText)) {
                     esdProblems.push('the optimisation header uses a native B88 functional — use its LibXC version, e.g. !LibXC(B3LYP)');
@@ -2896,7 +2914,8 @@
         //   "id:<n>"      -> custom DB header (the standard path)
         //
         // Untagged custom headers do NOT appear in slot dropdowns — assign
-        // a kind in the Headers manager to surface them here.
+        // a kind in the Headers manager to surface them here. Legacy (full)
+        // headers do not appear either: Advanced owns their settings.
 
         function normalizeHeaderText(s) {
             return (s || '').replace(/\s+/g, ' ').trim();
@@ -2907,7 +2926,7 @@
             selectEl.innerHTML = '';
 
             // Headers tagged with EXACTLY this kind.
-            var relevant = custom.filter(function (c) { return c.kind === kind; });
+            var relevant = custom.filter(function (c) { return c.kind === kind && !c.legacy; });
 
             if (relevant.length === 0) {
                 // Fallback: nothing seeded for this slot, let backend use defaults.py.
@@ -2941,6 +2960,67 @@
                 if (match) selectEl.value = 'id:' + match.id;
             }
         }
+
+        // ── Advanced settings ───────────────────────────────────────────
+        // Controls are adv-<stage>-<key>; choices and defaults come from the server.
+
+        function advancedSettings() {
+            var adv = {};
+            document.querySelectorAll('#submitAdvanced [id^="adv-"]').forEach(function (el) {
+                var parts = el.id.split('-');
+                adv[parts[1]] = adv[parts[1]] || {};
+                adv[parts[1]][parts[2]] = el.type === 'number' ? parseInt(el.value, 10) : el.value.trim();
+            });
+            return adv;
+        }
+
+        function advancedSummary(adv) {
+            var o = adv.optimization, s = adv.singlepoint;
+            var bits = [
+                o.grid === 'omit' ? 'ORCA grid' : o.grid,
+                o.scf_convergence === 'omit' ? 'ORCA SCF' : o.scf_convergence + ' SCF',
+                o.solvation === 'omit' ? 'gas phase' : o.solvation + '(' + o.solvent + ')',
+                o.nprocs + '×' + o.maxcore + ' / ' + s.nprocs + '×' + s.maxcore + ' MB',
+            ];
+            var differs = ['grid', 'scf_convergence', 'ri', 'aux_basis', 'solvation', 'solvent'].some(function (k) {
+                return o[k] !== s[k] && !(k === 'solvent' && o.solvation === 'omit' && s.solvation === 'omit');
+            });
+            return 'Advanced: ' + bits.join(' · ') + (differs ? ' · singlepoint differs' : '');
+        }
+
+        function refreshAdvanced() {
+            ['optimization', 'singlepoint'].forEach(function (stage) {
+                var solvation = document.getElementById('adv-' + stage + '-solvation');
+                document.getElementById('adv-' + stage + '-solvent').disabled = solvation.disabled || solvation.value === 'omit';
+            });
+            if (!document.getElementById('adv-optimization-grid').value) return;
+            document.getElementById('advSummary').textContent = advancedSummary(advancedSettings());
+        }
+
+        async function fetchAdvancedDefaults() {
+            try {
+                var data = await (await fetch('/api/advanced-defaults')).json();
+                document.querySelectorAll('#submitAdvanced [id^="adv-"]').forEach(function (el) {
+                    var parts = el.id.split('-');
+                    var choices = data.choices[parts[2]];
+                    if (choices) {
+                        el.innerHTML = choices.map(function (c) {
+                            return '<option value="' + escHtml(c) + '">' + escHtml(c === 'omit' ? 'ORCA default' : c) + '</option>';
+                        }).join('');
+                    }
+                    el.value = data.advanced[parts[1]][parts[2]];
+                });
+                document.getElementById('imagFreqTolerance').value = data.imag_freq_tolerance;
+                refreshAdvanced();
+            } catch (err) {
+                console.warn('Failed to load the Advanced defaults:', err);
+            }
+        }
+
+        document.querySelectorAll('#submitAdvanced [id^="adv-"]').forEach(function (el) {
+            el.addEventListener('change', refreshAdvanced);
+            el.addEventListener('input', refreshAdvanced);
+        });
 
         // Cache so the manager and the submit form share one fetch
         var headerCache = { defaults: [], custom: [] };
@@ -2980,7 +3060,8 @@
                         '<div class="id">#' + escHtml(c.id) + '</div>' +
                         '<div class="kind">' + escHtml(c.kind || 'any') + '</div>' +
                         '<div class="desc" title="' + escHtml(c.description || '') + '">' + escHtml(c.description || ('Header #' + c.id)) + '</div>' +
-                        '<div>' + (c.validated ? '<span class="badge badge-successful">validated</span>' : '') + '</div>' +
+                        '<div class="badges">' + (c.validated ? '<span class="badge badge-successful">validated</span>' : '') +
+                            (c.legacy ? '<span class="badge badge-pending" title="Sets what Advanced owns; kept for running projects, not offered on the submit form.">legacy</span>' : '') + '</div>' +
                         '<div class="actions">' +
                             '<button type="button" class="btn-mini" data-action="edit"   data-id="' + escHtml(c.id) + '">Edit</button>' +
                             '<button type="button" class="btn-mini danger" data-action="delete" data-id="' + escHtml(c.id) + '">Delete</button>' +
@@ -3185,6 +3266,11 @@
             setField('requestVertEx', info.settings.request_singlepoint_vertical_excitations, true);
             setField('maxConfS0', info.max_conformers.S0, true);
             ['headerConfsearch', 'headerOptimization', 'headerSinglepoint'].forEach(function (id) { setField(id, null, true); });
+            document.querySelectorAll('#submitAdvanced [id^="adv-"]').forEach(function (el) {
+                var parts = el.id.split('-');
+                setField(el.id, info.advanced ? info.advanced[parts[1]][parts[2]] : null, true);
+            });
+            if (!info.advanced) document.getElementById('advSummary').textContent = 'Advanced: none, the legacy headers set everything';
             Object.keys(EXTEND_STATES).forEach(function (state) {
                 var ids = EXTEND_STATES[state];
                 var share = info.states[state];
@@ -3397,6 +3483,8 @@
                 commonBody.nbo_keywords = document.getElementById('nboKeywords').value.trim();
             }
 
+            // Extend inherits the S0's settings server-side.
+            if (!extendMode) commonBody.advanced = advancedSettings();
             if (extendMode) {
                 await submitExtend(commonBody, btn, feedback);
                 return;
@@ -4880,6 +4968,7 @@
         // Initial load
         loadIdentity().then(function () { activateRoute(currentRoute()); });
         fetchHeaders();
+        fetchAdvancedDefaults();
         refreshAll();
         activateRoute(currentRoute());
 

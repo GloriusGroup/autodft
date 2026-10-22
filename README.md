@@ -218,7 +218,8 @@ TDDFT are unchanged between 1000 and 2500 MB, and singlepoints peak at
 give it a larger singlepoint header if it runs short.
 
 The headers can be edited / extended in the dashboard's **Headers** page
-or via the `/api/headers` endpoints. All six belong to `admin`; anyone
+(full headers of before Advanced settings carry a "legacy" badge and are
+not offered on the submit form) or via the `/api/headers` endpoints. All six belong to `admin`; anyone
 may use them, only their owner or admin may change them. When a submission
 form or CLI/API call leaves a header slot on its default, the dashboard's
 header dropdown preselects the stored row whose text equals the package
@@ -312,8 +313,11 @@ sees the whole database:
   before you can submit), project, priority, request flags
   (Skip-confsearch / T1 / ox / red / Vertical excitations), per-state
   conformer-count inputs that appear only for the states you've
-  requested (default **1 per state**), and three kind-filtered header
-  dropdowns. The Submit button is disabled while the SMILES isn't
+  requested (default **1 per state**), three kind-filtered header
+  dropdowns (legacy full headers left out) and a collapsed **Advanced**
+  section: grid, SCF / geometry convergence, RI, auxiliary basis,
+  solvation, cores and memory per stage plus the imaginary-frequency
+  tolerance, pre-filled from the config defaults. The Submit button is disabled while the SMILES isn't
   valid; the server re-validates anyway, so direct API users also get
   HTTP 400 on bad input. The Author field is pre-filled with your
   username and is read-only unless you are admin, and the project you

@@ -142,7 +142,7 @@ def test_each_category_has_a_settings_panel_shown_only_when_ticked(client):
         "requestUvvis", "requestIr", "requestNmr", "requestEsd",
         "requestDensities", "requestNbo", "requestReactivity",
     ]
-    for needle in ('id="uvvisNroots"', 'id="uvvisTda"', 'id="irHeaderNote"',
+    for needle in ('id="uvvisNroots"', 'id="uvvisTda"',
                    'id="uvvisHeaderNote"', "commonBody.uvvis_nroots", "commonBody.uvvis_tda"):
         assert needle in html, needle
 
@@ -279,9 +279,112 @@ def test_a_project_can_be_extended_from_its_page(client):
 def test_the_submit_form_offers_the_imaginary_frequency_tolerance(client):
     c, headers = client
     html = c.get("/", headers=headers).text
-    for needle in ('id="submitOptions"', 'id="imagFreqTolerance"',
-                   "imag_freq_tolerance: parseFloat(document.getElementById('imagFreqTolerance').value) || 0"):
-        assert needle in html, needle
+    assert "imag_freq_tolerance: parseFloat(document.getElementById('imagFreqTolerance').value) || 0" in html
+    assert 'id="submitOptions"' not in html
+
+
+ADVANCED_KEYS = {
+    "confsearch": ("nprocs", "maxcore"),
+    "optimization": ("grid", "scf_convergence", "geom_convergence", "ri", "aux_basis",
+                     "solvation", "solvent", "nprocs", "maxcore"),
+    "singlepoint": ("grid", "scf_convergence", "ri", "aux_basis", "solvation", "solvent",
+                    "nprocs", "maxcore"),
+}
+
+
+def test_the_submit_form_has_an_advanced_section(client):
+    c, headers = client
+    html = c.get("/", headers=headers).text
+    section = html.split('<details id="submitAdvanced"', 1)[1].split("</details>", 1)[0]
+    ids = set(re.findall(r'id="(adv-[\w-]+)"', section))
+    assert ids == {f"adv-{stage}-{key}" for stage, keys in ADVANCED_KEYS.items() for key in keys}
+    served = c.get("/api/advanced-defaults", headers=headers).json()
+    assert ids == {f"adv-{stage}-{key}" for stage, keys in served["advanced"].items() for key in keys}
+    selects = {i.split("-")[2] for i in re.findall(r'<select id="(adv-[\w-]+)"', section)}
+    assert selects == set(served["choices"])
+    assert 'id="imagFreqTolerance"' in section
+    assert html.index('id="headerSinglepoint"') < html.index('<details id="submitAdvanced"')
+    assert 'list="advSolvents"' in section and 'id="advSolvents"' in html
+    assert "/api/advanced-defaults" in html
+
+
+def test_the_payload_carries_advanced_except_on_extend():
+    html = (TEMPLATE / "dashboard.html").read_text()
+    # Extend inherits the S0's settings server-side.
+    assert "if (!extendMode) commonBody.advanced = advancedSettings();" in html
+    assert html.count("commonBody.advanced =") == 1
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_advanced_settings_reads_every_control_with_numbers_as_ints():
+    controls = [
+        {"id": "adv-confsearch-nprocs", "type": "number", "value": "32"},
+        {"id": "adv-optimization-grid", "type": "select-one", "value": "DEFGRID3"},
+        {"id": "adv-optimization-solvent", "type": "text", "value": "MeCN"},
+        {"id": "adv-singlepoint-maxcore", "type": "number", "value": "1500"},
+    ]
+    script = ("var document = {querySelectorAll: function () { return %s; }};\n" % json.dumps(controls)
+              + _functions("advancedSettings")
+              + "\nprocess.stdout.write(JSON.stringify(advancedSettings()));\n")
+    out = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout
+    assert json.loads(out) == {
+        "confsearch": {"nprocs": 32},
+        "optimization": {"grid": "DEFGRID3", "solvent": "MeCN"},
+        "singlepoint": {"maxcore": 1500},
+    }
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_advanced_summary_names_grid_scf_solvation_and_resources():
+    adv = {
+        "confsearch": {"nprocs": 32, "maxcore": 500},
+        "optimization": {"grid": "DEFGRID3", "scf_convergence": "Tight", "geom_convergence": "Normal",
+                         "ri": "RIJCOSX", "aux_basis": "def2/J", "solvation": "CPCM", "solvent": "MeCN",
+                         "nprocs": 12, "maxcore": 2000},
+        "singlepoint": {"grid": "DEFGRID3", "scf_convergence": "Tight", "ri": "RIJCOSX",
+                        "aux_basis": "def2/J", "solvation": "CPCM", "solvent": "MeCN",
+                        "nprocs": 8, "maxcore": 1500},
+    }
+    differs = json.loads(json.dumps(adv))
+    differs["singlepoint"]["solvation"] = "omit"
+    script = (_functions("advancedSummary")
+              + f"\nprocess.stdout.write(advancedSummary({json.dumps(adv)}) + '\\n'"
+              + f" + advancedSummary({json.dumps(differs)}));\n")
+    out = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout
+    same, other = out.split("\n")
+    assert same == "Advanced: DEFGRID3 · Tight SCF · CPCM(MeCN) · 12×2000 / 8×1500 MB"
+    assert other == "Advanced: DEFGRID3 · Tight SCF · CPCM(MeCN) · 12×2000 / 8×1500 MB · singlepoint differs"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_submit_header_selects_skip_legacy_headers():
+    custom = [
+        {"id": 6, "kind": "optimization", "description": "full old", "text": "!x Opt Freq", "legacy": True},
+        {"id": 7, "kind": "optimization", "description": "method", "text": "!x", "legacy": False},
+        {"id": 8, "kind": "singlepoint", "description": "sp", "text": "!y", "legacy": False},
+    ]
+    script = ("var document = {createElement: function () { return {}; }};\n"
+              + "var sel = {value: '', options: [], set innerHTML(v) { this.options = []; },"
+              + " appendChild: function (o) { this.options.push(o); }};\n"
+              + _functions("normalizeHeaderText", "populateHeaderSelect")
+              + f"\npopulateHeaderSelect(sel, 'optimization', [], {json.dumps(custom)});\n"
+              + "process.stdout.write(JSON.stringify(sel.options.map(function (o) { return o.value; })));\n")
+    out = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout
+    assert json.loads(out) == ["id:7"]
+
+
+def test_the_headers_page_badges_legacy_headers():
+    html = (TEMPLATE / "dashboard.html").read_text()
+    assert "(c.legacy ? '<span class=\"badge badge-pending\"" in html
+    assert ">legacy</span>" in html
+
+
+def test_freq_is_no_longer_asked_of_the_optimisation_header(client):
+    c, headers = client
+    html = c.get("/", headers=headers).text
+    for gone in ('id="irHeaderNote"', "needs Freq in the optimisation header", "FREQ_RE",
+                 "has no Freq"):
+        assert gone not in html, gone
 
 
 def _functions(*names: str) -> str:
