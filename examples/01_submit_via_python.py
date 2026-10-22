@@ -100,6 +100,7 @@ def make_metadata(
     max_conformers_T1: int = 1,
     max_conformers_ox: int = 1,
     max_conformers_red: int = 1,
+    imag_freq_tolerance: float = 0.0,
 ) -> str:
     """Build the ``request_metadata`` JSON blob the controller consumes.
 
@@ -128,6 +129,8 @@ def make_metadata(
         "max_conformers_T1": max_conformers_T1,
         "max_conformers_ox": max_conformers_ox,
         "max_conformers_red": max_conformers_red,
+        # cm^-1, -300 to 0: optimisations fail on any imaginary mode below it.
+        "imag_freq_tolerance": imag_freq_tolerance,
     })
 
 

@@ -343,3 +343,21 @@ def test_the_dashboard_offers_the_tolerance():
                    "imag_freq_tolerance: "):
         assert needle in html, needle
     assert "strictConvergence" not in html and "strict_convergence" not in html
+
+
+def _example_make_metadata():
+    """examples/01's make_metadata, without importing the script (it opens the configured database)."""
+    import ast
+
+    path = Path(__file__).resolve().parents[1] / "examples" / "01_submit_via_python.py"
+    tree = ast.parse(path.read_text())
+    func = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "make_metadata")
+    namespace = {"json": json}
+    exec(compile(ast.Module(body=[func], type_ignores=[]), str(path), "exec"), namespace)
+    return namespace["make_metadata"]
+
+
+@pytest.mark.parametrize("kwargs, stored", [({}, 0.0), ({"imag_freq_tolerance": -10.0}, -10.0)])
+def test_the_python_example_records_the_tolerance(kwargs, stored):
+    meta = json.loads(_example_make_metadata()("nho/p", "nho", **kwargs))
+    assert meta["imag_freq_tolerance"] == stored
