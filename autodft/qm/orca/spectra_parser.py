@@ -179,7 +179,11 @@ _HIRSHFELD_TITLE = "HIRSHFELD ANALYSIS"
 # "   0 Br  -0.055841    0.000000"
 _HIRSHFELD_ROW = re.compile(r"^\s*(\d+)\s+([A-Z][a-z]?)\s+(-?[\d.]+)\s+(-?[\d.]+)\s*$")
 _POLAR_ISO_RE = re.compile(r"^Isotropic polarizability\s*:\s*(-?[\d.]+)", re.MULTILINE)
-_POLAR_TENSOR = "The raw cartesian tensor (atomic units):"
+_POLAR_TITLE = "STATIC POLARIZABILITY TENSOR"
+_POLAR_TENSOR_RE = re.compile(
+    r"The raw cartesian tensor \(atomic units\):[ \t]*\n"
+    + r"[ \t]*(-?[\d.]+)[ \t]+(-?[\d.]+)[ \t]+(-?[\d.]+)[ \t]*\n" * 3
+)
 _QUAD_TITLE = "QUADRUPOLE MOMENT"
 # "  TOT     -136.108961855  -161.573828523 ... (a.u.)": XX YY ZZ XY XZ YZ.
 _QUAD_TOT_RE = re.compile(r"^\s*TOT\s+" + r"(-?[\d.]+)\s+" * 6 + r"\(a\.u\.\)", re.MULTILINE)
@@ -232,16 +236,14 @@ def parse_hirshfeld(content: str) -> list[AtomCharge]:
 
 
 def parse_polarizability(content: str) -> Optional[dict]:
-    """The last static dipole polarizability (a.u.): ``isotropic`` and the 3x3 ``tensor``."""
+    """The last static dipole polarizability (a.u.): ``isotropic`` and the 3x3 ``tensor`` (None if cut short)."""
     found = _POLAR_ISO_RE.findall(content)
     if not found:
         return None
-    lines = content.splitlines()
-    starts = [i for i, line in enumerate(lines) if line.strip() == _POLAR_TENSOR]
-    tensor = (
-        [[float(v) for v in line.split()] for line in lines[starts[-1] + 1:starts[-1] + 4]]
-        if starts else None
-    )
+    start = content.rfind(_POLAR_TITLE)
+    match = _POLAR_TENSOR_RE.search(content, start) if start >= 0 else None
+    values = [float(v) for v in match.groups()] if match else None
+    tensor = [values[0:3], values[3:6], values[6:9]] if values else None
     return {"isotropic": float(found[-1]), "tensor": tensor}
 
 

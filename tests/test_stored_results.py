@@ -1189,6 +1189,22 @@ def test_init_db_purges_orphaned_job_results_and_keeps_live_rows(tmp_path):
 _SNAPSHOT_PATH = Path(__file__).parent / "fixtures" / "extract_snapshot.json"
 
 
+def _reactivity_digest(record: dict) -> dict:
+    """The reactivity record's shape and a few values, not its full payload."""
+    reactivity = record["reactivity"]
+    return {
+        "keys": sorted(record),
+        "reactivity_keys": sorted(reactivity),
+        "npa_charges": [len(record["npa_charges"]), record["npa_charges"][0]],
+        "hirshfeld": [len(reactivity["hirshfeld"]), reactivity["hirshfeld"][0]],
+        "polarizability": reactivity["polarizability"],
+        "quadrupole": reactivity["quadrupole"],
+        "wiberg": [len(reactivity["wiberg"]), reactivity["wiberg"][0], reactivity["wiberg"][-1]],
+        "stability": reactivity["stability"],
+        "s2": reactivity["s2"],
+    }
+
+
 def test_extract_output_is_pinned():
     """M9: extract() must not drift without PARSER_VERSION being bumped."""
     cases = {
@@ -1208,12 +1224,12 @@ def test_extract_output_is_pinned():
         "esd_phosp": results.extract("esd_phosp", (FIXTURES_ESD / "phosp.out").read_text()),
     }
     assert set(cases) == results.STORED_TYPES
-    cases["singlepoint (reactivity)"] = results.extract(
+    cases["singlepoint (reactivity)"] = _reactivity_digest(results.extract(
         "singlepoint", (FIXTURES_ORCA / "reactivity_relaxed_closed.out").read_text(),
-    )
-    cases["singlepoint_vert_ox (reactivity)"] = results.extract(
+    ))
+    cases["singlepoint_vert_ox (reactivity)"] = _reactivity_digest(results.extract(
         "singlepoint_vert_ox", (FIXTURES_ORCA / "reactivity_vert_open.out").read_text(),
-    )
+    ))
     # Pin the stored shape (as store() persists it), not the raw Python
     # objects -- extract() returns tuples (e.g. SOC's sorted roots) that
     # json round-trips into lists, same as a real row's data_json does.

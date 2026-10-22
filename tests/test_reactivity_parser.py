@@ -63,6 +63,20 @@ class TestPolarizability:
     def test_absent(self):
         assert parse_polarizability(PLAIN) is None
 
+    def test_tensor_of_the_polarizability_section_only(self):
+        other = "\nThe raw cartesian tensor (atomic units):\n  1.0 2.0 3.0\n  4.0 5.0 6.0\n  7.0 8.0 9.0\n"
+        assert parse_polarizability(CLOSED + other)["tensor"][0][0] == 713.938963116
+
+    def test_truncated_tensor_is_none(self):
+        text = CLOSED.replace("      56.104029548        54.594094087       462.483786808  \n", "")
+        polar = parse_polarizability(text)
+        assert polar == {"isotropic": 656.31703, "tensor": None}
+
+    def test_output_cut_inside_the_tensor(self):
+        cut = CLOSED[:CLOSED.index("     -19.030900168       792.528342122")]
+        assert parse_polarizability(cut + "Isotropic polarizability : 1.0\n") == {"isotropic": 1.0, "tensor": None}
+        assert results.extract("singlepoint", cut)["reactivity"]["polarizability"] is None
+
 
 class TestQuadrupole:
     def test_closed_shell(self):
@@ -150,12 +164,17 @@ class TestExtract:
         assert record["reactivity"]["stability"] == {"stable": True, "lowest_eigenvalue": 0.01543417}
         assert record["reactivity"]["s2"] == 0.787496
 
-    def test_no_reactivity_without_its_blocks(self):
-        record = results.extract("singlepoint_vert_ox", PLAIN)
-        assert "reactivity" not in record and record["npa_charges"] is None
+    @pytest.mark.parametrize("task_type", categories.REACTIVITY_TYPES)
+    def test_none_without_its_blocks(self, task_type):
+        record = results.extract(task_type, PLAIN)
+        assert record["reactivity"] is None and record["npa_charges"] is None
 
-    def test_parser_version(self):
-        assert results.PARSER_VERSION == 3
+    def test_other_types_get_no_reactivity_key(self):
+        assert "reactivity" not in results.extract("singlepoint_uvvis", CLOSED)
+
+    def test_parser_version_not_bumped(self):
+        # A new key its readers `require` needs no bump; a bump stales every stored record.
+        assert results.PARSER_VERSION == 2
 
 
 def _job_dir(path: Path, output: str = CLOSED) -> Path:

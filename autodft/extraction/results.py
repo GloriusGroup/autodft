@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 # are then re-parsed. A new key needs no bump when its readers `require` it:
 # a record without it is stale for them and falls back to parsing on its own.
 # Pinned by tests/test_stored_results.py::test_extract_output_is_pinned.
-PARSER_VERSION = 3
+PARSER_VERSION = 2
 
 # The task types a reader ever asks for. store() stores nothing else, and the
 # backfill's query skips them outright.
@@ -71,9 +71,7 @@ def extract(task_type: str, output: str, input_text: Optional[str] = None, ir: b
     elif task_type in categories.REACTIVITY_TYPES:
         charges = parse_natural_charges(output)
         record["npa_charges"] = [asdict(c) for c in charges] if charges else None
-        reactivity = _reactivity(output)
-        if reactivity is not None:
-            record["reactivity"] = reactivity
+        record["reactivity"] = _reactivity(output)
     elif task_type == "singlepoint_uvvis":
         record["transitions"] = [asdict(t) for t in parse_absorption(output)]
     elif task_type == "singlepoint_nmr":
