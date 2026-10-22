@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from autodft.config import Settings, load_settings
@@ -143,12 +145,24 @@ def test_config_defaults_match_toml():
     assert (s.advanced.optimization.nprocs, s.advanced.confsearch.maxcore) == (12, 500)
 
 
-@pytest.mark.parametrize("solvent", ["x) Opt (", " ", "()", "", "-MeCN", "a" * 41])
+@pytest.mark.parametrize("override, field", [
+    ('[advanced.optimization]\ngrid = "DEFGRID9"\n', "advanced.optimization.grid"),
+    ('[advanced.singlepoint]\nsolvent = "carbon tetrachloride"\n', "advanced.singlepoint.solvent"),
+    ("[advanced.confsearch]\nnprocs = 64\nmaxcore = 16000\n", "advanced.confsearch"),
+])
+def test_bad_config_defaults_fail_on_load(tmp_path, override, field):
+    config = tmp_path / "reaction.toml"
+    config.write_text(override)
+    with pytest.raises(ValueError, match=re.escape(field)):
+        load_settings(config)
+
+
+@pytest.mark.parametrize("solvent", ["x) Opt (", " ", "()", "", "-MeCN", "a" * 41, "carbon tetrachloride"])
 def test_solvent_refused(settings, solvent):
     assert resolve({"singlepoint": {"solvent": solvent}}, settings)[0] is None
 
 
-@pytest.mark.parametrize("solvent", ["MeCN", "1,2-dichloroethane", "n-hexane", "carbon tetrachloride"])
+@pytest.mark.parametrize("solvent", ["MeCN", "1,2-dichloroethane", "n-hexane", "CCl4"])
 def test_solvent_accepted(settings, solvent):
     assert resolve({"optimization": {"solvent": solvent}}, settings)[1] is None
 

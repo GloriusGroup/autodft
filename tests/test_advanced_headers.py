@@ -96,3 +96,24 @@ def test_api_headers_flags_legacy(tmp_path):
     assert flags[LEGACY_HEADER_SINGLEPOINT] is True
     assert flags["!wB97X-D3 def2-SVP\n"] is False
     reset_engine()
+
+
+def test_api_headers_flags_confsearch_by_the_submission_rule(tmp_path):
+    settings = _settings(tmp_path)
+    reset_engine()
+    init_db(settings)
+    gfn2_opt = "!GOAT XTB2 Opt\n%GOAT\nMAXEN 10.0\nEND\n"
+    with_pal = "!GOAT XTB2\n%pal nprocs 32 end\n%GOAT\nMAXEN 10.0\nEND\n"
+    with get_session(settings) as session:
+        session.add(ComputationHeader(header_text=gfn2_opt, kind="confsearch"))
+        session.add(ComputationHeader(header_text=with_pal, kind="confsearch"))
+        session.add(ComputationHeader(header_text=gfn2_opt, kind="optimization"))
+        session.commit()
+        key = accounts.rotate_api_key(session, accounts.get_user_by_username(session, "admin"))
+    with TestClient(create_app(settings)) as c:
+        data = c.get("/api/headers", headers={"X-AutoDFT-API-Key": key}).json()
+    flags = {(h["kind"], h["text"]): h["legacy"] for h in data["custom"]}
+    assert flags[("confsearch", gfn2_opt)] is False
+    assert flags[("confsearch", with_pal)] is True
+    assert flags[("optimization", gfn2_opt)] is True
+    reset_engine()

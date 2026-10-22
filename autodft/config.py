@@ -445,4 +445,8 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
     # Environment variable overrides (highest priority)
     _apply_env_overrides(data)
 
-    return _dict_to_dataclass(Settings, data)
+    from autodft.qm.orca.advanced import check_defaults
+
+    settings = _dict_to_dataclass(Settings, data)
+    check_defaults(settings)
+    return settings

@@ -25,7 +25,7 @@ CHOICES: dict[str, tuple[str, ...]] = {
     "solvation": ("CPCM", "SMD", "omit"),
 }
 _GEOM_ORDER = ("Loose", "Normal", "Tight", "VeryTight")
-_SOLVENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ,-]*")
+_SOLVENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9,-]*")
 _SOLVENT_MAX = 40
 _RANGES = {"nprocs": (1, 64), "maxcore": (250, 16000)}
 _MAX_TOTAL_MB = 400000
@@ -67,7 +67,7 @@ def _check(stage: str, key: str, value) -> Optional[str]:
             return f"{field}: {value!r} is not one of {', '.join(CHOICES[key])}"
     elif key == "solvent":
         if not (isinstance(value, str) and _SOLVENT_RE.fullmatch(value) and len(value) <= _SOLVENT_MAX):
-            return f"{field}: {value!r} is not a solvent name (letters, digits, space , -; up to {_SOLVENT_MAX})"
+            return f"{field}: {value!r} is not a solvent name (letters, digits, ',' or '-', no spaces; up to {_SOLVENT_MAX})"
     else:
         low, high = _RANGES[key]
         if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
@@ -99,6 +99,13 @@ def resolve(requested: Optional[dict], settings: Settings) -> tuple[Optional[dic
         if total > _MAX_TOTAL_MB:
             return None, f"advanced.{stage}: nprocs x maxcore is {total} MB, above {_MAX_TOTAL_MB}"
     return full, None
+
+
+def check_defaults(settings: Settings) -> None:
+    """Raise ValueError naming the first bad ``[advanced.*]`` config value."""
+    error = resolve(defaults(settings), settings)[1]
+    if error:
+        raise ValueError(f"config {error}")
 
 
 def method_settings(advanced: dict) -> dict:
@@ -172,15 +179,20 @@ def owned_keyword(header: str, *, resources_only: bool = False) -> Optional[str]
     return None
 
 
-def is_legacy_header(header: str) -> bool:
-    """Whether *header* sets what Advanced owns."""
-    return owned_keyword(header) is not None
+def stage_owned_keyword(header: str, stage: Optional[str]) -> Optional[str]:
+    """:func:`owned_keyword` as submission applies it: a confsearch header only for cores and memory."""
+    return owned_keyword(header, resources_only=stage == "confsearch")
+
+
+def is_legacy_header(header: str, stage: Optional[str] = None) -> bool:
+    """Whether *header* (of *stage*) sets what Advanced owns."""
+    return stage_owned_keyword(header, stage) is not None
 
 
 def header_error(headers: tuple) -> Optional[str]:
     """Why the (confsearch, optimization, singlepoint) *headers* cannot take Advanced settings, or None."""
     for stage, text in zip(STAGES, headers):
-        message = text and owned_keyword(text, resources_only=stage == "confsearch")
+        message = text and stage_owned_keyword(text, stage)
         if message:
             return f"{message} ({stage} header)"
     return None

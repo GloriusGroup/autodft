@@ -1286,7 +1286,7 @@ def api_headers(
         },
     ]
     for d in defaults:
-        d["legacy"] = is_legacy_header(d["text"])
+        d["legacy"] = is_legacy_header(d["text"], d["kind"])
 
     with get_session() as session:
         stmt = select(ComputationHeader).order_by(ComputationHeader.id.desc())  # type: ignore[union-attr]
@@ -1306,7 +1306,7 @@ def api_headers(
                 "validated": h.validated,
                 "deleted": h.deleted,
                 "text": h.header_text,
-                "legacy": is_legacy_header(h.header_text),
+                "legacy": is_legacy_header(h.header_text, h.kind),
             }
             for h in headers
         ]
