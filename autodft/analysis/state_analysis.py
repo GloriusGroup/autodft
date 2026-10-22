@@ -376,9 +376,11 @@ def _analyze_project_uncached(project_name: str) -> dict:
 
     # (mol_id, state_desc) -> [ConformerResult, ...], ordered by opt_task_id
     groups: dict[tuple[int, str], list[ConformerResult]] = {}
+    excluded: dict[int, dict[str, list[ConformerResult]]] = {}  # mol_id -> state -> imaginary-mode rows
     for r in all_results:
         if stored.excludes(r.note):
-            continue  # an imaginary mode; the export states it
+            excluded.setdefault(r.molecule_id, {}).setdefault(r.state, []).append(r)
+            continue
         groups.setdefault((r.molecule_id, r.state), []).append(r)
     for k in groups:
         groups[k].sort(key=lambda r: r.opt_task_id)
@@ -495,11 +497,21 @@ def _analyze_project_uncached(project_name: str) -> dict:
             if mid != mol_id:
                 continue
             per_state[st_desc] = rs
+        left_out = {
+            st: {"count": len(rs), "conformers": [
+                {"conformer_index": r.conformer_index, "opt_task_id": r.opt_task_id, "note": r.note}
+                for r in sorted(rs, key=lambda r: r.opt_task_id)
+            ]}
+            for st, rs in excluded.get(mol_id, {}).items()
+        }
+        stated = {"excluded": left_out} if left_out else {}
 
         if "S0" not in per_state:
             out_mols.append({
                 "id": mol_id, "smiles": m.smiles, "modes": None,
-                "note": "No S0 conformers extracted yet — analysis skipped.",
+                "note": "Every S0 conformer has an imaginary mode below its cutoff; analysis skipped."
+                if "S0" in left_out else "No S0 conformers extracted yet — analysis skipped.",
+                **stated,
             })
             continue
 
@@ -512,6 +524,7 @@ def _analyze_project_uncached(project_name: str) -> dict:
             out_mols.append({
                 "id": mol_id, "smiles": m.smiles, "modes": None,
                 "note": "S0 has no conformer with both SP energy and free-energy correction.",
+                **stated,
             })
             continue
 
@@ -565,6 +578,7 @@ def _analyze_project_uncached(project_name: str) -> dict:
                 "lowest_energy": _ana_to_dict(ana_low),
                 "rmsd_matched":  _ana_to_dict(ana_rmsd),
             },
+            **stated,
         })
 
     return {

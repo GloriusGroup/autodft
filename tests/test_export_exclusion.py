@@ -8,10 +8,11 @@ from pathlib import Path
 from typing import Optional
 
 import pytest
+from sqlmodel import select
 
 from autodft import categories
 from autodft.analysis.spectroscopy import analyze_spectra
-from autodft.analysis.state_analysis import analyze_project
+from autodft.analysis.state_analysis import _load_results_from_archive_csv, analyze_project
 from autodft.config import Settings
 from autodft.db import get_session, init_db, reset_engine
 from autodft.extraction import results
@@ -177,22 +178,88 @@ def test_file_export_of_an_all_excluded_state_copies_nothing(db, tmp_path):
 def test_state_analysis_skips_excluded(db):
     with get_session() as session:
         state = _state(session)
-        _conformer(session, db, state, "low", [-15.0], -2.0)
+        low = _conformer(session, db, state, "low", [-15.0], -2.0).id
         other = _conformer(session, db, state, "high", [], -1.0).id
-    payload = analyze_project(PROJECT, use_cache=False)
-    pick = payload["molecules"][0]["modes"]["lowest_energy"]["picks"]["S0"]
-    assert pick["opt_task_id"] == other
+    molecule = analyze_project(PROJECT, use_cache=False)["molecules"][0]
+    assert molecule["modes"]["lowest_energy"]["picks"]["S0"]["opt_task_id"] == other
+    assert molecule["excluded"] == {"S0": {"count": 1, "conformers": [
+        {"conformer_index": 1, "opt_task_id": low, "note": "imaginary mode -15.0 cm-1"},
+    ]}}
+
+
+def test_state_analysis_says_when_every_s0_conformer_is_excluded(db):
+    with get_session() as session:
+        state = _state(session)
+        _conformer(session, db, state, "a", [-15.0], -2.0)
+    molecule = analyze_project(PROJECT, use_cache=False)["molecules"][0]
+    assert molecule["modes"] is None
+    assert molecule["note"] == "Every S0 conformer has an imaginary mode below its cutoff; analysis skipped."
+    assert molecule["excluded"]["S0"]["count"] == 1
+
+
+def test_state_analysis_without_exclusions_has_no_excluded_key(db):
+    with get_session() as session:
+        state = _state(session)
+        _conformer(session, db, state, "a", [], -2.0)
+    assert "excluded" not in analyze_project(PROJECT, use_cache=False)["molecules"][0]
 
 
 def test_photophysics_skips_excluded(db):
     uvvis = (FIXTURES / "uvvis_absorption.out").read_text()
     with get_session() as session:
         state = _state(session, {categories.UVVIS: True})
+        ids = []
         for name, imaginary in (("low", [-15.0]), ("high", [])):
             opt = _conformer(session, db, state, name, imaginary, -1.0)
+            ids.append(opt.id)
             _task(session, db, state, TaskType.singlepoint_uvvis, f"uv_{name}", None,
                   depends_on=opt.id, output=uvvis)
         mol_id = state.molecule_id
     uv = analyze_spectra(PROJECT, molecule_id=mol_id, use_cache=False)["molecules"][0]["uvvis"]
     assert uv["count"] == 1
     assert [c["conformer_index"] for c in uv["conformers"]] == [2]
+    excluded = [{"conformer_index": 1, "opt_task_id": ids[0], "note": "imaginary mode -15.0 cm-1"}]
+    assert (uv["excluded"], uv["excluded_conformers"]) == (1, excluded)
+    summary = analyze_spectra(PROJECT, use_cache=False)["molecules"][0]["uvvis"]
+    assert (summary["excluded"], summary["excluded_conformers"]) == (1, excluded)
+
+
+@pytest.mark.parametrize("metadata", [{}, {"esd_role": "T1"}])
+def test_t1_state_gets_the_strict_cutoff(db, metadata):
+    with get_session() as session:
+        state = _state(session, metadata, description="T1")
+        opt = _conformer(session, db, state, "a", [-15.0], -1.0)
+        assert results.exclusion(session, opt, state) == "imaginary mode -15.0 cm-1"
+
+
+def test_archive_csv_reads_the_note_back(db, tmp_path):
+    with get_session() as session:
+        state = _state(session)
+        _conformer(session, db, state, "low", [-15.0], -2.0)
+        _conformer(session, db, state, "high", [], -1.0)
+    PipelineExtractor(PROJECT).export_summary_csv(tmp_path / "all.csv", all_conformers=True)
+    rows = _load_results_from_archive_csv(tmp_path / "all.csv")
+    assert [r.note for r in rows] == ["imaginary mode -15.0 cm-1", None]
+
+
+def test_an_archive_csv_without_the_note_column_excludes_nothing(tmp_path):
+    path = tmp_path / "old.csv"
+    path.write_text("molecule_id,smiles,state,conformer_index,opt_task_id,e_singlepoint\n"
+                    "1,C,S0,1,7,-1.0\n", encoding="utf-8")
+    [row] = _load_results_from_archive_csv(path)
+    assert row.note is None and not results.excludes(row.note)
+
+
+def test_the_csv_reads_the_record_exclusion_reads(db):
+    """A stale record without "imaginary" and no output: no correction, and "unchecked" both ways."""
+    with get_session() as session:
+        state = _state(session)
+        opt = _conformer(session, db, state, "a", [], -1.0)
+        row = session.exec(select(JobResult).where(JobResult.task_id == opt.id)).one()
+        row.parser_version = results.PARSER_VERSION - 1
+        row.data_json = json.dumps({"energy": None, "free_energy_correction": 0.1})
+        session.add(row)
+        session.commit()
+        assert results.exclusion(session, opt, state) == "unchecked"
+    [reported] = _reported()
+    assert (reported.e_correction, reported.note) == (None, "unchecked")

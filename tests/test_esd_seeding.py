@@ -174,6 +174,50 @@ def test_every_s0_conformer_broken_ends_esd(session, esd):
     assert _tasks(session, esd["s1"]) == [] and _tasks(session, esd["t1"]) == []
 
 
+def _with_notes(monkeypatch, esd, notes, energies=None):
+    """S0 conformers as the extractor reports them, with exclusion notes."""
+    energies = energies or esd["energies"]
+
+    def reported(self, session, mol, state):
+        return [ConformerResult(molecule_id=mol.id, smiles=mol.smiles, state="S0", conformer_index=i,
+                                opt_task_id=o.id, e_singlepoint=energies[o.id][0],
+                                e_combined=energies[o.id][1], note=note)
+                for i, (o, note) in enumerate(zip(esd["opts"], notes), 1)]
+
+    monkeypatch.setattr(PipelineExtractor, "extract_state_results", reported)
+
+
+def test_an_excluded_s0_conformer_is_never_s0_star(session, esd, monkeypatch):
+    _with_notes(monkeypatch, esd, [None, "imaginary mode -15.0 cm-1"])  # the lowest in G is excluded
+    photophysics.advance_photophysics(session, Settings())
+    assert json.loads(esd["s1"].metadata_json)["esd_seed"] == {"task": esd["opts"][0].id}
+
+
+def test_every_s0_conformer_excluded_says_so(session, esd, monkeypatch):
+    _with_notes(monkeypatch, esd, ["imaginary mode -15.0 cm-1", "imaginary mode -22.0 cm-1"])
+    photophysics.advance_photophysics(session, Settings())
+    assert json.loads(esd["s1"].metadata_json)["esd_seed"] == {"error": (
+        "Every finished S0 conformer has an imaginary mode below the strict cutoff of -10 cm-1 "
+        "(conformer 1: imaginary mode -15.0 cm-1; conformer 2: imaginary mode -22.0 cm-1)."
+    )}
+    assert _tasks(session, esd["s1"]) == [] and _tasks(session, esd["t1"]) == []
+
+
+def test_an_excluded_conformer_beside_an_unfinished_one_names_the_exclusion(session, esd, monkeypatch):
+    s0 = esd["s0"]
+    s0.metadata_json = json.dumps({categories.ESD: True, "strict_convergence": False})
+    session.add(s0)
+    session.commit()
+    opts = esd["opts"]
+    _with_notes(monkeypatch, esd, ["imaginary mode -60.0 cm-1", None],
+                energies={opts[0].id: (-10.0, -9.9), opts[1].id: (None, None)})
+    photophysics.advance_photophysics(session, Settings())
+    assert json.loads(esd["s1"].metadata_json)["esd_seed"] == {"error": (
+        "Every finished S0 conformer has an imaginary mode below the relaxed cutoff of -50 cm-1 "
+        "(conformer 1: imaginary mode -60.0 cm-1)."
+    )}
+
+
 def test_paused_and_archived_projects_wait(session, esd, monkeypatch):
     monkeypatch.setattr(photophysics, "paused_project_names", lambda session: {"nho/p"})
     photophysics.advance_photophysics(session, Settings())

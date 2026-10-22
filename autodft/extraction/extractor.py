@@ -265,7 +265,7 @@ class PipelineExtractor:
             return None
 
         # Free energy correction from the optimization's record
-        record = stored.for_job(session, job, opt_task.task_type.value)
+        record = stored.for_job(session, job, opt_task.task_type.value, require=("imaginary",))
         e_correction = record["free_energy_correction"] if record else None
 
         # Get dependent tasks

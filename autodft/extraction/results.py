@@ -267,17 +267,21 @@ def exclusion(session: Session, opt_task: ComputationTask, state: MoleculeState)
     return record_exclusion(for_task(session, opt_task, require=("imaginary",)), state)
 
 
-def record_exclusion(record: Optional[dict], state: MoleculeState) -> Optional[str]:
-    """exclusion() from an opt record already read."""
+def imaginary_cutoff(state: MoleculeState) -> Optional[float]:
+    """The mode (cm-1) below which exports leave *state*'s conformers out; None for ESD S1."""
     metadata = json.loads(state.metadata_json) if state.metadata_json else {}
     if metadata.get("esd_role") == "S1":
         return None  # its own check already applied
+    return IMAGINARY_FREQ_THRESHOLD_STRICT if metadata.get("strict_convergence", True) else IMAGINARY_FREQ_THRESHOLD
+
+
+def record_exclusion(record: Optional[dict], state: MoleculeState) -> Optional[str]:
+    """exclusion() from an opt record already read."""
+    cutoff = imaginary_cutoff(state)
+    if cutoff is None:
+        return None
     if record is None or "imaginary" not in record:
         return "unchecked"
-    cutoff = (
-        IMAGINARY_FREQ_THRESHOLD_STRICT if metadata.get("strict_convergence", True)
-        else IMAGINARY_FREQ_THRESHOLD
-    )
     lowest = min(record["imaginary"], default=0.0)
     return f"imaginary mode {lowest:.1f} cm-1" if lowest < cutoff else None
 

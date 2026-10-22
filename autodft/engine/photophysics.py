@@ -26,6 +26,7 @@ from autodft.models import (
     ComputationHeader, ComputationTask, Molecule, MoleculeGeometry, MoleculeState, TaskStatus, TaskType,
 )
 from autodft.qm.orca import blocks, esd_inputs
+from autodft.qm.orca.parser import IMAGINARY_FREQ_THRESHOLD_STRICT
 
 logger = logging.getLogger(__name__)
 
@@ -112,11 +113,7 @@ def _seed(
     geometry = session.get(MoleculeGeometry, opt.output_geometry_id) \
         if opt is not None and opt.output_geometry_id is not None else None
     if geometry is None:
-        _mark(session, s1, esd_seed={
-            "error": "Every S0 conformer's optimised geometry lost bonds of the molecule."
-            if conformers and not intact else
-            "No S0 conformer finished both its optimisation and its energy singlepoint.",
-        })
+        _mark(session, s1, esd_seed={"error": _no_seed(s0, conformers, intact)})
         logger.warning("Molecule %d: no S0 conformer to seed ESD from", molecule.id)
         return
     folder = extractor.successful_job_path(session, opt.id)
@@ -147,6 +144,20 @@ def _seed(
     )
     _mark(session, s1, esd_seed={"task": opt.id})
     logger.info("Molecule %d: ESD seeded from S0 optimisation %d", molecule.id, opt.id)
+
+
+def _no_seed(s0: MoleculeState, conformers: list, intact: list) -> str:
+    """Why no S0 conformer can seed ESD."""
+    if conformers and not intact:
+        return "Every S0 conformer's optimised geometry lost bonds of the molecule."
+    finished = [c for c in intact if c.e_singlepoint is not None]
+    if finished and all(results.excludes(c.note) for c in finished):
+        cutoff = results.imaginary_cutoff(s0)
+        kind = "strict" if cutoff == IMAGINARY_FREQ_THRESHOLD_STRICT else "relaxed"
+        notes = "; ".join(f"conformer {c.conformer_index}: {c.note}" for c in finished)
+        return (f"Every finished S0 conformer has an imaginary mode below the {kind} cutoff "
+                f"of {cutoff:.0f} cm-1 ({notes}).")
+    return "No S0 conformer finished both its optimisation and its energy singlepoint."
 
 
 def rate_inputs(
