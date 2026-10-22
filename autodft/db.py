@@ -130,15 +130,15 @@ def _seed_default_headers(engine) -> None:
 
 
 def _ensure_default_headers(engine) -> None:
-    """Insert each SEED_HEADERS text missing from the table; existing rows stay."""
+    """Insert each SEED_HEADERS (kind, text) missing from the table, deleted rows included; rows are never edited."""
     from autodft.models.header import ComputationHeader
     from autodft.qm.orca.defaults import SEED_HEADERS
 
     with Session(engine) as session:
         from sqlmodel import select as _select
-        have = {h.header_text for h in session.exec(_select(ComputationHeader)).all()}
+        have = {(h.kind, h.header_text) for h in session.exec(_select(ComputationHeader)).all()}
         for entry in SEED_HEADERS:
-            if entry["header_text"] in have:
+            if (entry["kind"], entry["header_text"]) in have:
                 continue
             session.add(
                 ComputationHeader(

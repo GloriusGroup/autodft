@@ -28,11 +28,16 @@ def _texts(settings):
         return [h.header_text for h in session.exec(select(ComputationHeader)).all()]
 
 
-def test_fresh_db_has_one_row_per_seed_text(tmp_path):
+def _pairs(settings):
+    with get_session(settings) as session:
+        return [(h.kind, h.header_text) for h in session.exec(select(ComputationHeader)).all()]
+
+
+def test_fresh_db_has_one_row_per_seed_kind_and_text(tmp_path):
     settings = _settings(tmp_path)
     reset_engine()
     init_db(settings)
-    assert sorted(_texts(settings)) == sorted(h["header_text"] for h in SEED_HEADERS)
+    assert sorted(_pairs(settings)) == sorted((h["kind"], h["header_text"]) for h in SEED_HEADERS)
     reset_engine()
 
 
@@ -55,6 +60,24 @@ def test_init_db_adds_method_only_rows_to_existing_db(tmp_path):
     reset_engine()
     init_db(settings)
     assert len(_texts(settings)) == len(SEED_HEADERS) + 2
+    reset_engine()
+
+
+def test_deleted_seed_row_is_not_reinserted(tmp_path):
+    settings = _settings(tmp_path)
+    reset_engine()
+    init_db(settings)
+    with get_session(settings) as session:
+        row = session.exec(select(ComputationHeader).where(ComputationHeader.kind == "optimization")).first()
+        row_id = row.id
+        row.deleted = True
+        session.add(row)
+        session.commit()
+    reset_engine()
+    init_db(settings)
+    assert len(_pairs(settings)) == len(SEED_HEADERS)
+    with get_session(settings) as session:
+        assert session.get(ComputationHeader, row_id).deleted is True
     reset_engine()
 
 

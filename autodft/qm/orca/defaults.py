@@ -116,6 +116,11 @@ SEED_HEADERS = [
         "header_text": DEFAULT_HEADER_OPTIMIZATION,
     },
     {
+        "kind": "optimization",
+        "description": "wB97X-D3 / def2-TZVP",
+        "header_text": DEFAULT_HEADER_SINGLEPOINT,
+    },
+    {
         "kind": "singlepoint",
         "description": "wB97X-D3 / def2-TZVP",
         "header_text": DEFAULT_HEADER_SINGLEPOINT,

@@ -59,6 +59,7 @@ def test_seed_headers_are_method_only_and_unique():
         ("confsearch", "GOAT g-xTB conformer ensemble", DEFAULT_HEADER_CONFSEARCH),
         ("singlepoint", "wB97X-D3 / def2-QZVPD", "!wB97X-D3 def2-QZVPD\n"),
         ("optimization", "wB97X-D3 / def2-SVP", DEFAULT_HEADER_OPTIMIZATION),
+        ("optimization", "wB97X-D3 / def2-TZVP", DEFAULT_HEADER_SINGLEPOINT),
         ("singlepoint", "wB97X-D3 / def2-TZVP", DEFAULT_HEADER_SINGLEPOINT),
     ]
     assert QZVPD_HEADER_SINGLEPOINT == "!wB97X-D3 def2-QZVPD\n"
