@@ -928,8 +928,8 @@ def _state_sort_key(s: MoleculeState) -> tuple[int, str]:
 
 
 class ArchiveRequest(BaseModel):
-    extensions: list[str] = [".inp", ".xyz", ".out"]
     all_conformers: bool = False
+    keep_gbw: bool = False
 
 
 PROTECTED_PROJECT_NAMES = {"default"}
@@ -957,12 +957,12 @@ def _project_is_archived(session, name: str) -> Optional[bool]:
 def api_project_archive(
     name: str, body: ArchiveRequest, identity: Identity = Depends(current_identity),
 ):
-    """Start a destructive archive of one project as a background job.
+    """Start "Export and Delete" of one project as a background job.
 
-    Writes the CSV summary + the user-selected files into
-    ``<export_data>/<name>/`` (CSV at the root, raw files under
-    ``raw/``), then deletes every ``<comp_data>/mol_<id>/`` belonging
-    to the project and flips ``Molecule.archived = True`` on every row.
+    Writes the export tree into ``<export_data>/<name>/`` (summary files
+    and ``molecules/``; see ``PipelineExtractor.export_tree``), then deletes
+    every ``<comp_data>/mol_<id>/`` belonging to the project and flips
+    ``Molecule.archived = True`` on every row.
 
     The work runs on a background thread so it survives the browser closing;
     poll ``GET /api/projects/{name}/jobs`` for progress. Returns **202** with
@@ -1014,7 +1014,7 @@ def api_project_archive(
             owner_id=identity.user_id,
             qualified_name=name,
             kind=ProjectJobKind.archive,
-            params={"extensions": body.extensions, "all_conformers": body.all_conformers},
+            params={"all_conformers": body.all_conformers, "keep_gbw": body.keep_gbw},
             settings=settings,
         )
         return JSONResponse(status_code=202, content={"project": name, "job": job})
@@ -1047,13 +1047,16 @@ def api_project_export(
     name: str,
     format: str = Query("csv"),
     all_conformers: bool = Query(False),
+    keep_gbw: bool = Query(False),
     identity: Identity = Depends(current_identity),
 ):
     """Start an export for one project as a background job.
 
-    Writes into ``<export_data>/<name>/``. Format: ``csv`` -> ``<name>.csv``;
-    ``json`` -> ``<name>.json``; ``files`` -> raw ORCA files under
-    ``<name>/files/``; ``xlsx`` -> the state-analysis workbook.
+    Writes into ``<export_data>/<name>/``. Format: ``files`` -> the export
+    tree ("Export Project": summary files plus ``molecules/``, replacing a
+    previous one; ``keep_gbw`` adds singlepoint ``.gbw`` files); ``csv`` ->
+    ``<name>.csv``; ``json`` -> ``<name>.json``; ``xlsx`` -> the
+    state-analysis workbook.
 
     The work runs on a background thread so it survives the browser closing;
     poll ``GET /api/projects/{name}/jobs`` and download the result via
@@ -1094,7 +1097,7 @@ def api_project_export(
             owner_id=identity.user_id,
             qualified_name=name,
             kind=kind,
-            params={"all_conformers": all_conformers},
+            params={"all_conformers": all_conformers, "keep_gbw": keep_gbw},
             settings=settings,
         )
         return JSONResponse(status_code=202, content={"project": name, "job": job})

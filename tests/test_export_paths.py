@@ -102,12 +102,12 @@ class TestExportRoute:
         # The parent must be the directory that was actually created.
         assert expected.parent.is_dir()
 
-    def test_raw_files_go_under_the_project_directory(self, client):
+    def test_the_export_tree_is_the_project_directory(self, client):
         c, headers, tmp_path = client
         response = c.post(
             "/api/projects/owner:screening/export?format=files", headers=headers,
         )
         result = _run_export_job(c, headers, response)
-        assert result["path"] == str(
-            tmp_path / "export_data" / "owner" / "screening" / "files"
-        )
+        root = tmp_path / "export_data" / "owner" / "screening"
+        assert result["path"] == str(root)
+        assert (root / "molecules").is_dir()

@@ -271,26 +271,28 @@ def export_files(
     project: str = typer.Option(..., "--project", help="Project name"),
     output_dir: Optional[Path] = typer.Option(
         None, "--output-dir", "-o",
-        help="Destination directory (default: <export_data>/<owner>/<project>/)",
+        help="Export root; the tree goes into <root>/<owner>/<project>/ (default: <export_data>)",
     ),
     config: Optional[str] = typer.Option(None, "--config", help="Path to config TOML file"),
-    all_conformers: bool = typer.Option(False, "--all-conformers", help="Include all conformers"),
+    all_conformers: bool = typer.Option(
+        False, "--all-conformers", help="Every conformer, not only the reported one per state",
+    ),
+    keep_gbw: bool = typer.Option(False, "--keep-gbw", help="Copy singlepoint .gbw files"),
 ) -> None:
-    """Copy ORCA calculation files with standardized naming."""
+    """Write the export tree ("Export Project"): summary files and molecules/<id>/, replacing a previous one."""
     from autodft.config import load_settings
     from autodft.extraction.extractor import PipelineExtractor
 
     settings = load_settings(config)
     settings.ensure_directories()
 
-    if output_dir is None:
-        from autodft.paths import safe_subdirectory
-
-        output_dir = safe_subdirectory(settings.export_data_path, project)
-
-    extractor = PipelineExtractor(project)
-    count = extractor.export_calculation_files(output_dir, all_conformers=all_conformers)
-    console.print(f"[green]Exported {count} files to {output_dir}[/green]")
+    summary = PipelineExtractor(project).export_tree(
+        output_dir or settings.export_data_path, all_conformers=all_conformers, keep_gbw=keep_gbw,
+    )
+    console.print(
+        f"[green]Exported {summary['files_copied']} files of {summary['molecules']} molecules "
+        f"to {summary['root']}[/green]"
+    )
 
 
 @app.command("progress")

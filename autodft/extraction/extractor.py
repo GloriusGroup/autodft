@@ -13,7 +13,7 @@ import logging
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from sqlmodel import Session, col, select
 
@@ -63,7 +63,7 @@ class PipelineExtractor:
 
         ext = PipelineExtractor("my_project")
         ext.export_summary_csv("results.csv")
-        ext.export_calculation_files(Path("./export"))
+        ext.export_tree(Path("./export_data"))
     """
 
     def __init__(self, project_name: str) -> None:
@@ -398,236 +398,169 @@ class PipelineExtractor:
         logger.info("Exported %d entries to %s", len(data), path)
 
     # ------------------------------------------------------------------
-    # Export: raw calculation files
+    # Export tree: "Export Project" and "Export and Delete"
     # ------------------------------------------------------------------
 
-    def export_calculation_files(
-        self,
-        dest_dir: str | Path,
-        all_conformers: bool = False,
-        additional_extensions: Optional[list[str]] = None,
-    ) -> int:
-        """Copy ORCA calculation files with standardized naming.
+    def export_tree(
+        self, export_root: str | Path, all_conformers: bool = False, keep_gbw: bool = False,
+    ) -> dict[str, Any]:
+        """Write the summary files and ``molecules/`` tree into ``<export_root>/<project>/``.
 
-        File naming convention:
-        ``<mol_id>/<state>/conf<N>_<task_type>_<file>.ext``
-
-        Returns:
-            Total number of files copied.
+        Replaces a previous export there; archived molecules keep their folders.
+        Returns ``{molecules, files_copied, root}``.
         """
-        dest = Path(dest_dir)
-        dest.mkdir(parents=True, exist_ok=True)
+        from autodft.paths import project_file_stem, safe_subdirectory
 
-        # Collect the copy plan under a short-lived session, then copy with no
-        # session open. This runs on a background thread that shares the
-        # SQLite connection pool with the controller (see db.py); holding a
-        # pooled connection across minutes of NFS copies would starve the
-        # pipeline's own writes.
-        plan: list[tuple[Path, Path, int, str, bool]] = []
+        root = safe_subdirectory(Path(export_root), self.project_name)
+        root.mkdir(parents=True, exist_ok=True)
+        stem = project_file_stem(self.project_name)
+
+        # Planned under a short session, copied with none open (see db.py).
         with get_session() as session:
             molecules = session.exec(
                 select(Molecule).where(Molecule.project_name == self.project_name)
+                .order_by(col(Molecule.id))
             ).all()
+            archived = {m.id for m in molecules if m.archived}
+            plans = [self._plan_molecule(session, m, all_conformers, keep_gbw)
+                     for m in molecules if not m.archived]
 
-            for mol in molecules:
-                states = session.exec(
-                    select(MoleculeState).where(MoleculeState.molecule_id == mol.id)
-                ).all()
+        _clear_export(root, stem, archived)
+        self.export_summary_csv(root / f"{stem}.csv")
+        self.export_summary_csv(root / f"{stem}_all_conformers.csv", all_conformers=True)
+        from autodft.analysis.state_analysis import analyze_project, build_xlsx_bytes
 
-                for state in states:
-                    plan.extend(
-                        self._plan_state_files(session, mol, state, dest, all_conformers)
-                    )
+        (root / f"{stem}_state_analysis.xlsx").write_bytes(build_xlsx_bytes(analyze_project(self.project_name)))
+        for _, writer in OPTIONAL_WRITERS:
+            writer(self.project_name, root, stem)
 
-        total_copied = 0
-        for source_job_path, dest_subdir, conf_index, task_type, cubes in plan:
-            total_copied += _copy_task_files(
-                source_job_path=source_job_path,
-                dest_dir=dest_subdir,
-                conf_index=conf_index,
-                task_type=task_type,
-                additional_extensions=additional_extensions,
-                cubes=cubes,
-            )
+        copied = 0
+        for manifest, jobs in plans:
+            folder = root / "molecules" / str(manifest["molecule_id"])
+            files = {}
+            for job in jobs:
+                for src, dest in _tree_files(job, keep_gbw):
+                    source = job.job_path / src
+                    if not source.is_file():
+                        continue
+                    rel = f"{job.folder}/{dest}"
+                    (folder / rel).parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, folder / rel)
+                    files[rel] = {"task_id": job.task_id, "job_path": str(job.job_path), "source": src}
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "molecule.json").write_text(json.dumps({**manifest, "files": files}, indent=1))
+            copied += len(files)
 
-        logger.info("Exported %d files to %s", total_copied, dest)
-        return total_copied
+        logger.info("Exported %d files of %d molecules to %s", copied, len(plans), root)
+        return {"molecules": len(plans), "files_copied": copied, "root": str(root)}
 
-    def _plan_state_files(
-        self,
-        session: Session,
-        mol: Molecule,
-        state: MoleculeState,
-        dest: Path,
-        all_conformers: bool,
-    ) -> list[tuple[Path, Path, int, str, bool]]:
-        """Resolve which files to copy for one state.
+    def _plan_molecule(
+        self, session: Session, mol: Molecule, all_conformers: bool, keep_gbw: bool,
+    ) -> tuple[dict, list[_TreeJob]]:
+        """*mol*'s molecule.json (without files) and the jobs to copy from."""
+        metadata = json.loads(mol.metadata_json) if mol.metadata_json else {}
+        manifest: dict[str, Any] = {
+            "molecule_id": mol.id, "smiles": mol.smiles, "name": metadata.get("name"),
+            "project": mol.project_name, "states": [],
+        }
+        copies: list[_TreeJob] = []
+        states = session.exec(
+            select(MoleculeState).where(MoleculeState.molecule_id == mol.id).order_by(col(MoleculeState.id))
+        ).all()
+        for state in states:
+            entry, state_copies = self._plan_state(session, mol, state, all_conformers, keep_gbw)
+            manifest["states"].append(entry)
+            copies.extend(state_copies)
+        return manifest, copies
 
-        Returns a list of ``(source_job_path, dest_subdir, conf_index,
-        task_type, cubes)`` -- everything the copy needs, gathered while the
-        session is open so the copy itself can run without one.
-        """
-        # Get all successful tasks for this state
+    def _plan_state(
+        self, session: Session, mol: Molecule, state: MoleculeState, all_conformers: bool, keep_gbw: bool,
+    ) -> tuple[dict, list[_TreeJob]]:
+        """One state's molecule.json entry and jobs; only successful tasks' latest successful jobs."""
         tasks = session.exec(
             select(ComputationTask).where(
                 ComputationTask.state_id == state.id,
                 ComputationTask.status == TaskStatus.successful,
-            )
+            ).order_by(col(ComputationTask.id))
         ).all()
-
-        # Build conformer index from optimization tasks
-        opt_tasks = sorted(
-            [t for t in tasks if t.task_type == TaskType.optimization],
-            key=lambda t: t.id,  # type: ignore[arg-type]
-        )
-        opt_id_to_conf = {t.id: i + 1 for i, t in enumerate(opt_tasks)}
-        # Excluded conformers keep their index; they and their dependents are left out.
-        valid = [t for t in opt_tasks if not stored.excludes(stored.exclusion(session, t, state))]
-        if not all_conformers and valid:
-            # The conformer the CSV reports, under the CSV's conformer index.
-            picked = self._extract_state_results(session, mol, state, all_conformers=False)
-            keep = picked[0].opt_task_id if picked else valid[0].id
-            valid = [t for t in valid if t.id == keep]
-        opt_id_to_conf = {t.id: opt_id_to_conf[t.id] for t in valid}
+        opts = [t for t in tasks if t.task_type == TaskType.optimization]
+        notes = {t.id: stored.exclusion(session, t, state) for t in opts}
+        valid = [t for t in opts if not stored.excludes(notes[t.id])]
+        picked = self._extract_state_results(session, mol, state, all_conformers=False)
+        reported = picked[0].opt_task_id if picked else (valid[0].id if valid else None)
+        written = {t.id for t in valid if all_conformers or t.id == reported}
         metadata = json.loads(state.metadata_json) if state.metadata_json else {}
-        densities_flagged = bool(metadata.get(categories.DENSITIES))
-        plan: list[tuple[Path, Path, int, str, bool]] = []
+        cubes = bool(metadata.get(categories.DENSITIES))
 
-        for task in tasks:
-            # Determine conformer index
-            if task.task_type == TaskType.optimization:
-                conf_idx = opt_id_to_conf.get(task.id)
-            elif task.task_type == TaskType.confsearch:
-                conf_idx = 0
-            else:
-                conf_idx = opt_id_to_conf.get(task.depends_on_task_id)
+        copies: list[_TreeJob] = []
+        jobs: dict[int, Optional[str]] = {}
 
-            if conf_idx is None:
-                continue
+        def add(task: ComputationTask, folder: Optional[str]) -> None:
+            """Record *task*'s job; plan its copies into *folder* unless None."""
+            job = stored.latest_successful_job(session, task.id)
+            jobs[task.id] = job.job_path if job else None
+            if folder is None or job is None or not job.job_path:
+                return
+            copies.append(_TreeJob(task.id, task.task_type.value, _task_key(task), Path(job.job_path), folder,
+                                   cubes and task.task_type == TaskType.singlepoint))
 
-            job_path = self._get_successful_job_path(session, task.id)
-            if job_path is None:
-                continue
-
-            cubes = densities_flagged and task.task_type == TaskType.singlepoint
-            folder = dest / str(mol.id) / state.description
-            part = json.loads(task.inputs_json or "{}").get("part")
-            if part is not None:
-                # The parts of one HT rate share its file names.
-                folder = folder / f"{task.task_type.value}_part{part}"
-            plan.append((job_path, folder, conf_idx, task.task_type.value, cubes))
-
-        return plan
+        confsearch = next((t for t in tasks if t.task_type == TaskType.confsearch), None)
+        if confsearch is not None:
+            add(confsearch, state.description)
+        conformers = []
+        for index, opt in enumerate(opts, 1):
+            folder = f"{state.description}/conf{index}" if opt.id in written else None
+            members = [opt, *(t for t in tasks if t.depends_on_task_id == opt.id and t not in opts)]
+            for task in members:
+                add(task, folder)
+            conformers.append({
+                "conformer_index": index, "opt_task_id": opt.id, "reported": opt.id == reported,
+                "note": notes[opt.id], "folder": folder,
+                "tasks": {_task_key(t): {"task_id": t.id, "job_path": jobs[t.id]} for t in members},
+            })
+        entry = {
+            "state": state.description, "state_id": state.id,
+            "multiplicity": state.multiplicity, "charge": state.charge,
+            "reported_conformer": next((c["conformer_index"] for c in conformers if c["reported"]), None),
+            "confsearch": None if confsearch is None else {
+                "task_id": confsearch.id, "job_path": jobs.get(confsearch.id),
+            },
+            "conformers": conformers,
+        }
+        return entry, copies
 
     # ------------------------------------------------------------------
-    # Archive: filtered export + comp_data wipe + DB delete
+    # Export and Delete: export tree + comp_data wipe, DB rows kept
     # ------------------------------------------------------------------
 
     def archive_project(
         self,
         export_root: str | Path,
         comp_root: str | Path,
-        extensions: list[str],
         all_conformers: bool = False,
+        keep_gbw: bool = False,
     ) -> dict[str, Any]:
-        """Destructive one-shot archive of this project.
+        """Destructive: :meth:`export_tree`, then delete every ``<comp_root>/mol_<id>/`` and flag archived.
 
-        Steps, in order:
-          1. Write the energy summary CSV into ``<export_root>/<project>/``.
-          2. Copy every file under ``<comp_root>/mol_<id>/`` whose suffix
-             is in ``extensions`` into ``<export_root>/<project>/raw/``,
-             preserving the directory structure.
-          3. ``rm -rf`` each ``<comp_root>/mol_<id>/`` for this project.
-          4. Delete the project's rows from the database (jobs → tasks
-             → geometries → states → molecules → entrypoints).
-
-        Returns a summary dict ``{molecules, files_copied, files_dropped,
-        csv_path, files_root}``.
-
-        Designed to be triggered from the dashboard's "Export all files"
-        button. The caller is responsible for the user confirmation.
+        The caller is responsible for the user confirmation.
         """
-
-        export_root = Path(export_root)
-        comp_root = Path(comp_root)
-
-        # Normalise & sanity-check extensions (always include the leading dot,
-        # never accept things that aren't extensions like "input.inp").
-        clean_exts = {self._normalise_ext(e) for e in extensions}
-        if not clean_exts:
-            raise ValueError("At least one extension is required.")
-
-        from autodft.paths import project_file_stem, safe_subdirectory
-
-        project_export_dir = safe_subdirectory(export_root, self.project_name)
-        project_export_dir.mkdir(parents=True, exist_ok=True)
-        raw_dir = project_export_dir / "raw"
-
-        # 1) CSV summary first — if extraction fails we abort before
-        #    touching anything destructive.
-        csv_path = project_export_dir / f"{project_file_stem(self.project_name)}.csv"
-        self.export_summary_csv(csv_path, all_conformers=all_conformers)
-
-        # 2) Filtered copy of comp_data tree.
-        files_copied = 0
-        files_dropped = 0
-        molecule_ids: list[int] = []
+        # The export first: if it fails, nothing is deleted.
+        summary = self.export_tree(export_root, all_conformers, keep_gbw)
 
         with get_session() as session:
-            molecules = session.exec(
-                select(Molecule).where(Molecule.project_name == self.project_name)
-            ).all()
-            molecule_ids = [m.id for m in molecules if m.id is not None]
-
+            molecule_ids = [m for m in session.exec(
+                select(Molecule.id).where(Molecule.project_name == self.project_name)
+            ).all() if m is not None]
         for mol_id in molecule_ids:
-            mol_dir = comp_root / f"mol_{mol_id}"
-            if not mol_dir.is_dir():
-                continue
-            for src in mol_dir.rglob("*"):
-                if not src.is_file():
-                    continue
-                if src.suffix not in clean_exts:
-                    files_dropped += 1
-                    continue
-                rel = src.relative_to(comp_root)
-                dest = raw_dir / rel
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(src, dest)
-                files_copied += 1
-
-        # 3) Wipe comp_data/mol_<id> trees for this project.
-        for mol_id in molecule_ids:
-            mol_dir = comp_root / f"mol_{mol_id}"
+            mol_dir = Path(comp_root) / f"mol_{mol_id}"
             if mol_dir.is_dir():
                 shutil.rmtree(mol_dir)
 
-        # 4) Mark the project as archived. We deliberately KEEP every DB
-        #    row so the Molecules subpage can still show the project's
-        #    history; only the on-disk comp_data tree is gone.
+        # Every DB row is kept: the project stays browsable as read-only history.
         self._mark_project_archived()
-
-        logger.info(
-            "Archived project %r: %d molecules, %d files kept, %d dropped",
-            self.project_name, len(molecule_ids), files_copied, files_dropped,
-        )
-
-        return {
-            "molecules": len(molecule_ids),
-            "files_copied": files_copied,
-            "files_dropped": files_dropped,
-            "csv_path": str(csv_path),
-            "files_root": str(raw_dir),
-            "extensions": sorted(clean_exts),
-        }
-
-    @staticmethod
-    def _normalise_ext(ext: str) -> str:
-        ext = ext.strip().lower()
-        if not ext:
-            return ""
-        if not ext.startswith("."):
-            ext = "." + ext
-        return ext
+        logger.info("Archived project %r: %d molecules, %d files kept",
+                    self.project_name, len(molecule_ids), summary["files_copied"])
+        return summary
 
     def _mark_project_archived(self) -> None:
         """Set ``Molecule.archived = True`` on every row in this project.
@@ -645,22 +578,6 @@ class PipelineExtractor:
                 m.archived = True
                 session.add(m)
             session.commit()
-
-    def has_densities_flagged_molecule(self) -> bool:
-        """Whether this project has a molecule with a densities-flagged state."""
-        with get_session() as session:
-            candidates = session.exec(
-                select(MoleculeState.metadata_json)
-                .join(Molecule, Molecule.id == MoleculeState.molecule_id)
-                .where(
-                    Molecule.project_name == self.project_name,
-                    col(MoleculeState.metadata_json).contains(categories.DENSITIES),
-                )
-            ).all()
-        return any(
-            (json.loads(raw) if raw else {}).get(categories.DENSITIES) is True
-            for raw in candidates
-        )
 
     # ------------------------------------------------------------------
     # Cleanup
@@ -737,98 +654,85 @@ class PipelineExtractor:
 
 
 # ======================================================================
-# File copy helper (ported from old FileExporter)
+# Export tree helpers
 # ======================================================================
 
-# Map task_type -> list of (source_name, dest_suffix)
-_FILE_MAP: dict[str, list[tuple[str, str]]] = {
-    "optimization": [
-        ("input.inp", "opt_input.inp"),
-        ("input.xyz", "opt_geometry.xyz"),
-        ("output.out", "opt_output.out"),
-    ],
-    "singlepoint": [
-        ("input.inp", "sp_input.inp"),
-        ("input.xyz", "sp_geometry.xyz"),
-        ("output.out", "sp_output.out"),
-    ],
-    "singlepoint_vert_spin_change": [
-        ("input.inp", "sp_vert_spin_change_input.inp"),
-        ("input.xyz", "sp_vert_spin_change_geometry.xyz"),
-        ("output.out", "sp_vert_spin_change_output.out"),
-    ],
-    "singlepoint_vert_ox": [
-        ("input.inp", "sp_vert_ox_input.inp"),
-        ("input.xyz", "sp_vert_ox_geometry.xyz"),
-        ("output.out", "sp_vert_ox_output.out"),
-    ],
-    "singlepoint_vert_red": [
-        ("input.inp", "sp_vert_red_input.inp"),
-        ("input.xyz", "sp_vert_red_geometry.xyz"),
-        ("output.out", "sp_vert_red_output.out"),
-    ],
-    "singlepoint_uvvis": [
-        ("input.inp", "sp_uvvis_input.inp"),
-        ("input.xyz", "sp_uvvis_geometry.xyz"),
-        ("output.out", "sp_uvvis_output.out"),
-    ],
-    "singlepoint_nmr": [
-        ("input.inp", "sp_nmr_input.inp"),
-        ("input.xyz", "sp_nmr_geometry.xyz"),
-        ("output.out", "sp_nmr_output.out"),
-    ],
-    "singlepoint_soc": [
-        ("input.inp", "sp_soc_input.inp"),
-        ("input.xyz", "sp_soc_geometry.xyz"),
-        ("output.out", "sp_soc_output.out"),
-    ],
-    "confsearch": [
-        ("input.inp", "confsearch_input.inp"),
-        ("output.out", "confsearch_output.out"),
-        ("input.finalensemble.xyz", "confsearch_ensemble.xyz"),
-    ],
+# File stems per task type; ESD and SOC tasks keep their task type.
+_TREE_STEMS = {
+    "optimization": "opt",
+    "singlepoint": "sp",
+    "singlepoint_vert_ox": "vert_ox",
+    "singlepoint_vert_red": "vert_red",
+    "singlepoint_vert_spin_change": "vert_spin_change",
+    "singlepoint_uvvis": "uvvis",
+    "singlepoint_nmr": "nmr",
+    "singlepoint_nbo": "nbo",
 }
 
-# ESD rate jobs: the rate input, the final-state geometry and ORCA's output.
-for _rate in ("esd_isc", "esd_risc", "esd_ic", "esd_fluor", "esd_isc_t1s0", "esd_phosp"):
-    _FILE_MAP[_rate] = [
-        ("input.inp", f"{_rate}_input.inp"),
-        ("input.xyz", f"{_rate}_geometry.xyz"),
-        ("output.out", f"{_rate}_output.out"),
-    ]
+
+def _task_key(task: ComputationTask) -> str:
+    """The task type, with ``_part<k>`` for one part of an HT rate."""
+    part = json.loads(task.inputs_json or "{}").get("part")
+    return task.task_type.value if part is None else f"{task.task_type.value}_part{part}"
 
 
-def _copy_task_files(
-    source_job_path: Path,
-    dest_dir: Path,
-    conf_index: int,
-    task_type: str,
-    additional_extensions: Optional[list[str]] = None,
-    cubes: bool = False,
-) -> int:
-    """Copy ORCA files with standardized naming. Returns files copied."""
-    if not source_job_path.exists():
-        return 0
+@dataclass
+class _TreeJob:
+    """One task's latest successful job, planned for the export tree."""
+    task_id: int
+    task_type: str
+    key: str  # _task_key()
+    job_path: Path
+    folder: str  # relative to molecules/<id>/
+    cubes: bool  # the energy singlepoint of a Densities state
 
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    base = f"conf{conf_index}"
-    copied = 0
 
-    for src_name, dest_suffix in _FILE_MAP.get(task_type, []):
-        src = source_job_path / src_name
-        if src.exists():
-            shutil.copy2(src, dest_dir / f"{base}_{dest_suffix}")
-            copied += 1
+def _tree_files(job: _TreeJob, keep_gbw: bool) -> list[tuple[str, str]]:
+    """``(source name, export name)`` pairs: input, output, final geometry and the opted-in extras."""
+    if job.task_type == TaskType.confsearch.value:
+        return [("output.out", "confsearch.out"), ("input.finalensemble.xyz", "confsearch_ensemble.xyz")]
+    stem = _TREE_STEMS.get(job.task_type, job.task_type) + job.key[len(job.task_type):]
+    files = [("input.inp", f"{stem}.inp"), ("output.out", f"{stem}.out")]
+    if job.task_type == TaskType.optimization.value:
+        files.append(("input.xyz", f"{stem}.xyz"))
+    if keep_gbw and job.task_type.startswith("singlepoint"):
+        files += [(f.name, stem + f.name[len("input"):] if f.name.startswith("input") else f"{stem}_{f.name}")
+                  for f in sorted(job.job_path.glob("*.gbw"))]
+    if job.cubes:
+        files += [(f.name, f"sp_{f.name}") for f in sorted(job.job_path.glob("*.cube"))]
+    return files
 
-    if additional_extensions:
-        for ext in additional_extensions:
-            for f in source_job_path.glob(f"*{ext}"):
-                shutil.copy2(f, dest_dir / f"{base}_{f.name}")
-                copied += 1
 
-    if cubes:
-        for f in source_job_path.glob("*.cube"):
-            shutil.copy2(f, dest_dir / f"{base}_sp_{f.name}")
-            copied += 1
+def write_photophysics(project_name: str, root: Path, stem: str, payload: Optional[dict] = None) -> list[Path]:
+    """The photophysics workbook and JSON; without *payload*, only when a molecule is flagged."""
+    from autodft.analysis import spectroscopy
+    from autodft.analysis.photophysics_export import build_xlsx
 
-    return copied
+    if payload is None:
+        payload = spectroscopy.full_payload(project_name)
+        if not payload["molecules"]:
+            return []
+    data = root / f"{stem}_photophysics.json"
+    data.write_text(json.dumps(payload, indent=1))
+    workbook = root / f"{stem}_photophysics.xlsx"
+    workbook.write_bytes(build_xlsx(payload))
+    return [workbook, data]
+
+
+# Optional per-project files export_tree writes when the project asks for them,
+# as (file suffixes, writer(project, root, stem)). The reactivity workbook goes here.
+OPTIONAL_WRITERS: list[tuple[tuple[str, ...], Callable[[str, Path, str], list[Path]]]] = [
+    (("_photophysics.xlsx", "_photophysics.json"), write_photophysics),
+]
+_SUMMARY_SUFFIXES = (".csv", "_all_conformers.csv", "_state_analysis.xlsx")
+
+
+def _clear_export(root: Path, stem: str, keep_molecules: set[int]) -> None:
+    """Remove a previous export's summary files and molecule folders, except *keep_molecules*'."""
+    for suffix in (*_SUMMARY_SUFFIXES, *(s for suffixes, _ in OPTIONAL_WRITERS for s in suffixes)):
+        (root / f"{stem}{suffix}").unlink(missing_ok=True)
+    molecules = root / "molecules"
+    if molecules.is_dir():
+        for folder in molecules.iterdir():
+            if folder.is_dir() and folder.name not in {str(m) for m in keep_molecules}:
+                shutil.rmtree(folder)

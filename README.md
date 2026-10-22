@@ -324,10 +324,8 @@ sees the whole database:
   counts. Three subpages: **Summary**, **Molecules** (per-conformer
   status with a rendered structure) and **State Analysis** (triplet /
   redox energies, downloadable as XLSX). The Export panel has three
-  buttons: **Export CSV**, **Export JSON**, and **Export all files**
-  (destructive archive — see below). An "include all conformers" toggle
-  controls whether every conformer's energies are written or just the
-  lowest-energy one per state.
+  buttons: **Export Project**, **Export and Delete** and **Delete
+  Project** (see below).
 * **Headers** — create, edit, soft-delete computation headers. Each
   has a `kind` (confsearch / optimization / singlepoint / any), a
   free-form description (shown in the submission dropdowns), and the
@@ -344,16 +342,32 @@ sees the whole database:
   deactivate), the submission hold, the failure circuit breaker and the
   database reset.
 
-**"Export all files" / project archive** — opens a confirmation modal
-listing the destructive steps it will take and lets you edit the
-extension whitelist (`.inp .xyz .out` by default). On confirm it writes
-the CSV, copies only files matching those extensions into
-`<export_data>/<owner>/<project>/raw/`, and deletes every
-`<comp_data>/mol_*/` for the project. The database rows are **kept** and
-flagged `archived`, so the project stays browsable in Project Overview
-— what is gone is the raw tree on disk, which also means an archived
-project can no longer be exported (409). Refused for the protected
-`admin/default` project and for a project that is already archived.
+**Export Project / Export and Delete / Delete Project** — the project page's
+three buttons:
+
+| Button | Writes the export | Deletes `comp_data` | DB rows | Afterwards |
+|---|---|---|---|---|
+| **Export Project** | yes | no | kept | live |
+| **Export and Delete** | yes | yes | kept, molecules archived | read-only history |
+| **Delete Project** | no | yes | deleted | gone |
+
+The two export buttons open one dialog: **Lowest conformer per state** or
+**All conformers**, and **Keep .gbw files**. Both write the same tree into
+`<export_data>/<owner>/<project>/`, replacing a previous export there:
+`<project>.csv` (reported conformer per state), `<project>_all_conformers.csv`,
+`<project>_state_analysis.xlsx`, the photophysics workbook for a project with
+photophysics molecules, and `molecules/<mol_id>/` with a `molecule.json`
+(the mapping back to the database) and `<state>/conf<N>/opt.inp opt.out
+opt.xyz sp.inp sp.out vert_ox.* uvvis.* …`. Only the final files of
+successful tasks are copied; a conformer with an imaginary mode gets no
+folder and is named in the all-conformers CSV. **Export and Delete** then
+deletes every `<comp_data>/mol_*/` of the project — everything not in the
+tree is gone — and flags the molecules `archived`; the project stays
+browsable in Project Overview but can no longer be exported (409). Refused for
+a protected project and for one that is already archived. **Delete Project**
+is the project wipe (below) offered to the owner and admin: a preview, the
+project name typed back, refused for a protected project and with 409 while
+another wipe runs. The Admin page keeps its own wipe.
 
 **"Add calculations…" (Extend)** — on the project page, before the project
 is archived. It opens the submission form with the project's molecules and
@@ -602,8 +616,8 @@ is either scoped to the caller's own projects or deliberately shared
 | GET    | `/api/projects/{name}/photophysics` | UV/Vis, IR, NMR and ESD results per molecule (`?molecule_id=`) |
 | GET    | `/api/projects/{name}/extend-info`  | what the project's molecules already have (for Extend)        |
 | POST   | `/api/projects/{name}/extend`       | add categories / states to the project's molecules            |
-| POST   | `/api/projects/{name}/export`       | trigger CSV/JSON/files/photophysics export (`?format=&all_conformers=`)    |
-| POST   | `/api/projects/{name}/archive`      | **destructive**: CSV+filtered files, then wipe `comp_data`     |
+| POST   | `/api/projects/{name}/export`       | trigger CSV/JSON/files/photophysics export (`?format=&all_conformers=&keep_gbw=`) |
+| POST   | `/api/projects/{name}/archive`      | **destructive**: the export tree, then wipe `comp_data`        |
 | GET    | `/api/projects/{name}/jobs`         | the project's background jobs (exports, archive), newest first |
 | GET    | `/api/jobs/{id}`                    | one background job                                            |
 | GET    | `/api/jobs/{id}/download`           | the file a finished export produced                           |
@@ -740,16 +754,17 @@ autodft admin export \
     --output /tmp/phenols.json
 ```
 
-Raw ORCA files (standardised naming `mol_<id>/<state>/conf<N>_<task>_…`):
+The export tree (summary files and `molecules/<id>/<state>/conf<N>/…`, as
+"Export Project" writes it):
 
 ```bash
 autodft admin export-files \
-    --project admin/phenols --config config/reaction.toml
+    --project admin/phenols --config config/reaction.toml [--all-conformers] [--keep-gbw]
 # -> /mnt/share/dft_calculations/autodft_data/export_data/admin/phenols/
 ```
 
-Or click **Project Overview → Export** in the dashboard, which calls
-`POST /api/projects/{name}/export` and writes into the same
+Or click **Project Overview → Export Project** in the dashboard, which calls
+`POST /api/projects/{name}/export?format=files` and writes into the same
 `<export_data>/<owner>/<project>/`.
 
 Strip large temporaries from successful job directories:
@@ -767,7 +782,7 @@ from autodft.extraction.extractor import PipelineExtractor
 # The qualified name, exactly as it is stored on the molecules.
 ext = PipelineExtractor("admin/phenols")
 ext.export_summary_csv("phenols.csv")
-ext.export_calculation_files("./raw")
+ext.export_tree("./export_data", all_conformers=False, keep_gbw=False)  # -> ./export_data/admin/phenols/
 ```
 
 ---

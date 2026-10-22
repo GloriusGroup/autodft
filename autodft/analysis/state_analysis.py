@@ -361,10 +361,12 @@ def _analyze_project_uncached(project_name: str) -> dict:
             settings = get_active_settings()
             from autodft.paths import project_file_stem, safe_subdirectory
 
-            csv_path = (
-                safe_subdirectory(settings.export_data_path, project_name)
-                / f"{project_file_stem(project_name)}.csv"
-            )
+            root = safe_subdirectory(settings.export_data_path, project_name)
+            stem = project_file_stem(project_name)
+            # Every conformer; archives from before the export tree have only <stem>.csv.
+            csv_path = root / f"{stem}_all_conformers.csv"
+            if not csv_path.is_file():
+                csv_path = root / f"{stem}.csv"
         except Exception:
             csv_path = None
         if csv_path and csv_path.is_file():

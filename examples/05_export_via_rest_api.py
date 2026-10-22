@@ -8,8 +8,8 @@ Endpoints exercised:
 
 * ``GET  /api/projects``                  — list with summary counts
 * ``GET  /api/projects/{name}``           — molecules + progress + status
-* ``POST /api/projects/{name}/export``    — CSV / JSON / files
-* ``POST /api/projects/{name}/archive``   — DESTRUCTIVE archive
+* ``POST /api/projects/{name}/export``    — CSV / JSON / the export tree (``files``)
+* ``POST /api/projects/{name}/archive``   — DESTRUCTIVE: export tree, then comp_data wiped
 
 ``{name}`` is a project, and projects belong to accounts: they are stored
 as ``owner/project`` and written ``owner:project`` in a URL. A slash would
@@ -40,9 +40,9 @@ OWNER = "admin"     # namespace PROJECT lives in
 PROJECT = "Test"    # bare name
 ALL_CONFORMERS = False
 
-# For the archive flow: file extensions to KEEP. Everything else under
-# comp_data/mol_* is deleted as part of the archive.
-ARCHIVE_EXTENSIONS = [".inp", ".xyz", ".out"]
+# Whether the export tree keeps singlepoint .gbw files. For the archive,
+# everything not in the tree is deleted with comp_data/mol_*.
+KEEP_GBW = False
 # Hard gate — leave False so re-running this script can't accidentally
 # nuke a project.
 RUN_ARCHIVE = False
@@ -122,24 +122,26 @@ def export_project(
     owner: str = OWNER,
     fmt: str = "csv",
     all_conformers: bool = ALL_CONFORMERS,
+    keep_gbw: bool = KEEP_GBW,
 ) -> dict:
     """Non-destructive ``POST /api/projects/{name}/export?format=…``.
 
-    ``fmt`` is one of ``"csv"``, ``"json"``, ``"files"``. Output lands in
-    ``<export_data>/<owner>/<project>/``.
+    ``fmt`` is one of ``"csv"``, ``"json"``, ``"files"`` (the export tree).
+    Output lands in ``<export_data>/<owner>/<project>/``.
     """
     return call(
         "POST",
         f"/api/projects/{project_path(project, owner)}/export",
-        params={"format": fmt, "all_conformers": str(bool(all_conformers)).lower()},
+        params={"format": fmt, "all_conformers": str(bool(all_conformers)).lower(),
+                "keep_gbw": str(bool(keep_gbw)).lower()},
     )
 
 
 def archive_project(
     project: str = PROJECT,
     owner: str = OWNER,
-    extensions: list[str] = ARCHIVE_EXTENSIONS,
     all_conformers: bool = ALL_CONFORMERS,
+    keep_gbw: bool = KEEP_GBW,
 ) -> dict:
     """**Destructive** ``POST /api/projects/{name}/archive``.
 
@@ -150,7 +152,7 @@ def archive_project(
     return call(
         "POST",
         f"/api/projects/{project_path(project, owner)}/archive",
-        body={"extensions": extensions, "all_conformers": bool(all_conformers)},
+        body={"all_conformers": bool(all_conformers), "keep_gbw": bool(keep_gbw)},
     )
 
 

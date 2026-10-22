@@ -161,10 +161,10 @@ def test_file_export_skips_excluded_opts_and_their_dependents(db, tmp_path, all_
         _conformer(session, db, state, "low", [-15.0], -2.0)
         _conformer(session, db, state, "high", [], -1.0)
         mol_id = state.molecule_id
-    dest = tmp_path / "export"
-    PipelineExtractor(PROJECT).export_calculation_files(dest, all_conformers=all_conformers)
-    assert sorted(p.name for p in (dest / str(mol_id) / "S0").iterdir()) == [
-        "conf2_opt_input.inp", "conf2_sp_input.inp",
+    PipelineExtractor(PROJECT).export_tree(tmp_path / "export", all_conformers=all_conformers)
+    state_dir = tmp_path / "export" / "nho" / "p" / "molecules" / str(mol_id) / "S0"
+    assert sorted(p.relative_to(state_dir).as_posix() for p in state_dir.rglob("*") if p.is_file()) == [
+        "conf2/opt.inp", "conf2/sp.inp",
     ]
 
 
@@ -172,7 +172,7 @@ def test_file_export_of_an_all_excluded_state_copies_nothing(db, tmp_path):
     with get_session() as session:
         state = _state(session)
         _conformer(session, db, state, "a", [-15.0], -2.0)
-    assert PipelineExtractor(PROJECT).export_calculation_files(tmp_path / "export") == 0
+    assert PipelineExtractor(PROJECT).export_tree(tmp_path / "export")["files_copied"] == 0
 
 
 def test_state_analysis_skips_excluded(db):

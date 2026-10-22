@@ -16,10 +16,11 @@ from autodft.api import project_jobs, routes
 from autodft.config import Settings
 from autodft.db import get_session, init_db, reset_engine
 from autodft.extraction.extractor import (
-    _FILE_MAP,
     ConformerResult,
     PipelineExtractor,
-    _copy_task_files,
+    _task_key,
+    _tree_files,
+    _TreeJob,
 )
 from autodft.models import (
     ComputationJob,
@@ -33,38 +34,43 @@ from autodft.models import (
 from tests.test_spectroscopy_analysis import project  # noqa: F401 - fixture
 
 
-def test_legacy_file_maps_are_unchanged():
-    assert _FILE_MAP["optimization"] == [
-        ("input.inp", "opt_input.inp"), ("input.xyz", "opt_geometry.xyz"), ("output.out", "opt_output.out"),
-    ]
-    assert _FILE_MAP["singlepoint"] == [
-        ("input.inp", "sp_input.inp"), ("input.xyz", "sp_geometry.xyz"), ("output.out", "sp_output.out"),
-    ]
-    for kind in ("vert_spin_change", "vert_ox", "vert_red"):
-        assert _FILE_MAP[f"singlepoint_{kind}"] == [
-            ("input.inp", f"sp_{kind}_input.inp"), ("input.xyz", f"sp_{kind}_geometry.xyz"),
-            ("output.out", f"sp_{kind}_output.out"),
-        ]
-    assert _FILE_MAP["confsearch"] == [
-        ("input.inp", "confsearch_input.inp"), ("output.out", "confsearch_output.out"),
-        ("input.finalensemble.xyz", "confsearch_ensemble.xyz"),
-    ]
+def _files(tmp_path, task_type, names, keep_gbw=False, cubes=False, part=None):
+    job = tmp_path / "job"
+    job.mkdir(exist_ok=True)
+    for name in names:
+        (job / name).write_text(name)
+    task = ComputationTask(task_type=TaskType(task_type), state_id=1, header_id=1,
+                           inputs_json=json.dumps({"part": part}) if part else None)
+    planned = _TreeJob(1, task_type, _task_key(task), job, "S0/conf1", cubes)
+    return [dest for src, dest in _tree_files(planned, keep_gbw) if (job / src).exists()]
 
 
-@pytest.mark.parametrize("task_type,prefix", [
-    ("singlepoint_uvvis", "sp_uvvis"), ("singlepoint_nmr", "sp_nmr"), ("singlepoint_soc", "sp_soc"),
+@pytest.mark.parametrize("task_type,stem", [
+    ("singlepoint", "sp"), ("singlepoint_vert_ox", "vert_ox"), ("singlepoint_vert_red", "vert_red"),
+    ("singlepoint_vert_spin_change", "vert_spin_change"), ("singlepoint_uvvis", "uvvis"),
+    ("singlepoint_nmr", "nmr"), ("singlepoint_soc", "singlepoint_soc"),
     ("esd_isc", "esd_isc"), ("esd_risc", "esd_risc"), ("esd_ic", "esd_ic"), ("esd_fluor", "esd_fluor"),
     ("esd_isc_t1s0", "esd_isc_t1s0"), ("esd_phosp", "esd_phosp"),
 ])
-def test_new_job_types_export_input_geometry_and_output(tmp_path, task_type, prefix):
-    job = tmp_path / "job"
-    job.mkdir()
-    for name in ("input.inp", "input.xyz", "output.out", "input.gbw", "initial.hess"):
-        (job / name).write_text(name)
-    assert _copy_task_files(job, tmp_path / "out", 1, task_type) == 3
-    assert sorted(p.name for p in (tmp_path / "out").iterdir()) == sorted(
-        f"conf1_{prefix}_{suffix}" for suffix in ("input.inp", "geometry.xyz", "output.out")
-    )
+def test_job_types_export_input_and_output(tmp_path, task_type, stem):
+    names = ("input.inp", "input.xyz", "output.out", "input.gbw", "initial.hess", "slurm-1.out")
+    assert _files(tmp_path, task_type, names) == [f"{stem}.inp", f"{stem}.out"]
+
+
+def test_the_optimisation_exports_its_final_geometry(tmp_path):
+    names = ("input.inp", "input.xyz", "output.out", "input.hess")
+    assert _files(tmp_path, "optimization", names) == ["opt.inp", "opt.out", "opt.xyz"]
+
+
+def test_the_confsearch_exports_output_and_ensemble(tmp_path):
+    names = ("input.inp", "output.out", "input.finalensemble.xyz")
+    assert _files(tmp_path, "confsearch", names) == ["confsearch.out", "confsearch_ensemble.xyz"]
+
+
+def test_an_ht_part_carries_its_number(tmp_path):
+    assert _files(tmp_path, "esd_fluor", ("input.inp", "output.out"), part=3) == [
+        "esd_fluor_part3.inp", "esd_fluor_part3.out",
+    ]
 
 
 def _job_dir(session, tmp_path, name, metadata, task_type=TaskType.optimization, description="S0"):
@@ -151,24 +157,15 @@ def test_cleanup_keeps_cubes_for_densities_singlepoints(db):
 
 
 def test_singlepoint_cubes_are_copied_with_the_sp_prefix(tmp_path):
-    job = tmp_path / "job"
-    job.mkdir()
-    for name in ("input.inp", "input.xyz", "output.out", "ElDens.cube", "SpinDens.cube"):
-        (job / name).write_text(name)
-    assert _copy_task_files(job, tmp_path / "out", 2, "singlepoint", cubes=True) == 5
-    assert sorted(p.name for p in (tmp_path / "out").iterdir()) == sorted([
-        "conf2_sp_input.inp", "conf2_sp_geometry.xyz", "conf2_sp_output.out",
-        "conf2_sp_ElDens.cube", "conf2_sp_SpinDens.cube",
-    ])
+    names = ("input.inp", "input.xyz", "output.out", "ElDens.cube", "SpinDens.cube")
+    assert _files(tmp_path, "singlepoint", names, cubes=True) == [
+        "sp.inp", "sp.out", "sp_ElDens.cube", "sp_SpinDens.cube",
+    ]
 
 
 def test_cubes_are_not_copied_unless_requested(tmp_path):
-    job = tmp_path / "job"
-    job.mkdir()
-    for name in ("input.inp", "input.xyz", "output.out", "ElDens.cube"):
-        (job / name).write_text(name)
-    assert _copy_task_files(job, tmp_path / "out", 1, "singlepoint") == 3
-    assert "conf1_sp_ElDens.cube" not in [p.name for p in (tmp_path / "out").iterdir()]
+    names = ("input.inp", "input.xyz", "output.out", "ElDens.cube")
+    assert _files(tmp_path, "singlepoint", names) == ["sp.inp", "sp.out"]
 
 
 def test_export_copies_singlepoint_cubes(db):
@@ -203,10 +200,9 @@ def test_export_copies_singlepoint_cubes(db):
         session.commit()
         mol_id = mol.id
 
-    dest = db / "export"
-    PipelineExtractor("nho/p").export_calculation_files(dest)
-    names = sorted(p.name for p in (dest / str(mol_id) / "S0").iterdir())
-    assert "conf1_sp_ElDens.cube" in names
+    PipelineExtractor("nho/p").export_tree(db / "export")
+    names = sorted(p.name for p in (db / "export" / "nho" / "p" / "molecules" / str(mol_id) / "S0" / "conf1").iterdir())
+    assert "sp_ElDens.cube" in names
 
 
 def test_export_takes_the_conformer_the_csv_reports(db, monkeypatch):
@@ -237,10 +233,9 @@ def test_export_takes_the_conformer_the_csv_reports(db, monkeypatch):
                                 conformer_index=2, opt_task_id=opt_ids[1])]
     monkeypatch.setattr(PipelineExtractor, "_extract_state_results", lowest)
 
-    dest = db / "export"
-    PipelineExtractor("nho/p").export_calculation_files(dest)
-    names = sorted(p.name for p in (dest / str(mol_id) / "S0").iterdir())
-    assert names == ["conf2_opt_input.inp"]
+    PipelineExtractor("nho/p").export_tree(db / "export")
+    state_dir = db / "export" / "nho" / "p" / "molecules" / str(mol_id) / "S0"
+    assert sorted(p.relative_to(state_dir).as_posix() for p in state_dir.rglob("*")) == ["conf2", "conf2/opt.inp"]
 
 
 # ----------------------------------------------------------------------

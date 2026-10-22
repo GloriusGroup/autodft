@@ -3,13 +3,14 @@
 Three flows, all built on ``PipelineExtractor``:
 
 * ``export_summary`` — CSV + JSON of energies.
-* ``export_files``   — also copies the curated raw ORCA files.
-* ``archive``        — DESTRUCTIVE: filter by extension, then wipe the
+* ``export_files``   — the export tree: summary files and ``molecules/<id>/``
+                        with each state's final ORCA files ("Export Project").
+* ``archive``        — DESTRUCTIVE: the export tree, then wipe the
                         project's ``comp_data`` trees and flag it archived.
                         The database rows stay, so the Molecules page keeps
                         the history; only the raw files go. Same code path
                         as ``POST /api/projects/{name}/archive`` and the
-                        dashboard's "Export all files" button.
+                        dashboard's "Export and Delete" button.
 
 Set the configuration at the top, then import / call any of the
 ``run_*`` helpers — or just execute the file to run the demo.
@@ -45,9 +46,9 @@ PROJECT = "Test"    # bare name — qualified with USER below
 # lowest-energy one per state (False).
 ALL_CONFORMERS = False
 
-# For the archive flow: file extensions to KEEP. Everything else under
-# comp_data/mol_* is deleted as part of the archive step.
-ARCHIVE_EXTENSIONS = [".inp", ".xyz", ".out"]
+# Whether the export tree keeps singlepoint .gbw files. For the archive,
+# everything not in the tree is deleted with comp_data/mol_*.
+KEEP_GBW = False
 # Set to True to actually run the destructive archive when this script
 # is executed directly. Leave False during development.
 RUN_ARCHIVE = False
@@ -110,25 +111,21 @@ def export_files(
     project: str = PROJECT,
     user: str = USER,
     all_conformers: bool = ALL_CONFORMERS,
+    keep_gbw: bool = KEEP_GBW,
 ) -> dict:
-    """Summaries + the curated raw ORCA files under ``<project dir>/files/``."""
-    summary = export_summary(project=project, user=user, all_conformers=all_conformers)
-    name = qualified(project, user)
-    files_dir = safe_subdirectory(SETTINGS.export_data_path, name) / "files"
-    copied = PipelineExtractor(name).export_calculation_files(
-        files_dir, all_conformers=all_conformers
+    """The export tree in ``<export_data>/<owner>/<project>/``; returns ``{molecules, files_copied, root}``."""
+    return PipelineExtractor(qualified(project, user)).export_tree(
+        SETTINGS.export_data_path, all_conformers=all_conformers, keep_gbw=keep_gbw,
     )
-    summary.update({"files_dir": str(files_dir), "files_copied": copied})
-    return summary
 
 
 def archive(
     project: str = PROJECT,
     user: str = USER,
-    extensions: list[str] = ARCHIVE_EXTENSIONS,
     all_conformers: bool = ALL_CONFORMERS,
+    keep_gbw: bool = KEEP_GBW,
 ) -> dict:
-    """**Destructive**: filtered export + comp_data wipe + project DB drop.
+    """**Destructive**: the export tree, then the comp_data wipe; DB rows kept, flagged archived.
 
     No interactive confirmation — the caller is responsible for guarding
     this. Returns the summary dict from ``archive_project``.
@@ -136,8 +133,8 @@ def archive(
     return PipelineExtractor(qualified(project, user)).archive_project(
         export_root=SETTINGS.export_data_path,
         comp_root=SETTINGS.comp_data_path,
-        extensions=extensions,
         all_conformers=all_conformers,
+        keep_gbw=keep_gbw,
     )
 
 
@@ -154,7 +151,7 @@ if __name__ == "__main__":
     print(f"\nsummaries written:\n  {summary['csv']}\n  {summary['json']}")
 
     files = export_files()
-    print(f"copied {files['files_copied']} raw file(s) into {files['files_dir']}")
+    print(f"copied {files['files_copied']} file(s) into {files['root']}")
 
     if RUN_ARCHIVE:
         print(f"\nRUN_ARCHIVE=True — archiving {qualified()} now...")

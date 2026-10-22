@@ -1747,14 +1747,10 @@
 
         <div class="submit-section" id="projectExportSection" style="display: none;">
             <h2 style="font-size:0.95rem; font-weight:600; color:var(--text-secondary); text-transform:uppercase; letter-spacing:0.05em;">Export</h2>
-            <div class="form-row" style="gap: 10px; margin-top: 12px;">
-                <button type="button" class="btn" id="exportCsvBtn">Export CSV</button>
-                <button type="button" class="btn" id="exportJsonBtn">Export JSON</button>
-                <button type="button" class="btn" id="exportAllBtn">Export all files</button>
-                <label class="checkbox-group" style="margin-left: 8px;">
-                    <input type="checkbox" id="exportAllConformers">
-                    <span style="font-size:0.85rem; color:var(--text-secondary);">Include all conformers</span>
-                </label>
+            <div class="form-row" id="projectExportRow" style="gap: 10px; margin-top: 12px;">
+                <button type="button" class="btn" id="exportProjectBtn">Export Project</button>
+                <button type="button" class="btn btn-danger" id="exportDeleteBtn">Export and Delete</button>
+                <button type="button" class="btn btn-danger" id="deleteProjectBtn">Delete Project</button>
             </div>
             <div class="submit-feedback" id="projectExportFeedback"></div>
         </div>
@@ -1768,36 +1764,53 @@
             <div class="submit-feedback" id="projectExtendFeedback"></div>
         </div>
 
-        <!-- Archive confirmation modal (hidden by default) -->
-        <div class="modal-backdrop" id="archiveModal" style="display:none;">
+        <!-- Export dialog, shared by "Export Project" and "Export and Delete" (hidden by default) -->
+        <div class="modal-backdrop" id="exportModal" style="display:none;">
             <div class="modal">
-                <h2>Archive project <span id="archiveProjectName" class="mono"></span>?</h2>
-                <p class="modal-warn">
-                    This is a <strong>destructive</strong> operation. It will:
-                </p>
-                <ol class="modal-list">
-                    <li>Write the energy summary to <code id="archiveCsvPath" class="mono"></code>.</li>
-                    <li>Copy only files with the extensions below into <code id="archiveFilesPath" class="mono"></code>.</li>
-                    <li><strong>Delete every other file</strong> from <code id="archiveCompPath" class="mono"></code>.</li>
-                    <li>Remove the project from the database — it will no longer appear in Project Overview.</li>
-                </ol>
-                <p class="modal-warn">
-                    All raw files will be deleted; only files matching the extensions you list here will survive.
+                <h2><span id="exportModalTitle">Export project</span> <span id="exportProjectName" class="mono"></span></h2>
+                <p>
+                    Writes into <code id="exportRootPath" class="mono"></code>, replacing a previous export there:
+                    <code id="exportStem" class="mono"></code><code>.csv</code> (reported conformer per state),
+                    <code>_all_conformers.csv</code>, <code>_state_analysis.xlsx</code>
+                    (and the photophysics workbook when requested), and
+                    <code>molecules/&lt;id&gt;/</code> with <code>molecule.json</code> and one folder per state
+                    and conformer (<code>S0/conf1/opt.inp opt.out opt.xyz sp.inp sp.out …</code>).
+                    Only the final files of successful tasks are copied; conformers with an imaginary mode
+                    get no folder and are named in the all-conformers CSV.
                 </p>
                 <div class="form-group" style="margin-top: 12px;">
-                    <label for="archiveExts">File extensions to keep (space- or comma-separated)</label>
-                    <input type="text" id="archiveExts" class="mono" value=".inp .xyz .out">
-                    <div class="header-text-hint">
-                        Defaults preserve the canonical ORCA inputs/geometries/outputs.
-                        Add e.g. <code>.cube</code>, <code>.spindens</code>, <code>.eldens</code>,
-                        <code>.gbw</code>, <code>.densities</code>, <code>.hess</code> to keep more.
-                    </div>
+                    <label class="checkbox-group">
+                        <input type="radio" name="exportConformers" id="exportLowest" value="lowest" checked>
+                        <span>Lowest conformer per state</span>
+                    </label>
+                    <label class="checkbox-group">
+                        <input type="radio" name="exportConformers" id="exportAll" value="all">
+                        <span>All conformers</span>
+                    </label>
+                    <label class="checkbox-group" style="margin-top: 8px;">
+                        <input type="checkbox" id="exportKeepGbw">
+                        <span>Keep .gbw files</span>
+                    </label>
+                </div>
+                <div id="exportDeleteWarning" style="display:none;">
+                    <p class="modal-warn">
+                        This is a <strong>destructive</strong> operation. After the export it will:
+                    </p>
+                    <ol class="modal-list">
+                        <li><strong>Delete</strong> every <code id="exportCompPath" class="mono"></code> tree of this project.</li>
+                        <li>Keep the database rows and flag the molecules archived: the project stays as read-only history.</li>
+                    </ol>
+                    <p class="modal-warn">
+                        Files not selected here are gone: other conformers with "Lowest conformer per state",
+                        <code>.gbw</code> files unless kept, failed attempts, SLURM logs, trajectories and
+                        every other by-product.
+                    </p>
                 </div>
                 <div class="form-row" style="justify-content: flex-end; margin-top: 16px;">
-                    <button type="button" class="btn-mini"      id="archiveCancelBtn">Cancel</button>
-                    <button type="button" class="btn btn-danger" id="archiveConfirmBtn">Archive and delete</button>
+                    <button type="button" class="btn-mini"      id="exportCancelBtn">Cancel</button>
+                    <button type="button" class="btn"           id="exportConfirmBtn">Export</button>
                 </div>
-                <div class="submit-feedback" id="archiveFeedback"></div>
+                <div class="submit-feedback" id="exportModalFeedback"></div>
             </div>
         </div>
 
@@ -2407,7 +2420,7 @@
             adminRenderUsage(res.data.usage);
         }
 
-        async function adminPrepareProjectWipe(name, row) {
+        async function adminPrepareProjectWipe(name, row, onDone) {
             var existing = row.parentNode.querySelector('.admin-confirm');
             if (existing) existing.remove();
 
@@ -2461,7 +2474,10 @@
                 feedback.textContent = 'Wiped ' + adminRowsLine(out.data.rows)
                     + '. ' + removalLine(out.data);
                 feedback.className = 'submit-feedback success adm-feedback';
-                setTimeout(function () { box.remove(); loadAdminPage(); fetchProjects(); }, 1800);
+                setTimeout(function () {
+                    box.remove();
+                    if (onDone) { onDone(); } else { loadAdminPage(); fetchProjects(); }
+                }, 1800);
             });
         }
 
@@ -3643,25 +3659,25 @@
                     detail.textContent = '';
                 }
 
-                // Gate the export + archive buttons. Archived projects have
-                // no source files to export; the protected project ("default")
-                // cannot be archived. Tooltips explain why a button is off.
+                // Gate the project buttons. Archived projects have no source
+                // files to export; protected projects are never deleted.
+                // Tooltips explain why a button is off.
                 var isArchived  = !!data.archived;
                 var isProtected = !!data.protected;
-                var csvBtn  = document.getElementById('exportCsvBtn');
-                var jsonBtn = document.getElementById('exportJsonBtn');
-                var allBtn  = document.getElementById('exportAllBtn');
-                csvBtn.disabled  = isArchived;
-                jsonBtn.disabled = isArchived;
-                allBtn.disabled  = isArchived || isProtected;
+                var exportBtn = document.getElementById('exportProjectBtn');
+                var exportDeleteBtn = document.getElementById('exportDeleteBtn');
+                var deleteBtn = document.getElementById('deleteProjectBtn');
+                exportBtn.disabled = isArchived;
+                exportDeleteBtn.disabled = isArchived || isProtected;
+                deleteBtn.disabled = isProtected;
                 var extendBtn = document.getElementById('extendBtn');
                 extendBtn.disabled = isArchived;
                 extendBtn.title = isArchived ? 'Project is archived — its calculation files are gone.' : '';
-                csvBtn.title  = isArchived  ? 'Project is archived — source files are gone.' : '';
-                jsonBtn.title = isArchived  ? 'Project is archived — source files are gone.' : '';
-                allBtn.title  = isArchived  ? 'Project is already archived.'
-                                : isProtected ? 'The default project is protected and cannot be archived.'
-                                              : '';
+                exportBtn.title = isArchived ? 'Project is archived — source files are gone.' : '';
+                exportDeleteBtn.title = isArchived  ? 'Project is already archived.'
+                                      : isProtected ? 'This project is protected and cannot be deleted.'
+                                                    : '';
+                deleteBtn.title = isProtected ? 'This project is protected and cannot be deleted.' : '';
                 if (isArchived) {
                     // Override the running/complete banner with a single archived state.
                     var banner = document.getElementById('projectStatusBanner');
@@ -3760,94 +3776,53 @@
             }
         }
 
-        async function exportProject(format) {
-            if (!currentProject) return;
-            var fb = document.getElementById('projectExportFeedback');
-            var allConf = document.getElementById('exportAllConformers').checked;
-            fb.textContent = 'Starting ' + format + ' export…';
-            fb.className = 'submit-feedback';
-            var started = await startProjectJob(
-                '/api/projects/' + projectPath(currentProject) +
-                '/export?format=' + format + '&all_conformers=' + (allConf ? 'true' : 'false'),
-                { method: 'POST' }
-            );
-            if (!started.ok) {
-                fb.textContent = 'Error' + (started.status ? ' (HTTP ' + started.status + ')' : '') +
-                                 ': ' + started.detail;
-                fb.className = 'submit-feedback error';
-                return;
-            }
-            await pollProjectJob(started.project, started.job.id, {
-                onRunning: function () {
-                    fb.textContent = 'Exporting ' + format + '… (job #' + started.job.id +
-                                     ' running — safe to close this page)';
-                    fb.className = 'submit-feedback';
-                },
-                onSuccess: function (job) {
-                    var r = job.result || {};
-                    var msg = 'Exported: ' + escHtml(r.path || '');
-                    if (r.files_copied != null) msg += ' (' + escHtml(r.files_copied) + ' files)';
-                    if (r.downloadable) {
-                        msg += ' — <a href="/api/jobs/' + job.id + '/download">download</a>';
-                    }
-                    fb.innerHTML = msg;
-                    fb.className = 'submit-feedback success';
-                },
-                onError: function (e) {
-                    fb.textContent = 'Failed: ' + e;
-                    fb.className = 'submit-feedback error';
-                },
-            });
-        }
+        // ── Export dialog: "Export Project" and "Export and Delete" ─────
 
-        // ── Project archive confirmation modal ──────────────────────────
+        var exportDeletes = false;
 
-        function openArchiveModal() {
+        function openExportModal(deletes) {
             if (!currentProject) return;
-            // Show the modal and pre-fill the path hints so the user sees
-            // exactly where data is going / disappearing from.
-            document.getElementById('archiveProjectName').textContent = currentProject;
-            // We don't actually know the export path until the server responds,
-            // but we can render the relative shape so the warning is concrete.
-            document.getElementById('archiveCsvPath').textContent   = '<export_data>/' + currentProject + '/' + currentProject + '.csv';
-            document.getElementById('archiveFilesPath').textContent = '<export_data>/' + currentProject + '/raw/';
-            document.getElementById('archiveCompPath').textContent  = '<comp_data>/mol_*/';
-            var fb = document.getElementById('archiveFeedback');
+            exportDeletes = deletes;
+            var stem = currentProject.split('/').pop();
+            document.getElementById('exportModalTitle').textContent = deletes ? 'Export and delete project' : 'Export project';
+            document.getElementById('exportProjectName').textContent = currentProject;
+            document.getElementById('exportRootPath').textContent = '<export_data>/' + currentProject + '/';
+            document.getElementById('exportStem').textContent = stem;
+            document.getElementById('exportCompPath').textContent = '<comp_data>/mol_<id>/';
+            document.getElementById('exportDeleteWarning').style.display = deletes ? 'block' : 'none';
+            var btn = document.getElementById('exportConfirmBtn');
+            btn.textContent = deletes ? 'Export and delete' : 'Export';
+            btn.className = deletes ? 'btn btn-danger' : 'btn';
+            btn.disabled = false;
+            var fb = document.getElementById('exportModalFeedback');
             fb.textContent = '';
             fb.className = 'submit-feedback';
-            document.getElementById('archiveModal').style.display = 'flex';
+            document.getElementById('exportModal').style.display = 'flex';
         }
 
-        function closeArchiveModal() {
-            document.getElementById('archiveModal').style.display = 'none';
+        function closeExportModal() {
+            document.getElementById('exportModal').style.display = 'none';
         }
 
-        async function runArchive() {
+        async function runExport() {
             if (!currentProject) return;
-            var fb = document.getElementById('archiveFeedback');
-            var raw = document.getElementById('archiveExts').value || '';
-            var exts = raw.split(/[\s,]+/).filter(function (e) { return e.length; });
-            if (exts.length === 0) {
-                fb.textContent = 'At least one extension is required.';
-                fb.className = 'submit-feedback error';
-                return;
-            }
-            fb.textContent = 'Starting archive…';
+            var deletes = exportDeletes;
+            var allConf = document.getElementById('exportAll').checked;
+            var keepGbw = document.getElementById('exportKeepGbw').checked;
+            var fb = document.getElementById('exportModalFeedback');
+            var btn = document.getElementById('exportConfirmBtn');
+            fb.textContent = 'Starting…';
             fb.className = 'submit-feedback';
-
-            var btn = document.getElementById('archiveConfirmBtn');
             btn.disabled = true;
-            var started = await startProjectJob(
-                '/api/projects/' + projectPath(currentProject) + '/archive',
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        extensions: exts,
-                        all_conformers: document.getElementById('exportAllConformers').checked,
-                    }),
-                }
-            );
+            var base = '/api/projects/' + projectPath(currentProject);
+            var started = deletes
+                ? await startProjectJob(base + '/archive', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ all_conformers: allConf, keep_gbw: keepGbw }),
+                  })
+                : await startProjectJob(base + '/export?format=files&all_conformers=' + allConf +
+                                        '&keep_gbw=' + keepGbw, { method: 'POST' });
             if (!started.ok) {
                 fb.textContent = 'Error' + (started.status ? ' (HTTP ' + started.status + ')' : '') +
                                  ': ' + started.detail;
@@ -3858,26 +3833,23 @@
             // The button stays disabled until the background job finishes.
             await pollProjectJob(started.project, started.job.id, {
                 onRunning: function () {
-                    fb.textContent = 'Archiving… (waiting for running jobs to finish, ' +
-                                     'then copy → delete). Safe to close this page.';
+                    fb.textContent = (deletes
+                        ? 'Exporting, then deleting… (waits for running jobs to finish first). '
+                        : 'Exporting… ') + '(job #' + started.job.id + ' running — safe to close this page)';
                     fb.className = 'submit-feedback';
                 },
                 onSuccess: function (job) {
                     var r = job.result || {};
-                    fb.innerHTML =
-                        'Archived <strong>' + escHtml(started.project) + '</strong>: ' +
-                        escHtml(r.molecules) + ' molecules, ' +
-                        escHtml(r.files_copied) + ' files kept (' +
-                        escHtml(r.files_dropped) + ' dropped). ' +
-                        'CSV → <code>' + escHtml(r.csv_path) + '</code>.';
+                    fb.innerHTML = (deletes ? 'Exported and deleted ' : 'Exported ') +
+                        '<strong>' + escHtml(started.project) + '</strong>: ' +
+                        escHtml(r.molecules) + ' molecules, ' + escHtml(r.files_copied) +
+                        ' files → <code>' + escHtml(r.root) + '</code>.';
                     fb.className = 'submit-feedback success';
                     btn.disabled = false;
-                    // The project stays visible (marked archived) so the user
-                    // can still browse its molecules.
-                    setTimeout(function () {
-                        closeArchiveModal();
-                        fetchProjects();
-                    }, 1800);
+                    if (deletes) {
+                        // The project stays visible (marked archived) so its molecules can be browsed.
+                        setTimeout(function () { closeExportModal(); fetchProjects(); }, 1800);
+                    }
                 },
                 onError: function (e) {
                     fb.textContent = 'Failed: ' + e;
@@ -3922,14 +3894,18 @@
                     loadPhotophysicsPage();
                 });
             }
-            document.getElementById('exportCsvBtn').addEventListener('click', function () { exportProject('csv'); });
-            document.getElementById('exportJsonBtn').addEventListener('click', function () { exportProject('json'); });
-            document.getElementById('exportAllBtn').addEventListener('click', openArchiveModal);
-            document.getElementById('archiveCancelBtn').addEventListener('click', closeArchiveModal);
-            document.getElementById('archiveConfirmBtn').addEventListener('click', runArchive);
+            document.getElementById('exportProjectBtn').addEventListener('click', function () { openExportModal(false); });
+            document.getElementById('exportDeleteBtn').addEventListener('click', function () { openExportModal(true); });
+            document.getElementById('deleteProjectBtn').addEventListener('click', function () {
+                if (!currentProject) return;
+                // The Admin page's wipe: preview, typed-name confirmation, protected refusal.
+                adminPrepareProjectWipe(currentProject, document.getElementById('projectExportRow'), fetchProjects);
+            });
+            document.getElementById('exportCancelBtn').addEventListener('click', closeExportModal);
+            document.getElementById('exportConfirmBtn').addEventListener('click', runExport);
             // Click outside the modal to cancel.
-            document.getElementById('archiveModal').addEventListener('click', function (e) {
-                if (e.target === this) closeArchiveModal();
+            document.getElementById('exportModal').addEventListener('click', function (e) {
+                if (e.target === this) closeExportModal();
             });
         })();
 

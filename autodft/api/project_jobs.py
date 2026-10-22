@@ -287,6 +287,7 @@ def _execute(
     stem = project_file_stem(qualified_name)
     extractor = PipelineExtractor(qualified_name)
     all_conformers = bool(params.get("all_conformers", False))
+    keep_gbw = bool(params.get("keep_gbw", False))
 
     if kind == ProjectJobKind.export_csv:
         target = out_root / f"{stem}.csv"
@@ -299,16 +300,9 @@ def _execute(
         return {"format": "json", "path": str(target), "downloadable": True}
 
     if kind == ProjectJobKind.export_files:
-        target = out_root / "files"
-        count = extractor.export_calculation_files(target, all_conformers=all_conformers)
-        # A directory, not a single file -- reported by server path, matching
-        # the pre-job behaviour; not offered as a browser download.
-        return {
-            "format": "files",
-            "path": str(target),
-            "files_copied": count,
-            "downloadable": False,
-        }
+        summary = extractor.export_tree(settings.export_data_path, all_conformers, keep_gbw)
+        # A directory, not a single file: reported by server path, not offered as a download.
+        return {"format": "files", "path": summary["root"], **summary, "downloadable": False}
 
     if kind == ProjectJobKind.export_xlsx:
         from autodft.analysis.state_analysis import analyze_project, build_xlsx_bytes
@@ -320,19 +314,12 @@ def _execute(
 
     if kind == ProjectJobKind.export_photophysics:
         from autodft.analysis import spectroscopy
-        from autodft.analysis.photophysics_export import build_xlsx
+        from autodft.extraction.extractor import write_photophysics
 
-        payload = spectroscopy.full_payload(qualified_name)
-        data = out_root / f"{stem}_photophysics.json"
-        data.write_text(json.dumps(payload, indent=1))
-        target = out_root / f"{stem}_photophysics.xlsx"
-        target.write_bytes(build_xlsx(payload))
+        target, data = write_photophysics(qualified_name, out_root, stem, spectroscopy.full_payload(qualified_name))
         return {"format": "photophysics", "path": str(target), "json_path": str(data), "downloadable": True}
 
     if kind == ProjectJobKind.archive:
-        extensions = params.get("extensions") or [".inp", ".xyz", ".out"]
-        if not params.get("extensions") and extractor.has_densities_flagged_molecule():
-            extensions = [*extensions, ".cube"]
         # Do not rmtree under a job still writing files. The pause has already
         # stopped new jobs for this project; wait for what is left to finish.
         _wait_for_quiescence(qualified_name)
@@ -345,8 +332,8 @@ def _execute(
         summary = extractor.archive_project(
             export_root=settings.export_data_path,
             comp_root=settings.comp_data_path,
-            extensions=extensions,
             all_conformers=all_conformers,
+            keep_gbw=keep_gbw,
         )
         summary["downloadable"] = False
         if frozen:

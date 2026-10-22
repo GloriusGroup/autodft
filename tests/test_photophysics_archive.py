@@ -77,35 +77,6 @@ def test_an_archived_molecule_without_a_frozen_file_is_analysed_live(project, se
     assert spectroscopy.analyze_spectra("nho/p", use_cache=False)["molecules"][0]["uvvis"]["count"] == 1
 
 
-def test_archive_does_not_add_cube_without_densities(project, settings, monkeypatch):
-    assert ".cube" not in _archive(settings, monkeypatch)["extensions"]
-
-
-def test_archive_adds_cube_for_a_densities_flagged_molecule(project, settings, monkeypatch):
-    with get_session() as session:
-        mol = Molecule(smiles="CC(=O)C", project_name="nho/p")
-        session.add(mol)
-        session.commit()
-        session.add(MoleculeState(molecule_id=mol.id, description="S0", multiplicity=1, charge=0,
-                                  metadata_json=json.dumps({categories.DENSITIES: True})))
-        session.commit()
-    assert ".cube" in _archive(settings, monkeypatch)["extensions"]
-
-
-def test_archive_keeps_explicit_extensions_even_with_densities(project, settings, monkeypatch):
-    """M6: .cube is only added on top of the default, not an explicit list."""
-    with get_session() as session:
-        mol = Molecule(smiles="CC(=O)C", project_name="nho/p")
-        session.add(mol)
-        session.commit()
-        session.add(MoleculeState(molecule_id=mol.id, description="S0", multiplicity=1, charge=0,
-                                  metadata_json=json.dumps({categories.DENSITIES: True})))
-        session.commit()
-    monkeypatch.setattr(project_jobs, "_wait_for_quiescence", lambda name: None)
-    result = project_jobs._execute(ProjectJobKind.archive, "nho/p", {"extensions": [".out"]}, settings)
-    assert result["extensions"] == [".out"]
-
-
 def test_a_project_without_categories_freezes_nothing(project, settings, monkeypatch):
     with get_session() as session:
         mol = session.get(Molecule, project["molecule"])

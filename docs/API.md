@@ -720,7 +720,7 @@ export job runs. The dashboard's project page opens it as
 "Add calculations…": the submission form with the project's molecules and
 headers, present items greyed out. Owner or admin.
 
-### `POST /api/projects/{name}/export` `?format=csv|json|files|xlsx|photophysics&all_conformers=true|false`
+### `POST /api/projects/{name}/export` `?format=csv|json|files|xlsx|photophysics&all_conformers=true|false&keep_gbw=true|false`
 
 Starts an export as a background job and answers **202** for every
 format — none of them block the request. Writes into
@@ -729,7 +729,9 @@ the filename stem:
 
 * `csv`   → `<project>.csv` (summary table of energies)
 * `json`  → `<project>.json`
-* `files` → `files/` tree with the canonical curated ORCA files
+* `files` → the export tree, the dashboard's "Export Project" (below);
+  `all_conformers` writes every valid conformer's folder instead of only
+  the reported one per state, `keep_gbw` adds singlepoint `.gbw` files
 * `xlsx`  → `<project>_state_analysis.xlsx`
 * `photophysics` → `<project>_photophysics.json` (the full UV/Vis, IR,
   NMR, ESD and NBO detail payload) plus `<project>_photophysics.xlsx`
@@ -752,38 +754,57 @@ Poll `GET /api/projects/{name}/jobs` for the job's `status` and, once
 in flight for the project. `csv` / `json` / `files` also answer `409`
 for an archived project — their source files are no longer on disk.
 `xlsx` and `photophysics` are allowed on an archived project: `xlsx` is
-built from the archive's CSV, and `photophysics` is served from the
-payload archiving froze — see [`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md).
+built from the archive's all-conformers CSV, and `photophysics` is served
+from the payload archiving froze — see [`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md).
+
+**The export tree** (`files` and the archive), replacing a previous one in
+the same directory (archived molecules keep their folders):
+
+```
+<export_data>/<owner>/<project>/
+  <project>.csv                  # reported conformer per state
+  <project>_all_conformers.csv   # every conformer, excluded ones with their note
+  <project>_state_analysis.xlsx
+  <project>_photophysics.xlsx    # with .json, only for a project with photophysics molecules
+  molecules/<mol_id>/
+    molecule.json                # SMILES, states, reported conformer, task ids, job_path per file
+    S0/confsearch.out  S0/confsearch_ensemble.xyz
+    S0/conf1/opt.inp opt.out opt.xyz  sp.inp sp.out [sp.gbw]  vert_ox.inp vert_ox.out
+             uvvis.inp uvvis.out  nmr.*  esd_fluor.*  esd_isc_part1.*  sp_ElDens.cube …
+    T1/ ox/ red/ …
+```
+
+Only each successful task's latest successful job is copied, and of it only
+the input, output and (optimisations) final geometry; never failed attempts,
+SLURM logs or trajectories. `.gbw` files come only with `keep_gbw`, cubes
+only for a Densities state. Conformers are numbered as in the CSV;
+a conformer with an imaginary mode below its state's cutoff gets no folder
+and is named, with its note, in `<project>_all_conformers.csv` and
+`molecule.json`.
 
 ### `POST /api/projects/{name}/archive`
 
-**Destructive.** Writes the CSV, copies every file matching the
-extensions you list (preserving the directory layout), then wipes
-`<comp_data>/mol_*/` for the project and flags every molecule
-`archived = true`. The database rows are **kept**, so the project stays
-listed and browsable — what is gone is the raw tree on disk, which is
-why an archived project can no longer be exported. The dashboard's
-"Export all files" button is the intended UI for this.
+**Destructive** — the dashboard's "Export and Delete". Writes the export
+tree (above), then wipes `<comp_data>/mol_*/` for the project and flags
+every molecule `archived = true`. The database rows are **kept**, so the
+project stays listed and browsable as read-only history — what is gone is
+the raw tree on disk, which is why an archived project can no longer be
+exported. Everything not in the tree (other conformers when only the
+reported one is chosen, `.gbw` files unless kept, failed attempts, logs) is
+deleted with it. Answers **202** with the job, like the exports.
 
 **Body:**
 
 ```json
-{ "extensions": [".inp", ".xyz", ".out"], "all_conformers": false }
+{ "all_conformers": false, "keep_gbw": false }
 ```
 
-Add `.cube`, `.spindens`, `.eldens`, `.gbw`, `.densities`, `.hess`, …
-to keep more. `.cube` is added automatically, regardless of what you
-pass, when the project has any Densities-flagged molecule.
-
-**Response:**
+**Job result:**
 
 ```json
-{ "project": "admin/phenols", "archived": true,
-  "molecules": 12, "files_copied": 96, "files_dropped": 184,
-  "csv_path":   "/.../export_data/admin/phenols/phenols.csv",
-  "files_root": "/.../export_data/admin/phenols/raw",
-  "extensions": [".inp", ".out", ".xyz"],
-  "photophysics_frozen": 5 }
+{ "molecules": 12, "files_copied": 96,
+  "root": "/.../export_data/admin/phenols",
+  "downloadable": false, "photophysics_frozen": 5 }
 ```
 
 `photophysics_frozen` counts the molecules whose UV/Vis, IR, NMR, ESD or
@@ -895,7 +916,9 @@ a `POST` that acts and requires `confirm` to echo an exact string.
 | `POST /api/admin/disk-usage` | admin | — | nothing; starts a measurement |
 
 A user may wipe their own projects and molecules; someone else's answers
-**404**, the same as a read, since a 403 would confirm it exists. Only the
+**404**, the same as a read, since a 403 would confirm it exists. The
+project page's "Delete Project" button is this project wipe, offered to the
+owner and admin; the Admin page keeps its own. Only the
 shared `admin/default` is protected — your own `alice/default` is an
 ordinary project. `wipe-status` tells a non-admin only *that* something is
 running: the label names the project, which may not be theirs.
