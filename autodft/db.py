@@ -100,6 +100,7 @@ def init_db(settings: Settings | None = None) -> None:
 
     # Seed standard headers if the table is empty.
     _seed_default_headers(engine)
+    _ensure_default_headers(engine)
 
     # Accounts. Creates the admin user on first boot and brings any
     # pre-accounts project names into admin's namespace.
@@ -117,6 +118,28 @@ def _seed_default_headers(engine) -> None:
         if existing is not None:
             return
         for entry in SEED_HEADERS:
+            session.add(
+                ComputationHeader(
+                    header_text=entry["header_text"],
+                    description=entry["description"],
+                    kind=entry["kind"],
+                    validated=True,
+                )
+            )
+        session.commit()
+
+
+def _ensure_default_headers(engine) -> None:
+    """Insert each SEED_HEADERS text missing from the table; existing rows stay."""
+    from autodft.models.header import ComputationHeader
+    from autodft.qm.orca.defaults import SEED_HEADERS
+
+    with Session(engine) as session:
+        from sqlmodel import select as _select
+        have = {h.header_text for h in session.exec(_select(ComputationHeader)).all()}
+        for entry in SEED_HEADERS:
+            if entry["header_text"] in have:
+                continue
             session.add(
                 ComputationHeader(
                     header_text=entry["header_text"],

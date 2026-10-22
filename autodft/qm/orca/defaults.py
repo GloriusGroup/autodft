@@ -1,6 +1,6 @@
 """Default ORCA input headers for common calculation types.
 
-Also holds the larger-basis and GFN2-xTB alternates, the ``LEGACY_*`` full
+Also holds the QZVPD and GFN2-xTB alternates, the ``LEGACY_*`` full
 headers of before Advanced settings, and the ``SEED_HEADERS`` rows a fresh
 database is seeded with.
 """
@@ -60,19 +60,8 @@ LEGACY_HEADER_SINGLEPOINT = (
 )
 
 
-# Optional pair for the larger basis sets, kept as the second choice in
-# each slot's seeded rows.
-TZVP_MECN_HEADER_OPTIMIZATION = (
-    "!wB97X-D3 def2-TZVP def2/J RIJCOSX DEFGRID3 TightOpt TightSCF CPCM(MeCN) Freq\n"
-    "%maxcore 1000\n"
-    "%pal nprocs 8 end\n"
-)
-
-QZVPD_MECN_HEADER_SINGLEPOINT = (
-    "!wB97X-D3 def2-QZVPD def2/J RIJCOSX DEFGRID3 TightSCF KeepDens CPCM(MeCN)\n"
-    "%maxcore 1500\n"
-    "%pal nprocs 2 end\n"
-)
+# The larger basis, kept as the alternate singlepoint row.
+QZVPD_HEADER_SINGLEPOINT = "!wB97X-D3 def2-QZVPD\n"
 
 
 # The same conformer search at GFN2-xTB, kept as the alternate.
@@ -101,39 +90,34 @@ LEGACY_GFN2_HEADER_CONFSEARCH = (
 )
 
 
-# Headers seeded into the database the first time init_db() is called
-# against a fresh ``computation_headers`` table. Each entry is shown in
+# Headers seeded into a fresh ``computation_headers`` table; init_db() adds
+# any missing ones to an existing table. Each entry is shown in
 # the dashboard's Headers manager and the kind-filtered submission
 # dropdowns.
 SEED_HEADERS = [
     {
         "kind": "confsearch",
         "description": "GOAT GFN2-xTB conformer ensemble",
-        "header_text": LEGACY_GFN2_HEADER_CONFSEARCH,
+        "header_text": GFN2_HEADER_CONFSEARCH,
     },
     {
         "kind": "confsearch",
         "description": "GOAT g-xTB conformer ensemble",
-        "header_text": LEGACY_HEADER_CONFSEARCH,
-    },
-    {
-        "kind": "optimization",
-        "description": "wB97X-D3 / def2-TZVP TightOpt + Freq + CPCM(MeCN)",
-        "header_text": TZVP_MECN_HEADER_OPTIMIZATION,
+        "header_text": DEFAULT_HEADER_CONFSEARCH,
     },
     {
         "kind": "singlepoint",
-        "description": "wB97X-D3 / def2-QZVPD KeepDens + CPCM(MeCN)",
-        "header_text": QZVPD_MECN_HEADER_SINGLEPOINT,
+        "description": "wB97X-D3 / def2-QZVPD",
+        "header_text": QZVPD_HEADER_SINGLEPOINT,
     },
     {
         "kind": "optimization",
-        "description": "wB97X-D3 / def2-SVP Opt + Freq + CPCM(MeCN)",
-        "header_text": LEGACY_HEADER_OPTIMIZATION,
+        "description": "wB97X-D3 / def2-SVP",
+        "header_text": DEFAULT_HEADER_OPTIMIZATION,
     },
     {
         "kind": "singlepoint",
-        "description": "wB97X-D3 / def2-TZVP KeepDens + CPCM(MeCN)",
-        "header_text": LEGACY_HEADER_SINGLEPOINT,
+        "description": "wB97X-D3 / def2-TZVP",
+        "header_text": DEFAULT_HEADER_SINGLEPOINT,
     },
 ]

@@ -16,6 +16,7 @@ from autodft.db import get_session, init_db, reset_engine
 from autodft.engine import nmr_references
 from autodft.extraction import results
 from autodft.models import (
+    ComputationHeader,
     ComputationJob,
     ComputationTask,
     Molecule,
@@ -24,6 +25,7 @@ from autodft.models import (
     TaskStatus,
     TaskType,
 )
+from autodft.qm.orca.defaults import LEGACY_HEADER_SINGLEPOINT
 from autodft.qm.orca.spectra_parser import parse_shieldings
 
 FIXTURES = Path(__file__).parent / "fixtures" / "orca"
@@ -90,15 +92,20 @@ def _task(session, state, task_type, parent=None, geometry=None):
 
 
 def _state(session, smiles, project, metadata):
+    if session.get(ComputationHeader, SP_HEADER_ID) is None:
+        session.add(ComputationHeader(id=SP_HEADER_ID, header_text=LEGACY_HEADER_SINGLEPOINT, kind="singlepoint"))
     mol = Molecule(smiles=smiles, project_name=project)
     session.add(mol)
     session.commit()
     state = MoleculeState(molecule_id=mol.id, description="S0", multiplicity=1, charge=0,
                           metadata_json=json.dumps(metadata),
-                          optimization_header_id=3, singlepoint_header_id=5)
+                          optimization_header_id=3, singlepoint_header_id=SP_HEADER_ID)
     session.add(state)
     session.commit()
     return mol, state
+
+
+SP_HEADER_ID = 99
 
 
 @pytest.fixture()
@@ -138,7 +145,7 @@ def _tms(session, tmp_path, inp=B3LYP_NMR, method=None, name="t", done=True, smi
     state = MoleculeState(molecule_id=mol.id, description="S0", multiplicity=1, charge=0,
                           metadata_json=json.dumps({categories.NMR: True,
                                                     **({"nmr_method": method} if method else {})}),
-                          optimization_header_id=3, singlepoint_header_id=5)
+                          optimization_header_id=3, singlepoint_header_id=SP_HEADER_ID)
     session.add(state)
     session.commit()
     opt = _task(session, state, TaskType.optimization)

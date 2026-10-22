@@ -1240,10 +1240,11 @@ def api_headers(
     ``?include_deleted=true`` to see them (used by the manager view).
     """
     from autodft.qm.orca.defaults import (
-        LEGACY_HEADER_CONFSEARCH,
-        LEGACY_HEADER_OPTIMIZATION,
-        LEGACY_HEADER_SINGLEPOINT,
+        DEFAULT_HEADER_CONFSEARCH,
+        DEFAULT_HEADER_OPTIMIZATION,
+        DEFAULT_HEADER_SINGLEPOINT,
     )
+    from autodft.qm.orca.advanced import is_legacy_header
 
     defaults = [
         {
@@ -1251,23 +1252,25 @@ def api_headers(
             "label": "GOAT g-xTB (default)",
             "description": "GOAT conformer ensemble at g-xTB; MAXEN 10, ENDIFF 0.2, RMSD 0.15.",
             "kind": "confsearch",
-            "text": LEGACY_HEADER_CONFSEARCH,
+            "text": DEFAULT_HEADER_CONFSEARCH,
         },
         {
             "id": "default_optimization",
-            "label": "wB97X-D3 / def2-SVP Opt Freq CPCM(MeCN) (default)",
-            "description": "Geometry optimisation + frequencies at wB97X-D3/def2-SVP with RIJCOSX def2/J and CPCM(MeCN).",
+            "label": "wB97X-D3 / def2-SVP (default)",
+            "description": "Functional and basis wB97X-D3/def2-SVP; other settings are Advanced.",
             "kind": "optimization",
-            "text": LEGACY_HEADER_OPTIMIZATION,
+            "text": DEFAULT_HEADER_OPTIMIZATION,
         },
         {
             "id": "default_singlepoint",
-            "label": "wB97X-D3 / def2-TZVP KeepDens CPCM(MeCN) (default)",
-            "description": "Single-point at wB97X-D3/def2-TZVP with RIJCOSX, KeepDens for downstream densities, CPCM(MeCN).",
+            "label": "wB97X-D3 / def2-TZVP (default)",
+            "description": "Functional and basis wB97X-D3/def2-TZVP; other settings are Advanced.",
             "kind": "singlepoint",
-            "text": LEGACY_HEADER_SINGLEPOINT,
+            "text": DEFAULT_HEADER_SINGLEPOINT,
         },
     ]
+    for d in defaults:
+        d["legacy"] = is_legacy_header(d["text"])
 
     with get_session() as session:
         stmt = select(ComputationHeader).order_by(ComputationHeader.id.desc())  # type: ignore[union-attr]
@@ -1287,6 +1290,7 @@ def api_headers(
                 "validated": h.validated,
                 "deleted": h.deleted,
                 "text": h.header_text,
+                "legacy": is_legacy_header(h.header_text),
             }
             for h in headers
         ]

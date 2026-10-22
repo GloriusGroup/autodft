@@ -18,9 +18,8 @@ from autodft.qm.orca.defaults import (
     LEGACY_HEADER_CONFSEARCH,
     LEGACY_HEADER_OPTIMIZATION,
     LEGACY_HEADER_SINGLEPOINT,
-    QZVPD_MECN_HEADER_SINGLEPOINT,
+    QZVPD_HEADER_SINGLEPOINT,
     SEED_HEADERS,
-    TZVP_MECN_HEADER_OPTIMIZATION,
 )
 
 
@@ -54,19 +53,15 @@ def test_legacy_singlepoint_header_is_tzvp_with_cpcm():
     )
 
 
-def test_seed_headers_contains_exactly_these_six_headers():
+def test_seed_headers_are_method_only_and_unique():
     assert [(h["kind"], h["description"], h["header_text"]) for h in SEED_HEADERS] == [
-        ("confsearch", "GOAT GFN2-xTB conformer ensemble", LEGACY_GFN2_HEADER_CONFSEARCH),
-        ("confsearch", "GOAT g-xTB conformer ensemble", LEGACY_HEADER_CONFSEARCH),
-        ("optimization", "wB97X-D3 / def2-TZVP TightOpt + Freq + CPCM(MeCN)",
-         TZVP_MECN_HEADER_OPTIMIZATION),
-        ("singlepoint", "wB97X-D3 / def2-QZVPD KeepDens + CPCM(MeCN)",
-         QZVPD_MECN_HEADER_SINGLEPOINT),
-        ("optimization", "wB97X-D3 / def2-SVP Opt + Freq + CPCM(MeCN)",
-         LEGACY_HEADER_OPTIMIZATION),
-        ("singlepoint", "wB97X-D3 / def2-TZVP KeepDens + CPCM(MeCN)",
-         LEGACY_HEADER_SINGLEPOINT),
+        ("confsearch", "GOAT GFN2-xTB conformer ensemble", GFN2_HEADER_CONFSEARCH),
+        ("confsearch", "GOAT g-xTB conformer ensemble", DEFAULT_HEADER_CONFSEARCH),
+        ("singlepoint", "wB97X-D3 / def2-QZVPD", "!wB97X-D3 def2-QZVPD\n"),
+        ("optimization", "wB97X-D3 / def2-SVP", DEFAULT_HEADER_OPTIMIZATION),
+        ("singlepoint", "wB97X-D3 / def2-TZVP", DEFAULT_HEADER_SINGLEPOINT),
     ]
+    assert QZVPD_HEADER_SINGLEPOINT == "!wB97X-D3 def2-QZVPD\n"
 
 
 @pytest.fixture()
@@ -83,11 +78,12 @@ def client(tmp_path):
     reset_engine()
 
 
-def test_api_headers_defaults_carry_the_new_texts(client):
+def test_api_headers_defaults_carry_the_method_only_texts(client):
     c, headers = client
     data = c.get("/api/headers", headers=headers).json()
     by_kind = {d["kind"]: d for d in data["defaults"]}
-    assert by_kind["optimization"]["text"] == LEGACY_HEADER_OPTIMIZATION
-    assert by_kind["singlepoint"]["text"] == LEGACY_HEADER_SINGLEPOINT
-    assert "CPCM(MeCN)" in by_kind["optimization"]["label"]
-    assert "CPCM(MeCN)" in by_kind["singlepoint"]["label"]
+    assert by_kind["confsearch"]["text"] == DEFAULT_HEADER_CONFSEARCH
+    assert by_kind["optimization"]["text"] == DEFAULT_HEADER_OPTIMIZATION
+    assert by_kind["singlepoint"]["text"] == DEFAULT_HEADER_SINGLEPOINT
+    for d in data["defaults"]:
+        assert "CPCM" not in d["label"] + d["description"]
