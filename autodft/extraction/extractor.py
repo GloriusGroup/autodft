@@ -435,7 +435,7 @@ class PipelineExtractor:
         root.mkdir(parents=True, exist_ok=True)
         exported = [manifest["molecule_id"] for manifest, _ in plans]
 
-        _clear_export(root, stem, exported)
+        folders = _clear_export(root, stem, [manifest for manifest, _ in plans])
         self.export_summary_csv(root / f"{stem}.csv")
         self.export_summary_csv(root / f"{stem}_all_conformers.csv", all_conformers=True)
         from autodft.analysis.state_analysis import analyze_project, build_xlsx_bytes
@@ -445,8 +445,10 @@ class PipelineExtractor:
             writer(self.project_name, root, stem, all_conformers)
 
         copied = 0
-        for manifest, jobs in plans:
-            folder = root / "molecules" / str(manifest["molecule_id"])
+        for (manifest, jobs), folder in zip(plans, folders):
+            # Written first too, so an interrupted export's folder is recognised as ours.
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "molecule.json").write_text(json.dumps({**manifest, "files": {}}, indent=1))
             files = {}
             for job in jobs:
                 for src, dest in _tree_files(job, keep_gbw):
@@ -457,7 +459,6 @@ class PipelineExtractor:
                     (folder / rel).parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(source, folder / rel)
                     files[rel] = {"task_id": job.task_id, "job_path": str(job.job_path), "source": src}
-            folder.mkdir(parents=True, exist_ok=True)
             (folder / "molecule.json").write_text(json.dumps({**manifest, "files": files}, indent=1))
             copied += len(files)
 
@@ -768,14 +769,37 @@ OPTIONAL_WRITERS: list[tuple[tuple[str, ...], Callable[[str, Path, str, bool], l
 _SUMMARY_SUFFIXES = (".csv", "_all_conformers.csv", "_state_analysis.xlsx")
 
 
-def _clear_export(root: Path, stem: str, molecule_ids: list[int]) -> None:
-    """Remove a previous export's summary files and the folders of *molecule_ids*, re-exported now.
+def _clear_export(root: Path, stem: str, manifests: list[dict]) -> list[Path]:
+    """Remove a previous export's summary files and the folders of *manifests*' molecules; returns those folders.
 
-    Other folders stay: archived or wiped molecules' only copy (SQLite may reuse a wiped id).
+    Other folders stay: archived or wiped molecules' only copy.
     """
+    folders = [_molecule_folder(root, m) for m in manifests]
     for suffix in (*_SUMMARY_SUFFIXES, *(s for suffixes, _ in OPTIONAL_WRITERS for s in suffixes)):
         (root / f"{stem}{suffix}").unlink(missing_ok=True)
-    for mol_id in molecule_ids:
-        folder = root / "molecules" / str(mol_id)
+    for folder in folders:
         if folder.is_dir():
             shutil.rmtree(folder)
+    return folders
+
+
+def _molecule_folder(root: Path, manifest: dict) -> Path:
+    """``molecules/<id>/``, or ``<id>_<n>/`` when an older one holds another molecule (SQLite reuses wiped ids)."""
+    base = root / "molecules" / str(manifest["molecule_id"])
+    folder, n = base, 1
+    while folder.is_dir() and not _same_molecule(folder, manifest):
+        logger.warning("%s holds another molecule; exporting molecule %s beside it",
+                       folder, manifest["molecule_id"])
+        n += 1
+        folder = base.with_name(f"{base.name}_{n}")
+    return folder
+
+
+def _same_molecule(folder: Path, manifest: dict) -> bool:
+    """Whether *folder*'s molecule.json names *manifest*'s molecule, SMILES and project."""
+    try:
+        old = json.loads((folder / "molecule.json").read_text())
+    except (OSError, ValueError):
+        return False
+    keys = ("molecule_id", "smiles", "project")
+    return isinstance(old, dict) and all(old.get(k) == manifest[k] for k in keys)

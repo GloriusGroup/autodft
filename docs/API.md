@@ -774,7 +774,8 @@ from the payload archiving froze — see [`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.m
 
 **The export tree** (`files` and the archive), replacing a previous one in
 the same directory (only the folders of the molecules exported now are replaced;
-archived or wiped molecules keep theirs):
+archived or wiped molecules keep theirs, and a molecule whose id is still held by
+a wiped one's folder is written to `molecules/<mol_id>_2/`):
 
 ```
 <export_data>/<owner>/<project>/

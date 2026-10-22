@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -269,6 +270,42 @@ def test_a_second_export_replaces_the_first(db):
     assert not (root / "p_photophysics.json").exists()
     assert (root / "photophysics" / "mol_1.json").read_text() == "frozen"
     assert (root / "notes.txt").read_text() == "mine"
+
+
+@pytest.mark.parametrize("manifest", [
+    {"molecule_id": 1, "smiles": "CCO", "project": PROJECT},
+    {"molecule_id": 1, "smiles": "c1ccccc1", "project": "nho/other"},
+    None,
+])
+def test_a_reused_id_exports_beside_another_molecules_folder(db, manifest):
+    """SQLite may hand a wiped molecule's id to a new one; the old folder is the only copy."""
+    mol_id, _, _ = _standard(db)
+    root = _root(db)
+    folder = root / "molecules" / str(mol_id)
+    folder.mkdir(parents=True)
+    (folder / "S0").mkdir()
+    (folder / "S0" / "opt.out").write_text("old")
+    if manifest is not None:
+        (folder / "molecule.json").write_text(json.dumps(manifest))
+    before = {p.relative_to(folder): p.read_bytes() for p in folder.rglob("*") if p.is_file()}
+    _export(db)
+    _export(db)
+    assert {p.relative_to(folder): p.read_bytes() for p in folder.rglob("*") if p.is_file()} == before
+    assert sorted(p.name for p in (root / "molecules").iterdir()) == [str(mol_id), f"{mol_id}_2"]
+    assert _tree(db, f"{mol_id}_2") == {"molecule.json", "S0/confsearch.out", *CONF1}
+
+
+def test_an_interrupted_export_is_replaced(db, monkeypatch):
+    mol_id, _, _ = _standard(db)
+
+    def crash(*args, **kwargs):
+        raise OSError("disk")
+    with monkeypatch.context() as m:
+        m.setattr(shutil, "copy2", crash)
+        with pytest.raises(OSError):
+            _export(db)
+    _export(db)
+    assert _tree(db, mol_id) == {"molecule.json", "S0/confsearch.out", *CONF1}
 
 
 def test_photophysics_files_for_a_flagged_project(project):  # noqa: F811
