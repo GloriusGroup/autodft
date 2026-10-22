@@ -16,7 +16,7 @@ from autodft.engine.state_machine import (
     _get_stage_config,
 )
 from autodft.models import ComputationTask, MoleculeState, TaskStatus, TaskType
-from autodft.qm.orca.input_generator import generate_submit_script
+from autodft.qm.orca.input_generator import render_submit_script
 from autodft.qm.orca.parser import OrcaParser
 from autodft.qm.orca.retry import FailureInfo, IncreaseResources
 from tests.test_uvvis_tasks import _s0_with_opt
@@ -39,25 +39,24 @@ def test_default_rendering_is_byte_identical_to_main(tmp_dir, keep):
 
 
 def test_mpi_env_is_sourced_before_orca(tmp_path):
-    text = generate_submit_script(tmp_path, "j", 1, 2000, "1-00:00:00", "CPU", mpi_env="/opt/ompi4/env.sh").read_text()
+    text = render_submit_script(tmp_path, "j", 1, 2000, "1-00:00:00", "CPU", mpi_env="/opt/ompi4/env.sh")
     assert "source /opt/ompi4/env.sh\n" in text
     assert text.index("source /opt/ompi4/env.sh") < text.index("input.inp >")
-    assert "\nsource " not in generate_submit_script(tmp_path, "j", 1, 2000, "1-00:00:00", "CPU").read_text()
+    assert "\nsource " not in render_submit_script(tmp_path, "j", 1, 2000, "1-00:00:00", "CPU")
 
 
 def test_hessians_are_staged_and_copied_back(tmp_path):
-    path = generate_submit_script(tmp_path, "j", 1, 2000, "1-00:00:00", "CPU",
-                                  keep_hessian=True, extra_inputs=["initial.hess", "final.hess"])
-    text = path.read_text()
+    text = render_submit_script(tmp_path, "j", 1, 2000, "1-00:00:00", "CPU",
+                                keep_hessian=True, extra_inputs=["initial.hess", "final.hess"])
     assert 'cp "$WORK_DIR"/initial.hess "$TMP_DIR"/\ncp "$WORK_DIR"/final.hess "$TMP_DIR"/\n' in text
     assert 'cp *.hess' in text
 
 
 def test_cubes_are_copied_back_only_when_requested(tmp_path):
-    without = generate_submit_script(tmp_path / "a", "j", 1, 2000, "1-00:00:00", "CPU").read_text()
-    with_cubes = generate_submit_script(
+    without = render_submit_script(tmp_path / "a", "j", 1, 2000, "1-00:00:00", "CPU")
+    with_cubes = render_submit_script(
         tmp_path / "b", "j", 1, 2000, "1-00:00:00", "CPU", keep_cubes=True,
-    ).read_text()
+    )
     assert 'cp *.cube "$WORK_DIR"/ 2>/dev/null || true' not in without
     assert 'cp *.cube "$WORK_DIR"/ 2>/dev/null || true' in with_cubes
 
@@ -66,20 +65,20 @@ ESD_COPY = 'cp *.FS.hess *.GS.hess *.ES.hess *.spectrum* *.corrfunc "$WORK_DIR"/
 
 
 def test_esd_by_products_are_copied_back_only_when_requested(tmp_path):
-    without = generate_submit_script(tmp_path / "a", "j", 1, 2000, "1-00:00:00", "CPU").read_text()
-    with_esd = generate_submit_script(
+    without = render_submit_script(tmp_path / "a", "j", 1, 2000, "1-00:00:00", "CPU")
+    with_esd = render_submit_script(
         tmp_path / "b", "j", 1, 2000, "1-00:00:00", "CPU", keep_esd_files=True,
-    ).read_text()
+    )
     assert ESD_COPY not in without
     assert ESD_COPY + "\ncp input.finalensemble.xyz" in with_esd
     assert without == with_esd.replace(ESD_COPY + "\n", "").replace(str(tmp_path / "b"), str(tmp_path / "a"))
 
 
 def test_nbo_raises_the_stack_limit_and_keeps_no_archive(tmp_path):
-    without = generate_submit_script(tmp_path / "a", "j", 1, 2000, "1-00:00:00", "CPU").read_text()
-    with_nbo = generate_submit_script(
+    without = render_submit_script(tmp_path / "a", "j", 1, 2000, "1-00:00:00", "CPU")
+    with_nbo = render_submit_script(
         tmp_path / "b", "j", 1, 2000, "1-00:00:00", "CPU", runs_nbo=True,
-    ).read_text()
+    )
     stack = "# NBO7 overflows the default 8 MB stack on larger systems and dies silently.\nulimit -s unlimited\n"
     assert "ulimit" not in without
     assert ".47" not in with_nbo

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from autodft import categories
 from autodft.qm.orca.blocks import NMR_DH_ROUTE
-from autodft.qm.orca.input_generator import generate_submit_script
+from autodft.qm.orca.input_generator import render_submit_script
 from autodft.qm.orca.parser import MP2_RESPONSE_MEMORY, OrcaParser
 from autodft.qm.orca.retry import FailureInfo, IncreaseMP2ResponseMemory, IncreaseResources
 from tests.test_orca_parser import ABNORMAL_TERMINATION
@@ -82,8 +82,8 @@ def test_other_jobs_stay_clamped_to_the_ceiling():
 
 def test_nmr_jobs_copy_their_mp2_response_logs_back(tmp_path):
     copy = 'cp *.mp2resp_* "$WORK_DIR"/'
-    assert copy in generate_submit_script(tmp_path, "j", 12, 6000, "4-00:00:00", "CPU", keep_mp2resp=True).read_text()
-    assert copy not in generate_submit_script(tmp_path, "j", 12, 6000, "4-00:00:00", "CPU").read_text()
+    assert copy in render_submit_script(tmp_path, "j", 12, 6000, "4-00:00:00", "CPU", keep_mp2resp=True)
+    assert copy not in render_submit_script(tmp_path, "j", 12, 6000, "4-00:00:00", "CPU")
 
 
 def test_dh_resources_are_validated_only_for_dh():

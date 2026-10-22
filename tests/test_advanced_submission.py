@@ -17,13 +17,10 @@ from autodft.db import get_session, init_db, reset_engine
 from autodft.engine import entrypoint_processor as ep
 from autodft.models import CalculationEntrypoint, MoleculeState
 from autodft.qm.orca.advanced import CHOICES, defaults, resolve
-from autodft.qm.orca.defaults import (
-    LEGACY_HEADER_CONFSEARCH,
-    LEGACY_HEADER_OPTIMIZATION,
-    LEGACY_HEADER_SINGLEPOINT,
-)
+from autodft.qm.orca.defaults import LEGACY_HEADER_OPTIMIZATION, LEGACY_HEADER_SINGLEPOINT
+from tests.fixtures.advanced.generate import LEGACY_HEADERS
 
-LEGACY = {"header_confsearch": LEGACY_HEADER_CONFSEARCH, "header_optimization": LEGACY_HEADER_OPTIMIZATION,
+LEGACY = {"header_confsearch": LEGACY_HEADERS["confsearch"], "header_optimization": LEGACY_HEADER_OPTIMIZATION,
           "header_singlepoint": LEGACY_HEADER_SINGLEPOINT}
 
 
@@ -65,7 +62,7 @@ def _legacy_project(settings, project="nho/p", smiles="CCO"):
     with get_session() as session:
         session.add(CalculationEntrypoint(
             smiles=smiles, request_metadata=json.dumps({"project_name": project, "project_author": "nho"}),
-            header_confsearch=LEGACY_HEADER_CONFSEARCH, header_optimization=LEGACY_HEADER_OPTIMIZATION,
+            header_confsearch=LEGACY_HEADERS["confsearch"], header_optimization=LEGACY_HEADER_OPTIMIZATION,
             header_singlepoint=LEGACY_HEADER_SINGLEPOINT,
         ))
         session.commit()
@@ -324,7 +321,7 @@ def test_cli_legacy_project_with_its_headers_stays_legacy(cli_db, tmp_path, monk
     monkeypatch.setattr(ep, "_generate_initial_xyz", lambda s: "C 0 0 0\nH 1 0 0\n")
     _legacy_project(cli_db, project="admin/p")
     files = []
-    for name, text in (("cs", LEGACY_HEADER_CONFSEARCH), ("opt", LEGACY_HEADER_OPTIMIZATION),
+    for name, text in (("cs", LEGACY_HEADERS["confsearch"]), ("opt", LEGACY_HEADER_OPTIMIZATION),
                        ("sp", LEGACY_HEADER_SINGLEPOINT)):
         files.append(tmp_path / f"{name}.inp")
         files[-1].write_text(text)

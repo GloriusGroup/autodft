@@ -1,4 +1,4 @@
-"""Generate ORCA input files and SLURM submit scripts using Jinja2 templates.
+"""Render ORCA input files and SLURM submit scripts from Jinja2 templates.
 
 All paths are handled via :class:`pathlib.Path`.  Templates live in
 ``autodft/qm/templates/``.
@@ -11,8 +11,6 @@ from typing import Optional
 from jinja2 import Environment, FileSystemLoader
 
 __all__ = [
-    "generate_orca_input",
-    "generate_submit_script",
     "render_orca_input",
     "render_submit_script",
     "write_xyz_file",
@@ -46,36 +44,6 @@ def render_orca_input(header_text: str, charge: int, multiplicity: int) -> str:
     )
 
 
-def generate_orca_input(
-    job_path: Path,
-    header_text: str,
-    charge: int,
-    multiplicity: int,
-    xyz_data: str,
-) -> Path:
-    """Render ``orca_input.inp.j2`` and write ``input.inp`` into *job_path*.
-
-    Args:
-        job_path: Target directory (will be created if it does not exist).
-        header_text: ORCA header / route section (everything before the
-                     geometry specification, typically starting with ``!``).
-        charge: Molecular charge.
-        multiplicity: Spin multiplicity.
-        xyz_data: XYZ geometry data.  Only needed for ``write_xyz_file``;
-                  the template uses ``*xyzfile`` to reference ``input.xyz``.
-
-    Returns:
-        Path to the written ``input.inp``.
-    """
-    job_path = Path(job_path)
-    job_path.mkdir(parents=True, exist_ok=True)
-
-    input_path = job_path / "input.inp"
-    input_path.write_text(render_orca_input(header_text, charge, multiplicity), encoding="utf-8")
-    logger.debug("Wrote ORCA input file: %s", input_path)
-    return input_path
-
-
 # ------------------------------------------------------------------
 # SLURM submit script
 # ------------------------------------------------------------------
@@ -105,65 +73,10 @@ def render_submit_script(
     stall_minutes: int = 0,
     sync_minutes: int = 0,
 ) -> str:
-    """The text of ``submit.cmd``; see :func:`generate_submit_script`."""
-    total_mem = nprocs * (mem_per_core + 50)
-
-    env = _get_jinja_env()
-    template = env.get_template("submit.cmd.j2")
-    return template.render(
-        job_name=job_name,
-        job_path=str(job_path),
-        nprocs=nprocs,
-        total_mem=total_mem,
-        time_limit=time_limit,
-        partition=partition,
-        nice=nice,
-        orca_path=orca_path,
-        orca_extra_args=orca_extra_args,
-        nbo_exe=nbo_exe,
-        mpi_env=mpi_env,
-        tmp_dir=tmp_dir,
-        keep_wavefunction=keep_wavefunction,
-        keep_densities=keep_densities,
-        keep_hessian=keep_hessian,
-        keep_cubes=keep_cubes,
-        runs_nbo=runs_nbo,
-        keep_mp2resp=keep_mp2resp,
-        keep_esd_files=keep_esd_files,
-        extra_inputs=extra_inputs or [],
-        stall_minutes=stall_minutes,
-        sync_minutes=sync_minutes,
-    )
-
-
-def generate_submit_script(
-    job_path: Path,
-    job_name: str,
-    nprocs: int,
-    mem_per_core: int,
-    time_limit: str,
-    partition: str,
-    nice: int = 0,
-    orca_path: str = "orca",
-    orca_extra_args: str = "",
-    nbo_exe: str | None = None,
-    mpi_env: str = "",
-    tmp_dir: str = "/tmp",
-    keep_wavefunction: bool = False,
-    keep_densities: bool = False,
-    keep_hessian: bool = False,
-    keep_cubes: bool = False,
-    runs_nbo: bool = False,
-    keep_mp2resp: bool = False,
-    keep_esd_files: bool = False,
-    extra_inputs: Optional[list[str]] = None,
-    stall_minutes: int = 0,
-    sync_minutes: int = 0,
-) -> Path:
-    """Render ``submit.cmd.j2`` and write ``submit.cmd`` into *job_path*.
+    """The text of ``submit.cmd``.
 
     Args:
-        job_path: Target directory.
+        job_path: The job directory the script runs in.
         job_name: SLURM job name (``--job-name``).
         nprocs: Number of tasks / cores (``--ntasks-per-node``).
         mem_per_core: Memory per core in MB. Total memory is computed as
@@ -194,24 +107,35 @@ def generate_submit_script(
                       ``input.inp``.
         stall_minutes: Stall watchdog threshold; 0 runs ORCA in the foreground.
         sync_minutes: Copy output.out back this often while the watchdog runs.
-
-    Returns:
-        Path to the written ``submit.cmd``.
     """
-    job_path = Path(job_path)
-    job_path.mkdir(parents=True, exist_ok=True)
-    rendered = render_submit_script(
-        job_path, job_name, nprocs, mem_per_core, time_limit, partition, nice=nice, orca_path=orca_path,
-        orca_extra_args=orca_extra_args, nbo_exe=nbo_exe, mpi_env=mpi_env, tmp_dir=tmp_dir,
-        keep_wavefunction=keep_wavefunction, keep_densities=keep_densities, keep_hessian=keep_hessian,
-        keep_cubes=keep_cubes, runs_nbo=runs_nbo, keep_mp2resp=keep_mp2resp, keep_esd_files=keep_esd_files,
-        extra_inputs=extra_inputs, stall_minutes=stall_minutes, sync_minutes=sync_minutes,
-    )
+    total_mem = nprocs * (mem_per_core + 50)
 
-    submit_path = job_path / "submit.cmd"
-    submit_path.write_text(rendered, encoding="utf-8")
-    logger.debug("Wrote SLURM submit script: %s", submit_path)
-    return submit_path
+    env = _get_jinja_env()
+    template = env.get_template("submit.cmd.j2")
+    return template.render(
+        job_name=job_name,
+        job_path=str(job_path),
+        nprocs=nprocs,
+        total_mem=total_mem,
+        time_limit=time_limit,
+        partition=partition,
+        nice=nice,
+        orca_path=orca_path,
+        orca_extra_args=orca_extra_args,
+        nbo_exe=nbo_exe,
+        mpi_env=mpi_env,
+        tmp_dir=tmp_dir,
+        keep_wavefunction=keep_wavefunction,
+        keep_densities=keep_densities,
+        keep_hessian=keep_hessian,
+        keep_cubes=keep_cubes,
+        runs_nbo=runs_nbo,
+        keep_mp2resp=keep_mp2resp,
+        keep_esd_files=keep_esd_files,
+        extra_inputs=extra_inputs or [],
+        stall_minutes=stall_minutes,
+        sync_minutes=sync_minutes,
+    )
 
 
 # ------------------------------------------------------------------

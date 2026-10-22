@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import subprocess
 
-from autodft.qm.orca.input_generator import generate_submit_script
+from autodft.qm.orca.input_generator import render_submit_script
 from autodft.qm.orca.parser import STALL_MARKER, OrcaParser
 from autodft.qm.orca.retry import FailureInfo, IncreaseResources
 
 
 def test_watchdog_renders_valid_bash(tmp_path):
-    path = generate_submit_script(tmp_path, "j", 8, 1000, "1-00:00:00", "CPU",
-                                  orca_path="/o/orca", stall_minutes=240, sync_minutes=10)
-    text = path.read_text()
+    text = render_submit_script(tmp_path, "j", 8, 1000, "1-00:00:00", "CPU",
+                                orca_path="/o/orca", stall_minutes=240, sync_minutes=10)
+    path = tmp_path / "submit.cmd"
+    path.write_text(text)
     assert "setsid -w /o/orca input.inp > output.out &" in text
     assert "STALL_SEC=14400" in text
     assert "TICK % 10" in text
@@ -23,13 +24,13 @@ def test_watchdog_renders_valid_bash(tmp_path):
 
 
 def test_no_watchdog_by_default(tmp_path):
-    text = generate_submit_script(tmp_path, "j", 8, 1000, "1-00:00:00", "CPU").read_text()
+    text = render_submit_script(tmp_path, "j", 8, 1000, "1-00:00:00", "CPU")
     assert "setsid" not in text and STALL_MARKER not in text
 
 
 def test_sync_needs_scratch(tmp_path):
-    text = generate_submit_script(tmp_path, "j", 8, 1000, "1-00:00:00", "CPU", tmp_dir="",
-                                  stall_minutes=240, sync_minutes=10).read_text()
+    text = render_submit_script(tmp_path, "j", 8, 1000, "1-00:00:00", "CPU", tmp_dir="",
+                                stall_minutes=240, sync_minutes=10)
     assert "setsid" in text and ".output.out.part" not in text
 
 

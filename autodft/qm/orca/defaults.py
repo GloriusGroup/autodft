@@ -28,22 +28,6 @@ DEFAULT_HEADER_SINGLEPOINT = "!wB97X-D3 def2-TZVP\n"
 
 
 # The full headers of before Advanced settings; running projects use them.
-LEGACY_HEADER_CONFSEARCH = (
-    "!GOAT XTB\n"
-    "%xtb\n"
-    '  XTBInputString "--gxtb"\n'
-    "end\n"
-    "%maxcore 500\n"
-    "%pal nprocs 32 end\n"
-    "%GOAT\n"
-    "MAXEN 10.0\n"
-    "ENDIFF 0.2\n"
-    "RMSD 0.15\n"
-    "FREEZECISTRANS TRUE\n"
-    "CONFDEGEN AUTO\n"
-    "END\n"
-)
-
 LEGACY_HEADER_OPTIMIZATION = (
     "!wB97X-D3 def2-SVP def2/J RIJCOSX DEFGRID3 Opt TightSCF CPCM(MeCN) Freq\n"
     "%maxcore 2000\n"
@@ -75,20 +59,6 @@ GFN2_HEADER_CONFSEARCH = (
     "CONFDEGEN AUTO\n"
     "END\n"
 )
-
-LEGACY_GFN2_HEADER_CONFSEARCH = (
-    "!GOAT XTB2\n"
-    "%maxcore 500\n"
-    "%pal nprocs 32 end\n"
-    "%GOAT\n"
-    "MAXEN 10.0\n"
-    "ENDIFF 0.2\n"
-    "RMSD 0.15\n"
-    "FREEZECISTRANS TRUE\n"
-    "CONFDEGEN AUTO\n"
-    "END\n"
-)
-
 
 # Headers seeded into a fresh ``computation_headers`` table; init_db() adds
 # any missing ones to an existing table. Each entry is shown in

@@ -14,8 +14,6 @@ from autodft.qm.orca.defaults import (
     DEFAULT_HEADER_OPTIMIZATION,
     DEFAULT_HEADER_SINGLEPOINT,
     GFN2_HEADER_CONFSEARCH,
-    LEGACY_GFN2_HEADER_CONFSEARCH,
-    LEGACY_HEADER_CONFSEARCH,
     LEGACY_HEADER_OPTIMIZATION,
     LEGACY_HEADER_SINGLEPOINT,
     QZVPD_HEADER_SINGLEPOINT,
@@ -33,10 +31,6 @@ def test_default_confsearch_header_is_goat_gxtb_without_resources():
     assert GFN2_HEADER_CONFSEARCH.startswith("!GOAT XTB2\n%GOAT\n")
     for header in (DEFAULT_HEADER_CONFSEARCH, GFN2_HEADER_CONFSEARCH):
         assert "%pal" not in header and "%maxcore" not in header
-    assert LEGACY_HEADER_CONFSEARCH == DEFAULT_HEADER_CONFSEARCH.replace(
-        "%GOAT\n", "%maxcore 500\n%pal nprocs 32 end\n%GOAT\n")
-    assert LEGACY_GFN2_HEADER_CONFSEARCH == GFN2_HEADER_CONFSEARCH.replace(
-        "%GOAT\n", "%maxcore 500\n%pal nprocs 32 end\n%GOAT\n")
 
 
 def test_legacy_optimization_header_is_svp_with_cpcm():

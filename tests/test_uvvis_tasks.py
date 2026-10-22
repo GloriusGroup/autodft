@@ -23,7 +23,7 @@ from autodft.models import (
     TaskType,
 )
 from autodft.qm.orca import blocks
-from autodft.qm.orca.input_generator import generate_orca_input
+from autodft.qm.orca.input_generator import render_orca_input
 from autodft.qm.orca.parser import OrcaParser
 
 SP = "!B3LYP def2-TZVP TightSCF\n%maxcore 500\n%pal nprocs 2 end\n"
@@ -179,7 +179,7 @@ class TestJobInput:
 
     def test_singlepoint_input_is_byte_identical(self, session, tmp_path):
         text = self._job_input(session, tmp_path, TaskType.singlepoint)
-        reference = generate_orca_input(tmp_path / "ref", SP, 0, 1, "").read_text()
+        reference = render_orca_input(SP, 0, 1)
         assert text == reference
 
     def test_a_header_conflict_fails_the_job(self, session, tmp_path):
