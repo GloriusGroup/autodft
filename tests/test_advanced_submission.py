@@ -204,6 +204,53 @@ def test_expansion_revalidates_advanced(api, advanced, header, needle):
         assert session.exec(select(MoleculeState)).first() is None
 
 
+def _insert(**fields) -> int:
+    with get_session() as session:
+        entry = CalculationEntrypoint(smiles="CCO", **fields)
+        session.add(entry)
+        session.commit()
+        return entry.id
+
+
+def test_expansion_refuses_a_method_only_header_without_advanced(api):
+    _, _, settings = api
+    entry_id = _insert(header_optimization="!wB97X-D3 def2-SVP\n", header_singlepoint="!wB97X-D3 def2-TZVP\n",
+                       request_metadata=json.dumps({"project_name": "nho/p"}))
+    _process(settings)
+    with get_session() as session:
+        error = session.get(CalculationEntrypoint, entry_id).processing_error
+        assert "optimization header" in error and "!wB97X-D3 def2-SVP" in error and "advanced" in error
+        assert session.exec(select(MoleculeState)).first() is None
+
+
+def test_expansion_refuses_a_requested_optimization_without_header(api):
+    _, _, settings = api
+    entry_id = _insert(header_singlepoint=LEGACY_HEADER_SINGLEPOINT, request_metadata=json.dumps(
+        {"project_name": "nho/p"}))
+    _process(settings)
+    with get_session() as session:
+        assert "no optimization header" in session.get(CalculationEntrypoint, entry_id).processing_error
+
+
+def test_expansion_without_optimization_needs_no_opt_header(api):
+    _, _, settings = api
+    entry_id = _insert(header_singlepoint=LEGACY_HEADER_SINGLEPOINT, request_metadata=json.dumps(
+        {"project_name": "nho/p", "request_optimization": False}))
+    _process(settings)
+    with get_session() as session:
+        assert session.get(CalculationEntrypoint, entry_id).processing_error is None
+    assert "advanced" not in _states()["S0"]
+
+
+def test_expansion_keeps_a_legacy_entrypoint(api):
+    _, _, settings = api
+    entry_id = _insert(**LEGACY, request_metadata=json.dumps({"project_name": "nho/p"}))
+    _process(settings)
+    with get_session() as session:
+        assert session.get(CalculationEntrypoint, entry_id).processing_error is None
+    assert "advanced" not in _states()["S0"]
+
+
 def test_advanced_defaults_endpoint(api):
     client, key, settings = api
     data = client.get("/api/advanced-defaults", headers=key).json()

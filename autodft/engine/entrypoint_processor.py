@@ -143,6 +143,9 @@ def _process_entrypoint_body(
 
     # The API and CLI decided the mode: an entrypoint without ``advanced`` is legacy.
     headers = (entrypoint.header_confsearch, entrypoint.header_optimization, entrypoint.header_singlepoint)
+    reason = _legacy_header_error(metadata, entrypoint.header_optimization)
+    if reason:
+        raise ValueError(f"{reason} Nothing was submitted for this molecule.")
     if "advanced" in metadata:
         resolved, reason = advanced.for_submission(metadata["advanced"], headers, settings)
         if reason:
@@ -663,6 +666,19 @@ def _canonicalize_smiles(smiles: str) -> str:
     except ImportError:
         pass
     return smiles
+
+
+def _legacy_header_error(metadata: dict, header: Optional[str]) -> Optional[str]:
+    """Why a legacy entrypoint (no ``advanced``) cannot run *header* as its optimization header, or None."""
+    if "advanced" in metadata or not (header or metadata.get("request_optimization", True)):
+        return None
+    if header is None:
+        return "Optimization is requested but no optimization header is given."
+    if advanced.is_legacy_header(header):
+        return None
+    return (f"The optimization header {header!r} is method only (no Opt, Freq, %pal or %maxcore), and an "
+            f"entrypoint without 'advanced' runs its headers as they are; add \"advanced\": {{}} to its "
+            f"metadata for the config defaults, or give a full header.")
 
 
 def legacy_submission(session: Session, project: str, headers: tuple) -> bool:

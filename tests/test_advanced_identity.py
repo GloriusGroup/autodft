@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+from unittest import mock
 
 from sqlmodel import select
 
 from autodft.config import Settings
 from autodft.db import get_session
+from autodft.engine import entrypoint_processor as ep
 from autodft.engine import nmr_references
 from autodft.models import CalculationEntrypoint, ComputationHeader, Molecule, MoleculeState
 from autodft.qm.orca.advanced import method_settings, resolve
@@ -30,14 +32,15 @@ def _states_of(smiles):
 
 
 def _bare_legacy_project(settings):
-    """S0 states on a method-only header, stored without ``advanced``."""
+    """S0 states on a method-only header, stored without ``advanced`` (the expansion now refuses those)."""
     with get_session() as session:
         session.add(CalculationEntrypoint(
             smiles="CCO", request_metadata=json.dumps({"project_name": "nho/p", "project_author": "nho",
                                                        "request_confsearch": False}),
             header_optimization=BARE["header_optimization"], header_singlepoint=BARE["header_singlepoint"]))
         session.commit()
-    _process(settings)
+    with mock.patch.object(ep, "_legacy_header_error", lambda *args: None):
+        _process(settings)
 
 
 def test_resubmit_with_other_grid_refused(api):
