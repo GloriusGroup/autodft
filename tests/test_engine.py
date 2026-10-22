@@ -434,7 +434,7 @@ class _StubEngine:
         self.result = result
         self.raises = raises
 
-    def check_output(self, job_path, task_type):
+    def check_output(self, job_path, task_type, imag_freq_tolerance=None):
         if self.raises is not None:
             raise self.raises
         return self.result

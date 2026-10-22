@@ -330,15 +330,17 @@ class TestCheckOutput:
         assert result.checks["Imaginary Frequencies"] is False
         assert result.checks["Optimization Convergence"] is True
 
-    @pytest.mark.parametrize("mode,strict,relaxed", [(-62.2, False, True), (-130.0, False, False)])
-    def test_without_strict_convergence_an_s1_hessian_tolerates_soft_rotors(self, tmp_path: Path, mode, strict, relaxed):
+    @pytest.mark.parametrize("mode,passes_at_minus_100", [(-62.2, True), (-130.0, False)])
+    def test_an_s1_mode_below_minus_50_fails_by_default_and_passes_only_above_a_tolerance_of_minus_100(
+        self, tmp_path: Path, mode, passes_at_minus_100,
+    ):
         freqs = VIBRATIONAL_FREQUENCIES_CLEAN.replace("6:", f"6:     {mode:.2f} cm**-1  ***imaginary mode***\n  99:", 1)
         content = ENERGY_OUTPUT + "\n" + freqs + "\n" + OPTIMIZATION_CONVERGED + "\n" + NORMAL_TERMINATION
         job_path = self._write_output(tmp_path, content)
-        assert OrcaParser().check_output(job_path, "optimization").checks["Imaginary Frequencies"] is strict
-        assert OrcaParser().check_output(job_path, "optimization_excited").checks["Imaginary Frequencies"] is strict
-        relaxed_check = OrcaParser().check_output(job_path, "optimization_excited_relaxed").checks
-        assert relaxed_check["Imaginary Frequencies"] is relaxed and "Excited Root" in relaxed_check
+        assert OrcaParser().check_output(job_path, "optimization").checks["Imaginary Frequencies"] is False
+        assert OrcaParser().check_output(job_path, "optimization_excited").checks["Imaginary Frequencies"] is False
+        at_minus_100 = OrcaParser().check_output(job_path, "optimization_excited", -100.0).checks
+        assert at_minus_100["Imaginary Frequencies"] is passes_at_minus_100 and "Excited Root" in at_minus_100
 
     def test_missing_output_file(self, tmp_path: Path):
         parser = OrcaParser()

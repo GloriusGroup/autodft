@@ -23,7 +23,7 @@ from autodft.models import ComputationJob, ComputationTask, Molecule, MoleculeSt
 from autodft.models.result import JobResult
 from autodft.qm.orca import esd_parser
 from autodft.qm.orca.esd_parser import Rate
-from autodft.qm.orca.parser import IMAGINARY_FREQ_THRESHOLD, IMAGINARY_FREQ_THRESHOLD_STRICT, OrcaParser
+from autodft.qm.orca.parser import IMAGINARY_FREQ_THRESHOLD, IMAGINARY_FREQ_THRESHOLD_S1, OrcaParser
 from autodft.qm.orca.spectra_parser import (
     IRMode, NaturalCharge, Shielding, Transition, parse_absorption, parse_ir, parse_natural_charges,
     parse_shieldings,
@@ -267,19 +267,20 @@ def exclusion(session: Session, opt_task: ComputationTask, state: MoleculeState)
     return record_exclusion(for_task(session, opt_task, require=("imaginary",)), state)
 
 
-def imaginary_cutoff(state: MoleculeState) -> Optional[float]:
-    """The mode (cm-1) below which exports leave *state*'s conformers out; None for ESD S1."""
+def imaginary_cutoff(state: MoleculeState) -> float:
+    """The mode (cm-1) below which *state*'s optimisations fail and exports leave them out."""
     metadata = json.loads(state.metadata_json) if state.metadata_json else {}
-    if metadata.get("esd_role") == "S1":
-        return None  # its own check already applied
-    return IMAGINARY_FREQ_THRESHOLD_STRICT if metadata.get("strict_convergence", True) else IMAGINARY_FREQ_THRESHOLD
+    if "imag_freq_tolerance" in metadata:
+        return float(metadata["imag_freq_tolerance"])
+    # States from before the tolerance keep the old rule.
+    if metadata.get("esd_role") == "S1" and not metadata.get("strict_convergence", True):
+        return IMAGINARY_FREQ_THRESHOLD_S1
+    return IMAGINARY_FREQ_THRESHOLD
 
 
 def record_exclusion(record: Optional[dict], state: MoleculeState) -> Optional[str]:
     """exclusion() from an opt record already read."""
     cutoff = imaginary_cutoff(state)
-    if cutoff is None:
-        return None
     if record is None or "imaginary" not in record:
         return "unchecked"
     lowest = min(record["imaginary"], default=0.0)

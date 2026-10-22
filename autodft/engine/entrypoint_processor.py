@@ -202,6 +202,7 @@ def _process_entrypoint_body(
     s0 = _check_extension(session, molecule, header_ids, added) if metadata.get("extend") else None
     if s0 is not None:
         initial_xyz = _initial_geometry(session, s0) or _generate_initial_xyz(smiles)
+        metadata = _with_s0_tolerance(metadata, s0)
 
     # 4. Create states.
     _create_state(
@@ -290,6 +291,14 @@ def _initial_geometry(session: Session, state: MoleculeState) -> Optional[str]:
         select(MoleculeGeometry).where(MoleculeGeometry.state_id == state.id, MoleculeGeometry.label == "initial")
     ).first()
     return geometry.xyz_data if geometry is not None else None
+
+
+def _with_s0_tolerance(metadata: dict, s0: MoleculeState) -> dict:
+    """*metadata* with S0's imaginary-mode cutoff keys in place of the request's."""
+    keys = ("imag_freq_tolerance", "strict_convergence")
+    s0_metadata = json.loads(s0.metadata_json or "{}")
+    return {**{k: v for k, v in metadata.items() if k not in keys},
+            **{k: s0_metadata[k] for k in keys if k in s0_metadata}}
 
 
 def _check_extension(
@@ -740,8 +749,10 @@ def _create_state(
     if description == "S0":
         state_metadata.update(categories.snapshot(metadata))
 
-    # Stored only when off, so a default submission's metadata stays as it was.
-    if metadata.get("strict_convergence") is False:
+    # See results.imaginary_cutoff; an entrypoint queued before the tolerance keeps the old rule.
+    if "imag_freq_tolerance" in metadata:
+        state_metadata["imag_freq_tolerance"] = float(metadata["imag_freq_tolerance"])
+    elif metadata.get("strict_convergence") is False:
         state_metadata["strict_convergence"] = False
 
     # Densities, NBO and Reactivity apply to every state's own energy singlepoint, not

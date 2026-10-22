@@ -198,6 +198,7 @@ def _reference_entrypoint(
         "request_singlepoint": False,
         "request_singlepoint_vertical_excitations": False,
         "request_singlepoint_nbo": False,
+        "imag_freq_tolerance": 0.0,
         "max_conformers_S0": 1,
         categories.NMR: True,
         "nmr_nuclei": sorted({n for scheme in REFERENCES.values() for n, ref in scheme.items() if ref == smiles}),

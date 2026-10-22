@@ -43,13 +43,16 @@ class QMEngine(ABC):
     """Interface that every QM engine must satisfy."""
 
     @abstractmethod
-    def check_output(self, job_path: Path, task_type: str) -> QMResult:
+    def check_output(
+        self, job_path: Path, task_type: str, imag_freq_tolerance: Optional[float] = None,
+    ) -> QMResult:
         """Analyse a completed calculation and return structured results.
 
         Args:
             job_path: Directory that contains the program output files.
             task_type: One of ``"optimization"``, ``"singlepoint"``,
                        ``"confsearch"``, etc.
+            imag_freq_tolerance: An optimisation fails on any mode below it (cm^-1).
 
         Returns:
             A :class:`QMResult` summarising success and extracted data.

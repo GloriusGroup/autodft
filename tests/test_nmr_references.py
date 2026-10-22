@@ -158,6 +158,7 @@ class TestQueueing:
                 assert meta[categories.NMR] is True
                 assert meta["request_confsearch"] is False and meta["request_singlepoint"] is False
                 assert meta["request_singlepoint_vertical_excitations"] is False
+                assert meta["imag_freq_tolerance"] == 0.0
 
     def test_references_are_queued_once_per_method(self, engine, tmp_path, monkeypatch):
         settings = _settings(tmp_path)

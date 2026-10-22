@@ -212,9 +212,8 @@ class SubmitRequest(BaseModel):
     # singlepoint ("sp") or the optimisation ("opt") level.
     esd_ht_scope: str = "all"
     esd_ht_method: str = "sp"
-    # Retry any optimisation with an imaginary mode below -50 cm^-1. Off: ESD's
-    # S1 optimisation (numerical Hessian) accepts down to -100 cm^-1, flagged.
-    strict_convergence: bool = True
+    # Every optimisation fails on any imaginary mode below this (cm^-1, -300 to 0).
+    imag_freq_tolerance: float = 0.0
     density_eldens: bool = True
     density_spindens: bool = True
     density_grid: int = 75
@@ -2131,6 +2130,18 @@ def _resolved_headers(session, body: SubmitRequest) -> tuple[Optional[str], Opti
     )
 
 
+def _tolerance_error(body: SubmitRequest) -> Optional[JSONResponse]:
+    """A 400 when *body*'s imag_freq_tolerance is out of range, else None."""
+    from autodft.qm.orca.parser import IMAG_FREQ_TOLERANCE_MIN
+
+    if IMAG_FREQ_TOLERANCE_MIN <= body.imag_freq_tolerance <= 0:
+        return None
+    return JSONResponse(status_code=400, content={"detail": (
+        f"imag_freq_tolerance must be between {IMAG_FREQ_TOLERANCE_MIN:g} and 0 cm-1 "
+        f"(got {body.imag_freq_tolerance:g})."
+    )})
+
+
 def _reject_reason(body: SubmitRequest, smiles: str, headers) -> tuple[Optional[str], dict]:
     """Why *smiles* cannot be queued under *body*'s options (None if it can),
     with the validation result."""
@@ -2187,6 +2198,9 @@ def api_submit(
     from autodft import categories
     from autodft.api import project_jobs
 
+    bad = _tolerance_error(body)
+    if bad is not None:
+        return bad
     with get_session() as session:
         headers = _resolved_headers(session, body)
         detail, check = _reject_reason(body, body.smiles, headers)
@@ -2329,7 +2343,7 @@ def api_extend(name: str, body: SubmitBatchRequest, identity: Identity = Depends
     from autodft import categories
     from autodft.api import project_jobs
 
-    bad = _reject_bad_project(name)
+    bad = _reject_bad_project(name) or _tolerance_error(body)
     if bad is not None:
         return bad
     with get_session() as session:
@@ -2400,6 +2414,9 @@ def api_submit_batch(
             status_code=400,
             content={"detail": "smiles_list is empty; nothing to queue."},
         )
+    bad = _tolerance_error(body)
+    if bad is not None:
+        return bad
 
     accepted: list[tuple[str, CalculationEntrypoint]] = []
     rejected: list[dict] = []
@@ -2518,7 +2535,7 @@ def _new_entrypoint(
         "request_singlepoint": body.request_singlepoint,
         "request_singlepoint_vertical_excitations": body.request_singlepoint_vertical_excitations,
         "request_singlepoint_nbo": False,
-        "strict_convergence": body.strict_convergence,
+        "imag_freq_tolerance": body.imag_freq_tolerance,
         "max_conformers_S0": n_s0,
         "max_conformers_T1": n_t1,
         "max_conformers_ox": n_ox,

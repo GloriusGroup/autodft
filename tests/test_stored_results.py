@@ -1048,7 +1048,7 @@ class _StubEngine:
     def __init__(self, result):
         self.result = result
 
-    def check_output(self, job_path, task_type):
+    def check_output(self, job_path, task_type, imag_freq_tolerance=None):
         return self.result
 
 

@@ -152,7 +152,9 @@ def process_finished_jobs(session: Session, qm_engine: QMEngine, max_attempts: i
         # pipeline tick, discarding every other molecule's progress and
         # re-raising on the same job forever.
         try:
-            result = qm_engine.check_output(job_path, _check_type(session, task))
+            result = qm_engine.check_output(
+                job_path, _check_type(session, task), _imag_freq_tolerance(session, task),
+            )
         except Exception as exc:  # noqa: BLE001 - deliberately broad
             logger.exception("Failed to parse output for job %d", job.id)
             job.success = False
@@ -1430,21 +1432,24 @@ def _esd_role(state: MoleculeState) -> Optional[str]:
 
 def _check_type(session: Session, task: ComputationTask) -> str:
     """The task type whose output checks apply; an ESD S1 optimisation gets the
-    excited-state ones (softer on imaginary modes without strict convergence), any
-    other strict one the -10 cm-1 cutoff,
-    a densities singlepoint the cube check."""
+    excited-state ones, a densities singlepoint the cube check."""
     if task.task_type == TaskType.optimization:
         state = session.get(MoleculeState, task.state_id)
         if state is not None and _esd_role(state) == "S1":
-            strict = json.loads(state.metadata_json or "{}").get("strict_convergence", True)
-            return "optimization_excited" if strict else "optimization_excited_relaxed"
-        if state is not None and json.loads(state.metadata_json or "{}").get("strict_convergence", True):
-            return "optimization_strict"
+            return "optimization_excited"
     if task.task_type == TaskType.singlepoint:
         state = session.get(MoleculeState, task.state_id)
         if state is not None and _keeps_cubes(state, task):
             return "singlepoint_densities"
     return task.task_type.value
+
+
+def _imag_freq_tolerance(session: Session, task: ComputationTask) -> Optional[float]:
+    """The imaginary-mode cutoff of an optimisation's state; None for other tasks."""
+    if task.task_type != TaskType.optimization:
+        return None
+    state = session.get(MoleculeState, task.state_id)
+    return results.imaginary_cutoff(state) if state is not None else None
 
 
 def _keeps_hessian(state: MoleculeState, task: ComputationTask) -> bool:
