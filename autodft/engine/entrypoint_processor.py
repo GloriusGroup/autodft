@@ -173,7 +173,7 @@ def _process_entrypoint_body(
         conflict = None  # reference molecules get one S0 state per NMR method (see _create_state)
     else:
         conflict = categories.existing_conflict(
-            session, project, _canonicalize_smiles(smiles), wanted, requested_options,
+            session, project, _canonicalize_smiles(smiles), wanted, requested_options, metadata.get("advanced"),
         )
     if conflict:
         raise ValueError(conflict)
@@ -211,7 +211,7 @@ def _process_entrypoint_body(
     s0 = _check_extension(session, molecule, header_ids, added) if metadata.get("extend") else None
     if s0 is not None:
         initial_xyz = _initial_geometry(session, s0) or _generate_initial_xyz(smiles)
-        metadata = _with_s0_tolerance(metadata, s0)
+        metadata = _with_s0_settings(metadata, s0)
 
     # 4. Create states.
     _create_state(
@@ -302,9 +302,9 @@ def _initial_geometry(session: Session, state: MoleculeState) -> Optional[str]:
     return geometry.xyz_data if geometry is not None else None
 
 
-def _with_s0_tolerance(metadata: dict, s0: MoleculeState) -> dict:
-    """*metadata* with S0's imaginary-mode cutoff keys in place of the request's."""
-    keys = ("imag_freq_tolerance", "strict_convergence")
+def _with_s0_settings(metadata: dict, s0: MoleculeState) -> dict:
+    """*metadata* with S0's imaginary-mode cutoff keys and ``advanced`` in place of the request's."""
+    keys = ("imag_freq_tolerance", "strict_convergence", "advanced")
     s0_metadata = json.loads(s0.metadata_json or "{}")
     return {**{k: v for k, v in metadata.items() if k not in keys},
             **{k: s0_metadata[k] for k in keys if k in s0_metadata}}
@@ -665,7 +665,10 @@ def _canonicalize_smiles(smiles: str) -> str:
 
 
 def legacy_submission(session: Session, project: str, headers: tuple) -> bool:
-    """Whether *project* has S0 states without ``advanced`` under exactly these header texts."""
+    """Whether *project* has S0 states without ``advanced`` under exactly these header texts,
+    the optimisation one setting what Advanced owns."""
+    if not (headers[1] and advanced.is_legacy_header(headers[1])):
+        return False
     ids = [session.exec(select(ComputationHeader.id).where(ComputationHeader.header_text == text)).first()
            if text else None for text in headers]
     if any(text and hid is None for text, hid in zip(headers, ids)):
@@ -739,10 +742,11 @@ def _create_state(
         )
     ).all()
     if nmr_references.is_reference_project(metadata.get("project_name", "")):
-        # A reference at the same headers but another NMR method is a state of its own.
-        method = categories.options(metadata).get("nmr_method")
-        existing = [s for s in existing
-                    if nmr_references.method_key(json.loads(s.metadata_json or "{}")) == method]
+        # A reference at the same headers but another NMR method or Advanced method settings is its own state.
+        key = (categories.options(metadata).get("nmr_method"), advanced.stored_method_settings(metadata))
+        stored = [(s, json.loads(s.metadata_json or "{}")) for s in existing]
+        existing = [s for s, meta in stored
+                    if (nmr_references.method_key(meta), advanced.stored_method_settings(meta)) == key]
     existing = existing[0] if existing else None
 
     if existing is not None:

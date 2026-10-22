@@ -459,7 +459,9 @@ Every submission path (CLI, REST, Python) ends up writing the same
   then hold only the method: one with e.g. `DEFGRID3`, `TightSCF`,
   `CPCM(...)`, `Opt`, `Freq`, `KeepDens`, `%pal` or `%maxcore` is refused,
   naming the setting. Without `advanced`, a submission to a project whose
-  molecules ran on exactly these (full) headers stays as it was; see
+  molecules ran on exactly these (full) headers stays as it was. An existing
+  molecule is not resubmitted with other method settings (cores and memory
+  may differ); Extend takes the molecule's own; see
   [`docs/API.md`](docs/API.md#post-apisubmit).
 * `header_confsearch_id / _optimization_id / _singlepoint_id` — pick a
   stored header by ID. Or pass raw `header_*` text. The method-only

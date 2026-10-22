@@ -189,7 +189,7 @@ package defaults in `autodft/qm/orca/defaults.py`: method only
 | `header_confsearch`                         | str?   | `null`        | Raw ORCA header block (multi-line). Used if no header id is set.                            |
 | `header_optimization`                       | str?   | `null`        | Raw ORCA header block. Used if no header id is set.                                         |
 | `header_singlepoint`                        | str?   | `null`        | Raw ORCA header block. **Must not contain `Opt` or `Freq`.**                                |
-| `advanced` | object? | `null` | Advanced settings per stage: `{"confsearch": {...}, "optimization": {...}, "singlepoint": {...}}`. Keys: confsearch `nprocs`, `maxcore`; optimization `grid`, `scf_convergence`, `geom_convergence`, `ri`, `aux_basis`, `solvation`, `solvent`, `nprocs`, `maxcore`; singlepoint the same without `geom_convergence`. Choices: `grid` DEFGRID1/2/3; `scf_convergence` Normal/Strong/Tight/VeryTight/Extreme; `geom_convergence` Loose/Normal/Tight/VeryTight; `ri` RIJCOSX/RI-J/RIJK/NoRI; `aux_basis` def2/J, def2/JK, AutoAux; `solvation` CPCM/SMD; each also `omit` (ORCA default); `solvent` an ORCA name (letters, digits, space `,` `-`; max 40); `nprocs` 1–64; `maxcore` 250–16000 MB; `nprocs` × `maxcore` ≤ 400 000 MB. Missing keys take the config defaults (`[advanced.*]`, `GET /api/advanced-defaults`); unknown stages or keys, a wrong value or a non-object answer 400. Rendered into each job: a second `!` line (RI, aux basis, grid, solvation; `Opt Freq` on optimisations) and `%maxcore`, `%pal`, `%scf`, `%geom` blocks. The resolved dict is stored on every state. With `advanced` (or without it, see below) the headers must be method only: a header with `DEFGRIDn`, `*SCF`, RI or aux-basis keywords, `CPCM`/`SMD`, `PALn`, any `Opt`, `Freq`, `KeepDens`, `%pal`, `%maxcore`, `%geom`, `%cpcm` or `%scf Convergence` answers 400 naming the setting (the confsearch header only for `PALn`, `%pal`, `%maxcore`). Without `advanced`, a submission to a project whose S0 states ran on exactly these headers without Advanced settings stays legacy (headers used as they are, nothing stored); every other one gets the defaults. CLI: `--opt-grid`, `--sp-grid`, `--opt-scf-convergence`, `--sp-scf-convergence`, `--opt-geom-convergence`, `--opt-ri`, `--sp-ri`, `--opt-aux-basis`, `--sp-aux-basis`, `--opt-solvation`, `--sp-solvation`, `--opt-solvent`, `--sp-solvent`, `--cs-nprocs`, `--opt-nprocs`, `--sp-nprocs`, `--cs-maxcore`, `--opt-maxcore`, `--sp-maxcore`. |
+| `advanced` | object? | `null` | Advanced settings per stage: `{"confsearch": {...}, "optimization": {...}, "singlepoint": {...}}`. Keys: confsearch `nprocs`, `maxcore`; optimization `grid`, `scf_convergence`, `geom_convergence`, `ri`, `aux_basis`, `solvation`, `solvent`, `nprocs`, `maxcore`; singlepoint the same without `geom_convergence`. Choices: `grid` DEFGRID1/2/3; `scf_convergence` Normal/Strong/Tight/VeryTight/Extreme; `geom_convergence` Loose/Normal/Tight/VeryTight; `ri` RIJCOSX/RI-J/RIJK/NoRI; `aux_basis` def2/J, def2/JK, AutoAux; `solvation` CPCM/SMD; each also `omit` (ORCA default); `solvent` an ORCA name (letters, digits, space `,` `-`; max 40); `nprocs` 1–64; `maxcore` 250–16000 MB; `nprocs` × `maxcore` ≤ 400 000 MB. Missing keys take the config defaults (`[advanced.*]`, `GET /api/advanced-defaults`); unknown stages or keys, a wrong value or a non-object answer 400. Rendered into each job: a second `!` line (RI, aux basis, grid, solvation; `Opt Freq` on optimisations) and `%maxcore`, `%pal`, `%scf`, `%geom` blocks. The resolved dict is stored on every state. With `advanced` (or without it, see below) the headers must be method only: a header with `DEFGRIDn`, `*SCF`, RI or aux-basis keywords, `CPCM`/`SMD`, `PALn`, any `Opt`, `Freq`, `KeepDens`, `%pal`, `%maxcore`, `%geom`, `%cpcm` or `%scf Convergence` answers 400 naming the setting (the confsearch header only for `PALn`, `%pal`, `%maxcore`). Without `advanced`, a submission to a project whose S0 states ran on exactly these headers without Advanced settings, the optimisation header itself setting what Advanced owns, stays legacy (headers used as they are, nothing stored); every other one gets the defaults. Resubmitting an existing molecule with other Advanced method settings (all but `nprocs`/`maxcore`), or in the other mode, answers 400 naming the setting, with or without categories. CLI: `--opt-grid`, `--sp-grid`, `--opt-scf-convergence`, `--sp-scf-convergence`, `--opt-geom-convergence`, `--opt-ri`, `--sp-ri`, `--opt-aux-basis`, `--sp-aux-basis`, `--opt-solvation`, `--sp-solvation`, `--opt-solvent`, `--sp-solvent`, `--cs-nprocs`, `--opt-nprocs`, `--sp-nprocs`, `--cs-maxcore`, `--opt-maxcore`, `--sp-maxcore`. |
 | `header_confsearch_id`                      | int?   | `null`        | ID of a stored `ComputationHeader`. Wins over the raw text version.                         |
 | `header_optimization_id`                    | int?   | `null`        | Same.                                                                                       |
 | `header_singlepoint_id`                     | int?   | `null`        | Same.                                                                                       |
@@ -197,7 +197,7 @@ package defaults in `autodft/qm/orca/defaults.py`: method only
 | `uvvis_nroots`                              | int    | `20`          | UV/Vis excited states (1–100). Stored only when UV/Vis is requested.                        |
 | `uvvis_tda`                                 | bool   | `false`       | Tamm–Dancoff approximation for the UV/Vis TDDFT. Stored only when UV/Vis is requested.      |
 | `request_spec_ir`                           | bool   | `false`       | IR: read from the S0 optimisation's frequency calculation — no extra job. A legacy submission needs `Freq` in the optimisation header. |
-| `request_spec_nmr`                          | bool   | `false`       | NMR: a singlepoint on every optimised S0 conformer in the `nmr_method`. Shifts are referenced to chloroform or TMS (`nmr_reference`, ¹H/¹³C) and CFCl₃ (¹⁹F), which the pipeline computes itself — once per optimisation/singlepoint header pair and `nmr_method` — in the protected `admin/reference_systems` project. Closed-shell molecules only. |
+| `request_spec_nmr`                          | bool   | `false`       | NMR: a singlepoint on every optimised S0 conformer in the `nmr_method`. Shifts are referenced to chloroform or TMS (`nmr_reference`, ¹H/¹³C) and CFCl₃ (¹⁹F), which the pipeline computes itself — once per optimisation/singlepoint header pair, `nmr_method` and Advanced method settings — in the protected `admin/reference_systems` project. Closed-shell molecules only. |
 | `nmr_nuclei`                                | list   | `["H","C","F"]` | Nuclei to report; stored only with NMR.                                                  |
 | `nmr_method`                                | string | `"singlepoint"` | `"singlepoint"`: the singlepoint header with `NMR` added to its `!` line. `"dh"`: `!revDSD-PBEP86-D4/2021 PCSSEG-3 AUTOAUX NMR NOFROZENCORE TightSCF` plus the singlepoint header's solvation keywords and `%cpcm` only, on its own `nmr_dh_nprocs` × `nmr_dh_maxcore`; refused for elements past Kr (no `pcSseg-3`). Stored only with NMR. |
 | `nmr_reference`                             | string | `"chcl3"`       | ¹H/¹³C reference compound: `"chcl3"` (chloroform; its experimental shift in the calculation's solvent is added, Fulmer et al. 2010, e.g. 7.58 / 79.17 ppm in MeCN) or `"tms"`. ¹⁹F always CFCl₃. Stored only with NMR; molecules from before the option read as `"chcl3"`; a different value is no conflict with an existing molecule. |
@@ -482,8 +482,8 @@ UV/Vis, IR, NMR, ESD and NBO for every molecule submitted with those
 categories (Densities has no payload of its own — see
 [`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md#densities-and-nbo) for its cube
 files). A plain resubmission of an existing molecule with a category it
-does not have, or with different options for one it already has, answers
-400; add categories to existing molecules with
+does not have, or with different options for one it already has (or other
+Advanced method settings), answers 400; add categories to existing molecules with
 [`POST /api/projects/{name}/extend`](#post-apiprojectsnameextend).
 
 Without `molecule_id`, one summary per molecule (this view is cached, and
@@ -532,7 +532,8 @@ atom). `reference` names, per reported nucleus, the reference compound
 (chloroform or TMS for H and C per `nmr_reference`, CFCl₃ for F) at the molecule's optimisation and
 singlepoint headers and NMR method in `admin/reference_systems` — the one
 whose NMR input matches the molecule's, else the one stored with the same
-`nmr_method` (none for molecules from before the option): `status` is `"ok"`,
+`nmr_method` (none for molecules from before the option) and Advanced method
+settings: `status` is `"ok"`,
 `"pending"`, `"failed"` or `"missing"` (none at this method); `sigma_ppm`
 is its mean isotropic shielding for that element; `delta_ref_ppm` the
 reference's experimental shift added to σ_ref − σ (0 for TMS and CFCl₃) and
@@ -697,8 +698,10 @@ A molecule any of whose state family's optimisations lost bonds adds
 
 What the project's unarchived molecules already have, for Extend:
 `molecules`, `archived`, `extendable` (with a `reason` when not: an empty or
-fully archived project, or molecules on more than one header set),
+fully archived project, or molecules on more than one header set or set of
+Advanced method settings),
 `headers` (`confsearch` / `optimization` / `singlepoint`: `{id, text}`),
+`advanced` (the first S0 state's; `null` for a legacy project),
 `categories` and `states` (`T1`, `ox`, `red`) as `"all"` / `"some"` /
 `"none"` of the molecules, the `options` of each present category (ESD
 also carries `request_esd_ht`), `max_conformers` per existing state,
@@ -712,8 +715,9 @@ Adds calculations to the project's molecules — all unarchived ones, or
 those in `smiles_list` — without recomputing anything. The body is a
 [`submit-batch`](#post-apisubmit-batch) body: tick the categories and states
 to have (present ones may stay ticked); headers in the body are ignored and
-the project's own are used, and a body with `advanced` answers 400: a legacy
-project stays legacy. Each molecule gains only what it lacks:
+the project's own are used, and a body with `advanced` answers 400: each
+extension takes its S0 state's Advanced settings, and a legacy project stays
+legacy. Each molecule gains only what it lacks:
 T1/ox/red states (with their conformer search), UV/Vis and NMR singlepoints
 for its finished S0 conformers (running ones get them when they finish),
 IR, and ESD (S1 plus a triplet seeded from the lowest S0 conformer —

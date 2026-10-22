@@ -107,6 +107,11 @@ def method_settings(advanced: dict) -> dict:
             for stage, values in advanced.items()}
 
 
+def stored_method_settings(metadata: dict) -> Optional[dict]:
+    """The method settings stored in *metadata*; None for a legacy state."""
+    return method_settings(metadata["advanced"]) if metadata.get("advanced") else None
+
+
 def stage_for(task_type: str) -> str:
     """The Advanced stage whose settings a task of *task_type* uses."""
     return task_type if task_type in ("confsearch", "optimization") else "singlepoint"

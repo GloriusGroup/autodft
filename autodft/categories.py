@@ -438,17 +438,15 @@ def present(session: Session, project_name: str, canonical_smiles: str) -> set[s
 
 def existing_conflict(
     session: Session, project_name: str, canonical_smiles: str, wanted: set[str],
-    requested_options: Optional[dict] = None,
+    requested_options: Optional[dict] = None, advanced: Optional[dict] = None,
 ) -> Optional[str]:
     """Refuse categories for a molecule that already exists without them, or
-    with different options for them.
+    with different options for them, and other Advanced method settings
+    (*advanced* None is a legacy submission).
 
     Categories are only added to new molecules: finished work is never
     extended, so a molecule computed before a category existed stays as it was.
     """
-    if not wanted:
-        return None
-
     from autodft.models.molecule import Molecule
     from autodft.models.state import MoleculeState
 
@@ -463,6 +461,7 @@ def existing_conflict(
 
     have: set[str] = set()
     stored_metadata: dict = {}
+    settings_conflict = None
     for state in session.exec(
         select(MoleculeState).where(
             MoleculeState.molecule_id == molecule.id,
@@ -472,6 +471,15 @@ def existing_conflict(
         metadata = json.loads(state.metadata_json) if state.metadata_json else {}
         have |= requested(metadata)
         stored_metadata.update(metadata)
+        settings_conflict = settings_conflict or _settings_difference(metadata, advanced)
+    if settings_conflict:
+        return (
+            f"{canonical_smiles} already exists in {project_name} (molecule {molecule.id}): "
+            f"{settings_conflict}; Advanced method settings apply to new molecules only, "
+            f"so submit it into another project."
+        )
+    if not wanted:
+        return None
 
     missing = sorted(LABELS[key] for key in wanted - have)
     if missing:
@@ -504,6 +512,26 @@ def existing_conflict(
                         f"molecules only, so submit it into another project."
                     )
     return None
+
+
+def _settings_difference(metadata: dict, advanced: Optional[dict]) -> Optional[str]:
+    """How a stored state's Advanced method settings differ from *advanced*'s, or None."""
+    from autodft.qm.orca.advanced import method_settings, stored_method_settings
+
+    stored = stored_method_settings(metadata)
+    wanted = method_settings(advanced) if advanced else None
+    if stored == wanted:
+        return None
+    if stored is None:
+        return "the existing molecule was computed with header-embedded settings, Advanced settings requested"
+    if wanted is None:
+        return "the existing molecule was computed with Advanced settings, header-embedded settings requested"
+    for stage, values in stored.items():
+        for key, old in values.items():
+            new = wanted.get(stage, {}).get(key)
+            if old != new:
+                return f"advanced.{stage}.{key} is {old} for the existing molecule, {new} requested"
+    return "the Advanced method settings differ from the existing molecule's"
 
 
 def _integer(value) -> bool:

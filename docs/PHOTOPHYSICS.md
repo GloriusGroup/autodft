@@ -16,7 +16,7 @@ Tick a category when you submit: the dashboard's checkboxes, the API's
 `--density-grid` / `--eldens-file` / `--spindens-file` / `--nbo-keywords`).
 Resubmitting an existing molecule with a category it doesn't already have
 is refused, and so is resubmitting it with different options for a
-category it already has. To add categories or states to a project's
+category it already has, or with other Advanced method settings. To add categories or states to a project's
 molecules, use the project's Extend (see [`docs/API.md`](API.md#post-apiprojectsnameextend));
 Densities and NBO can only be requested at first submission.
 A category's options (`uvvis_nroots`, `uvvis_tda`, `nmr_nuclei`,
@@ -112,10 +112,11 @@ calculation's implicit solvent (Fulmer et al., Organometallics 2010, 29,
 acetone-d₆, CD₂Cl₂, THF-d₈, toluene-d₈, C₆D₆, C₆D₅Cl, CD₃OD, TFE-d₃), the
 CDCl₃ values without one (gas phase, water). The pipeline computes the
 reference compounds itself once per
-optimisation/singlepoint header pair and `nmr_method`, in the protected
-`admin/reference_systems` project (one S0 state per method there). A
-molecule takes the reference whose NMR input has the same `!` keywords
-and `%` blocks as its own, else the one stored with its `nmr_method`.
+optimisation/singlepoint header pair, `nmr_method` and Advanced method
+settings, in the protected `admin/reference_systems` project (one S0 state
+per method there). A molecule takes the reference whose NMR input has the
+same `!` keywords and `%` blocks as its own, else the one stored with its
+`nmr_method` and Advanced method settings.
 Molecules and references stored before `nmr_method` existed (NMR in
 `pcSseg-2`) carry none and so only pair with each other; a new molecule
 never takes one of their references. `method_matches` compares the `!`

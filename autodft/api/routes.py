@@ -2270,7 +2270,7 @@ def api_submit(
         project_name, author = _submission_owner(session, identity, body)
         conflict = categories.existing_conflict(
             session, project_name, check["canonical"], categories.requested(flags),
-            {**categories.options(flags), categories.ESD_HT: bool(flags.get(categories.ESD_HT))},
+            {**categories.options(flags), categories.ESD_HT: bool(flags.get(categories.ESD_HT))}, advanced,
         )
         if conflict:
             return JSONResponse(
@@ -2309,8 +2309,9 @@ class SubmitBatchRequest(SubmitRequest):
 
 
 def _extend_scope(session, name: str) -> dict:
-    """What a project's molecules already have, for Extend: headers, categories, states, options."""
+    """What a project's molecules already have, for Extend: headers, Advanced settings, categories, states, options."""
     from autodft import categories
+    from autodft.qm.orca.advanced import stored_method_settings
 
     molecules = session.exec(select(Molecule).where(Molecule.project_name == name)).all()
     live = [m for m in molecules if not m.archived]
@@ -2326,9 +2327,13 @@ def _extend_scope(session, name: str) -> dict:
     have: dict[str, int] = {}
     options: dict = {}
     first: dict = {}
+    method_sets = []
     for st in s0:
         metadata = json.loads(st.metadata_json) if st.metadata_json else {}
         first = first or metadata
+        settings = stored_method_settings(metadata)
+        if settings not in method_sets:
+            method_sets.append(settings)
         for key in categories.requested(metadata):
             have[key] = have.get(key, 0) + 1
             if key not in options:
@@ -2355,6 +2360,9 @@ def _extend_scope(session, name: str) -> dict:
         reason = "The project has no molecules left to extend (all archived)." if molecules else "The project is empty."
     elif headers is None:
         reason = "The project's molecules use more than one header set; extend is only possible with one."
+    elif len(method_sets) > 1:
+        reason = ("The project's molecules use more than one set of Advanced method settings; "
+                  "extend is only possible with one.")
     return {
         "project": name,
         "molecules": n,
@@ -2362,6 +2370,8 @@ def _extend_scope(session, name: str) -> dict:
         "extendable": reason is None,
         "reason": reason,
         "headers": headers,
+        # Each extension takes its own S0's; None for a legacy project.
+        "advanced": first.get("advanced"),
         "categories": {key: share(have.get(key, 0)) for key in categories.CATEGORIES},
         "options": options,
         "states": {d: share(counts.get(d, 0)) for d in ("T1", "ox", "red")},
@@ -2412,9 +2422,7 @@ def api_extend(name: str, body: SubmitBatchRequest, identity: Identity = Depends
             return JSONResponse(status_code=409, content={"detail": str(exc)})
         headers = tuple(h["text"] if h else None for h in (scope["headers"][k] for k in
                                                             ("confsearch", "optimization", "singlepoint")))
-        advanced, detail = _submission_advanced(session, body, name, headers)
-        if detail is not None:
-            return JSONResponse(status_code=400, content={"detail": detail})
+        advanced = scope["advanced"]
         wanted = categories.requested(_category_flags(body))
         states = {d for d, on in (("T1", body.request_t1), ("ox", body.request_ox), ("red", body.request_red)) if on}
         known = set(scope["smiles"])
@@ -2509,7 +2517,7 @@ def api_submit_batch(
             detail, check = _reject_reason(body, smiles, headers, advanced)
             if detail is None:
                 detail = categories.existing_conflict(
-                    session, project_name, check["canonical"], wanted, requested_options,
+                    session, project_name, check["canonical"], wanted, requested_options, advanced,
                 )
             if detail is not None:
                 rejected.append({"smiles": smiles, "detail": detail})

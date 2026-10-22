@@ -21,7 +21,7 @@ from autodft.engine import nmr_references
 from autodft.extraction import results as stored
 from autodft.extraction.extractor import PipelineExtractor
 from autodft.models import ComputationHeader, ComputationTask, Molecule, MoleculeGeometry, MoleculeState, TaskStatus, TaskType
-from autodft.qm.orca.advanced import effective_header
+from autodft.qm.orca.advanced import effective_header, stored_method_settings
 from autodft.qm.orca.spectra_parser import Shielding
 
 _OPEN = (TaskStatus.created, TaskStatus.pending)
@@ -85,17 +85,17 @@ def method_fingerprint(input_text: str) -> tuple[frozenset[str], str]:
 def reference_shieldings(
     session: Session, opt_header_id, sp_header_id, cache: Optional[dict] = None,
     method: Optional[str] = None, fingerprint: Optional[tuple[frozenset[str], str]] = None,
-    choice: Optional[str] = None,
+    choice: Optional[str] = None, settings: Optional[dict] = None,
 ) -> dict:
     """Per nucleus: the reference compound's mean shielding at these headers.
 
     Of the references at these headers, the one whose NMR input has
     *fingerprint* is taken, else the one stored with NMR *method*
-    (``nmr_references.method_key``). *cache*, when given, spares every
-    molecule at the same method a repeat lookup. *choice* is the
-    ``nmr_reference`` (chloroform or TMS for 1H/13C).
+    (``nmr_references.method_key``) and Advanced method *settings* (None:
+    legacy). *cache*, when given, spares every molecule at the same method a
+    repeat lookup. *choice* is the ``nmr_reference`` (chloroform or TMS for 1H/13C).
     """
-    key = (opt_header_id, sp_header_id, method, fingerprint, choice)
+    key = (opt_header_id, sp_header_id, method, fingerprint, choice, json.dumps(settings, sort_keys=True))
     if cache is not None and key in cache:
         return cache[key]
     from autodft.engine.entrypoint_processor import _canonicalize_smiles
@@ -104,7 +104,7 @@ def reference_shieldings(
     by_element = nmr_references.reference_compounds(choice)
     compounds = {
         smiles: _reference(session, extractor, _canonicalize_smiles(smiles), opt_header_id, sp_header_id,
-                           method, fingerprint)
+                           method, fingerprint, settings)
         for smiles in sorted(set(by_element.values()))
     }
     out = {}
@@ -171,6 +171,7 @@ def molecule_nmr(
     reference = reference_shieldings(
         session, state.optimization_header_id, state.singlepoint_header_id, references,
         nmr_references.method_key(metadata), fingerprint, categories.options(metadata).get("nmr_reference"),
+        stored_method_settings(metadata),
     )
     sp_header = session.get(ComputationHeader, state.singlepoint_header_id) if state.singlepoint_header_id else None
     sp_text = effective_header(sp_header.header_text, metadata, "singlepoint") if sp_header else None
@@ -212,7 +213,7 @@ def molecule_nmr(
     return out
 
 
-def _reference(session, extractor, canonical, opt_header_id, sp_header_id, method, fingerprint) -> dict:
+def _reference(session, extractor, canonical, opt_header_id, sp_header_id, method, fingerprint, settings) -> dict:
     molecule = session.exec(
         select(Molecule).where(
             Molecule.smiles == canonical,
@@ -235,7 +236,8 @@ def _reference(session, extractor, canonical, opt_header_id, sp_header_id, metho
         if fingerprint is not None and ref["status"] == "ok" and ref["fingerprint"] == fingerprint:
             return ref
     for state, ref in found:
-        if nmr_references.method_key(json.loads(state.metadata_json or "{}")) == method:
+        metadata = json.loads(state.metadata_json or "{}")
+        if nmr_references.method_key(metadata) == method and stored_method_settings(metadata) == settings:
             return ref
     return {"status": "missing", "molecule_id": molecule.id}
 
