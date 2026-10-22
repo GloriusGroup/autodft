@@ -41,6 +41,7 @@ class ProjectJobKind(str, Enum):
     export_files = "export_files"
     export_xlsx = "export_xlsx"
     export_photophysics = "export_photophysics"
+    export_reactivity = "export_reactivity"
 
 
 class ProjectJobStatus(str, Enum):

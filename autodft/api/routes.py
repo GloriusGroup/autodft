@@ -1030,7 +1030,7 @@ def api_project_archive(
 
 
 # Export format -> the background-job kind that produces it. `xlsx` is the
-# state-analysis workbook; `photophysics` is the photophysics workbook + JSON;
+# state-analysis workbook; `photophysics` and `reactivity` are workbook + JSON;
 # the rest come off the PipelineExtractor.
 _EXPORT_KINDS = {
     "csv": ProjectJobKind.export_csv,
@@ -1038,6 +1038,7 @@ _EXPORT_KINDS = {
     "files": ProjectJobKind.export_files,
     "xlsx": ProjectJobKind.export_xlsx,
     "photophysics": ProjectJobKind.export_photophysics,
+    "reactivity": ProjectJobKind.export_reactivity,
 }
 
 
@@ -1065,7 +1066,9 @@ def api_project_export(
     archived project is refused (409); ``xlsx`` is built from the frozen
     archive CSV and is allowed. ``photophysics`` -> the photophysics workbook
     plus JSON, allowed for archived projects (served from the frozen
-    payload). A project with a job already in flight is refused (409).
+    payload). ``reactivity`` -> the reactivity workbook plus JSON, refused
+    for archived projects like ``csv``. A project with a job already in
+    flight is refused (409).
     """
     bad = _reject_bad_project(name)
     if bad is not None:

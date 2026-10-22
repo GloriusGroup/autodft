@@ -720,7 +720,7 @@ export job runs. The dashboard's project page opens it as
 "Add calculations…": the submission form with the project's molecules and
 headers, present items greyed out. Owner or admin.
 
-### `POST /api/projects/{name}/export` `?format=csv|json|files|xlsx|photophysics&all_conformers=true|false&keep_gbw=true|false`
+### `POST /api/projects/{name}/export` `?format=csv|json|files|xlsx|photophysics|reactivity&all_conformers=true|false&keep_gbw=true|false`
 
 Starts an export as a background job and answers **202** for every
 format — none of them block the request. Writes into
@@ -735,6 +735,20 @@ the filename stem:
 * `xlsx`  → `<project>_state_analysis.xlsx`
 * `photophysics` → `<project>_photophysics.json` (the full UV/Vis, IR,
   NMR, ESD and NBO detail payload) plus `<project>_photophysics.xlsx`
+* `reactivity` → `<project>_reactivity.xlsx` plus `<project>_reactivity.json`
+  (the same rows), for scripts; Export Project writes them too. One row set
+  per successful relaxed and vertical singlepoint of each Reactivity state's
+  reported conformer (every valid conformer with `all_conformers`):
+  * `molecular`: mol_id, smiles, state, state_id, conformer, opt_task_id,
+    `sp_kind` (relaxed / vert_ox / vert_red / vert_spin_change),
+    sp_task_id, charge, multiplicity, `energy_Eh`, `polarizability_iso_au`,
+    `quad_xx_au` … `quad_yz_au`, `s2`, `stable`, `stability_lowest_Eh`,
+    `note` (`unchecked`, or `no reactivity output` for a singlepoint
+    without the Reactivity blocks)
+  * `atomic`: the identifying columns plus `atom_1based`, `element`,
+    Hirshfeld and NPA charge and spin
+  * `wiberg`: the identifying columns plus `i_1based`, `j_1based`,
+    `wiberg_index` (pairs ≥ 0.05)
 
 ```json
 { "project": "admin/phenols",
@@ -752,7 +766,8 @@ Poll `GET /api/projects/{name}/jobs` for the job's `status` and, once
 
 `404` when the project holds no molecules; `409` when a job is already
 in flight for the project. `csv` / `json` / `files` also answer `409`
-for an archived project — their source files are no longer on disk.
+for an archived project — their source files are no longer on disk —
+and so does `reactivity` (the archive's tree already holds its workbook).
 `xlsx` and `photophysics` are allowed on an archived project: `xlsx` is
 built from the archive's all-conformers CSV, and `photophysics` is served
 from the payload archiving froze — see [`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md).
@@ -767,6 +782,7 @@ archived or wiped molecules keep theirs):
   <project>_all_conformers.csv   # every conformer, excluded ones with their note
   <project>_state_analysis.xlsx
   <project>_photophysics.xlsx    # with .json, only for a project with photophysics molecules
+  <project>_reactivity.xlsx      # with .json, only for a project with Reactivity molecules
   molecules/<mol_id>/
     molecule.json                # SMILES, states, reported conformer, task ids, job_path per file
     S0/confsearch.out  S0/confsearch_ensemble.xyz

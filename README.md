@@ -356,7 +356,10 @@ The two export buttons open one dialog: **Lowest conformer per state** or
 `<export_data>/<owner>/<project>/`, replacing a previous export there:
 `<project>.csv` (reported conformer per state), `<project>_all_conformers.csv`,
 `<project>_state_analysis.xlsx`, the photophysics workbook for a project with
-photophysics molecules, and `molecules/<mol_id>/` with a `molecule.json`
+photophysics molecules, the reactivity workbook (`_reactivity.xlsx` and
+`.json`: sheets `molecular`, `atomic`, `wiberg`, one row set per relaxed and
+vertical singlepoint of the conformers chosen in the dialog) for a project
+with Reactivity molecules, and `molecules/<mol_id>/` with a `molecule.json`
 (the mapping back to the database) and `<state>/conf<N>/opt.inp opt.out
 opt.xyz sp.inp sp.out vert_ox.* uvvis.* …`. Only the final files of
 successful tasks are copied; a conformer with an imaginary mode gets no
@@ -435,6 +438,8 @@ Every submission path (CLI, REST, Python) ends up writing the same
   open-shell verticals (~350–450 GB of `.gbw` per 1,000 molecules). Needs
   `[orca].nbo_exe` and a singlepoint header without Hirshfeld, NBO,
   `%elprop`, `%nbo` or `STABPerform`; submission only, not Extend.
+  Export Project writes the reactivity workbook; `cleanup-files` keeps
+  these singlepoints' `.gbw`.
 * `imag_freq_tolerance` (CLI `--imag-freq-tolerance`, default **0**,
   −300 to 0) — every optimisation, ESD's S1 included, fails on any
   imaginary mode below it (cm⁻¹) and is retried; exports leave such
@@ -621,7 +626,7 @@ is either scoped to the caller's own projects or deliberately shared
 | GET    | `/api/projects/{name}/photophysics` | UV/Vis, IR, NMR and ESD results per molecule (`?molecule_id=`) |
 | GET    | `/api/projects/{name}/extend-info`  | what the project's molecules already have (for Extend)        |
 | POST   | `/api/projects/{name}/extend`       | add categories / states to the project's molecules            |
-| POST   | `/api/projects/{name}/export`       | trigger CSV/JSON/files/photophysics export (`?format=&all_conformers=&keep_gbw=`) |
+| POST   | `/api/projects/{name}/export`       | trigger CSV/JSON/files/photophysics/reactivity export (`?format=&all_conformers=&keep_gbw=`) |
 | POST   | `/api/projects/{name}/archive`      | **destructive**: the export tree, then wipe `comp_data`        |
 | GET    | `/api/projects/{name}/jobs`         | the project's background jobs (exports, archive), newest first |
 | GET    | `/api/jobs/{id}`                    | one background job                                            |

@@ -438,7 +438,7 @@ class PipelineExtractor:
 
         (root / f"{stem}_state_analysis.xlsx").write_bytes(build_xlsx_bytes(analyze_project(self.project_name)))
         for _, writer in OPTIONAL_WRITERS:
-            writer(self.project_name, root, stem)
+            writer(self.project_name, root, stem, all_conformers)
 
         copied = 0
         for manifest, jobs in plans:
@@ -589,7 +589,8 @@ class PipelineExtractor:
     ) -> int:
         """Delete large temporary files from successful job directories.
 
-        Keeps only files with the specified extensions.
+        Keeps only files with the specified extensions, plus optimisations' ``.hess``,
+        Densities singlepoints' ``.cube`` and Reactivity singlepoints' ``.gbw``.
 
         Returns:
             Number of files deleted.
@@ -605,6 +606,7 @@ class PipelineExtractor:
                 select(ComputationTask.id).where(ComputationTask.task_type == TaskType.optimization)
             ).all())
             density_sps = self._densities_singlepoints(session)
+            reactivity_sps = self._reactivity_singlepoints(session)
 
             jobs = session.exec(
                 select(ComputationJob).where(ComputationJob.success == True)  # noqa: E712
@@ -619,6 +621,8 @@ class PipelineExtractor:
                 keep = extensions | {".hess"} if job.task_id in optimisations else extensions
                 if job.task_id in density_sps:
                     keep = keep | {".cube"}
+                if job.task_id in reactivity_sps:
+                    keep = keep | {".gbw"}
                 for f in job_dir.iterdir():
                     if f.is_file() and f.suffix not in keep:
                         if dry_run:
@@ -633,23 +637,33 @@ class PipelineExtractor:
     @staticmethod
     def _densities_singlepoints(session: Session) -> set[int]:
         """Energy singlepoint tasks of densities-flagged states."""
-        candidates = session.exec(
-            select(MoleculeState.id, MoleculeState.metadata_json).where(
-                col(MoleculeState.metadata_json).contains(categories.DENSITIES)
-            )
-        ).all()
-        states = [
-            state_id for state_id, raw in candidates
-            if (json.loads(raw) if raw else {}).get(categories.DENSITIES) is True
-        ]
-        if not states:
-            return set()
-        return set(session.exec(
-            select(ComputationTask.id).where(
-                ComputationTask.task_type == TaskType.singlepoint,
-                col(ComputationTask.state_id).in_(states),
-            )
-        ).all())
+        return _flagged_tasks(session, categories.DENSITIES, ("singlepoint",))
+
+    @staticmethod
+    def _reactivity_singlepoints(session: Session) -> set[int]:
+        """Relaxed and vertical singlepoint tasks of Reactivity states."""
+        return _flagged_tasks(session, categories.REACTIVITY, categories.REACTIVITY_TYPES)
+
+
+def _flagged_tasks(session: Session, flag: str, task_types: tuple[str, ...]) -> set[int]:
+    """Tasks of *task_types* in states whose metadata sets *flag* true."""
+    candidates = session.exec(
+        select(MoleculeState.id, MoleculeState.metadata_json).where(
+            col(MoleculeState.metadata_json).contains(flag)
+        )
+    ).all()
+    states = [
+        state_id for state_id, raw in candidates
+        if (json.loads(raw) if raw else {}).get(flag) is True
+    ]
+    if not states:
+        return set()
+    return set(session.exec(
+        select(ComputationTask.id).where(
+            col(ComputationTask.task_type).in_([TaskType(t) for t in task_types]),
+            col(ComputationTask.state_id).in_(states),
+        )
+    ).all())
 
 
 # ======================================================================
@@ -702,8 +716,13 @@ def _tree_files(job: _TreeJob, keep_gbw: bool) -> list[tuple[str, str]]:
     return files
 
 
-def write_photophysics(project_name: str, root: Path, stem: str, payload: Optional[dict] = None) -> list[Path]:
-    """The photophysics workbook and JSON; without *payload*, only when a molecule is flagged."""
+def write_photophysics(
+    project_name: str, root: Path, stem: str, all_conformers: bool = False, payload: Optional[dict] = None,
+) -> list[Path]:
+    """The photophysics workbook and JSON; without *payload*, only when a molecule is flagged.
+
+    *all_conformers* is unused: the ensembles weigh every valid conformer.
+    """
     from autodft.analysis import spectroscopy
     from autodft.analysis.photophysics_export import build_xlsx
 
@@ -718,10 +737,29 @@ def write_photophysics(project_name: str, root: Path, stem: str, payload: Option
     return [workbook, data]
 
 
+def write_reactivity(
+    project_name: str, root: Path, stem: str, all_conformers: bool = False,
+    rows: Optional[dict[str, list[dict]]] = None,
+) -> list[Path]:
+    """The reactivity workbook and JSON; without *rows*, only when a state asked for Reactivity."""
+    from autodft.analysis import reactivity
+
+    if rows is None:
+        if not reactivity.has_reactivity(project_name):
+            return []
+        rows = reactivity.reactivity_rows(project_name, all_conformers)
+    data = root / f"{stem}_reactivity.json"
+    data.write_text(json.dumps(rows, indent=1))
+    workbook = root / f"{stem}_reactivity.xlsx"
+    workbook.write_bytes(reactivity.build_xlsx(rows))
+    return [workbook, data]
+
+
 # Optional per-project files export_tree writes when the project asks for them,
-# as (file suffixes, writer(project, root, stem)). The reactivity workbook goes here.
-OPTIONAL_WRITERS: list[tuple[tuple[str, ...], Callable[[str, Path, str], list[Path]]]] = [
+# as (file suffixes, writer(project, root, stem, all_conformers)).
+OPTIONAL_WRITERS: list[tuple[tuple[str, ...], Callable[[str, Path, str, bool], list[Path]]]] = [
     (("_photophysics.xlsx", "_photophysics.json"), write_photophysics),
+    (("_reactivity.xlsx", "_reactivity.json"), write_reactivity),
 ]
 _SUMMARY_SUFFIXES = (".csv", "_all_conformers.csv", "_state_analysis.xlsx")
 

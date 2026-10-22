@@ -316,8 +316,17 @@ def _execute(
         from autodft.analysis import spectroscopy
         from autodft.extraction.extractor import write_photophysics
 
-        target, data = write_photophysics(qualified_name, out_root, stem, spectroscopy.full_payload(qualified_name))
+        target, data = write_photophysics(qualified_name, out_root, stem,
+                                          payload=spectroscopy.full_payload(qualified_name))
         return {"format": "photophysics", "path": str(target), "json_path": str(data), "downloadable": True}
+
+    if kind == ProjectJobKind.export_reactivity:
+        from autodft.analysis.reactivity import reactivity_rows
+        from autodft.extraction.extractor import write_reactivity
+
+        rows = reactivity_rows(qualified_name, all_conformers)
+        target, data = write_reactivity(qualified_name, out_root, stem, rows=rows)
+        return {"format": "reactivity", "path": str(target), "json_path": str(data), "downloadable": True}
 
     if kind == ProjectJobKind.archive:
         # Do not rmtree under a job still writing files. The pause has already
