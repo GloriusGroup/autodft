@@ -361,7 +361,7 @@ headers: what every molecule already has is ticked and greyed out, and
 anything else can be ticked — T1/ox/red, UV/Vis, IR, NMR, ESD with any
 Herzberg–Teller mode. Each molecule gains only what it lacks; nothing is
 recomputed. A large library can so run its ground states first and its
-spectroscopy or ESD later. Densities and NBO run inside the energy
+spectroscopy or ESD later. Densities, NBO and Reactivity run inside the energy
 singlepoints and can only be chosen at the first submission; ESD needs the
 S0 Hessians, which every optimisation keeps.
 
@@ -414,6 +414,12 @@ Every submission path (CLI, REST, Python) ends up writing the same
   T1, ox, red — not ESD's S1, which has none), not only S0's. NBO needs
   `[orca].nbo_exe` configured; a submission is refused otherwise. See
   [docs/PHOTOPHYSICS.md](docs/PHOTOPHYSICS.md#densities-and-nbo).
+* `request_sp_reactivity` (CLI `--reactivity`) — Hirshfeld, `%elprop`
+  polarizability/quadrupole, NBO with Wiberg indices and a kept `.gbw` in
+  every relaxed and vertical singlepoint, plus stability analysis on
+  open-shell verticals (~350–450 GB of `.gbw` per 1,000 molecules). Needs
+  `[orca].nbo_exe` and a singlepoint header without Hirshfeld, NBO,
+  `%elprop`, `%nbo` or `STABPerform`; submission only, not Extend.
 * `header_confsearch_id / _optimization_id / _singlepoint_id` — pick a
   stored header by ID. Or pass raw `header_*` text. Defaults from
   `autodft/qm/orca/defaults.py` (= seeded DB rows) apply when neither

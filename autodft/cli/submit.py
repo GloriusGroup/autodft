@@ -85,7 +85,7 @@ def _category_options_to_flags(
     densities: bool = False, density_eldens: bool = True, density_spindens: bool = True,
     density_grid: int = 75, density_eldens_file: str = "ElDens.cube",
     density_spindens_file: str = "SpinDens.cube",
-    nbo: bool = False, nbo_keywords: str = "",
+    nbo: bool = False, nbo_keywords: str = "", reactivity: bool = False,
 ) -> dict:
     """CLI options as ``request_metadata`` category keys and settings."""
     from autodft import categories
@@ -98,6 +98,7 @@ def _category_options_to_flags(
         categories.NMR: nmr,
         categories.DENSITIES: densities,
         categories.NBO: nbo,
+        categories.REACTIVITY: reactivity,
         "uvvis_nroots": uvvis_nroots,
         "uvvis_tda": uvvis_tda,
         "nmr_nuclei": nmr_nuclei if nmr_nuclei is not None else ["H", "C", "F"],
@@ -143,7 +144,7 @@ def _check_categories(
     if reason:
         console.print(f"[red]{reason}[/red] — {smiles}")
         raise typer.Exit(code=1)
-    if categories.NBO in categories.requested(flags):
+    if categories.NBO_NEEDED & categories.requested(flags):
         unavailable = categories.nbo_unavailable(settings)
         if unavailable:
             console.print(f"[red]{unavailable}[/red] — {smiles}")
@@ -298,6 +299,7 @@ def submit(
     spindens_file: str = typer.Option("SpinDens.cube", "--spindens-file", help="Spin density cube file name"),
     nbo: bool = typer.Option(False, "--nbo", help="NBO 7 inside every state's energy singlepoint"),
     nbo_keywords: str = typer.Option("", "--nbo-keywords", help='Extra $NBO keywords, e.g. "BNDIDX"'),
+    reactivity: bool = typer.Option(False, "--reactivity", help="Hirshfeld, %elprop polarizability/quadrupole, NBO with Wiberg indices and kept .gbw in every relaxed and vertical singlepoint"),
     config: Optional[str] = typer.Option(None, "--config", help="Path to config TOML file"),
 ) -> None:
     """Submit a single molecule by SMILES string."""
@@ -315,7 +317,7 @@ def submit(
         nmr_dh_nprocs=nmr_dh_nprocs, nmr_dh_maxcore=nmr_dh_maxcore, nmr_reference=nmr_reference,
         densities=densities, density_eldens=not no_eldens, density_spindens=not no_spindens,
         density_grid=density_grid, density_eldens_file=eldens_file, density_spindens_file=spindens_file,
-        nbo=nbo, nbo_keywords=nbo_keywords,
+        nbo=nbo, nbo_keywords=nbo_keywords, reactivity=reactivity,
     )
     qualified, author = _qualified_project(project, user)
 
@@ -437,6 +439,7 @@ def submit_batch(
     spindens_file: str = typer.Option("SpinDens.cube", "--spindens-file", help="Spin density cube file name"),
     nbo: bool = typer.Option(False, "--nbo", help="NBO 7 inside every state's energy singlepoint"),
     nbo_keywords: str = typer.Option("", "--nbo-keywords", help='Extra $NBO keywords, e.g. "BNDIDX"'),
+    reactivity: bool = typer.Option(False, "--reactivity", help="Hirshfeld, %elprop polarizability/quadrupole, NBO with Wiberg indices and kept .gbw in every relaxed and vertical singlepoint"),
     config: Optional[str] = typer.Option(None, "--config", help="Path to config TOML file"),
 ) -> None:
     """Submit molecules from a CSV file."""
@@ -457,7 +460,7 @@ def submit_batch(
         nmr_dh_nprocs=nmr_dh_nprocs, nmr_dh_maxcore=nmr_dh_maxcore, nmr_reference=nmr_reference,
         densities=densities, density_eldens=not no_eldens, density_spindens=not no_spindens,
         density_grid=density_grid, density_eldens_file=eldens_file, density_spindens_file=spindens_file,
-        nbo=nbo, nbo_keywords=nbo_keywords,
+        nbo=nbo, nbo_keywords=nbo_keywords, reactivity=reactivity,
     )
 
     request_metadata = _build_request_metadata(

@@ -45,6 +45,7 @@ ESD_OWN_T1_DESCRIPTION = "T1_esd"
 ESD_OWN_T1_METADATA = {
     "request_singlepoint_vertical_excitations": False,
     categories.NBO: False,
+    categories.REACTIVITY: False,
     categories.DENSITIES: False,
 }
 
@@ -743,7 +744,7 @@ def _create_state(
     if metadata.get("strict_convergence") is False:
         state_metadata["strict_convergence"] = False
 
-    # Densities and NBO apply to every state's own energy singlepoint, not
+    # Densities, NBO and Reactivity apply to every state's own energy singlepoint, not
     # only S0's -- harmless for S1, which has none. {} when neither is
     # requested, so this never contradicts the snapshot above.
     state_metadata.update(categories.every_state_snapshot(metadata))
