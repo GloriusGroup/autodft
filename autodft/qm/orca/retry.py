@@ -341,11 +341,28 @@ class IncreaseMaxIter(RetryStrategy):
         return input_content, submit_content
 
 
+# Convergence level ranks (Medium = Normal).
+_RANK = {"sloppy": 0, "loose": 1, "medium": 2, "normal": 2, "strong": 3,
+         "tight": 4, "verytight": 5, "extreme": 6}
+_SCF_BLOCK = re.compile(r"^%scf\b.*?^\s*end\b", re.IGNORECASE | re.DOTALL | re.MULTILINE)
+_CONV_LINE = re.compile(r"(Convergence[ \t]+)(\w+)", re.IGNORECASE)
+
+
+def _raise_to_tight(block: str) -> str:
+    """Raise a block's Convergence level to Tight, never lowering; keeps its casing."""
+    def _fix(m: re.Match) -> str:
+        if _RANK.get(m.group(2).lower(), -1) >= _RANK["tight"]:
+            return m.group(0)
+        return m.group(1) + ("Tight" if m.group(2)[0].isupper() else "tight")
+    return _CONV_LINE.sub(_fix, block)
+
+
 class TightenConvergence(RetryStrategy):
     """Add ``TightSCF`` to the header and ``Convergence tight`` to ``%geom``.
 
     Triggered when imaginary frequencies are detected -- tighter SCF and
     geometry convergence criteria can eliminate spurious imaginary modes.
+    ``Convergence`` lines in ``%scf``/``%geom`` are raised to Tight, never lowered.
     """
 
     def applies(self, failure: FailureInfo, task_type: str) -> bool:
@@ -362,12 +379,13 @@ class TightenConvergence(RetryStrategy):
     ) -> tuple[str, str]:
         logger.debug("TightenConvergence: ensuring TightSCF and Convergence tight")
 
-        # Add TightSCF only when absent -- but the geometry-convergence part
-        # below must run either way. Guarding both on "TightSCF not present"
-        # (the previous behaviour) made this strategy a complete no-op for
-        # every shipped header, since they all already contain TightSCF: the
-        # retry produced a byte-identical input and re-ran the same job.
-        if not re.search(r"\bTightSCF\b", input_content, re.IGNORECASE):
+        # A %scf Convergence line replaces the TightSCF keyword; otherwise the
+        # keyword is added when absent. The %geom part below runs either way.
+        if any(_CONV_LINE.search(b) for b in _SCF_BLOCK.findall(input_content)):
+            input_content = _SCF_BLOCK.sub(
+                lambda m: _raise_to_tight(m.group(0)), input_content,
+            )
+        elif not re.search(r"\bTightSCF\b", input_content, re.IGNORECASE):
             input_content = re.sub(
                 r"^!(.*)",
                 r"!\1 TightSCF",
@@ -382,10 +400,7 @@ class TightenConvergence(RetryStrategy):
             def _update_convergence(match: re.Match) -> str:
                 block = match.group(0)
                 if re.search(r"Convergence\s+\w+", block, re.IGNORECASE):
-                    block = re.sub(
-                        r"Convergence\s+\w+", "Convergence tight", block,
-                        flags=re.IGNORECASE,
-                    )
+                    block = _raise_to_tight(block)
                 else:
                     block = block.replace("%geom", "%geom\n  Convergence tight")
                 return block
@@ -519,7 +534,8 @@ class RecoverSinglepointSCF(RetryStrategy):
         is gone: ORCA 6 no longer ships the old SCF program, so it aborted
         every retry.)
       * attempt >= 3: also relax ``TightSCF`` -> ``NormalSCF`` and add
-        ``SlowConv``, so a near-degenerate anion already converged to uEh is
+        ``SlowConv`` (and a ``%scf`` ``Convergence`` of Tight or stricter drops to
+        Normal), so a near-degenerate anion already converged to uEh is
         accepted rather than failed on the density criterion alone.
 
     Applies only to singlepoints; optimisations keep TightSCF (their geometry
@@ -591,6 +607,13 @@ class RecoverSinglepointSCF(RetryStrategy):
             # only thing failing. Relax it and damp harder.
             input_content = re.sub(
                 r"\bTightSCF\b", "NormalSCF", input_content, flags=re.IGNORECASE,
+            )
+            input_content = _SCF_BLOCK.sub(
+                lambda m: re.sub(
+                    r"(Convergence[ \t]+)(?:Tight|VeryTight|Extreme)\b", r"\1Normal",
+                    m.group(0), flags=re.IGNORECASE,
+                ),
+                input_content,
             )
             if not re.search(r"\bSlowConv\b", input_content, re.IGNORECASE):
                 input_content = re.sub(
