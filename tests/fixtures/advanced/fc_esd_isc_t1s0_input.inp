@@ -1,0 +1,69 @@
+! ESD(ISC) NOITER
+%maxcore 2000
+%esd
+  ISCISHESS "initial.hess"
+  ISCFSHESS "final.hess"
+  DELE 14444.3
+  SOCME 0.0, 5.261203e-08
+  USEJ TRUE
+  DOHT FALSE
+  LINES GAUSS
+  INLINEW 100
+  TEMP 298.15
+end
+
+*xyzfile 0 1 input.xyz
+
+$new_job
+# autodft: FC diagnostics from here on, not part of the rate
+! ESD(ISC) NOITER
+%maxcore 2000
+%esd
+  ISCISHESS "initial.hess"
+  ISCFSHESS "final.hess"
+  DELE 14444.3
+  SOCME 0.0, 5.261203e-08
+  USEJ TRUE
+  DOHT FALSE
+  LINES GAUSS
+  INLINEW 25
+  TEMP 298.15
+end
+
+*xyzfile 0 1 input.xyz
+
+$new_job
+! ESD(ISC) NOITER
+%maxcore 2000
+%esd
+  ISCISHESS "initial.hess"
+  ISCFSHESS "final.hess"
+  DELE 14444.3
+  SOCME 0.0, 5.261203e-08
+  USEJ TRUE
+  DOHT FALSE
+  LINES GAUSS
+  INLINEW 250
+  TEMP 298.15
+end
+
+*xyzfile 0 1 input.xyz
+
+$new_job
+! ESD(ISC) NOITER
+%maxcore 2000
+%esd
+  ISCISHESS "initial.hess"
+  ISCFSHESS "final.hess"
+  DELE 14444.3
+  SOCME 0.0, 5.261203e-08
+  USEJ TRUE
+  DOHT FALSE
+  LINES GAUSS
+  INLINEW 100
+  TCUTFREQ 300
+  TEMP 298.15
+end
+
+*xyzfile 0 1 input.xyz
+

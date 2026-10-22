@@ -1120,6 +1120,16 @@ def _generate_job_files(
         return _fail_task(session, task, job,
                           f"Cannot resolve charge/multiplicity: {exc}")
 
+    metadata = json.loads(state.metadata_json) if state.metadata_json else {}
+    if "advanced" in metadata:
+        # Advanced settings render onto the method-only header before anything composes it.
+        from autodft.qm.orca.advanced import render_settings, stage_for
+        from autodft.qm.orca.blocks import is_tight_optimization
+
+        stage = stage_for(task.task_type.value)
+        floor = "Tight" if is_tight_optimization(task.task_type.value, metadata) else None
+        header_text = render_settings(header_text, metadata["advanced"][stage], stage, geom_floor=floor)
+
     extra_inputs: Optional[list[str]] = None
     if task.task_type.value.startswith("esd_"):
         # Rate jobs are built from other tasks' results and Hessians.
@@ -1136,7 +1146,6 @@ def _generate_job_files(
         # header verbatim.
         from autodft.qm.orca.blocks import HeaderConflict, compose_header
 
-        metadata = json.loads(state.metadata_json) if state.metadata_json else {}
         if _runs_nbo(state, task):
             unavailable = categories.nbo_unavailable(settings)
             if unavailable:

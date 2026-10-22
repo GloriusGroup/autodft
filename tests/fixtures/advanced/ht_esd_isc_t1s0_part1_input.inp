@@ -1,0 +1,25 @@
+!wB97X-D3 def2-SVP def2/J RIJCOSX DEFGRID2 TightSCF CPCM(MeCN) ESD(ISC)
+%maxcore 2000
+%pal nprocs 12 end
+%tddft
+  nroots 4
+  sroot 0
+  troot 1
+  trootssl -1
+  triplets true
+  dosoc true
+  tda true
+end
+%esd
+  ISCISHESS "initial.hess"
+  ISCFSHESS "final.hess"
+  DELE 14444.3
+  USEJ TRUE
+  DOHT TRUE
+  LINES GAUSS
+  INLINEW 100
+  TEMP 298.15
+end
+
+*xyzfile 0 1 input.xyz
+

@@ -1,0 +1,21 @@
+!wB97X-D3 def2-SVP def2/J RIJCOSX DEFGRID2 TightSCF CPCM(MeCN) ESD(PHOSP)
+%maxcore 2000
+%pal nprocs 12 end
+%tddft
+  nroots 10
+  iroot 3
+  triplets true
+  dosoc true
+  tda true
+end
+%esd
+  GSHESSIAN "gs.hess"
+  TSHESSIAN "ts.hess"
+  DELE 14444.3
+  USEJ TRUE
+  DOHT TRUE
+  TEMP 298.15
+end
+
+*xyzfile 0 1 input.xyz
+

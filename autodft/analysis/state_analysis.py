@@ -31,6 +31,7 @@ Reference values:
 from __future__ import annotations
 
 import csv
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,6 +50,7 @@ from autodft.models import (
     MoleculeState,
 )
 from autodft.models.geometry import MoleculeGeometry
+from autodft.qm.orca.advanced import effective_header
 
 
 HARTREE_TO_EV = 27.211386245988
@@ -419,23 +421,25 @@ def _analyze_project_uncached(project_name: str) -> dict:
             ).all()
             if header_ids else []
         )
-        solvation_mecn = any(detects_mecn_solvation(h.header_text) for h in headers)
-
         # ...but decide per molecule when emitting potentials. A project-wide
         # any() meant one solvated header anywhere switched E vs SCE on for
         # every molecule in the project, including gas-phase ones, whose
         # "potential" would then be referenced against a solvated SCE scale.
+        # Each header is read as rendered with its state's Advanced settings.
         _header_by_id = {h.id: h for h in headers}
         mecn_by_molecule: dict[int, bool] = {}
         for st in states:
+            metadata = json.loads(st.metadata_json) if st.metadata_json else {}
             st_mecn = any(
-                detects_mecn_solvation(_header_by_id[hid].header_text)
-                for hid in (st.optimization_header_id, st.singlepoint_header_id)
+                detects_mecn_solvation(effective_header(_header_by_id[hid].header_text, metadata, stage))
+                for hid, stage in ((st.optimization_header_id, "optimization"),
+                                   (st.singlepoint_header_id, "singlepoint"))
                 if hid in _header_by_id
             )
             mecn_by_molecule[st.molecule_id] = (
                 mecn_by_molecule.get(st.molecule_id, False) or st_mecn
             )
+        solvation_mecn = any(mecn_by_molecule.values())
 
         opt_task_ids = [r.opt_task_id for r in all_results]
         opt_tasks = (

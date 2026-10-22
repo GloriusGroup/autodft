@@ -207,6 +207,9 @@ def with_densities(header: str, options: dict, multiplicity: int) -> str:
         raise HeaderConflict(
             "The header already has a %plots block; this job adds its own."
         )
+    # A legacy header brings KeepDens itself.
+    if "advanced" in options and not has_keyword(header, "KeepDens"):
+        header = with_keyword(header, "KeepDens")
     defaults = categories.OPTIONS[categories.DENSITIES]
     eldens = bool(options.get("density_eldens", defaults["density_eldens"]))
     spindens = bool(options.get("density_spindens", defaults["density_spindens"])) and multiplicity > 1
@@ -217,6 +220,14 @@ def with_densities(header: str, options: dict, multiplicity: int) -> str:
         eldens=eldens, spindens=spindens,
     )
     return append_block(header, block) if block else header
+
+
+def is_tight_optimization(task_type: str, options: dict) -> bool:
+    """Whether a job of *task_type* is an ESD optimisation, run tight."""
+    return task_type == "optimization" and (
+        options.get("esd_role") in ("S1", "T1")
+        or bool(options.get(categories.ESD) and not options.get("esd_added_later"))
+    )
 
 
 def compose_header(
@@ -256,12 +267,12 @@ def compose_header(
         # the numerical frequencies and corrupts the Hessian. ORCA solvates the excited
         # state in equilibrium only for analytic gradients, so cpcmeq is explicit.
         solvated = {"cpcmeq": True} if _SOLVATION_RE.search(header) else {}
-        return with_tddft(with_tight_opt(header), nroots=S1_NROOTS, iroot=1, tda=True, **solvated)
-    if task_type == "optimization" and (
-        options.get("esd_role") == "T1" or (options.get(categories.ESD) and not options.get("esd_added_later"))
-    ):
+        tight = header if "advanced" in options else with_tight_opt(header)
+        return with_tddft(tight, nroots=S1_NROOTS, iroot=1, tda=True, **solvated)
+    if is_tight_optimization(task_type, options):
         # ESD Hessians of T1 and of the S0 conformers (request_esd sits on S0 only).
-        return with_tight_opt(header)
+        # Advanced settings get a %geom floor instead (rendered before composition).
+        return header if "advanced" in options else with_tight_opt(header)
     if task_type in categories.REACTIVITY_TYPES and options.get(categories.REACTIVITY):
         # Reactivity's NBO takes the user's keywords when NBO is requested too.
         nbo_keywords = options.get("nbo_keywords", "") if options.get(categories.NBO) else ""

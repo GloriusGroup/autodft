@@ -21,6 +21,7 @@ from autodft.engine import nmr_references
 from autodft.extraction import results as stored
 from autodft.extraction.extractor import PipelineExtractor
 from autodft.models import ComputationHeader, ComputationTask, Molecule, MoleculeGeometry, MoleculeState, TaskStatus, TaskType
+from autodft.qm.orca.advanced import effective_header
 from autodft.qm.orca.spectra_parser import Shielding
 
 _OPEN = (TaskStatus.created, TaskStatus.pending)
@@ -172,6 +173,7 @@ def molecule_nmr(
         nmr_references.method_key(metadata), fingerprint, categories.options(metadata).get("nmr_reference"),
     )
     sp_header = session.get(ComputationHeader, state.singlepoint_header_id) if state.singlepoint_header_id else None
+    sp_text = effective_header(sp_header.header_text, metadata, "singlepoint") if sp_header else None
     for element in nuclei:
         groups: dict[int, list[int]] = defaultdict(list)
         for index, symbol in enumerate(elements):
@@ -182,7 +184,7 @@ def molecule_nmr(
         ref = reference[element]
         sigma_ref = ref["sigma_ppm"] if ref["status"] == "ok" else None
         delta_ref, solvent = nmr_references.reference_shift(
-            ref["compound"], element, sp_header.header_text if sp_header else None,
+            ref["compound"], element, sp_text,
         )
         signals = []
         for atoms in groups.values():

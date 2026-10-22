@@ -1,0 +1,6 @@
+!revDSD-PBEP86-D4/2021 PCSSEG-3 AUTOAUX NMR NOFROZENCORE TightSCF CPCM(MeCN)
+%maxcore 6000
+%pal nprocs 12 end
+
+*xyzfile 0 1 input.xyz
+

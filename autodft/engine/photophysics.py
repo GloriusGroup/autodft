@@ -25,7 +25,7 @@ from autodft.extraction.extractor import PipelineExtractor
 from autodft.models import (
     ComputationHeader, ComputationTask, Molecule, MoleculeGeometry, MoleculeState, TaskStatus, TaskType,
 )
-from autodft.qm.orca import blocks, esd_inputs
+from autodft.qm.orca import advanced, blocks, esd_inputs
 
 logger = logging.getLogger(__name__)
 
@@ -337,6 +337,11 @@ def _ht_header(session: Session, state: MoleculeState) -> Optional[str]:
     header = session.get(ComputationHeader, state.optimization_header_id)
     if header is None:
         raise esd_inputs.EsdInputError(f"optimisation header {state.optimization_header_id} not found")
+    metadata = _metadata(state)
+    if "advanced" in metadata:
+        return advanced.render_settings(
+            header.header_text, metadata["advanced"]["optimization"], "optimization", as_singlepoint=True,
+        )
     return blocks.singlepoint_of(header.header_text)
 
 

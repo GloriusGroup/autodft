@@ -1,0 +1,16 @@
+!GOAT XTB
+%xtb
+  XTBInputString "--gxtb"
+end
+%maxcore 500
+%pal nprocs 32 end
+%GOAT
+MAXEN 10.0
+ENDIFF 0.2
+RMSD 0.15
+FREEZECISTRANS TRUE
+CONFDEGEN AUTO
+END
+
+*xyzfile 0 1 input.xyz
+
