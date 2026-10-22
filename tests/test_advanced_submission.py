@@ -17,11 +17,9 @@ from autodft.db import get_session, init_db, reset_engine
 from autodft.engine import entrypoint_processor as ep
 from autodft.models import CalculationEntrypoint, MoleculeState
 from autodft.qm.orca.advanced import CHOICES, defaults, resolve
-from autodft.qm.orca.defaults import LEGACY_HEADER_OPTIMIZATION, LEGACY_HEADER_SINGLEPOINT
 from tests.fixtures.advanced.generate import LEGACY_HEADERS
 
-LEGACY = {"header_confsearch": LEGACY_HEADERS["confsearch"], "header_optimization": LEGACY_HEADER_OPTIMIZATION,
-          "header_singlepoint": LEGACY_HEADER_SINGLEPOINT}
+LEGACY = {f"header_{stage}": text for stage, text in LEGACY_HEADERS.items()}
 
 
 @pytest.fixture()
@@ -62,8 +60,8 @@ def _legacy_project(settings, project="nho/p", smiles="CCO"):
     with get_session() as session:
         session.add(CalculationEntrypoint(
             smiles=smiles, request_metadata=json.dumps({"project_name": project, "project_author": "nho"}),
-            header_confsearch=LEGACY_HEADERS["confsearch"], header_optimization=LEGACY_HEADER_OPTIMIZATION,
-            header_singlepoint=LEGACY_HEADER_SINGLEPOINT,
+            header_confsearch=LEGACY_HEADERS["confsearch"], header_optimization=LEGACY_HEADERS["optimization"],
+            header_singlepoint=LEGACY_HEADERS["singlepoint"],
         ))
         session.commit()
     _process(settings)
@@ -94,7 +92,7 @@ def test_submit_batch_stores_advanced(api):
 
 @pytest.mark.parametrize("slot, header, needle", [
     ("header_optimization", "!B3LYP def2-SVP DEFGRID3\n", "DEFGRID3 in the header: set the grid under Advanced"),
-    ("header_optimization", LEGACY_HEADER_OPTIMIZATION, "under Advanced"),
+    ("header_optimization", LEGACY_HEADERS["optimization"], "under Advanced"),
     ("header_singlepoint", "!B3LYP def2-TZVP\n%pal nprocs 4 end\n", "cores under Advanced"),
     ("header_singlepoint", "!B3LYP def2-TZVP KeepDens\n", "KeepDens in the header"),
     ("header_confsearch", "!GOAT XTB\n%maxcore 500\n", "memory under Advanced"),
@@ -222,7 +220,7 @@ def test_expansion_refuses_a_method_only_header_without_advanced(api):
 
 def test_expansion_refuses_a_requested_optimization_without_header(api):
     _, _, settings = api
-    entry_id = _insert(header_singlepoint=LEGACY_HEADER_SINGLEPOINT, request_metadata=json.dumps(
+    entry_id = _insert(header_singlepoint=LEGACY_HEADERS["singlepoint"], request_metadata=json.dumps(
         {"project_name": "nho/p"}))
     _process(settings)
     with get_session() as session:
@@ -231,7 +229,7 @@ def test_expansion_refuses_a_requested_optimization_without_header(api):
 
 def test_expansion_without_optimization_needs_no_opt_header(api):
     _, _, settings = api
-    entry_id = _insert(header_singlepoint=LEGACY_HEADER_SINGLEPOINT, request_metadata=json.dumps(
+    entry_id = _insert(header_singlepoint=LEGACY_HEADERS["singlepoint"], request_metadata=json.dumps(
         {"project_name": "nho/p", "request_optimization": False}))
     _process(settings)
     with get_session() as session:
@@ -311,7 +309,7 @@ def test_cli_refuses_bad_advanced(cli_db, args, needle):
 
 def test_cli_refuses_a_legacy_header_in_a_new_project(cli_db, tmp_path):
     header = tmp_path / "opt.inp"
-    header.write_text(LEGACY_HEADER_OPTIMIZATION)
+    header.write_text(LEGACY_HEADERS["optimization"])
     result = CliRunner().invoke(cli.app, ["submit", "--smiles", "CCO", "--project", "p", "--header-opt", str(header)])
     assert result.exit_code == 1
     assert "Advanced" in result.output
@@ -321,8 +319,8 @@ def test_cli_legacy_project_with_its_headers_stays_legacy(cli_db, tmp_path, monk
     monkeypatch.setattr(ep, "_generate_initial_xyz", lambda s: "C 0 0 0\nH 1 0 0\n")
     _legacy_project(cli_db, project="admin/p")
     files = []
-    for name, text in (("cs", LEGACY_HEADERS["confsearch"]), ("opt", LEGACY_HEADER_OPTIMIZATION),
-                       ("sp", LEGACY_HEADER_SINGLEPOINT)):
+    for name, text in (("cs", LEGACY_HEADERS["confsearch"]), ("opt", LEGACY_HEADERS["optimization"]),
+                       ("sp", LEGACY_HEADERS["singlepoint"])):
         files.append(tmp_path / f"{name}.inp")
         files[-1].write_text(text)
     result = CliRunner().invoke(cli.app, ["submit", "--smiles", "c1ccccc1", "--project", "p",

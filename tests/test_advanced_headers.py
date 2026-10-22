@@ -9,11 +9,8 @@ from autodft.api.app import create_app
 from autodft.config import Settings
 from autodft.db import get_session, init_db, reset_engine
 from autodft.models.header import ComputationHeader
-from autodft.qm.orca.defaults import (
-    LEGACY_HEADER_OPTIMIZATION,
-    LEGACY_HEADER_SINGLEPOINT,
-    SEED_HEADERS,
-)
+from autodft.qm.orca.defaults import SEED_HEADERS
+from tests.fixtures.advanced.generate import LEGACY_HEADERS
 from fastapi.testclient import TestClient
 
 
@@ -48,14 +45,14 @@ def test_init_db_adds_method_only_rows_to_existing_db(tmp_path):
     with get_session(settings) as session:
         for h in session.exec(select(ComputationHeader)).all():
             session.delete(h)
-        session.add(ComputationHeader(header_text=LEGACY_HEADER_OPTIMIZATION, kind="optimization"))
-        session.add(ComputationHeader(header_text=LEGACY_HEADER_SINGLEPOINT, kind="singlepoint"))
+        session.add(ComputationHeader(header_text=LEGACY_HEADERS["optimization"], kind="optimization"))
+        session.add(ComputationHeader(header_text=LEGACY_HEADERS["singlepoint"], kind="singlepoint"))
         session.commit()
     reset_engine()
     init_db(settings)
     texts = _texts(settings)
-    assert LEGACY_HEADER_OPTIMIZATION in texts and LEGACY_HEADER_SINGLEPOINT in texts
-    assert sorted(t for t in texts if t not in (LEGACY_HEADER_OPTIMIZATION, LEGACY_HEADER_SINGLEPOINT)) \
+    assert LEGACY_HEADERS["optimization"] in texts and LEGACY_HEADERS["singlepoint"] in texts
+    assert sorted(t for t in texts if t not in (LEGACY_HEADERS["optimization"], LEGACY_HEADERS["singlepoint"])) \
         == sorted(h["header_text"] for h in SEED_HEADERS)
     reset_engine()
     init_db(settings)
@@ -86,14 +83,14 @@ def test_api_headers_flags_legacy(tmp_path):
     reset_engine()
     init_db(settings)
     with get_session(settings) as session:
-        session.add(ComputationHeader(header_text=LEGACY_HEADER_SINGLEPOINT, kind="singlepoint"))
+        session.add(ComputationHeader(header_text=LEGACY_HEADERS["singlepoint"], kind="singlepoint"))
         session.commit()
         key = accounts.rotate_api_key(session, accounts.get_user_by_username(session, "admin"))
     with TestClient(create_app(settings)) as c:
         data = c.get("/api/headers", headers={"X-AutoDFT-API-Key": key}).json()
     assert all(d["legacy"] is False for d in data["defaults"])
     flags = {h["text"]: h["legacy"] for h in data["custom"]}
-    assert flags[LEGACY_HEADER_SINGLEPOINT] is True
+    assert flags[LEGACY_HEADERS["singlepoint"]] is True
     assert flags["!wB97X-D3 def2-SVP\n"] is False
     reset_engine()
 

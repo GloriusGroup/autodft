@@ -206,11 +206,10 @@ All six are method only: functional and basis (GOAT and its xTB level
 for the conformer searches), without `%pal` / `%maxcore`. Grid,
 convergence, RI, solvation, cores and memory are the `advanced`
 settings below, whose defaults reproduce the full headers of before
-Advanced settings (`LEGACY_*` in `autodft/qm/orca/defaults.py`:
-DEFGRID3, TightSCF, RIJCOSX def2/J, CPCM(MeCN)). A submission that sets
-neither `header_*` nor `header_*_id` gets 2, 4 and 6; 5 and 3 are the
-same method on the larger def2-TZVP/def2-QZVPD basis pair, kept as a
-seeded alternative. The defaults request 12 cores × 2000 MB
+Advanced settings (DEFGRID3, TightSCF, RIJCOSX def2/J, CPCM(MeCN)). A
+submission that sets neither `header_*` nor `header_*_id` gets 2, 4 and
+6; 5 and 3 are the same method on the larger def2-TZVP/def2-QZVPD basis
+pair, kept as a seeded alternative. The defaults request 12 cores × 2000 MB
 (optimisation) and 8 cores × 1500 MB (singlepoint), below the CPU
 nodes' ~2600 MB/core. Measured on a 45-atom acridine: opt+Freq is 8 %
 faster at 2000 than at 1250 MB, UV/Vis and SOC TDDFT are unchanged

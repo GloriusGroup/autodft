@@ -1,8 +1,7 @@
 """Default ORCA input headers for common calculation types.
 
-Also holds the QZVPD and GFN2-xTB alternates, the ``LEGACY_*`` full
-headers of before Advanced settings, and the ``SEED_HEADERS`` rows a fresh
-database is seeded with.
+Also holds the QZVPD and GFN2-xTB alternates and the ``SEED_HEADERS``
+rows a fresh database is seeded with.
 """
 
 # Method only: grid, convergence, RI, solvation, cores and memory are Advanced settings.
@@ -25,23 +24,6 @@ DEFAULT_HEADER_CONFSEARCH = (
 DEFAULT_HEADER_OPTIMIZATION = "!wB97X-D3 def2-SVP\n"
 
 DEFAULT_HEADER_SINGLEPOINT = "!wB97X-D3 def2-TZVP\n"
-
-
-# The full headers of before Advanced settings; running projects use them.
-LEGACY_HEADER_OPTIMIZATION = (
-    "!wB97X-D3 def2-SVP def2/J RIJCOSX DEFGRID3 Opt TightSCF CPCM(MeCN) Freq\n"
-    "%maxcore 2000\n"
-    "%pal nprocs 12 end\n"
-)
-
-LEGACY_HEADER_SINGLEPOINT = (
-    # Singlepoint headers must NEVER include "Opt" or "Freq" — those would
-    # turn the supposedly cheap singlepoint into a re-optimization or a
-    # full Hessian calculation on the produced geometry.
-    "!wB97X-D3 def2-TZVP def2/J RIJCOSX DEFGRID3 TightSCF CPCM(MeCN) KeepDens\n"
-    "%maxcore 1500\n"
-    "%pal nprocs 8 end\n"
-)
 
 
 # The larger basis, kept as the alternate singlepoint row.

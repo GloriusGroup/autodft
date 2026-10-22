@@ -14,8 +14,6 @@ from autodft.qm.orca.defaults import (
     DEFAULT_HEADER_OPTIMIZATION,
     DEFAULT_HEADER_SINGLEPOINT,
     GFN2_HEADER_CONFSEARCH,
-    LEGACY_HEADER_OPTIMIZATION,
-    LEGACY_HEADER_SINGLEPOINT,
     QZVPD_HEADER_SINGLEPOINT,
     SEED_HEADERS,
 )
@@ -31,20 +29,6 @@ def test_default_confsearch_header_is_goat_gxtb_without_resources():
     assert GFN2_HEADER_CONFSEARCH.startswith("!GOAT XTB2\n%GOAT\n")
     for header in (DEFAULT_HEADER_CONFSEARCH, GFN2_HEADER_CONFSEARCH):
         assert "%pal" not in header and "%maxcore" not in header
-
-
-def test_legacy_optimization_header_is_svp_with_cpcm():
-    assert LEGACY_HEADER_OPTIMIZATION == (
-        "!wB97X-D3 def2-SVP def2/J RIJCOSX DEFGRID3 Opt TightSCF CPCM(MeCN) Freq\n"
-        "%maxcore 2000\n%pal nprocs 12 end\n"
-    )
-
-
-def test_legacy_singlepoint_header_is_tzvp_with_cpcm():
-    assert LEGACY_HEADER_SINGLEPOINT == (
-        "!wB97X-D3 def2-TZVP def2/J RIJCOSX DEFGRID3 TightSCF CPCM(MeCN) KeepDens\n"
-        "%maxcore 1500\n%pal nprocs 8 end\n"
-    )
 
 
 def test_seed_headers_are_method_only_and_unique():

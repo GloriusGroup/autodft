@@ -25,8 +25,8 @@ from autodft.models import (
     TaskStatus,
     TaskType,
 )
-from autodft.qm.orca.defaults import LEGACY_HEADER_SINGLEPOINT
 from autodft.qm.orca.spectra_parser import parse_shieldings
+from tests.fixtures.advanced.generate import LEGACY_HEADERS
 
 FIXTURES = Path(__file__).parent / "fixtures" / "orca"
 GLYOXAL = (FIXTURES / "nmr_glyoxal.out").read_text()
@@ -93,7 +93,7 @@ def _task(session, state, task_type, parent=None, geometry=None):
 
 def _state(session, smiles, project, metadata):
     if session.get(ComputationHeader, SP_HEADER_ID) is None:
-        session.add(ComputationHeader(id=SP_HEADER_ID, header_text=LEGACY_HEADER_SINGLEPOINT, kind="singlepoint"))
+        session.add(ComputationHeader(id=SP_HEADER_ID, header_text=LEGACY_HEADERS["singlepoint"], kind="singlepoint"))
     mol = Molecule(smiles=smiles, project_name=project)
     session.add(mol)
     session.commit()
