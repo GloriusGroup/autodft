@@ -65,8 +65,8 @@ class TestBlocks:
         assert f"  nroots {default}\n" in blocks.compose_header("singlepoint_uvvis", SP)
 
 
-def _s0_with_opt(session, metadata: dict, description: str = "S0"):
-    header = ComputationHeader(header_text=SP)
+def _s0_with_opt(session, metadata: dict, description: str = "S0", header_text: str = SP):
+    header = ComputationHeader(header_text=header_text)
     session.add(header)
     session.commit()
     state = MoleculeState(

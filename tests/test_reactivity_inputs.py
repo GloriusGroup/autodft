@@ -11,11 +11,10 @@ import pytest
 from autodft import categories
 from autodft.config import Settings
 from autodft.engine.state_machine import _create_job_for_task, _keeps_wavefunction, _runs_nbo
-from autodft.models import (
-    ComputationHeader, ComputationTask, MoleculeGeometry, MoleculeState, TaskStatus, TaskType,
-)
+from autodft.models import ComputationTask, MoleculeState, TaskStatus, TaskType
 from autodft.qm.orca import blocks
 from autodft.qm.orca.parser import OrcaParser
+from tests.test_uvvis_tasks import _s0_with_opt
 
 LIB = (
     "!wB97X-D3 def2-TZVP def2/J RIJCOSX DEFGRID3 TightSCF CPCM(MeCN)\n"
@@ -142,34 +141,11 @@ def test_densities_also_applies_on_the_relaxed_sp():
     assert "%plots" not in blocks.compose_header("singlepoint_vert_ox", LIB, meta, 2)
 
 
-def _state(session, metadata: dict, multiplicity: int = 1, charge: int = 0):
-    header = ComputationHeader(header_text=LIB)
-    session.add(header)
-    session.commit()
-    state = MoleculeState(
-        molecule_id=1, description="S0", multiplicity=multiplicity, charge=charge,
-        metadata_json=json.dumps(metadata),
-        optimization_header_id=header.id, singlepoint_header_id=header.id,
-    )
-    session.add(state)
-    session.commit()
-    opt = ComputationTask(
-        task_type=TaskType.optimization, status=TaskStatus.successful,
-        state_id=state.id, header_id=header.id, has_followups=True,
-    )
-    session.add(opt)
-    session.commit()
-    geom = MoleculeGeometry(state_id=state.id, xyz_data="2\n\nC 0 0 0\nH 1 0 0\n", origin_task_id=opt.id)
-    session.add(geom)
-    session.commit()
-    return state, geom
-
-
-def _render(session, tmp_path, state, geom, task_type: str, nbo_exe="/path/to/nbo7.i8.exe"):
+def _render(session, tmp_path, state, opt, task_type: str, nbo_exe="/path/to/nbo7.i8.exe"):
     """The job's (input.inp, submit.cmd) with its paths and id normalised, or the failed job."""
     task = ComputationTask(
         task_type=TaskType(task_type), status=TaskStatus.created, state_id=state.id,
-        header_id=state.singlepoint_header_id, input_geometry_id=geom.id,
+        header_id=state.singlepoint_header_id, input_geometry_id=opt.output_geometry_id,
         task_path=str(tmp_path / task_type),
     )
     session.add(task)
@@ -191,8 +167,8 @@ def _render(session, tmp_path, state, geom, task_type: str, nbo_exe="/path/to/nb
 @pytest.mark.parametrize("task_type", categories.REACTIVITY_TYPES)
 def test_unflagged_byte_identical(session, tmp_path, task_type):
     assert blocks.compose_header(task_type, LIB, {}) is LIB
-    state, geom = _state(session, {})
-    inp, submit = _render(session, tmp_path, state, geom, task_type)
+    state, opt = _s0_with_opt(session, {}, header_text=LIB)
+    inp, submit = _render(session, tmp_path, state, opt, task_type)
     assert inp == (GOLDEN / f"unflagged_{task_type}_input.inp").read_text()
     assert submit == (GOLDEN / f"unflagged_{task_type}_submit.cmd").read_text()
 
@@ -211,8 +187,8 @@ def test_gates():
 
 
 def test_reactivity_vertical_job(session, tmp_path):
-    state, geom = _state(session, ON)
-    inp, submit = _render(session, tmp_path, state, geom, "singlepoint_vert_ox")
+    state, opt = _s0_with_opt(session, ON, header_text=LIB)
+    inp, submit = _render(session, tmp_path, state, opt, "singlepoint_vert_ox")
     _common(inp)
     assert STAB in inp
     assert "*xyzfile 1 2 input.xyz" in inp
@@ -225,8 +201,8 @@ def test_reactivity_vertical_job(session, tmp_path):
 
 
 def test_reactivity_without_nbo_exe_fails_the_job(session, tmp_path):
-    state, geom = _state(session, ON)
-    job = _render(session, tmp_path, state, geom, "singlepoint_vert_red", nbo_exe=None)
+    state, opt = _s0_with_opt(session, ON, header_text=LIB)
+    job = _render(session, tmp_path, state, opt, "singlepoint_vert_red", nbo_exe=None)
     assert job.success is False
     assert "nbo_exe" in job.fail_reason
 
