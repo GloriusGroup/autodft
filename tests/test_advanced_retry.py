@@ -42,7 +42,7 @@ def test_tighten_raises_scf_block():
 def test_tighten_keeps_verytight_scf_and_geom():
     out = _tighten(_opt(scf_convergence="VeryTight", geom_convergence="VeryTight"))
     assert "%scf\n  Convergence VeryTight\nend" in out
-    assert "%geom\n  Convergence VeryTight\nend" in out
+    assert "VeryTightOpt Freq" in out and "%geom" not in out
     assert "TightSCF" not in out
 
 
@@ -64,12 +64,25 @@ def test_tighten_skips_a_one_line_scf_block():
     assert "%geom\n  Convergence Tight\nend" in out
 
 
+def test_tighten_leaves_verytightopt_geometry_alone():
+    inp = _opt(geom_convergence="VeryTight")
+    out = _tighten(inp)
+    assert out == inp and "%geom" not in out
+    with_block = inp.replace(XYZ, "\n%geom\n  MaxIter 200\nend\n" + XYZ)
+    assert _tighten(with_block) == with_block
+
+
+def test_tighten_raises_a_medium_scf_block():
+    out = _tighten(_sp(scf_convergence="Normal"))
+    assert "%scf\n  Convergence Tight\nend" in out and "Medium" not in out
+
+
 def test_recover_scf_relaxes_block_convergence():
     inp = _sp(scf_convergence="Tight")
     strategy = RecoverSinglepointSCF()
     once, _ = strategy.modify(inp, "", _scf(3))
-    assert "Convergence Normal" in once
-    assert "Convergence Tight" not in once
+    assert "%scf\n  Convergence Medium\nend" in once
+    assert "Convergence Tight" not in once and "Convergence Normal" not in once
     assert re.search(r"\bSlowConv\b", once)
     assert "Shift Shift 0.3" in once
     twice, _ = strategy.modify(once, "", _scf(3))

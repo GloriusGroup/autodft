@@ -100,8 +100,7 @@ def test_new_mode_floor_only_for_esd_optimisations(tmp_path):
 
 def test_new_mode_t1_verytight_kept(tmp_path):
     inp, _ = _new(tmp_path, "optimization_esd_t1", settings=_with("optimization", geom_convergence="VeryTight"))
-    assert "%geom\n  Convergence VeryTight\nend\n" in inp
-    assert inp.count("%geom") == 1
+    assert "VeryTightOpt Freq\n" in inp and "%geom" not in inp
 
 
 def test_new_mode_s1_cpcmeq(tmp_path):

@@ -346,6 +346,7 @@ _RANK = {"sloppy": 0, "loose": 1, "medium": 2, "normal": 2, "strong": 3,
          "tight": 4, "verytight": 5, "extreme": 6}
 _SCF_BLOCK = re.compile(r"^%scf[ \t]*$.*?^\s*end\b", re.IGNORECASE | re.DOTALL | re.MULTILINE)
 _CONV_LINE = re.compile(r"(Convergence[ \t]+)(\w+)", re.IGNORECASE)
+_VERYTIGHT_OPT = re.compile(r"^\s*!.*\bVeryTightOpt\b", re.IGNORECASE | re.MULTILINE)
 
 
 def _raise_to_tight(block: str) -> str:
@@ -393,6 +394,10 @@ class TightenConvergence(RetryStrategy):
                 count=1,
                 flags=re.MULTILINE,
             )
+
+        # A %geom Convergence would override (loosen) a VeryTightOpt keyword.
+        if _VERYTIGHT_OPT.search(input_content):
+            return input_content, submit_content
 
         # Add or update Convergence tight inside the %geom block
         if "%geom" in input_content:
@@ -535,8 +540,9 @@ class RecoverSinglepointSCF(RetryStrategy):
         every retry.)
       * attempt >= 3: also relax ``TightSCF`` -> ``NormalSCF`` and add
         ``SlowConv`` (and a ``%scf`` ``Convergence`` of Tight or stricter drops to
-        Normal), so a near-degenerate anion already converged to uEh is
-        accepted rather than failed on the density criterion alone.
+        Medium, the NormalSCF level), so a near-degenerate anion already
+        converged to uEh is accepted rather than failed on the density
+        criterion alone.
 
     Applies only to singlepoints; optimisations keep TightSCF (their geometry
     and frequencies need it).
@@ -610,7 +616,7 @@ class RecoverSinglepointSCF(RetryStrategy):
             )
             input_content = _SCF_BLOCK.sub(
                 lambda m: re.sub(
-                    r"(Convergence[ \t]+)(?:Tight|VeryTight|Extreme)\b", r"\1Normal",
+                    r"(Convergence[ \t]+)(?:Tight|VeryTight|Extreme)\b", r"\1Medium",
                     m.group(0), flags=re.IGNORECASE,
                 ),
                 input_content,

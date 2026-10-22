@@ -87,6 +87,8 @@ def describe(header_text: str, stage: str) -> dict:
         level = _block_convergence(masked, block)
         if level:
             found[key] = level
+    if found.get("scf_convergence", "").lower() == "medium":  # block Medium is the NormalSCF level
+        found["scf_convergence"] = "Normal"
     cpcm = re.search(r"%cpcm\b(.*?)\bend\b", masked, re.IGNORECASE | re.DOTALL)
     if cpcm:
         if re.search(r"\bsmd\s+true\b", cpcm.group(1), re.IGNORECASE):

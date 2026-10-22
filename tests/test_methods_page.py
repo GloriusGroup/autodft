@@ -306,6 +306,18 @@ def test_describe_reads_route_lines_and_blocks():
     assert describe(rendered, "optimization")["geom_convergence"] == {"value": "Normal", "source": "header"}
 
 
+def test_describe_maps_orca_level_names():
+    medium = describe("!B3LYP\n%scf\n  Convergence Medium\nend\n", "singlepoint")["scf_convergence"]
+    assert medium == {"value": "Normal", "source": "header"}
+    assert describe("!B3LYP NormalSCF\n", "singlepoint")["scf_convergence"] == {"value": "Normal", "source": "header"}
+    assert describe("!B3LYP VeryTightOpt\n", "optimization")["geom_convergence"] == {
+        "value": "VeryTight", "source": "header"}
+    stage = {**advanced.defaults(Settings())["optimization"], "scf_convergence": "Normal",
+             "geom_convergence": "VeryTight"}
+    out = describe(advanced.render_settings("!x\n", stage, "optimization"), "optimization")
+    assert (out["scf_convergence"]["value"], out["geom_convergence"]["value"]) == ("Normal", "VeryTight")
+
+
 def _render_case(tmp_path, name: str, metadata_extra: dict, headers: dict):
     task_type, description, multiplicity, base = CASES[name]
     engine = create_engine("sqlite://")

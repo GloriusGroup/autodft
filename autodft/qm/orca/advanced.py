@@ -25,6 +25,7 @@ CHOICES: dict[str, tuple[str, ...]] = {
     "solvation": ("CPCM", "SMD", "omit"),
 }
 _GEOM_ORDER = ("Loose", "Normal", "Tight", "VeryTight")
+_SCF_BLOCK_LEVEL = {"Normal": "Medium"}
 _SOLVENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9,-]*")
 _SOLVENT_MAX = 40
 _RANGES = {"nprocs": (1, 64), "maxcore": (250, 16000)}
@@ -137,20 +138,23 @@ def render_settings(header: str, stage_settings: dict, stage: str, *,
     """*header* (method only) plus the generated ``!`` line and blocks of one stage."""
     s = stage_settings
     optimizing = stage == "optimization" and not as_singlepoint
+    geom = with_geom_floor(s.get("geom_convergence", "omit"), geom_floor)
     tokens = [s[k] for k in ("ri", "aux_basis", "grid") if s.get(k, "omit") != "omit"]
     if s.get("solvation", "omit") != "omit":
         tokens.append(f"{s['solvation']}({s['solvent']})")
     if optimizing:
-        tokens += ["Opt", "Freq"]
+        # ORCA 6.1 refuses %geom Convergence VeryTight; the keyword works.
+        tokens += ["VeryTightOpt" if geom == "VeryTight" else "Opt", "Freq"]
     lines = header.rstrip("\n").splitlines()
     if tokens:
         last = max((i for i, line in enumerate(lines) if line.lstrip().startswith("!")), default=-1)
         lines.insert(last + 1, "! " + " ".join(tokens))
     lines += [f"%maxcore {s['maxcore']}", f"%pal nprocs {s['nprocs']} end"]
     if s.get("scf_convergence", "omit") != "omit":
-        lines += ["%scf", f"  Convergence {s['scf_convergence']}", "end"]
-    geom = with_geom_floor(s.get("geom_convergence", "omit"), geom_floor)
-    if optimizing and geom != "omit":
+        # Block Normal is ORCA's Strong; block Medium is the NormalSCF keyword.
+        level = _SCF_BLOCK_LEVEL.get(s["scf_convergence"], s["scf_convergence"])
+        lines += ["%scf", f"  Convergence {level}", "end"]
+    if optimizing and geom not in ("omit", "VeryTight"):
         lines += ["%geom", f"  Convergence {geom}", "end"]
     return "\n".join(lines) + "\n"
 

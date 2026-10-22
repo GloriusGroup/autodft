@@ -47,8 +47,24 @@ def test_omit_renders_nothing():
 
 def test_geom_floor_raises_and_never_loosens():
     assert "Convergence Tight" in render_settings("!M\n", OPT, "optimization", geom_floor="Tight")
-    assert "Convergence VeryTight" in render_settings(
-        "!M\n", {**OPT, "geom_convergence": "VeryTight"}, "optimization", geom_floor="Tight")
+    out = render_settings("!M\n", {**OPT, "geom_convergence": "VeryTight"}, "optimization", geom_floor="Tight")
+    assert "! RIJCOSX def2/J DEFGRID3 CPCM(MeCN) VeryTightOpt Freq\n" in out and "%geom" not in out
+
+
+def test_scf_normal_renders_as_block_medium():
+    out = render_settings("!M\n", {**SP, "scf_convergence": "Normal"}, "singlepoint")
+    assert out.endswith("%scf\n  Convergence Medium\nend\n")
+    for level in ("Strong", "Tight", "VeryTight", "Extreme"):
+        out = render_settings("!M\n", {**SP, "scf_convergence": level}, "singlepoint")
+        assert out.endswith(f"%scf\n  Convergence {level}\nend\n")
+
+
+def test_verytight_geom_renders_as_the_keyword():
+    out = render_settings("!wB97X-D3 def2-SVP\n", {**OPT, "geom_convergence": "VeryTight"}, "optimization")
+    assert out == ("!wB97X-D3 def2-SVP\n! RIJCOSX def2/J DEFGRID3 CPCM(MeCN) VeryTightOpt Freq\n"
+                   "%maxcore 2000\n%pal nprocs 12 end\n%scf\n  Convergence Tight\nend\n")
+    single = render_settings("!M\n", {**OPT, "geom_convergence": "VeryTight"}, "optimization", as_singlepoint=True)
+    assert "Opt" not in single and "Freq" not in single and "%geom" not in single
 
 
 def test_geom_floor_with_omit_renders_floor():
