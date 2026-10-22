@@ -1432,11 +1432,16 @@ def _esd_role(state: MoleculeState) -> Optional[str]:
 
 def _check_type(session: Session, task: ComputationTask) -> str:
     """The task type whose output checks apply; an ESD S1 optimisation gets the
-    excited-state ones, a densities singlepoint the cube check."""
+    excited-state ones, a densities singlepoint the cube check, a Reactivity
+    singlepoint its blocks' (and the cube check)."""
     if task.task_type == TaskType.optimization:
         state = session.get(MoleculeState, task.state_id)
         if state is not None and _esd_role(state) == "S1":
             return "optimization_excited"
+    if task.task_type.value in categories.REACTIVITY_TYPES:
+        state = session.get(MoleculeState, task.state_id)
+        if state is not None and _is_reactivity(state, task):
+            return "singlepoint_reactivity"
     if task.task_type == TaskType.singlepoint:
         state = session.get(MoleculeState, task.state_id)
         if state is not None and _keeps_cubes(state, task):

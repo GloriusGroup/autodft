@@ -157,8 +157,12 @@ class TestExtractNbo:
     def test_none_without_an_npa_block(self):
         assert results.extract("singlepoint", "FINAL SINGLE POINT ENERGY      -1.0\n")["npa_charges"] is None
 
+    def test_verticals_get_npa_charges(self):
+        record = results.extract("singlepoint_vert_ox", NBO_CLOSED_SHELL_OUTPUT)
+        assert record["npa_charges"] == results.extract("singlepoint", NBO_CLOSED_SHELL_OUTPUT)["npa_charges"]
+
     def test_other_singlepoint_types_get_no_npa_charges(self):
-        assert "npa_charges" not in results.extract("singlepoint_vert_ox", NBO_CLOSED_SHELL_OUTPUT)
+        assert "npa_charges" not in results.extract("singlepoint_uvvis", NBO_CLOSED_SHELL_OUTPUT)
 
     def test_decoder_round_trips(self):
         record = json.loads(json.dumps(results.extract("singlepoint", NBO_CLOSED_SHELL_OUTPUT)))
@@ -1204,6 +1208,12 @@ def test_extract_output_is_pinned():
         "esd_phosp": results.extract("esd_phosp", (FIXTURES_ESD / "phosp.out").read_text()),
     }
     assert set(cases) == results.STORED_TYPES
+    cases["singlepoint (reactivity)"] = results.extract(
+        "singlepoint", (FIXTURES_ORCA / "reactivity_relaxed_closed.out").read_text(),
+    )
+    cases["singlepoint_vert_ox (reactivity)"] = results.extract(
+        "singlepoint_vert_ox", (FIXTURES_ORCA / "reactivity_vert_open.out").read_text(),
+    )
     # Pin the stored shape (as store() persists it), not the raw Python
     # objects -- extract() returns tuples (e.g. SOC's sorted roots) that
     # json round-trips into lists, same as a real row's data_json does.

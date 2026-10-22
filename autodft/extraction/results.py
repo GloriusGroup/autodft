@@ -25,8 +25,9 @@ from autodft.qm.orca import esd_parser
 from autodft.qm.orca.esd_parser import Rate
 from autodft.qm.orca.parser import IMAGINARY_FREQ_THRESHOLD, IMAGINARY_FREQ_THRESHOLD_S1, OrcaParser
 from autodft.qm.orca.spectra_parser import (
-    IRMode, NaturalCharge, Shielding, Transition, parse_absorption, parse_ir, parse_natural_charges,
-    parse_shieldings,
+    IRMode, NaturalCharge, Shielding, Transition, parse_absorption, parse_hirshfeld, parse_ir,
+    parse_natural_charges, parse_polarizability, parse_quadrupole, parse_s2, parse_shieldings,
+    parse_stability, parse_wiberg,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ logger = logging.getLogger(__name__)
 # are then re-parsed. A new key needs no bump when its readers `require` it:
 # a record without it is stale for them and falls back to parsing on its own.
 # Pinned by tests/test_stored_results.py::test_extract_output_is_pinned.
-PARSER_VERSION = 2
+PARSER_VERSION = 3
 
 # The task types a reader ever asks for. store() stores nothing else, and the
 # backfill's query skips them outright.
@@ -67,9 +68,12 @@ def extract(task_type: str, output: str, input_text: Optional[str] = None, ir: b
         record["followed_root"] = esd_parser.followed_root(output)
         if ir:
             record["ir_modes"] = [asdict(m) for m in parse_ir(output)]
-    elif task_type == "singlepoint":
+    elif task_type in categories.REACTIVITY_TYPES:
         charges = parse_natural_charges(output)
         record["npa_charges"] = [asdict(c) for c in charges] if charges else None
+        reactivity = _reactivity(output)
+        if reactivity is not None:
+            record["reactivity"] = reactivity
     elif task_type == "singlepoint_uvvis":
         record["transitions"] = [asdict(t) for t in parse_absorption(output)]
     elif task_type == "singlepoint_nmr":
@@ -86,6 +90,22 @@ def extract(task_type: str, output: str, input_text: Optional[str] = None, ir: b
     elif task_type.startswith("esd_"):
         record["rates"] = [asdict(r) for r in esd_parser.rates(output)]
     return record
+
+
+def _reactivity(output: str) -> Optional[dict]:
+    """Reactivity's properties, each None when not printed; None without Hirshfeld or polarizability."""
+    hirshfeld = parse_hirshfeld(output)
+    polarizability = parse_polarizability(output)
+    if not hirshfeld and polarizability is None:
+        return None
+    return {
+        "hirshfeld": [asdict(c) for c in hirshfeld] or None,
+        "polarizability": polarizability,
+        "quadrupole": parse_quadrupole(output),
+        "wiberg": parse_wiberg(output),
+        "stability": parse_stability(output),
+        "s2": parse_s2(output),
+    }
 
 
 def _soc(output: str) -> Optional[dict]:

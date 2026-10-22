@@ -41,6 +41,8 @@ MP2_RESPONSE_MEMORY = "MP2 Response Memory"
 _MP2_SHORT_RE = re.compile(r"not enough memory to treat a single MO \(need ([\d.]+) MB more\)")
 # A densities singlepoint's requested cubes are missing or empty.
 DENSITY_CUBES = "Density Cubes"
+# Blocks a Reactivity singlepoint must print, by the name its failure reports.
+REACTIVITY_MARKERS = (("NBO", "NBO analysis completed"), ("Polarizability", "Isotropic polarizability"))
 _PLOTS_RE = re.compile(r"^\s*%plots\b(.*?)^\s*end\b", re.IGNORECASE | re.MULTILINE | re.DOTALL)
 _CUBE_FILE_RE = re.compile(r'\(\s*"([^"]+\.cube)"\s*\)', re.IGNORECASE)
 
@@ -150,8 +152,13 @@ class OrcaParser(QMEngine):
             from autodft.qm.orca.spectra_parser import parse_absorption
 
             checks["Absorption Spectrum"] = bool(parse_absorption(content))
-        if task_type == "singlepoint_densities":
+        if task_type in ("singlepoint_densities", "singlepoint_reactivity"):
+            # A Reactivity input without %plots asks for no cubes.
             checks[DENSITY_CUBES] = not self.missing_cubes(job_path)
+        if task_type == "singlepoint_reactivity":
+            # NBO and the response run after the SCF; either can die and ORCA still ends normally.
+            for name, marker in REACTIVITY_MARKERS:
+                checks[f"Reactivity: {name} missing"] = marker in content
         if task_type == "singlepoint_nmr":
             from autodft.qm.orca.spectra_parser import parse_shieldings
 
