@@ -20,9 +20,13 @@ IR = "request_spec_ir"
 NMR = "request_spec_nmr"
 DENSITIES = "request_densities"
 NBO = "request_singlepoint_nbo"
+REACTIVITY = "request_sp_reactivity"
 
-CATEGORIES = (ESD, UVVIS, IR, NMR, DENSITIES, NBO)
-LABELS = {ESD: "ESD", UVVIS: "UV/Vis", IR: "IR", NMR: "NMR", DENSITIES: "Densities", NBO: "NBO"}
+CATEGORIES = (ESD, UVVIS, IR, NMR, DENSITIES, NBO, REACTIVITY)
+LABELS = {ESD: "ESD", UVVIS: "UV/Vis", IR: "IR", NMR: "NMR", DENSITIES: "Densities", NBO: "NBO",
+          REACTIVITY: "Reactivity"}
+# The relaxed and vertical singlepoints Reactivity adds its blocks to.
+REACTIVITY_TYPES = ("singlepoint", "singlepoint_vert_ox", "singlepoint_vert_red", "singlepoint_vert_spin_change")
 
 # What the engine can compute today. Anything else is refused at submission
 # rather than accepted and silently never run.
@@ -73,6 +77,11 @@ _NBO_CONFLICTS = (
     (re.compile(r"^\s*!.*\bNBO\b", re.IGNORECASE | re.MULTILINE), "the NBO keyword"),
     (re.compile(r"%nbo\b", re.IGNORECASE), "%nbo"),
 )
+_REACTIVITY_CONFLICTS = (
+    (re.compile(r"^\s*!.*\bHirshfeld\b", re.IGNORECASE | re.MULTILINE), "the Hirshfeld keyword"),
+    (re.compile(r"%elprop\b", re.IGNORECASE), "%elprop"),
+    *_NBO_CONFLICTS,
+)
 # No leading "-" (submit.cmd's `cp *.cube` would read it as an option) or
 # "." (a dotfile the same glob never matches).
 _CUBE_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}\.cube\Z")
@@ -98,6 +107,7 @@ OPTIONS: dict[str, dict] = {
         "density_spindens_file": "SpinDens.cube",
     },
     NBO: {"nbo_keywords": ""},
+    REACTIVITY: {},
 }
 # "all": every rate may get HT; "s1": fluorescence and S1->Tn ISC only.
 ESD_HT_SCOPES = ("all", "s1")
@@ -143,8 +153,8 @@ def snapshot(metadata: dict) -> dict:
 
 
 def every_state_snapshot(metadata: dict) -> dict:
-    """Densities and NBO settings for every state's own energy singlepoint,
-    not only S0's -- ``{}`` when neither is requested.
+    """Densities, NBO and Reactivity settings for every state's own energy
+    singlepoint, not only S0's -- ``{}`` when none is requested.
 
     ``request_singlepoint_nbo`` itself already flows onto every state through
     ``_create_state``'s defaults, so only its ``nbo_keywords`` option is
@@ -158,6 +168,8 @@ def every_state_snapshot(metadata: dict) -> dict:
     if metadata.get(NBO):
         out.update({name: metadata.get(name, default)
                     for name, default in OPTIONS[NBO].items()})
+    if metadata.get(REACTIVITY):
+        out[REACTIVITY] = True
     return out
 
 
@@ -349,6 +361,16 @@ def rejection(
                 "=_.,+- -- no $, quotes or newlines (nbo_keywords)."
             )
 
+    if REACTIVITY in wanted:
+        if not metadata.get("request_singlepoint", True):
+            return "Reactivity needs the energy singlepoint stage; it runs inside those jobs."
+        for pattern, label in _REACTIVITY_CONFLICTS:
+            if pattern.search(header_singlepoint or ""):
+                return (
+                    f"The singlepoint header already contains {label}. Reactivity adds "
+                    f"Hirshfeld, %elprop and NBO itself; pick a header without it."
+                )
+
     if wanted & _ON_SP_HEADER:
         for pattern, label in _SP_CONFLICTS:
             if pattern.search(header_singlepoint or ""):
@@ -372,7 +394,7 @@ def nbo_unavailable(settings) -> Optional[str]:
 
 
 # Run inside the energy singlepoints, so a finished molecule cannot gain them.
-SUBMIT_ONLY = (DENSITIES, NBO)
+SUBMIT_ONLY = (DENSITIES, NBO, REACTIVITY)
 
 
 def extension(

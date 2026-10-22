@@ -241,6 +241,7 @@ class OrcaParser(QMEngine):
         keep_mp2resp: bool = False,
         keep_esd_files: bool = False,
         extra_inputs: Optional[list[str]] = None,
+        keep_wavefunction: bool = False,
     ) -> None:
         """Delegated to :func:`input_generator.generate_submit_script`.
 
@@ -263,7 +264,7 @@ class OrcaParser(QMEngine):
             nbo_exe=self.orca.nbo_exe,
             mpi_env=self.orca.mpi_env,
             tmp_dir=self.orca.tmp_dir,
-            keep_wavefunction=self.orca.keep_wavefunction,
+            keep_wavefunction=keep_wavefunction or self.orca.keep_wavefunction,
             keep_densities=self.orca.keep_densities,
             keep_hessian=keep_hessian,
             keep_cubes=keep_cubes,

@@ -1135,7 +1135,7 @@ def _generate_job_files(
         from autodft.qm.orca.blocks import HeaderConflict, compose_header
 
         metadata = json.loads(state.metadata_json) if state.metadata_json else {}
-        if task.task_type == TaskType.singlepoint and metadata.get(categories.NBO):
+        if _runs_nbo(state, task):
             unavailable = categories.nbo_unavailable(settings)
             if unavailable:
                 return _fail_task(session, task, job, unavailable)
@@ -1187,6 +1187,7 @@ def _generate_job_files(
         keep_hessian=_keeps_hessian(state, task),
         keep_cubes=_keeps_cubes(state, task),
         runs_nbo=_runs_nbo(state, task),
+        keep_wavefunction=_keeps_wavefunction(state, task),
         # Its log names how much memory per rank an MP2 response lacked.
         keep_mp2resp=task.task_type == TaskType.singlepoint_nmr,
         keep_esd_files=task.task_type.value.startswith("esd_"),
@@ -1457,11 +1458,25 @@ def _keeps_cubes(state: MoleculeState, task: ComputationTask) -> bool:
 
 
 def _runs_nbo(state: MoleculeState, task: ComputationTask) -> bool:
-    """Whether a singlepoint runs NBO."""
+    """Whether a singlepoint runs NBO: the NBO category's relaxed one, or a Reactivity one."""
+    if _is_reactivity(state, task):
+        return True
     if task.task_type != TaskType.singlepoint:
         return False
     metadata = json.loads(state.metadata_json) if state.metadata_json else {}
     return bool(metadata.get(categories.NBO))
+
+
+def _keeps_wavefunction(state: MoleculeState, task: ComputationTask) -> bool:
+    """Whether a job copies its ``.gbw`` back: Reactivity singlepoints."""
+    return _is_reactivity(state, task)
+
+
+def _is_reactivity(state: MoleculeState, task: ComputationTask) -> bool:
+    if task.task_type.value not in categories.REACTIVITY_TYPES:
+        return False
+    metadata = json.loads(state.metadata_json) if state.metadata_json else {}
+    return bool(metadata.get(categories.REACTIVITY))
 
 
 def _get_stage_config(

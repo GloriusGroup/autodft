@@ -30,6 +30,10 @@ NMR_DH_ROUTE = "!revDSD-PBEP86-D4/2021 PCSSEG-3 AUTOAUX NMR NOFROZENCORE TightSC
 _NMR_DH_RE = re.compile(r"^\s*!.*\brevDSD-PBEP86\S*\s.*\bPCSSEG-3\b.*\bNMR\b", re.IGNORECASE | re.MULTILINE)
 _SOLVENT_TOKEN_RE = re.compile(r"(?:CPCMC?|SMD)(?:\(.*\))?", re.IGNORECASE)
 _DH_KEPT_BLOCKS_RE = re.compile(r"%cpcm\b.*?\bend\b", re.IGNORECASE | re.DOTALL)
+ELPROP_BLOCK = "%elprop\n  Dipole true\n  Quadrupole true\n  Polar true\nend\n"
+STABILITY_BLOCK = "%scf\n  STABPerform true\nend\n"
+# Wiberg bond indices.
+REACTIVITY_NBO_KEYWORDS = "BNDIDX"
 
 
 class HeaderConflict(ValueError):
@@ -155,6 +159,34 @@ def with_nbo(header: str, keywords: str) -> str:
     return header
 
 
+def with_stability(header: str) -> str:
+    """*header* with SCF stability analysis, merged into its ``%scf`` block if it has one."""
+    masked = re.sub(r"#[^\n]*", lambda m: " " * len(m.group(0)), header)
+    if re.search(r"\bSTABPerform\b", masked, re.IGNORECASE):
+        raise HeaderConflict("The header already sets STABPerform; this job adds its own.")
+    match = re.search(r"%scf\b", masked, re.IGNORECASE)
+    if match is None:
+        return append_block(header, STABILITY_BLOCK)
+    # Right after "%scf": a subblock's own "end" (Shift ... end) cannot capture it.
+    rest = header[match.end():].lstrip(" \t")
+    return header[:match.end()] + "\n  STABPerform true" + ("" if rest.startswith("\n") else "\n  ") + rest
+
+
+def with_reactivity(header: str, task_type: str, multiplicity: int, nbo_keywords: str) -> str:
+    """*header* with Hirshfeld, ``%elprop``, NBO with Wiberg indices and, on an
+    open-shell vertical, stability analysis."""
+    if has_block(header, "elprop"):
+        raise HeaderConflict("The header already has a %elprop block; this job adds its own.")
+    keywords = REACTIVITY_NBO_KEYWORDS.split()
+    for keyword in nbo_keywords.split():
+        if keyword.upper() not in (k.upper() for k in keywords):
+            keywords.append(keyword)
+    header = with_nbo(append_block(with_keyword(header, "Hirshfeld"), ELPROP_BLOCK), " ".join(keywords))
+    if task_type.startswith("singlepoint_vert_") and multiplicity > 1:
+        header = with_stability(header)
+    return header
+
+
 def densities_block(
     grid, eldens_file: str, spindens_file: str, *, eldens: bool, spindens: bool,
 ) -> Optional[str]:
@@ -194,7 +226,7 @@ def compose_header(
 
     *options* is the task's state metadata, where per-submission settings
     such as ``uvvis_nroots`` live. *multiplicity* is the job's own, for the
-    singlepoint's spin-density rule (open shell only).
+    spin-density and stability-analysis rules (open shell only).
     """
     options = options or {}
     if task_type == "singlepoint_uvvis":
@@ -230,6 +262,13 @@ def compose_header(
     ):
         # ESD Hessians of T1 and of the S0 conformers (request_esd sits on S0 only).
         return with_tight_opt(header)
+    if task_type in categories.REACTIVITY_TYPES and options.get(categories.REACTIVITY):
+        # Reactivity's NBO takes the user's keywords when NBO is requested too.
+        nbo_keywords = options.get("nbo_keywords", "") if options.get(categories.NBO) else ""
+        header = with_reactivity(header, task_type, multiplicity, nbo_keywords)
+        if task_type == "singlepoint" and options.get(categories.DENSITIES):
+            header = with_densities(header, options, multiplicity)
+        return header
     if task_type == "singlepoint":
         if options.get(categories.NBO):
             defaults = categories.OPTIONS[categories.NBO]

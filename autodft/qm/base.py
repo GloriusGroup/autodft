@@ -92,6 +92,7 @@ class QMEngine(ABC):
         keep_mp2resp: bool = False,
         keep_esd_files: bool = False,
         extra_inputs: Optional[list[str]] = None,
+        keep_wavefunction: bool = False,
     ) -> None:
         """Write a cluster submit script (e.g. SLURM) into *job_path*.
 
@@ -111,5 +112,6 @@ class QMEngine(ABC):
                             correlation functions back from scratch when True.
             extra_inputs: Files in *job_path* to stage into scratch next to
                           the input file.
+            keep_wavefunction: Copy ``*.gbw`` back from scratch when True.
         """
         ...
