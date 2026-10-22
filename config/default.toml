@@ -81,3 +81,28 @@ port = 8080
 # start. Set it only to share sessions across several controllers.
 # session_secret         = ""
 session_lifetime_seconds = 604800
+
+[advanced.confsearch]
+nprocs  = 32
+maxcore = 500
+
+[advanced.optimization]
+nprocs          = 12
+maxcore         = 2000
+grid            = "DEFGRID3"
+scf_convergence = "Tight"
+geom_convergence  = "Normal"
+ri              = "RIJCOSX"
+aux_basis       = "def2/J"
+solvation       = "CPCM"
+solvent         = "MeCN"
+
+[advanced.singlepoint]
+nprocs          = 8
+maxcore         = 1500
+grid            = "DEFGRID3"
+scf_convergence = "Tight"
+ri              = "RIJCOSX"
+aux_basis       = "def2/J"
+solvation       = "CPCM"
+solvent         = "MeCN"

@@ -208,6 +208,27 @@ class OrcaConfig:
 
 
 @dataclass
+class AdvancedStage:
+    """Method settings and resources of one stage; ``omit`` leaves a setting out."""
+    nprocs: int = 8
+    maxcore: int = 1500
+    grid: str = "DEFGRID3"
+    scf_convergence: str = "Tight"
+    geom_convergence: str = "Normal"
+    ri: str = "RIJCOSX"
+    aux_basis: str = "def2/J"
+    solvation: str = "CPCM"
+    solvent: str = "MeCN"
+
+
+@dataclass
+class AdvancedConfig:
+    confsearch: AdvancedStage = field(default_factory=lambda: AdvancedStage(nprocs=32, maxcore=500))
+    optimization: AdvancedStage = field(default_factory=lambda: AdvancedStage(nprocs=12, maxcore=2000))
+    singlepoint: AdvancedStage = field(default_factory=AdvancedStage)
+
+
+@dataclass
 class Settings:
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
@@ -216,6 +237,7 @@ class Settings:
     api: ApiConfig = field(default_factory=ApiConfig)
     orca: OrcaConfig = field(default_factory=OrcaConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
+    advanced: AdvancedConfig = field(default_factory=AdvancedConfig)
 
     # ------------------------------------------------------------------
     # Derived path helpers (used everywhere instead of touching the

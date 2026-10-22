@@ -102,3 +102,28 @@ port = 8085
 # secret living in this file.
 # session_secret         = ""
 session_lifetime_seconds = 604800   # 7 days
+
+[advanced.confsearch]
+nprocs  = 32
+maxcore = 500
+
+[advanced.optimization]
+nprocs          = 12
+maxcore         = 2000
+grid            = "DEFGRID3"
+scf_convergence = "Tight"
+geom_convergence  = "Normal"
+ri              = "RIJCOSX"
+aux_basis       = "def2/J"
+solvation       = "CPCM"
+solvent         = "MeCN"
+
+[advanced.singlepoint]
+nprocs          = 8
+maxcore         = 1500
+grid            = "DEFGRID3"
+scf_convergence = "Tight"
+ri              = "RIJCOSX"
+aux_basis       = "def2/J"
+solvation       = "CPCM"
+solvent         = "MeCN"
