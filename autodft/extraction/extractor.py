@@ -409,6 +409,12 @@ class PipelineExtractor:
         Replaces a previous export there; archived molecules keep their folders.
         Returns ``{molecules, files_copied, root}``.
         """
+        return self._export_tree(export_root, all_conformers, keep_gbw)[0]
+
+    def _export_tree(
+        self, export_root: str | Path, all_conformers: bool, keep_gbw: bool,
+    ) -> tuple[dict[str, Any], list[int]]:
+        """:meth:`export_tree`, plus the ids of the molecules it exported."""
         from autodft.paths import project_file_stem, safe_subdirectory
 
         root = safe_subdirectory(Path(export_root), self.project_name)
@@ -421,11 +427,11 @@ class PipelineExtractor:
                 select(Molecule).where(Molecule.project_name == self.project_name)
                 .order_by(col(Molecule.id))
             ).all()
-            archived = {m.id for m in molecules if m.archived}
             plans = [self._plan_molecule(session, m, all_conformers, keep_gbw)
                      for m in molecules if not m.archived]
+        exported = [manifest["molecule_id"] for manifest, _ in plans]
 
-        _clear_export(root, stem, archived)
+        _clear_export(root, stem, exported)
         self.export_summary_csv(root / f"{stem}.csv")
         self.export_summary_csv(root / f"{stem}_all_conformers.csv", all_conformers=True)
         from autodft.analysis.state_analysis import analyze_project, build_xlsx_bytes
@@ -452,7 +458,7 @@ class PipelineExtractor:
             copied += len(files)
 
         logger.info("Exported %d files of %d molecules to %s", copied, len(plans), root)
-        return {"molecules": len(plans), "files_copied": copied, "root": str(root)}
+        return {"molecules": len(plans), "files_copied": copied, "root": str(root)}, exported
 
     def _plan_molecule(
         self, session: Session, mol: Molecule, all_conformers: bool, keep_gbw: bool,
@@ -544,36 +550,29 @@ class PipelineExtractor:
 
         The caller is responsible for the user confirmation.
         """
-        # The export first: if it fails, nothing is deleted.
-        summary = self.export_tree(export_root, all_conformers, keep_gbw)
-
-        with get_session() as session:
-            molecule_ids = [m for m in session.exec(
-                select(Molecule.id).where(Molecule.project_name == self.project_name)
-            ).all() if m is not None]
+        # The export first: if it fails, nothing is deleted. Then exactly what it exported.
+        summary, molecule_ids = self._export_tree(export_root, all_conformers, keep_gbw)
         for mol_id in molecule_ids:
             mol_dir = Path(comp_root) / f"mol_{mol_id}"
             if mol_dir.is_dir():
                 shutil.rmtree(mol_dir)
 
         # Every DB row is kept: the project stays browsable as read-only history.
-        self._mark_project_archived()
+        self._mark_archived(molecule_ids)
         logger.info("Archived project %r: %d molecules, %d files kept",
                     self.project_name, len(molecule_ids), summary["files_copied"])
         return summary
 
-    def _mark_project_archived(self) -> None:
-        """Set ``Molecule.archived = True`` on every row in this project.
+    @staticmethod
+    def _mark_archived(molecule_ids: list[int]) -> None:
+        """Set ``Molecule.archived = True`` on *molecule_ids*.
 
-        Replaces the prior ``_delete_project_rows`` behaviour. Keeping
-        the rows means archived projects still appear in selectors and
-        the Molecules subpage; their on-disk data lives in the export
+        Keeping the rows means archived projects still appear in selectors
+        and the Molecules subpage; their on-disk data lives in the export
         directory and the DB acts as the searchable index.
         """
         with get_session() as session:
-            mols = session.exec(
-                select(Molecule).where(Molecule.project_name == self.project_name)
-            ).all()
+            mols = session.exec(select(Molecule).where(col(Molecule.id).in_(molecule_ids))).all()
             for m in mols:
                 m.archived = True
                 session.add(m)
@@ -727,12 +726,14 @@ OPTIONAL_WRITERS: list[tuple[tuple[str, ...], Callable[[str, Path, str], list[Pa
 _SUMMARY_SUFFIXES = (".csv", "_all_conformers.csv", "_state_analysis.xlsx")
 
 
-def _clear_export(root: Path, stem: str, keep_molecules: set[int]) -> None:
-    """Remove a previous export's summary files and molecule folders, except *keep_molecules*'."""
+def _clear_export(root: Path, stem: str, molecule_ids: list[int]) -> None:
+    """Remove a previous export's summary files and the folders of *molecule_ids*, re-exported now.
+
+    Other folders stay: archived or wiped molecules' only copy (SQLite may reuse a wiped id).
+    """
     for suffix in (*_SUMMARY_SUFFIXES, *(s for suffixes, _ in OPTIONAL_WRITERS for s in suffixes)):
         (root / f"{stem}{suffix}").unlink(missing_ok=True)
-    molecules = root / "molecules"
-    if molecules.is_dir():
-        for folder in molecules.iterdir():
-            if folder.is_dir() and folder.name not in {str(m) for m in keep_molecules}:
-                shutil.rmtree(folder)
+    for mol_id in molecule_ids:
+        folder = root / "molecules" / str(mol_id)
+        if folder.is_dir():
+            shutil.rmtree(folder)

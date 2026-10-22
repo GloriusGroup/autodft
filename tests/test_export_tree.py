@@ -96,13 +96,21 @@ def _conformer(session, settings, state, name, e_sp, imaginary=(), uvvis=True, f
     return opt
 
 
-def _standard(settings, low_first=True, imaginary_first=()):
+def _standard(settings, low_first=True, imaginary_first=(), ox=False):
     """S0 with a conformer search and two conformers, conf1 the lower unless *low_first* is False."""
     with get_session() as session:
         state = _molecule(session)
         _task(session, settings, state, TaskType.confsearch, "cs")
         first = _conformer(session, settings, state, "a", -2.0 if low_first else -1.0, imaginary_first)
         second = _conformer(session, settings, state, "b", -1.0 if low_first else -2.0)
+        if ox:
+            cation = MoleculeState(molecule_id=state.molecule_id, description="ox", multiplicity=2, charge=1,
+                                   metadata_json="{}")
+            session.add(cation)
+            session.commit()
+            opt = _task(session, settings, cation, TaskType.optimization, "ox_opt",
+                        {"energy": None, "free_energy_correction": 0.1, "imaginary": [], "followed_root": None})
+            _task(session, settings, cation, TaskType.singlepoint, "ox_sp", {"energy": -1.5}, depends_on=opt.id)
         return state.molecule_id, first.id, second.id
 
 
@@ -127,11 +135,14 @@ CONF1 = {
 }
 
 
+OX = {"ox/conf1/opt.inp", "ox/conf1/opt.out", "ox/conf1/opt.xyz", "ox/conf1/sp.inp", "ox/conf1/sp.out"}
+
+
 def test_tree_layout(db):
-    mol_id, _, _ = _standard(db)
+    mol_id, _, _ = _standard(db, ox=True)
     summary = _export(db)
-    assert _tree(db, mol_id) == {"molecule.json", "S0/confsearch.out", *CONF1}
-    assert summary == {"molecules": 1, "files_copied": len(CONF1) + 1, "root": str(_root(db))}
+    assert _tree(db, mol_id) == {"molecule.json", "S0/confsearch.out", *CONF1, *OX}
+    assert summary == {"molecules": 1, "files_copied": len(CONF1) + len(OX) + 1, "root": str(_root(db))}
 
 
 def test_summary_files_at_the_root(db):
@@ -252,7 +263,8 @@ def test_a_second_export_replaces_the_first(db):
     (root / "notes.txt").write_text("mine")
     _export(db, keep_gbw=True)
     _export(db)
-    assert sorted(p.name for p in (root / "molecules").iterdir()) == [str(mol_id)]
+    # A folder whose molecule is not in this export (wiped rows) is the only copy.
+    assert sorted(p.name for p in (root / "molecules").iterdir()) == sorted([str(mol_id), "999"])
     assert not any(p.endswith(".gbw") for p in _tree(db, mol_id))
     assert not (root / "p_photophysics.json").exists()
     assert (root / "photophysics" / "mol_1.json").read_text() == "frozen"
@@ -280,6 +292,60 @@ def test_archive_removes_comp_data_and_flags(db):
     with get_session() as session:
         assert session.get(Molecule, mol_id).archived is True
         assert session.exec(select(ComputationTask)).all()  # rows kept
+
+
+def test_archive_keeps_comp_data_when_export_fails(db, monkeypatch):
+    import autodft.analysis.state_analysis as state_analysis
+
+    mol_id, _, _ = _standard(db)
+
+    def broken(payload):
+        raise RuntimeError("xlsx")
+    monkeypatch.setattr(state_analysis, "build_xlsx_bytes", broken)
+    with pytest.raises(RuntimeError):
+        PipelineExtractor(PROJECT).archive_project(db.export_data_path, db.comp_data_path, False, False)
+    assert (db.comp_data_path / f"mol_{mol_id}" / "opt_a").is_dir()
+    with get_session() as session:
+        assert session.get(Molecule, mol_id).archived is False
+
+
+def test_archive_leaves_other_projects_comp_data(db):
+    _standard(db)
+    with get_session() as session:
+        other = Molecule(smiles="CCO", project_name="nho/other")
+        session.add(other)
+        session.commit()
+        other_id = other.id
+    (db.comp_data_path / f"mol_{other_id}").mkdir(parents=True)
+    PipelineExtractor(PROJECT).archive_project(db.export_data_path, db.comp_data_path, False, False)
+    assert (db.comp_data_path / f"mol_{other_id}").is_dir()
+    with get_session() as session:
+        assert session.get(Molecule, other_id).archived is False
+
+
+def test_archive_deletes_only_the_exported_molecules(db, monkeypatch):
+    """A molecule that arrives while the export runs is neither deleted nor archived."""
+    mol_id, _, _ = _standard(db)
+    late: list[int] = []
+    original = PipelineExtractor.export_summary_csv
+
+    def arrive(self, *args, **kwargs):
+        if not late:
+            with get_session() as session:
+                mol = Molecule(smiles="CCN", project_name=PROJECT)
+                session.add(mol)
+                session.commit()
+                late.append(mol.id)
+            (db.comp_data_path / f"mol_{late[0]}").mkdir(parents=True)
+        return original(self, *args, **kwargs)
+    monkeypatch.setattr(PipelineExtractor, "export_summary_csv", arrive)
+    summary = PipelineExtractor(PROJECT).archive_project(db.export_data_path, db.comp_data_path, False, False)
+    assert summary["molecules"] == 1
+    assert not (db.comp_data_path / f"mol_{mol_id}").exists()
+    assert (db.comp_data_path / f"mol_{late[0]}").is_dir()
+    with get_session() as session:
+        assert session.get(Molecule, mol_id).archived is True
+        assert session.get(Molecule, late[0]).archived is False
 
 
 def test_an_archived_molecule_keeps_its_folder_on_a_later_export(db):
@@ -354,6 +420,14 @@ def test_export_route_passes_keep_gbw(api, db):
     assert "S0/conf1/sp.gbw" in _tree(db, mol_id)
 
 
+def test_csv_export_takes_no_keep_gbw(api, db):
+    client, headers = api
+    _standard(db)
+    r = client.post("/api/projects/nho:p/export?format=csv&keep_gbw=true", headers=headers)
+    assert r.status_code == 202, r.text
+    assert r.json()["job"]["params"] == {"all_conformers": False}
+
+
 def test_archive_route_passes_the_dialog_options(api, db):
     client, headers = api
     _standard(db)
@@ -421,6 +495,14 @@ def _export_section() -> str:
 def test_dashboard_project_buttons():
     labels = re.findall(r"<button[^>]*>([^<]*)</button>", _export_section())
     assert labels == ["Export Project", "Export and Delete", "Delete Project"]
+
+
+def test_dashboard_delete_box_starts_unticked():
+    """Delete Project keeps the exports unless "Also delete exported data" is ticked."""
+    html = TEMPLATE.read_text()
+    assert "deleteProjectBtn" in html and "adminPrepareProjectWipe(currentProject" in html
+    [box] = re.findall(r'<input[^>]*class="adm-exports"[^>]*>', html)
+    assert "checked" not in box
 
 
 def test_dashboard_export_section():

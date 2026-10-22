@@ -1097,7 +1097,8 @@ def api_project_export(
             owner_id=identity.user_id,
             qualified_name=name,
             kind=kind,
-            params={"all_conformers": all_conformers, "keep_gbw": keep_gbw},
+            params={"all_conformers": all_conformers,
+                    **({"keep_gbw": keep_gbw} if kind == ProjectJobKind.export_files else {})},
             settings=settings,
         )
         return JSONResponse(status_code=202, content={"project": name, "job": job})

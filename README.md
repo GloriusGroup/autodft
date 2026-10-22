@@ -367,7 +367,8 @@ browsable in Project Overview but can no longer be exported (409). Refused for
 a protected project and for one that is already archived. **Delete Project**
 is the project wipe (below) offered to the owner and admin: a preview, the
 project name typed back, refused for a protected project and with 409 while
-another wipe runs. The Admin page keeps its own wipe.
+another wipe runs; "Also delete exported data" starts unticked. The Admin
+page keeps its own wipe.
 
 **"Add calculations…" (Extend)** — on the project page, before the project
 is archived. It opens the submission form with the project's molecules and

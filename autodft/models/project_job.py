@@ -48,7 +48,7 @@ class ProjectJob(SQLModel, table=True):
     # currently running a job" on every cycle.
     status: ProjectJobStatus = Field(default=ProjectJobStatus.running, index=True)
 
-    # The request options (extensions, all_conformers, ...) as JSON, so the
+    # The request options (all_conformers, keep_gbw, ...) as JSON, so the
     # worker thread can reconstruct the call without holding request state.
     params_json: str = Field(default="{}")
     # The summary dict on success (paths produced, counts), as JSON.

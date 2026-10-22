@@ -758,7 +758,8 @@ built from the archive's all-conformers CSV, and `photophysics` is served
 from the payload archiving froze — see [`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md).
 
 **The export tree** (`files` and the archive), replacing a previous one in
-the same directory (archived molecules keep their folders):
+the same directory (only the folders of the molecules exported now are replaced;
+archived or wiped molecules keep theirs):
 
 ```
 <export_data>/<owner>/<project>/
