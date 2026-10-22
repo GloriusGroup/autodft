@@ -2270,7 +2270,7 @@ def api_submit(
         project_name, author = _submission_owner(session, identity, body)
         conflict = categories.existing_conflict(
             session, project_name, check["canonical"], categories.requested(flags),
-            {**categories.options(flags), categories.ESD_HT: bool(flags.get(categories.ESD_HT))}, advanced,
+            {**categories.options(flags), categories.ESD_HT: bool(flags.get(categories.ESD_HT))}, advanced, headers,
         )
         if conflict:
             return JSONResponse(
@@ -2517,7 +2517,7 @@ def api_submit_batch(
             detail, check = _reject_reason(body, smiles, headers, advanced)
             if detail is None:
                 detail = categories.existing_conflict(
-                    session, project_name, check["canonical"], wanted, requested_options, advanced,
+                    session, project_name, check["canonical"], wanted, requested_options, advanced, headers,
                 )
             if detail is not None:
                 rejected.append({"smiles": smiles, "detail": detail})

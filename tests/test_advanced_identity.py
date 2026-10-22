@@ -53,7 +53,8 @@ def test_resubmit_with_other_grid_refused(api):
     # The expansion refuses it too (the CLI and direct inserts skip the API).
     with get_session() as session:
         entry = CalculationEntrypoint(smiles="c1ccccc1", header_optimization="!wB97X-D3 def2-SVP\n",
-                                      header_singlepoint="!wB97X-D3 def2-TZVP\n", request_metadata=json.dumps(
+                                      header_singlepoint="!wB97X-D3 def2-TZVP\n",
+                                      header_confsearch=_confsearch_header(), request_metadata=json.dumps(
                                           {"project_name": "nho/p", "advanced": {"singlepoint": {"grid": "DEFGRID2"}}}))
         session.add(entry)
         session.commit()
@@ -63,11 +64,39 @@ def test_resubmit_with_other_grid_refused(api):
         assert needle in session.get(CalculationEntrypoint, entry_id).processing_error
 
 
-def test_resubmit_of_a_legacy_molecule_in_new_mode_refused(api):
+def test_resubmit_of_a_legacy_molecule_in_new_mode_at_its_headers_refused(api):
+    client, key, settings = api
+    _bare_legacy_project(settings)
+    r = _submit(client, key, smiles="CCO", **BARE)
+    assert r.status_code == 400 and "header-embedded" in r.json()["detail"]
+
+
+def _s0_states(smiles):
+    with get_session() as session:
+        return session.exec(select(MoleculeState).join(Molecule, Molecule.id == MoleculeState.molecule_id).where(
+            Molecule.smiles == smiles, MoleculeState.description == "S0")).all()
+
+
+def test_resubmit_with_other_grid_at_other_headers_makes_new_states(api):
+    client, key, settings = api
+    assert _submit(client, key).status_code == 200
+    _process(settings)
+    r = _submit(client, key, header_singlepoint="!wB97X-D3 def2-QZVP\n", advanced={"singlepoint": {"grid": "DEFGRID2"}})
+    assert r.status_code == 200, r.text
+    _process(settings)
+    grids = sorted(json.loads(s.metadata_json)["advanced"]["singlepoint"]["grid"] for s in _s0_states("c1ccccc1"))
+    assert grids == ["DEFGRID2", "DEFGRID3"]
+
+
+def test_resubmit_of_a_legacy_molecule_in_new_mode_at_other_headers_makes_new_states(api):
     client, key, settings = api
     _legacy_project(settings)
     r = _submit(client, key, smiles="CCO", advanced={})
-    assert r.status_code == 400 and "header-embedded" in r.json()["detail"]
+    assert r.status_code == 200, r.text
+    _process(settings)
+    with get_session() as session:
+        assert all(e.processing_error is None for e in session.exec(select(CalculationEntrypoint)))
+    assert sorted("advanced" in json.loads(s.metadata_json) for s in _s0_states("CCO")) == [False, True]
 
 
 def test_resubmit_with_other_nprocs_allowed(api):

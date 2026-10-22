@@ -439,14 +439,16 @@ def present(session: Session, project_name: str, canonical_smiles: str) -> set[s
 def existing_conflict(
     session: Session, project_name: str, canonical_smiles: str, wanted: set[str],
     requested_options: Optional[dict] = None, advanced: Optional[dict] = None,
+    headers: tuple = (None, None, None),
 ) -> Optional[str]:
     """Refuse categories for a molecule that already exists without them, or
     with different options for them, and other Advanced method settings
-    (*advanced* None is a legacy submission).
+    (*advanced* None is a legacy submission) at the same *headers* (texts).
 
     Categories are only added to new molecules: finished work is never
     extended, so a molecule computed before a category existed stays as it was.
     """
+    from autodft.models.header import ComputationHeader
     from autodft.models.molecule import Molecule
     from autodft.models.state import MoleculeState
 
@@ -459,6 +461,11 @@ def existing_conflict(
     if molecule is None:
         return None
 
+    # Only states at these headers would be reused (and the new settings dropped).
+    header_ids = tuple(session.exec(select(ComputationHeader.id).where(ComputationHeader.header_text == text)).first()
+                       if text else None for text in headers)
+    if any(text and hid is None for text, hid in zip(headers, header_ids)):
+        header_ids = None
     have: set[str] = set()
     stored_metadata: dict = {}
     settings_conflict = None
@@ -471,12 +478,15 @@ def existing_conflict(
         metadata = json.loads(state.metadata_json) if state.metadata_json else {}
         have |= requested(metadata)
         stored_metadata.update(metadata)
-        settings_conflict = settings_conflict or _settings_difference(metadata, advanced)
+        same_headers = header_ids == (
+            state.confsearch_header_id, state.optimization_header_id, state.singlepoint_header_id)
+        if same_headers and not settings_conflict:
+            settings_conflict = _settings_difference(metadata, advanced)
     if settings_conflict:
         return (
-            f"{canonical_smiles} already exists in {project_name} (molecule {molecule.id}): "
-            f"{settings_conflict}; Advanced method settings apply to new molecules only, "
-            f"so submit it into another project."
+            f"{canonical_smiles} already exists in {project_name} (molecule {molecule.id}) at these "
+            f"headers: {settings_conflict}; its states there keep their settings, so submit it "
+            f"into another project or at other headers."
         )
     if not wanted:
         return None

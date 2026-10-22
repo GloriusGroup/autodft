@@ -174,6 +174,7 @@ def _process_entrypoint_body(
     else:
         conflict = categories.existing_conflict(
             session, project, _canonicalize_smiles(smiles), wanted, requested_options, metadata.get("advanced"),
+            headers,
         )
     if conflict:
         raise ValueError(conflict)

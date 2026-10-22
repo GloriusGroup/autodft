@@ -16,7 +16,7 @@ Tick a category when you submit: the dashboard's checkboxes, the API's
 `--density-grid` / `--eldens-file` / `--spindens-file` / `--nbo-keywords`).
 Resubmitting an existing molecule with a category it doesn't already have
 is refused, and so is resubmitting it with different options for a
-category it already has, or with other Advanced method settings. To add categories or states to a project's
+category it already has, or at the same headers with other Advanced method settings. To add categories or states to a project's
 molecules, use the project's Extend (see [`docs/API.md`](API.md#post-apiprojectsnameextend));
 Densities and NBO can only be requested at first submission.
 A category's options (`uvvis_nroots`, `uvvis_tda`, `nmr_nuclei`,
