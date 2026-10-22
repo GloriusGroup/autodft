@@ -99,7 +99,7 @@ def _conformer(session, settings, state, name, e_sp, imaginary=(), uvvis=True, f
 def _standard(settings, low_first=True, imaginary_first=(), ox=False):
     """S0 with a conformer search and two conformers, conf1 the lower unless *low_first* is False."""
     with get_session() as session:
-        state = _molecule(session)
+        state = _molecule(session, {"imag_freq_tolerance": -10.0})
         _task(session, settings, state, TaskType.confsearch, "cs")
         first = _conformer(session, settings, state, "a", -2.0 if low_first else -1.0, imaginary_first)
         second = _conformer(session, settings, state, "b", -1.0 if low_first else -2.0)
