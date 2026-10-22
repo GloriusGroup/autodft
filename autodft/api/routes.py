@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlmodel import col, func, select
 
 from autodft.api.auth import COOKIE_NAME, issue_token
@@ -154,6 +154,9 @@ def get_active_settings():
 
 
 class SubmitRequest(BaseModel):
+    # Unknown fields ignored, but kept so _tolerance_error can name strict_convergence.
+    model_config = ConfigDict(extra="allow")
+
     # Bounded: RDKit's SMILES parser overflows the C stack on very long
     # input and takes the whole process down with it -- and the dashboard
     # runs in a thread of the pipeline worker, so that kills the controller.
@@ -927,6 +930,8 @@ def _state_sort_key(s: MoleculeState) -> tuple[int, str]:
 
 
 class ArchiveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     all_conformers: bool = False
     keep_gbw: bool = False
 
@@ -1465,9 +1470,11 @@ def api_delete_header(
 
 
 class WipeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     confirm: str
-    # Project wipes remove <export_data>/<project>/ as well by default.
-    delete_exports: bool = True
+    # Project wipes keep <export_data>/<project>/ unless asked.
+    delete_exports: bool = False
 
 
 class ResetRequest(BaseModel):
@@ -2134,9 +2141,14 @@ def _resolved_headers(session, body: SubmitRequest) -> tuple[Optional[str], Opti
 
 
 def _tolerance_error(body: SubmitRequest) -> Optional[JSONResponse]:
-    """A 400 when *body*'s imag_freq_tolerance is out of range, else None."""
+    """A 400 when *body*'s imag_freq_tolerance is out of range or it sends strict_convergence, else None."""
     from autodft.qm.orca.parser import IMAG_FREQ_TOLERANCE_MIN
 
+    if "strict_convergence" in (body.model_extra or {}):
+        return JSONResponse(status_code=400, content={"detail": (
+            "strict_convergence was replaced by imag_freq_tolerance (cm-1, "
+            f"{IMAG_FREQ_TOLERANCE_MIN:g} to 0; 0 fails any imaginary mode)."
+        )})
     if IMAG_FREQ_TOLERANCE_MIN <= body.imag_freq_tolerance <= 0:
         return None
     return JSONResponse(status_code=400, content={"detail": (

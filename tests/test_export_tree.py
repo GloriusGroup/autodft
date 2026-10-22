@@ -463,6 +463,37 @@ def test_archive_route_passes_the_dialog_options(api, db):
     assert r.json()["job"]["params"] == {"all_conformers": True, "keep_gbw": True}
 
 
+def test_archive_route_refuses_unknown_fields(api, db):
+    """An old client's ``extensions`` must not archive without its .hess/.gbw."""
+    client, headers = api
+    mol_id, _, _ = _standard(db)
+    r = client.post("/api/projects/nho:p/archive", headers=headers, json={"extensions": [".hess"]})
+    assert r.status_code == 422, r.text
+    assert (db.comp_data_path / f"mol_{mol_id}").is_dir()
+
+
+@pytest.mark.parametrize("route, confirm", [
+    ("/api/projects/nho:p/wipe", "nho/p"), ("/api/molecules/{mol_id}/wipe", "c1ccccc1"),
+])
+def test_wipe_routes_refuse_unknown_fields(api, db, route, confirm):
+    client, headers = api
+    mol_id, _, _ = _standard(db)
+    r = client.post(route.format(mol_id=mol_id), headers=headers,
+                    json={"confirm": confirm, "delete_files": False})
+    assert r.status_code == 422, r.text
+    with get_session() as session:
+        assert session.get(Molecule, mol_id) is not None
+
+
+def test_a_project_wipe_keeps_exports_unless_asked(api, db):
+    client, headers = api
+    _standard(db)
+    _export(db)
+    r = client.post("/api/projects/nho:p/wipe", headers=headers, json={"confirm": "nho/p"})
+    assert r.status_code == 200, r.text
+    assert (_root(db) / "p.csv").is_file()
+
+
 # ----------------------------------------------------------------------
 # Delete Project: the wipe, for the owner and admin
 # ----------------------------------------------------------------------

@@ -7,6 +7,7 @@ These two checks are cheap and catch exactly that.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -281,3 +282,22 @@ def test_the_submit_form_offers_the_imaginary_frequency_tolerance(client):
     for needle in ('id="submitOptions"', 'id="imagFreqTolerance"',
                    "imag_freq_tolerance: parseFloat(document.getElementById('imagFreqTolerance').value) || 0"):
         assert needle in html, needle
+
+
+def _functions(*names: str) -> str:
+    html = (TEMPLATE / "dashboard.html").read_text()
+    return "\n".join(re.search(rf"\n( +)function {n}\(.*?\n\1\}}\n", html, re.S).group(0) for n in names)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+@pytest.mark.parametrize("with_exports", [False, True])
+def test_the_project_wipe_preview_lists_exports_only_when_ticked(with_exports):
+    preview = {"rows": {"molecules": 2}, "files": {
+        "measured_completely": True, "comp_data_human": "1 GB", "comp_data_dirs": 2,
+        "export_human": "5 MB", "total_human": "1.005 GB"}}
+    script = (_functions("adminEscape", "adminRowsLine", "atLeast", "projectWipeSummary")
+              + f"\nprocess.stdout.write(projectWipeSummary('nho/p', {json.dumps(preview)}, "
+              + f"{'true' if with_exports else 'false'}));\n")
+    out = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout
+    assert ("exports    5 MB" in out) is with_exports
+    assert ("total      1.005 GB" if with_exports else "total      1 GB") in out

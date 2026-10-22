@@ -2421,6 +2421,17 @@
             adminRenderUsage(res.data.usage);
         }
 
+        // Exports are listed only when "Also delete exported data" is ticked.
+        function projectWipeSummary(name, p, withExports) {
+            return 'This permanently deletes from <strong>' + adminEscape(name) + '</strong>:\n'
+                + '  ' + adminRowsLine(p.rows) + '\n'
+                + '  raw data   ' + atLeast(p.files) + p.files.comp_data_human
+                + ' in ' + p.files.comp_data_dirs + ' directories\n'
+                + (withExports ? '  exports    ' + p.files.export_human + '\n' : '')
+                + '  total      ' + atLeast(p.files)
+                + (withExports ? p.files.total_human : p.files.comp_data_human);
+        }
+
         async function adminPrepareProjectWipe(name, row, onDone) {
             var existing = row.parentNode.querySelector('.admin-confirm');
             if (existing) existing.remove();
@@ -2432,14 +2443,7 @@
             var box = document.createElement('div');
             box.className = 'admin-confirm';
             box.innerHTML =
-                '<div class="admin-summary">'
-                + 'This permanently deletes from <strong>' + adminEscape(name) + '</strong>:\n'
-                + '  ' + adminRowsLine(p.rows) + '\n'
-                + '  raw data   ' + atLeast(p.files) + p.files.comp_data_human
-                + ' in ' + p.files.comp_data_dirs + ' directories\n'
-                + '  exports    ' + p.files.export_human + '\n'
-                + '  total      ' + atLeast(p.files) + p.files.total_human
-                + '</div>'
+                '<div class="admin-summary">' + projectWipeSummary(name, p, false) + '</div>'
                 + '<label class="admin-check"><input type="checkbox" class="adm-exports"> '
                 + 'Also delete exported data</label>'
                 + '<div class="form-row" style="margin-top:10px;">'
@@ -2450,6 +2454,9 @@
                 + '<div class="submit-feedback adm-feedback"></div>';
             row.parentNode.insertBefore(box, row.nextSibling);
 
+            box.querySelector('.adm-exports').addEventListener('change', function () {
+                box.querySelector('.admin-summary').innerHTML = projectWipeSummary(name, p, this.checked);
+            });
             box.querySelector('.adm-cancel').addEventListener('click', function () { box.remove(); });
             box.querySelector('.adm-go').addEventListener('click', async function () {
                 var feedback = box.querySelector('.adm-feedback');

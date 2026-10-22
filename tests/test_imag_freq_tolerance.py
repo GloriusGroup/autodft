@@ -255,6 +255,25 @@ def test_api_refuses_a_tolerance_out_of_range(api, route, body, value):
     assert "imag_freq_tolerance" in r.json()["detail"] and "-300" in r.json()["detail"]
 
 
+@pytest.mark.parametrize("value", [True, False])
+@pytest.mark.parametrize("route, body", [
+    ("/api/submit", SUBMIT),
+    ("/api/submit-batch", {**SUBMIT, "smiles_list": ["c1ccccc1"]}),
+    ("/api/projects/p/extend", {"request_t1": True}),
+])
+def test_api_refuses_strict_convergence(api, route, body, value):
+    client, key, _ = api
+    r = client.post(route, headers=key, json={**body, "strict_convergence": value})
+    assert r.status_code == 400, r.text
+    assert "imag_freq_tolerance" in r.json()["detail"] and "strict_convergence" in r.json()["detail"]
+
+
+def test_api_still_ignores_other_unknown_fields(api):
+    client, key, _ = api
+    r = client.post("/api/submit", headers=key, json={**SUBMIT, "colour": "blue"})
+    assert r.status_code == 200, r.text
+
+
 @pytest.mark.parametrize("sent, stored", [({}, 0.0), ({"imag_freq_tolerance": -10}, -10.0)])
 def test_api_stores_the_tolerance_on_every_state(api, monkeypatch, sent, stored):
     client, key, settings = api

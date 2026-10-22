@@ -204,7 +204,7 @@ package defaults in `autodft/qm/orca/defaults.py`.
 | `request_esd_ht` | bool | `false` | Herzberg–Teller where it matters: fluorescence, phosphorescence, and ISC channels whose SOCME is below 5 cm⁻¹ (RISC more than 10 kT uphill stays FC); only with `request_esd`. |
 | `esd_ht_scope` | string | `"all"` | With `request_esd_ht`: `"all"` rates, or `"s1"` — fluorescence and S1→Tn ISC only (phosphorescence, T1→S0 ISC and RISC stay FC). Stored only with ESD. |
 | `esd_ht_method` | string | `"sp"` | With `request_esd_ht`: HT jobs at the singlepoint header's level (`"sp"`) or the optimisation header's (`"opt"`, e.g. def2-SVP; several times cheaper). Energies and FC couplings stay at the singlepoint level. Stored only with ESD. |
-| `imag_freq_tolerance` | float | `0.0` | cm⁻¹, −300 to 0 (else 400). Every optimisation, ESD's S1 included, fails on any imaginary mode below it and is retried as usual; exports, analysis and ESD seeding leave out conformers below it. `0` accepts no imaginary mode; `-10` accepts noise modes down to −10 cm⁻¹. Stored on every state; Extend ignores it and gives the states it adds S0's value. States (and queued submissions) from before the option keep −50 cm⁻¹ (ESD's S1 −100 cm⁻¹ if submitted without the former strict convergence), and so do the states Extend adds to them. CLI `--imag-freq-tolerance`; dashboard: "Options" above Submit. |
+| `imag_freq_tolerance` | float | `0.0` | cm⁻¹, −300 to 0 (else 400). Every optimisation, ESD's S1 included, fails on any imaginary mode below it and is retried as usual; exports, analysis and ESD seeding leave out conformers below it. `0` accepts no imaginary mode; `-10` accepts noise modes down to −10 cm⁻¹. A body still sending `strict_convergence` answers 400. Stored on every state; Extend ignores it and gives the states it adds S0's value. States (and queued submissions) from before the option keep −50 cm⁻¹ (ESD's S1 −100 cm⁻¹ if submitted without the former strict convergence), and so do the states Extend adds to them. CLI `--imag-freq-tolerance`; dashboard: "Options" above Submit. |
 | `esd_tn_window_ev` | float | `0.3` | S1→Tn ISC is summed over triplets up to this many eV above S1 (0–1). Stored only with ESD. |
 | `esd_temperature_k` | float | `298.15` | Temperature of the rates (0 < T ≤ 1000). Stored only with ESD. |
 | `esd_ic` | bool | `false` | Also run the S1→S0 internal-conversion rate (harmonic, often unreliable for large gaps). Stored only with ESD. |
@@ -816,6 +816,8 @@ deleted with it. Answers **202** with the job, like the exports.
 { "all_conformers": false, "keep_gbw": false }
 ```
 
+Any other field answers **422**.
+
 **Job result:**
 
 ```json
@@ -923,7 +925,7 @@ a `POST` that acts and requires `confirm` to echo an exact string.
 | Endpoint | Who | Confirm with | Deletes |
 |---|---|---|---|
 | `GET /api/projects/{name}/wipe-preview` | owner or admin | — | nothing |
-| `POST /api/projects/{name}/wipe` | owner or admin | the **qualified** project name | its rows, `comp_data/mol_*`, and (unless `delete_exports: false`) the export directory |
+| `POST /api/projects/{name}/wipe` | owner or admin | the **qualified** project name | its rows, `comp_data/mol_*`, and (only with `delete_exports: true`) the export directory |
 | `GET /api/molecules/{id}/wipe-preview` | owner or admin | — | nothing |
 | `POST /api/molecules/{id}/wipe` | owner or admin | the molecule's SMILES | that molecule's rows and `comp_data/mol_{id}` |
 | `GET /api/admin/reset-preview` | admin | — | nothing |
@@ -940,7 +942,8 @@ shared `admin/default` is protected — your own `alice/default` is an
 ordinary project. `wipe-status` tells a non-admin only *that* something is
 running: the label names the project, which may not be theirs.
 
-Saved headers are never touched by a project or molecule wipe.
+Saved headers are never touched by a project or molecule wipe. A wipe body
+with any field besides `confirm` and `delete_exports` answers **422**.
 
 Four properties worth knowing:
 
