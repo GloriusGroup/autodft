@@ -23,7 +23,7 @@ from autodft.models import ComputationJob, ComputationTask, Molecule, MoleculeSt
 from autodft.models.result import JobResult
 from autodft.qm.orca import esd_parser
 from autodft.qm.orca.esd_parser import Rate
-from autodft.qm.orca.parser import OrcaParser
+from autodft.qm.orca.parser import IMAGINARY_FREQ_THRESHOLD, IMAGINARY_FREQ_THRESHOLD_STRICT, OrcaParser
 from autodft.qm.orca.spectra_parser import (
     IRMode, NaturalCharge, Shielding, Transition, parse_absorption, parse_ir, parse_natural_charges,
     parse_shieldings,
@@ -260,6 +260,31 @@ def for_task(session: Session, task: ComputationTask, require: Iterable[str] = (
     """The record of *task*'s latest successful job, or None."""
     job = latest_successful_job(session, task.id)
     return for_job(session, job, task.task_type.value, require) if job is not None else None
+
+
+def exclusion(session: Session, opt_task: ComputationTask, state: MoleculeState) -> Optional[str]:
+    """Why exports leave *opt_task*'s conformer out, ``"unchecked"`` without a record, else None."""
+    return record_exclusion(for_task(session, opt_task, require=("imaginary",)), state)
+
+
+def record_exclusion(record: Optional[dict], state: MoleculeState) -> Optional[str]:
+    """exclusion() from an opt record already read."""
+    metadata = json.loads(state.metadata_json) if state.metadata_json else {}
+    if metadata.get("esd_role") == "S1":
+        return None  # its own check already applied
+    if record is None or "imaginary" not in record:
+        return "unchecked"
+    cutoff = (
+        IMAGINARY_FREQ_THRESHOLD_STRICT if metadata.get("strict_convergence", True)
+        else IMAGINARY_FREQ_THRESHOLD
+    )
+    lowest = min(record["imaginary"], default=0.0)
+    return f"imaginary mode {lowest:.1f} cm-1" if lowest < cutoff else None
+
+
+def excludes(note: Optional[str]) -> bool:
+    """Whether an exclusion() note drops the conformer; ``"unchecked"`` keeps it."""
+    return note is not None and note.startswith("imaginary")
 
 
 def ir_modes(record: dict) -> list[IRMode]:

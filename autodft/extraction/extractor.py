@@ -49,6 +49,7 @@ class ConformerResult:
     e_vert_spin_change: Optional[float] = None
     e_vert_ox: Optional[float] = None
     e_vert_red: Optional[float] = None
+    note: Optional[str] = None  # results.exclusion(): why it is left out, or "unchecked"
 
 
 # ======================================================================
@@ -218,7 +219,7 @@ class PipelineExtractor:
     def _pick_reported_conformer(
         results: list[ConformerResult],
     ) -> Optional[ConformerResult]:
-        """Return the lowest-energy conformer, ranking on a single scale.
+        """Return the lowest-energy conformer not excluded, ranking on a single scale.
 
         ``e_combined = e_singlepoint + (G - E_el)`` and that correction is
         positive and large (~0.1-0.2 Ha), so ranking a mixed pool by
@@ -228,6 +229,7 @@ class PipelineExtractor:
         Prefer the corrected pool; fall back to bare electronic energies only
         when nothing has a correction.
         """
+        results = [r for r in results if not stored.excludes(r.note)]
         if not results:
             return None
         corrected = [r for r in results if r.e_combined is not None]
@@ -295,6 +297,7 @@ class PipelineExtractor:
             e_vert_spin_change=e_vert_spin,
             e_vert_ox=e_vert_ox,
             e_vert_red=e_vert_red,
+            note=stored.record_exclusion(record, state),
         )
 
     def _get_energy_from_task(
@@ -346,7 +349,7 @@ class PipelineExtractor:
         fields = [
             "molecule_id", "smiles", "state", "conformer_index", "opt_task_id",
             "e_singlepoint", "e_correction", "e_combined",
-            "e_vert_spin_change", "e_vert_ox", "e_vert_red",
+            "e_vert_spin_change", "e_vert_ox", "e_vert_red", "note",
         ]
         with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fields)
@@ -364,6 +367,7 @@ class PipelineExtractor:
                     "e_vert_spin_change": r.e_vert_spin_change,
                     "e_vert_ox": r.e_vert_ox,
                     "e_vert_red": r.e_vert_red,
+                    "note": r.note,
                 })
         logger.info("Exported %d rows to %s", len(results), path)
 
@@ -386,6 +390,7 @@ class PipelineExtractor:
                 "e_vert_spin_change": r.e_vert_spin_change,
                 "e_vert_ox": r.e_vert_ox,
                 "e_vert_red": r.e_vert_red,
+                "note": r.note,
             }
             for r in results
         ]
@@ -476,11 +481,14 @@ class PipelineExtractor:
             key=lambda t: t.id,  # type: ignore[arg-type]
         )
         opt_id_to_conf = {t.id: i + 1 for i, t in enumerate(opt_tasks)}
-        if not all_conformers and opt_tasks:
+        # Excluded conformers keep their index; they and their dependents are left out.
+        valid = [t for t in opt_tasks if not stored.excludes(stored.exclusion(session, t, state))]
+        if not all_conformers and valid:
             # The conformer the CSV reports, under the CSV's conformer index.
             picked = self._extract_state_results(session, mol, state, all_conformers=False)
-            keep = picked[0].opt_task_id if picked else opt_tasks[0].id
-            opt_id_to_conf = {keep: opt_id_to_conf[keep]}
+            keep = picked[0].opt_task_id if picked else valid[0].id
+            valid = [t for t in valid if t.id == keep]
+        opt_id_to_conf = {t.id: opt_id_to_conf[t.id] for t in valid}
         metadata = json.loads(state.metadata_json) if state.metadata_json else {}
         densities_flagged = bool(metadata.get(categories.DENSITIES))
         plan: list[tuple[Path, Path, int, str, bool]] = []

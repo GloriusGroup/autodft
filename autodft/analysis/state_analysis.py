@@ -272,6 +272,7 @@ def _load_results_from_archive_csv(csv_path: Path) -> list[ConformerResult]:
                 e_vert_spin_change=_parse_float(row.get("e_vert_spin_change")),
                 e_vert_ox=_parse_float(row.get("e_vert_ox")),
                 e_vert_red=_parse_float(row.get("e_vert_red")),
+                note=row.get("note") or None,
             ))
     return results
 
@@ -376,6 +377,8 @@ def _analyze_project_uncached(project_name: str) -> dict:
     # (mol_id, state_desc) -> [ConformerResult, ...], ordered by opt_task_id
     groups: dict[tuple[int, str], list[ConformerResult]] = {}
     for r in all_results:
+        if stored.excludes(r.note):
+            continue  # an imaginary mode; the export states it
         groups.setdefault((r.molecule_id, r.state), []).append(r)
     for k in groups:
         groups[k].sort(key=lambda r: r.opt_task_id)

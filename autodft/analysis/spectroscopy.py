@@ -109,12 +109,15 @@ def conformer_pool(
     checks = results.connectivity_by_task(session, [o.id for o in opts])
     pool = []
     for index, opt in enumerate(opts, 1):
+        record = (
+            results.for_task(session, opt, require=("ir_modes",) if ir else ())
+            if opt.status == TaskStatus.successful else None
+        )
+        if results.excludes(results.record_exclusion(record, state)):
+            continue  # an imaginary mode below the state's cutoff
         conformer = Conformer(index, opt, degeneracy=starts.get(opt.input_geometry_id) or 1,
                               connectivity_ok=checks[opt.id]["ok"] if opt.id in checks else None)
         pool.append(conformer)
-        if opt.status != TaskStatus.successful:
-            continue
-        record = results.for_task(session, opt, require=("ir_modes",) if ir else ())
         if record is None:
             continue
         if ir:

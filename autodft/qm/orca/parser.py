@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 # routinely produce -20 to -50 cm^-1 modes that no amount of re-optimisation
 # removes; failing on them burns the whole retry budget for nothing.
 IMAGINARY_FREQ_THRESHOLD = -50.0
+IMAGINARY_FREQ_THRESHOLD_STRICT = -10.0
 # Without strict convergence: S1's Hessian is numerical, floppy aryl/tBu/CF3 rotors
 # land at -50 to -65 cm^-1, and a retry repeats the day-long Hessian. ESD reads
 # them as real (flagged).
