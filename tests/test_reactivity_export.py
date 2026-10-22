@@ -163,6 +163,41 @@ def test_a_record_without_reactivity_blocks_says_so(db):
     assert rows["atomic"] == rows["wiberg"] == []
 
 
+def test_outputs_are_parsed_with_no_session_open(db, monkeypatch):
+    """Stored records plan the rows; a record still to be parsed is read off NFS with no session held."""
+    import contextlib
+
+    from autodft.analysis import reactivity
+
+    with get_session() as session:
+        state = _state(session)
+        opt = _task(session, db, state, TaskType.optimization, "opt", "opt",
+                    record={"energy": None, "free_energy_correction": 0.1, "imaginary": [], "followed_root": None})
+        # Stored before Reactivity: the energy is there, the reactivity record must be parsed.
+        _task(session, db, state, TaskType.singlepoint, "sp", RELAXED, depends_on=opt.id,
+              record={"energy": -1.0, "free_energy_correction": None})
+    open_sessions, reads = [], []
+
+    @contextlib.contextmanager
+    def tracked(*args, **kwargs):
+        with get_session(*args, **kwargs) as session:
+            open_sessions.append(session)
+            try:
+                yield session
+            finally:
+                open_sessions.remove(session)
+    original = results._read
+
+    def read(path):
+        reads.append(bool(open_sessions))
+        return original(path)
+    monkeypatch.setattr(reactivity, "get_session", tracked)
+    monkeypatch.setattr(results, "_read", read)
+    rows = reactivity_rows(PROJECT)
+    assert reads == [False]
+    assert len(rows["atomic"]) == ATOMS
+
+
 def test_no_workbook_without_a_reactivity_molecule(db):
     with get_session() as session:
         state = _state(session, flagged=False)

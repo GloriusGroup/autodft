@@ -59,7 +59,8 @@ def reactivity_rows(project_name: str, all_conformers: bool = False) -> dict[str
     from autodft.engine.state_machine import _get_job_charge_multiplicity
 
     extractor = PipelineExtractor(project_name)
-    rows: dict[str, list[dict]] = {sheet: [] for sheet in COLUMNS}
+    # Planned under a short session, outputs parsed with none open (see db.py).
+    plans = []
     with get_session() as session:
         for mol, state in _flagged_states(session, project_name):
             for conformer in _conformers(extractor, session, mol, state, all_conformers):
@@ -78,8 +79,17 @@ def reactivity_rows(project_name: str, all_conformers: bool = False) -> dict[str
                         "opt_task_id": conformer.opt_task_id, "sp_kind": SP_KINDS[task.task_type.value],
                         "sp_task_id": task.id, "charge": charge, "multiplicity": multiplicity,
                     }
-                    record = results.for_task(session, task, require=("reactivity", "npa_charges"))
-                    _add(rows, keys, record, conformer.note)
+                    job = results.latest_successful_job(session, task.id)
+                    source = (job.job_path, *results.stored(session, job)) if job is not None else None
+                    plans.append((keys, task.task_type.value, source, conformer.note))
+
+    rows: dict[str, list[dict]] = {sheet: [] for sheet in COLUMNS}
+    for keys, task_type, source, note in plans:
+        record = None
+        if source is not None:
+            job_path, kept, current = source
+            record = results.resolve(job_path, task_type, kept, current, require=("reactivity", "npa_charges"))
+        _add(rows, keys, record, note)
     return rows
 
 

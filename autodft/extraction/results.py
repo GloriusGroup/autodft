@@ -256,6 +256,11 @@ def for_job(
     resort once the output is gone too, e.g. an archived project: served
     when it has every required key, else None.
     """
+    return resolve(job.job_path, task_type, *stored(session, job), require)
+
+
+def stored(session: Session, job: ComputationJob) -> tuple[Optional[dict], bool]:
+    """*job*'s stored record if the row still belongs to it, and whether its parser version is current."""
     row = session.exec(select(JobResult).where(JobResult.job_id == job.id)).first()
     same_identity = (
         row is not None
@@ -263,10 +268,19 @@ def for_job(
         and row.job_path == job.job_path
         and _same_instant(row.finished_at, job.time_end)
     )
-    record = json.loads(row.data_json) if same_identity else None
-    if record is not None and row.parser_version == PARSER_VERSION and all(key in record for key in require):
+    if not same_identity:
+        return None, False
+    return json.loads(row.data_json), row.parser_version == PARSER_VERSION
+
+
+def resolve(
+    job_path: Optional[str], task_type: str, record: Optional[dict], current: bool, require: Iterable[str] = (),
+) -> Optional[dict]:
+    """:func:`for_job` from a :func:`stored` result; needs no session, reads the output when it must."""
+    require = tuple(require)
+    if record is not None and current and all(key in record for key in require):
         return record
-    path = Path(job.job_path) if job.job_path else None
+    path = Path(job_path) if job_path else None
     output = _read(path / "output.out") if path is not None else None
     if output is None:
         return record if record is not None and all(key in record for key in require) else None
