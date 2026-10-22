@@ -13,7 +13,7 @@ from typing import Optional
 from sqlmodel import Session, select
 
 from autodft import categories
-from autodft.analysis.spectroscopy import Conformer, _OPEN, _follow_up, conformer_pool, ensemble
+from autodft.analysis.spectroscopy import Conformer, _OPEN, _follow_up, conformer_pool, ensemble, split_pool
 from autodft.extraction import results
 from autodft.extraction.extractor import PipelineExtractor
 from autodft.models import MoleculeState, TaskStatus, TaskType
@@ -114,11 +114,10 @@ def _extremes(atoms: list[dict]) -> dict:
 
 
 def _state_nbo(session: Session, extractor: PipelineExtractor, state: MoleculeState, detail: bool) -> dict:
-    pool = [c for c in conformer_pool(session, extractor, state, sp_require=("npa_charges",))
-            if c.opt.status != TaskStatus.failed]
+    pool, excluded = split_pool(conformer_pool(session, extractor, state, sp_require=("npa_charges",)))
     items = _drop_inconsistent([(c, *_npa(session, c)) for c in pool])
 
-    out = ensemble(items, True)
+    out = ensemble(items, True, excluded=excluded)
     have = out["conformers"]
     if not detail:
         del out["conformers"]

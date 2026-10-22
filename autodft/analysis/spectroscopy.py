@@ -80,6 +80,7 @@ class Conformer:
     degeneracy: int = 1  # GOAT's, from the conformer geometry the optimisation started from
     connectivity_ok: Optional[bool] = None  # the optimisation's stored bond check; None when unchecked
     sp_record: Optional[dict] = None  # the energy singlepoint's own record, read once
+    note: Optional[str] = None  # results.exclusion() of the optimisation
 
 
 def conformer_pool(
@@ -109,13 +110,15 @@ def conformer_pool(
     checks = results.connectivity_by_task(session, [o.id for o in opts])
     pool = []
     for index, opt in enumerate(opts, 1):
+        record = (
+            results.for_task(session, opt, require=("ir_modes",) if ir else ())
+            if opt.status == TaskStatus.successful else None
+        )
+        note = results.record_exclusion(record, state) if record is not None else None
         conformer = Conformer(index, opt, degeneracy=starts.get(opt.input_geometry_id) or 1,
-                              connectivity_ok=checks[opt.id]["ok"] if opt.id in checks else None)
+                              connectivity_ok=checks[opt.id]["ok"] if opt.id in checks else None, note=note)
         pool.append(conformer)
-        if opt.status != TaskStatus.successful:
-            continue
-        record = results.for_task(session, opt, require=("ir_modes",) if ir else ())
-        if record is None:
+        if record is None or results.excludes(note):
             continue
         if ir:
             conformer.ir_modes = results.ir_modes(record)
@@ -134,6 +137,12 @@ def conformer_pool(
     return pool
 
 
+def split_pool(conformers: list[Conformer]) -> tuple[list[Conformer], list[Conformer]]:
+    """``(pool, excluded)``: the conformers to weight, and those with an imaginary mode; failed ones in neither."""
+    kept = [c for c in conformers if c.opt.status != TaskStatus.failed]
+    return [c for c in kept if not results.excludes(c.note)], [c for c in kept if results.excludes(c.note)]
+
+
 def weighting(conformers: list) -> str:
     """The energies the Boltzmann weights rest on."""
     if any(c.e_combined is not None for c in conformers):
@@ -146,8 +155,10 @@ def weighting(conformers: list) -> str:
 def ensemble(
     items: list[tuple[Conformer, str, Optional[dict]]], detail: bool,
     peak: Optional[Callable[[list[tuple[Conformer, dict, float]]], Optional[dict]]] = None,
+    excluded: Iterable[Conformer] = (),
 ) -> dict:
     """Weight the conformers whose data and energy are in; count the rest by why they are not."""
+    excluded = list(excluded)
     ready = [(c, data) for c, status, data in items if status == "ok"]
     basis = weighting([c for c, _ in ready])
     have = [(c, data) for c, data in ready if _has_energy(c, basis)]
@@ -163,8 +174,13 @@ def ensemble(
         "failed": sum(status == "failed" for _, status, _ in items),
         "unavailable": sum(status == "unavailable" for _, status, _ in items),
         "unweighted": sum(not c.energy_pending for c in waiting),
+        "excluded": len(excluded),
         "weighting": basis,
     }
+    if excluded:
+        out["excluded_conformers"] = [
+            {"conformer_index": c.conformer_index, "opt_task_id": c.opt.id, "note": c.note} for c in excluded
+        ]
     if peak is not None:
         out["peak"] = peak(weighted)
     if detail:
@@ -275,28 +291,27 @@ def _molecule_entries(
         if not wanted and not nbo_wanted:
             continue
         needs_pool = bool(wanted & {categories.UVVIS, categories.IR, categories.NMR})
-        pool = [
-            c for c in conformer_pool(session, extractor, state, ir=categories.IR in wanted)
-            if c.opt.status != TaskStatus.failed
-        ] if needs_pool else []
+        pool, excluded = split_pool(
+            conformer_pool(session, extractor, state, ir=categories.IR in wanted)
+        ) if needs_pool else ([], [])
         entry: dict = {"id": mol.id, "smiles": mol.smiles, "state_id": state.id,
                        "archived": mol.archived}
         if needs_pool and not pool:
             entry["stage"] = _stage(session, state)
         if categories.UVVIS in wanted:
             items = [(c, *_uvvis(session, extractor, c)) for c in pool]
-            entry["uvvis"] = ensemble(items, detail, _uvvis_peak)
+            entry["uvvis"] = ensemble(items, detail, _uvvis_peak, excluded)
             wavelengths = [t["wavelength_nm"] for _, status, data in items
                            if status == "ok" for t in data["transitions"]]
             entry["uvvis"]["shortest_nm"] = min(wavelengths) if wavelengths else None
         if categories.IR in wanted:
             # Harmonic frequencies as ORCA prints them.
-            entry["ir"] = {**ensemble([(c, *_ir(c)) for c in pool], detail, _ir_peak),
+            entry["ir"] = {**ensemble([(c, *_ir(c)) for c in pool], detail, _ir_peak, excluded),
                            "scaled": False, "scale_factor": 1.0}
         if categories.NMR in wanted:
             from autodft.analysis.nmr import molecule_nmr
 
-            entry["nmr"] = molecule_nmr(session, extractor, state, pool, detail, nmr_references_seen)
+            entry["nmr"] = molecule_nmr(session, extractor, state, pool, detail, nmr_references_seen, excluded)
         if categories.ESD in wanted:
             from autodft.analysis.esd import molecule_esd
 

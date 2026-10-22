@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import re
 from collections import defaultdict
-from typing import Optional
+from typing import Iterable, Optional
 
 from sqlmodel import Session, col, select
 
@@ -125,6 +125,7 @@ def reference_shieldings(
 def molecule_nmr(
     session: Session, extractor: PipelineExtractor, state: MoleculeState,
     pool: list[Conformer], detail: bool, references: Optional[dict] = None,
+    excluded: Iterable[Conformer] = (),
 ) -> dict:
     """NMR signals of one S0 state, Boltzmann-weighted over its conformers.
 
@@ -140,7 +141,7 @@ def molecule_nmr(
         status = _status(session, extractor, conformer, results)
         items.append((conformer, status, {}))
     # ensemble decides which conformers carry weight (data and energy in).
-    out = ensemble(items, True)
+    out = ensemble(items, True, excluded=excluded)
     weight_of = {c["opt_task_id"]: c["weight"] for c in out["conformers"]}
     if not detail:
         del out["conformers"]
