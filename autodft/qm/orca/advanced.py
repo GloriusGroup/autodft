@@ -124,6 +124,13 @@ def stage_for(task_type: str) -> str:
     return task_type if task_type in ("confsearch", "optimization") else "singlepoint"
 
 
+def with_geom_floor(geom: str, floor: Optional[str]) -> str:
+    """*geom* raised to *floor*; ``omit`` counts as below it."""
+    if floor is not None and (geom == "omit" or _GEOM_ORDER.index(geom) < _GEOM_ORDER.index(floor)):
+        return floor
+    return geom
+
+
 def render_settings(header: str, stage_settings: dict, stage: str, *,
                     as_singlepoint: bool = False, geom_floor: Optional[str] = None) -> str:
     """*header* (method only) plus the generated ``!`` line and blocks of one stage."""
@@ -141,10 +148,7 @@ def render_settings(header: str, stage_settings: dict, stage: str, *,
     lines += [f"%maxcore {s['maxcore']}", f"%pal nprocs {s['nprocs']} end"]
     if s.get("scf_convergence", "omit") != "omit":
         lines += ["%scf", f"  Convergence {s['scf_convergence']}", "end"]
-    geom = s.get("geom_convergence", "omit")
-    if optimizing and geom_floor is not None and (
-            geom == "omit" or _GEOM_ORDER.index(geom) < _GEOM_ORDER.index(geom_floor)):
-        geom = geom_floor
+    geom = with_geom_floor(s.get("geom_convergence", "omit"), geom_floor)
     if optimizing and geom != "omit":
         lines += ["%geom", f"  Convergence {geom}", "end"]
     return "\n".join(lines) + "\n"

@@ -18,8 +18,8 @@ from autodft.engine.state_machine import (
 )
 from autodft.extraction import results
 from autodft.models import ComputationHeader, ComputationJob, ComputationTask, Molecule, MoleculeState, TaskType
-from autodft.qm.orca.advanced import STAGE_KEYS, STAGES
-from autodft.qm.orca.blocks import _keyword_lines
+from autodft.qm.orca.advanced import STAGE_KEYS, STAGES, with_geom_floor
+from autodft.qm.orca.blocks import _keyword_lines, is_tight_optimization, with_tight_opt
 from autodft.qm.orca.parser import IMAGINARY_FREQ_THRESHOLD
 from autodft.qm.orca.retry import build_strategies
 
@@ -109,9 +109,25 @@ def _from_settings(stage_settings: dict, stage: str) -> dict:
     return out
 
 
-def _settings_table(headers: dict, advanced: Optional[dict]) -> dict:
-    return {stage: (_from_settings(advanced[stage], stage) if advanced else describe(headers[stage], stage))
-            for stage in STAGES if advanced or headers.get(stage) is not None}
+def _esd_floor(table: dict, headers: dict, advanced: Optional[dict], tight: list[str], everyone: bool) -> None:
+    """The optimisation's geometry convergence as the engine runs ESD states: never below Tight."""
+    if not tight or "optimization" not in table:
+        return
+    if advanced:
+        level = with_geom_floor(advanced["optimization"].get("geom_convergence", "omit"), "Tight")
+    else:
+        level = describe(with_tight_opt(headers["optimization"]), "optimization")["geom_convergence"]["value"]
+    if level != table["optimization"]["geom_convergence"]["value"]:
+        source = "ESD floor" if everyone else f"ESD floor ({', '.join(tight)})"
+        table["optimization"]["geom_convergence"] = _row(level, source)
+
+
+def _settings_table(headers: dict, advanced: Optional[dict], states: list[MoleculeState], metas: dict) -> dict:
+    table = {stage: (_from_settings(advanced[stage], stage) if advanced else describe(headers[stage], stage))
+             for stage in STAGES if advanced or headers.get(stage) is not None}
+    tight = [s.description for s in states if is_tight_optimization("optimization", metas[s.id])]
+    _esd_floor(table, headers, advanced, sorted(set(tight)), len(tight) == len(states))
+    return table
 
 
 def _request(metadata: dict) -> dict:
@@ -175,28 +191,29 @@ def _render(session: Session, settings: Settings, task: ComputationTask, state: 
 
 def _inputs(session: Session, settings: Settings, states: list[MoleculeState], newest: dict,
             retried: dict) -> list[dict]:
-    """One input per (task type, job multiplicity, ESD role) present among *states*."""
+    """One input per (task type, job charge and multiplicity, ESD role) present among *states*."""
     picks: dict[tuple, dict] = {}
     for state in states:
         role = _esd_role(state)
         for task_type, task_id in newest.get(state.id, {}).items():
             try:
-                multiplicity = _get_job_charge_multiplicity(task_type, state)[1]
+                charge, multiplicity = _get_job_charge_multiplicity(task_type, state)
             except ValueError:
-                multiplicity = state.multiplicity
-            pick = picks.setdefault((task_type, multiplicity, role), {"task_id": task_id, "state": state,
-                                                                       "states": set()})
+                charge, multiplicity = state.charge, state.multiplicity
+            pick = picks.setdefault((task_type, multiplicity, charge, role),
+                                    {"task_id": task_id, "state": state, "states": set()})
             pick["states"].add(state.description)
             if task_id > pick["task_id"]:
                 pick.update(task_id=task_id, state=state)
     ids = {s.id for s in states}
     out = []
-    for (task_type, multiplicity, role), pick in sorted(
-            picks.items(), key=lambda item: (_TYPE_ORDER[item[0][0]], item[0][1], item[0][2] or "")):
+    for (task_type, multiplicity, charge, role), pick in sorted(
+            picks.items(), key=lambda item: (_TYPE_ORDER[item[0][0]], *item[0][1:3], item[0][3] or "")):
         task = session.get(ComputationTask, pick["task_id"])
         out.append({
             "task_type": task_type.value,
             "multiplicity": multiplicity,
+            "charge": charge,
             "states": sorted(pick["states"]),
             "input": _render(session, settings, task, pick["state"], multiplicity),
             "retried_jobs": sum(n for (state_id, t), n in retried.items() if t == task_type and state_id in ids),
@@ -280,7 +297,7 @@ def project_methods(session: Session, settings: Settings, project: str) -> dict:
             "states": dict(Counter(s.description for s in members)),
             "headers": headers,
             "advanced": group["advanced"],
-            "settings": _settings_table(headers, group["advanced"]),
+            "settings": _settings_table(headers, group["advanced"], members, metas),
             "imag_cutoff": {d: _cutoff(s, metas[s.id]) for d, s in first.items()},
             "categories": {**group["request"], "max_conformers": {
                 d: next(iter(v)) if len(v) == 1 else sorted(v) for d, v in conformers.items()}},

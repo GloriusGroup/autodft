@@ -56,8 +56,8 @@ def _headers(session, texts: dict) -> dict:
     return {f"{stage}_header_id": row.id for stage, row in rows.items()}
 
 
-def _state(session, mol, description, multiplicity, metadata, ids) -> MoleculeState:
-    state = MoleculeState(molecule_id=mol.id, description=description, multiplicity=multiplicity, charge=0,
+def _state(session, mol, description, multiplicity, metadata, ids, charge=0) -> MoleculeState:
+    state = MoleculeState(molecule_id=mol.id, description=description, multiplicity=multiplicity, charge=charge,
                           metadata_json=json.dumps(metadata), **ids)
     session.add(state)
     session.commit()
@@ -213,6 +213,63 @@ def test_an_input_that_cannot_render_shows_why(tmp_path):
     assert s1_cutoff == {"value": -50.0, "rule": "legacy: -50"}
 
 
+def _esd_methods(tmp_path, legacy: bool, geom: str = "Normal", ox: bool = False) -> dict:
+    """The one group of an ESD molecule (S0, S1, T1 and optionally ox)."""
+    engine = create_engine("sqlite://")
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as session:
+        ids = _headers(session, LEGACY_HEADERS if legacy else METHOD_HEADERS)
+        base = {"request_optimization": True}
+        if not legacy:
+            base["advanced"] = _advanced()
+            base["advanced"]["optimization"]["geom_convergence"] = geom
+        mol = Molecule(smiles="O=CC=O", project_name="nho/p")
+        session.add(mol)
+        session.commit()
+        _state(session, mol, "S0", 1, {**base, categories.ESD: True}, ids)
+        _state(session, mol, "S1", 1, {**base, "esd_role": "S1"}, ids)
+        _state(session, mol, "T1", 3, {**base, "esd_role": "T1"}, ids)
+        if ox:
+            _state(session, mol, "ox", 2, base, ids, charge=1)
+        groups = project_methods(session, _settings(), "nho/p")["groups"]
+    assert len(groups) == 1
+    return groups[0]["settings"]["optimization"]["geom_convergence"]
+
+
+@pytest.mark.parametrize("legacy", [True, False])
+def test_esd_optimisations_show_the_tight_floor(tmp_path, legacy):
+    assert _esd_methods(tmp_path, legacy) == {"value": "Tight", "source": "ESD floor"}
+
+
+def test_esd_floor_keeps_a_stricter_setting(tmp_path):
+    assert _esd_methods(tmp_path, False, geom="VeryTight") == {"value": "VeryTight", "source": "setting"}
+    assert _esd_methods(tmp_path, False, geom="omit") == {"value": "Tight", "source": "ESD floor"}
+
+
+@pytest.mark.parametrize("legacy", [True, False])
+def test_esd_floor_names_its_states_beside_others(tmp_path, legacy):
+    assert _esd_methods(tmp_path, legacy, ox=True) == {"value": "Tight", "source": "ESD floor (S0, S1, T1)"}
+
+
+def test_inputs_keep_ox_and_red_apart(tmp_path):
+    engine = create_engine("sqlite://")
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as session:
+        ids = _headers(session, METHOD_HEADERS)
+        meta = {"request_optimization": True, "advanced": _advanced()}
+        mol = Molecule(smiles="CCO", project_name="nho/p")
+        session.add(mol)
+        session.commit()
+        for description, multiplicity, charge in (("S0", 1, 0), ("ox", 2, 1), ("red", 2, -1)):
+            _task(session, _state(session, mol, description, multiplicity, meta, ids, charge=charge),
+                  "optimization", tmp_path)
+        inputs = project_methods(session, _settings(), "nho/p")["groups"][0]["inputs"]
+    by_key = {(i["multiplicity"], i["charge"]): i for i in inputs}
+    assert set(by_key) == {(1, 0), (2, 1), (2, -1)}
+    assert by_key[(2, 1)]["states"] == ["ox"] and "*xyzfile 1 2 input.xyz" in by_key[(2, 1)]["input"]
+    assert by_key[(2, -1)]["states"] == ["red"] and "*xyzfile -1 2 input.xyz" in by_key[(2, -1)]["input"]
+
+
 def test_pipeline_reports_the_current_config(seeded):
     pipeline = seeded[1]["pipeline"]
     settings = Settings()
@@ -356,8 +413,10 @@ def test_methods_cards_escape_text_and_fold_each_input():
                          "singlepoint": {"grid": {"value": "DEFGRID2", "source": "ORCA default"}}},
             "imag_cutoff": {"S0": {"value": -50.0, "rule": "legacy: -50"}},
             "categories": {"request_sp_reactivity": True},
-            "inputs": [{"task_type": "optimization", "multiplicity": 1, "input": "!x <b>\n", "retried_jobs": 3},
-                       {"task_type": "singlepoint", "multiplicity": 1, "input": "!y\n", "retried_jobs": 0}],
+            "inputs": [{"task_type": "optimization", "multiplicity": 1, "charge": 0, "input": "!x <b>\n",
+                        "retried_jobs": 3},
+                       {"task_type": "singlepoint", "multiplicity": 2, "charge": -1, "input": "!y\n",
+                        "retried_jobs": 0}],
         }],
         "pipeline": {"max_attempts": 3, "retry": {"IncreaseResources": "more cores"},
                      "stages": {"optimization": {"time_limit": "1-00:00:00", "default_nprocs": 16,
@@ -373,3 +432,4 @@ def test_methods_cards_escape_text_and_fold_each_input():
     assert "DEFGRID2" in out and "ORCA default" in out and "legacy: -50" in out
     assert "Pipeline (current config)" in out and "6.1.0" in out and "more cores" in out
     assert "3 retried" in out
+    assert "singlepoint · charge -1 · multiplicity 2" in out

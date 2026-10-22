@@ -709,7 +709,7 @@ flags and category options, and the imaginary-frequency tolerance:
                                      "geom_convergence": {"value": "Normal", "source": "ORCA default"}, ...}},
        "imag_cutoff": {"S0": {"value": -50.0, "rule": "legacy: -50"}},
        "categories": {"request_sp_reactivity": true, "max_conformers": {"S0": 5}, ...},
-       "inputs": [{"task_type": "singlepoint_vert_ox", "multiplicity": 2, "states": ["S0"],
+       "inputs": [{"task_type": "singlepoint_vert_ox", "multiplicity": 2, "charge": 1, "states": ["S0"],
                    "input": "!wB97X-D3 def2-TZVP\n...", "retried_jobs": 3}]}],
      "pipeline": {"max_attempts": 3, "retry": {"IncreaseResources": "..."},
                   "stages": {"optimization": {"time_limit": "1-00:00:00", "default_nprocs": 16,
@@ -721,16 +721,19 @@ flags and category options, and the imaginary-frequency tolerance:
 * `settings` has one row per Advanced key of each stage. `source` is
   `setting` (the state's Advanced settings), `header` (a legacy state,
   read from the header text) or `ORCA default` (value `DEFGRID2` for the
-  grid, `Normal` for the geometry convergence, `null` otherwise).
+  grid, `Normal` for the geometry convergence, `null` otherwise). ESD
+  optimisations (S0 with ESD, S1, T1) run at least Tight: the geometry
+  convergence then shows that level with source `ESD floor`, or
+  `ESD floor (S0, S1, T1)` naming them when the group holds other states.
   `advanced` is `null` for a legacy group.
 * `imag_cutoff` is per state description; `rule` is `imag_freq_tolerance`,
   `legacy: -50`, or `legacy: -100 (ESD S1 with strict_convergence off)`.
 * `inputs` holds the full `input.inp` a fresh job gets, per task type, job
-  multiplicity (closed- vs open-shell verticals) and ESD role present in
-  the group, rendered by the job-generation code without writing files. A
-  retry may modify it; `retried_jobs` counts the group's jobs of that type
-  that ran as retries. An input that cannot be built shows
-  `Cannot render: <reason>`.
+  multiplicity (closed- vs open-shell verticals), job charge (ox vs red)
+  and ESD role present in the group, rendered by the job-generation code
+  without writing files. A retry may modify it; `retried_jobs` counts the
+  group's jobs of that type that ran as retries. An input that cannot be
+  built shows `Cannot render: <reason>`.
 * `pipeline` is the controller's current config, not what earlier jobs
   ran with; `orca_versions` is read from the newest successful output of
   each task type (`null` when that file is gone).

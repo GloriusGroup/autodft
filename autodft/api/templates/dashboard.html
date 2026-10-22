@@ -4919,7 +4919,8 @@
             }).join('');
             var inputs = g.inputs.map(function (i) {
                 return '<details style="margin-top: 6px;"><summary class="mono" style="cursor: pointer;">' +
-                       escHtml(i.task_type) + ' · multiplicity ' + escHtml(i.multiplicity) +
+                       escHtml(i.task_type) + ' · charge ' + escHtml(i.charge) +
+                       ' · multiplicity ' + escHtml(i.multiplicity) +
                        (i.states ? ' · ' + escHtml(i.states.join(', ')) : '') + ' · ' +
                        escHtml(i.retried_jobs) + ' retried</summary>' + pre + escHtml(i.input) + '</pre></details>';
             }).join('');
