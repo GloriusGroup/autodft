@@ -121,10 +121,45 @@ def _category_options_to_flags(
     }
 
 
+# --<cs|opt|sp>-<setting> options of submit and submit-batch.
+_ADVANCED_OPTIONS = (
+    "opt_grid", "sp_grid", "opt_scf_convergence", "sp_scf_convergence", "opt_geom_convergence", "opt_ri",
+    "sp_ri", "opt_aux_basis", "sp_aux_basis", "opt_solvation", "sp_solvation", "opt_solvent", "sp_solvent",
+    "cs_nprocs", "opt_nprocs", "sp_nprocs", "cs_maxcore", "opt_maxcore", "sp_maxcore",
+)
+_STAGE_PREFIXES = {"cs": "confsearch", "opt": "optimization", "sp": "singlepoint"}
+
+
+def _advanced_from_options(options: dict) -> Optional[dict]:
+    """``advanced`` from the Advanced options given, or None if none was."""
+    advanced: dict = {}
+    for name in _ADVANCED_OPTIONS:
+        if options[name] is not None:
+            prefix, _, key = name.partition("_")
+            advanced.setdefault(_STAGE_PREFIXES[prefix], {})[key] = options[name]
+    return advanced or None
+
+
+def _submission_advanced(project: str, headers: tuple, requested: Optional[dict], settings) -> Optional[dict]:
+    """The resolved ``advanced`` (None in legacy mode); mirrors POST /api/submit."""
+    from autodft.engine.entrypoint_processor import legacy_submission
+    from autodft.qm.orca import advanced
+
+    if requested is None:
+        with get_session() as session:
+            if legacy_submission(session, project, headers):
+                return None
+    resolved, error = advanced.for_submission(requested, headers, settings)
+    if error:
+        console.print(f"[red]{error}[/red]")
+        raise typer.Exit(code=1)
+    return resolved
+
+
 def _check_categories(
     smiles: str, flags: dict,
     header_optimization: Optional[str], header_singlepoint: Optional[str],
-    settings,
+    settings, advanced: Optional[dict] = None,
 ) -> None:
     """Refuse categories this molecule or these headers cannot run.
 
@@ -141,7 +176,7 @@ def _check_categories(
     check = validate_smiles(smiles)
     if not check["valid"]:
         return
-    reason = categories.rejection(check, flags, header_optimization, header_singlepoint)
+    reason = categories.rejection(check, flags, header_optimization, header_singlepoint, advanced)
     if reason:
         console.print(f"[red]{reason}[/red] — {smiles}")
         raise typer.Exit(code=1)
@@ -196,6 +231,7 @@ def _build_request_metadata(
     max_conformers_red: int,
     category_flags: Optional[dict] = None,
     imag_freq_tolerance: float = 0.0,
+    advanced: Optional[dict] = None,
 ) -> str:
     """Build the request_metadata JSON string."""
     metadata = {
@@ -220,6 +256,8 @@ def _build_request_metadata(
     from autodft import categories
 
     metadata.update(categories.snapshot(category_flags or {}))
+    if advanced is not None:
+        metadata["advanced"] = advanced
 
     return json.dumps(metadata)
 
@@ -248,10 +286,10 @@ def submit(
         None, "--header-confsearch", help="ORCA header file for conformer search (default: GOAT g-xTB)"
     ),
     header_opt: Optional[Path] = typer.Option(
-        None, "--header-opt", help="ORCA header file for optimization (default: wB97X-D3 / def2-SVP CPCM(MeCN))"
+        None, "--header-opt", help="ORCA header file for optimization, method only (default: wB97X-D3 / def2-SVP)"
     ),
     header_sp: Optional[Path] = typer.Option(
-        None, "--header-sp", help="ORCA header file for singlepoint (default: wB97X-D3 / def2-TZVP CPCM(MeCN))"
+        None, "--header-sp", help="ORCA header file for singlepoint, method only (default: wB97X-D3 / def2-TZVP)"
     ),
     max_conformers_s0: int = typer.Option(1, "--max-conformers-s0", help="Max conformers kept for S0"),
     max_conformers_t1: int = typer.Option(1, "--max-conformers-t1", help="Max conformers kept for T1"),
@@ -301,9 +339,29 @@ def submit(
     nbo: bool = typer.Option(False, "--nbo", help="NBO 7 inside every state's energy singlepoint"),
     nbo_keywords: str = typer.Option("", "--nbo-keywords", help='Extra $NBO keywords, e.g. "BNDIDX"'),
     reactivity: bool = typer.Option(False, "--reactivity", help="Hirshfeld, %elprop polarizability/quadrupole, NBO with Wiberg indices and kept .gbw in every relaxed and vertical singlepoint"),
+    opt_grid: Optional[str] = typer.Option(None, "--opt-grid", help="Optimisation grid: DEFGRID1-3 or omit (default: config [advanced])"),
+    sp_grid: Optional[str] = typer.Option(None, "--sp-grid", help="Singlepoint grid: DEFGRID1-3 or omit (default: config [advanced])"),
+    opt_scf_convergence: Optional[str] = typer.Option(None, "--opt-scf-convergence", help="Optimisation SCF convergence: Normal, Strong, Tight, VeryTight, Extreme or omit (default: config [advanced])"),
+    sp_scf_convergence: Optional[str] = typer.Option(None, "--sp-scf-convergence", help="Singlepoint SCF convergence: Normal, Strong, Tight, VeryTight, Extreme or omit (default: config [advanced])"),
+    opt_geom_convergence: Optional[str] = typer.Option(None, "--opt-geom-convergence", help="Geometry convergence: Loose, Normal, Tight, VeryTight or omit (default: config [advanced])"),
+    opt_ri: Optional[str] = typer.Option(None, "--opt-ri", help="Optimisation RI: RIJCOSX, RI-J, RIJK, NoRI or omit (default: config [advanced])"),
+    sp_ri: Optional[str] = typer.Option(None, "--sp-ri", help="Singlepoint RI: RIJCOSX, RI-J, RIJK, NoRI or omit (default: config [advanced])"),
+    opt_aux_basis: Optional[str] = typer.Option(None, "--opt-aux-basis", help="Optimisation auxiliary basis: def2/J, def2/JK, AutoAux or omit (default: config [advanced])"),
+    sp_aux_basis: Optional[str] = typer.Option(None, "--sp-aux-basis", help="Singlepoint auxiliary basis: def2/J, def2/JK, AutoAux or omit (default: config [advanced])"),
+    opt_solvation: Optional[str] = typer.Option(None, "--opt-solvation", help="Optimisation solvation: CPCM, SMD or omit (default: config [advanced])"),
+    sp_solvation: Optional[str] = typer.Option(None, "--sp-solvation", help="Singlepoint solvation: CPCM, SMD or omit (default: config [advanced])"),
+    opt_solvent: Optional[str] = typer.Option(None, "--opt-solvent", help="Optimisation solvent (ORCA name) (default: config [advanced])"),
+    sp_solvent: Optional[str] = typer.Option(None, "--sp-solvent", help="Singlepoint solvent (ORCA name) (default: config [advanced])"),
+    cs_nprocs: Optional[int] = typer.Option(None, "--cs-nprocs", help="Conformer search cores (1-64) (default: config [advanced])"),
+    opt_nprocs: Optional[int] = typer.Option(None, "--opt-nprocs", help="Optimisation cores (1-64) (default: config [advanced])"),
+    sp_nprocs: Optional[int] = typer.Option(None, "--sp-nprocs", help="Singlepoint cores (1-64) (default: config [advanced])"),
+    cs_maxcore: Optional[int] = typer.Option(None, "--cs-maxcore", help="Conformer search MB per core (250-16000) (default: config [advanced])"),
+    opt_maxcore: Optional[int] = typer.Option(None, "--opt-maxcore", help="Optimisation MB per core (250-16000) (default: config [advanced])"),
+    sp_maxcore: Optional[int] = typer.Option(None, "--sp-maxcore", help="Singlepoint MB per core (250-16000) (default: config [advanced])"),
     config: Optional[str] = typer.Option(None, "--config", help="Path to config TOML file"),
 ) -> None:
     """Submit a single molecule by SMILES string."""
+    options = dict(locals())  # the parameters, for _advanced_from_options
     from autodft.config import load_settings
 
     settings = load_settings(config)
@@ -326,7 +384,8 @@ def submit(
     h_cs = _read_header_file(header_confsearch) if header_confsearch else (None if skip_confsearch else DEFAULT_HEADER_CONFSEARCH)
     h_opt = _read_header_file(header_opt) if header_opt else DEFAULT_HEADER_OPTIMIZATION
     h_sp = _read_header_file(header_sp) if header_sp else DEFAULT_HEADER_SINGLEPOINT
-    _check_categories(smiles, flags, h_opt, h_sp, settings)
+    advanced = _submission_advanced(qualified, (h_cs, h_opt, h_sp), _advanced_from_options(options), settings)
+    _check_categories(smiles, flags, h_opt, h_sp, settings, advanced)
 
     request_metadata = _build_request_metadata(
         project_name=qualified,
@@ -342,6 +401,7 @@ def submit(
         max_conformers_red=max_conformers_red,
         category_flags=flags,
         imag_freq_tolerance=imag_freq_tolerance,
+        advanced=advanced,
     )
 
     entry = CalculationEntrypoint(
@@ -388,10 +448,10 @@ def submit_batch(
         None, "--header-confsearch", help="ORCA header file for conformer search (default: GOAT g-xTB)"
     ),
     header_opt: Optional[Path] = typer.Option(
-        None, "--header-opt", help="ORCA header file for optimization (default: wB97X-D3 / def2-SVP CPCM(MeCN))"
+        None, "--header-opt", help="ORCA header file for optimization, method only (default: wB97X-D3 / def2-SVP)"
     ),
     header_sp: Optional[Path] = typer.Option(
-        None, "--header-sp", help="ORCA header file for singlepoint (default: wB97X-D3 / def2-TZVP CPCM(MeCN))"
+        None, "--header-sp", help="ORCA header file for singlepoint, method only (default: wB97X-D3 / def2-TZVP)"
     ),
     max_conformers_s0: int = typer.Option(1, "--max-conformers-s0", help="Max conformers kept for S0"),
     max_conformers_t1: int = typer.Option(1, "--max-conformers-t1", help="Max conformers kept for T1"),
@@ -441,9 +501,29 @@ def submit_batch(
     nbo: bool = typer.Option(False, "--nbo", help="NBO 7 inside every state's energy singlepoint"),
     nbo_keywords: str = typer.Option("", "--nbo-keywords", help='Extra $NBO keywords, e.g. "BNDIDX"'),
     reactivity: bool = typer.Option(False, "--reactivity", help="Hirshfeld, %elprop polarizability/quadrupole, NBO with Wiberg indices and kept .gbw in every relaxed and vertical singlepoint"),
+    opt_grid: Optional[str] = typer.Option(None, "--opt-grid", help="Optimisation grid: DEFGRID1-3 or omit (default: config [advanced])"),
+    sp_grid: Optional[str] = typer.Option(None, "--sp-grid", help="Singlepoint grid: DEFGRID1-3 or omit (default: config [advanced])"),
+    opt_scf_convergence: Optional[str] = typer.Option(None, "--opt-scf-convergence", help="Optimisation SCF convergence: Normal, Strong, Tight, VeryTight, Extreme or omit (default: config [advanced])"),
+    sp_scf_convergence: Optional[str] = typer.Option(None, "--sp-scf-convergence", help="Singlepoint SCF convergence: Normal, Strong, Tight, VeryTight, Extreme or omit (default: config [advanced])"),
+    opt_geom_convergence: Optional[str] = typer.Option(None, "--opt-geom-convergence", help="Geometry convergence: Loose, Normal, Tight, VeryTight or omit (default: config [advanced])"),
+    opt_ri: Optional[str] = typer.Option(None, "--opt-ri", help="Optimisation RI: RIJCOSX, RI-J, RIJK, NoRI or omit (default: config [advanced])"),
+    sp_ri: Optional[str] = typer.Option(None, "--sp-ri", help="Singlepoint RI: RIJCOSX, RI-J, RIJK, NoRI or omit (default: config [advanced])"),
+    opt_aux_basis: Optional[str] = typer.Option(None, "--opt-aux-basis", help="Optimisation auxiliary basis: def2/J, def2/JK, AutoAux or omit (default: config [advanced])"),
+    sp_aux_basis: Optional[str] = typer.Option(None, "--sp-aux-basis", help="Singlepoint auxiliary basis: def2/J, def2/JK, AutoAux or omit (default: config [advanced])"),
+    opt_solvation: Optional[str] = typer.Option(None, "--opt-solvation", help="Optimisation solvation: CPCM, SMD or omit (default: config [advanced])"),
+    sp_solvation: Optional[str] = typer.Option(None, "--sp-solvation", help="Singlepoint solvation: CPCM, SMD or omit (default: config [advanced])"),
+    opt_solvent: Optional[str] = typer.Option(None, "--opt-solvent", help="Optimisation solvent (ORCA name) (default: config [advanced])"),
+    sp_solvent: Optional[str] = typer.Option(None, "--sp-solvent", help="Singlepoint solvent (ORCA name) (default: config [advanced])"),
+    cs_nprocs: Optional[int] = typer.Option(None, "--cs-nprocs", help="Conformer search cores (1-64) (default: config [advanced])"),
+    opt_nprocs: Optional[int] = typer.Option(None, "--opt-nprocs", help="Optimisation cores (1-64) (default: config [advanced])"),
+    sp_nprocs: Optional[int] = typer.Option(None, "--sp-nprocs", help="Singlepoint cores (1-64) (default: config [advanced])"),
+    cs_maxcore: Optional[int] = typer.Option(None, "--cs-maxcore", help="Conformer search MB per core (250-16000) (default: config [advanced])"),
+    opt_maxcore: Optional[int] = typer.Option(None, "--opt-maxcore", help="Optimisation MB per core (250-16000) (default: config [advanced])"),
+    sp_maxcore: Optional[int] = typer.Option(None, "--sp-maxcore", help="Singlepoint MB per core (250-16000) (default: config [advanced])"),
     config: Optional[str] = typer.Option(None, "--config", help="Path to config TOML file"),
 ) -> None:
     """Submit molecules from a CSV file."""
+    options = dict(locals())  # the parameters, for _advanced_from_options
     from autodft.config import load_settings
 
     settings = load_settings(config)
@@ -464,6 +544,11 @@ def submit_batch(
         nbo=nbo, nbo_keywords=nbo_keywords, reactivity=reactivity,
     )
 
+    h_cs = _read_header_file(header_confsearch) if header_confsearch else (None if skip_confsearch else DEFAULT_HEADER_CONFSEARCH)
+    h_opt = _read_header_file(header_opt) if header_opt else DEFAULT_HEADER_OPTIMIZATION
+    h_sp = _read_header_file(header_sp) if header_sp else DEFAULT_HEADER_SINGLEPOINT
+    advanced = _submission_advanced(qualified, (h_cs, h_opt, h_sp), _advanced_from_options(options), settings)
+
     request_metadata = _build_request_metadata(
         project_name=qualified,
         project_author=author,
@@ -478,11 +563,8 @@ def submit_batch(
         max_conformers_red=max_conformers_red,
         category_flags=flags,
         imag_freq_tolerance=imag_freq_tolerance,
+        advanced=advanced,
     )
-
-    h_cs = _read_header_file(header_confsearch) if header_confsearch else (None if skip_confsearch else DEFAULT_HEADER_CONFSEARCH)
-    h_opt = _read_header_file(header_opt) if header_opt else DEFAULT_HEADER_OPTIMIZATION
-    h_sp = _read_header_file(header_sp) if header_sp else DEFAULT_HEADER_SINGLEPOINT
 
     smiles_list: list[str] = []
     with open(file, newline="", encoding="utf-8") as fh:
@@ -518,7 +600,7 @@ def submit_batch(
     # whole or not at all.
     for smi in smiles_list:
         _check_reference_state(smi, request_t1, request_ox, request_red)
-        _check_categories(smi, flags, h_opt, h_sp, settings)
+        _check_categories(smi, flags, h_opt, h_sp, settings, advanced)
 
     submitted = 0
     with get_session() as session:

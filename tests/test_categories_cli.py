@@ -10,7 +10,7 @@ import typer
 from autodft import categories
 from autodft.cli import submit as cli
 from autodft.config import Settings
-from autodft.qm.orca.defaults import DEFAULT_HEADER_OPTIMIZATION, DEFAULT_HEADER_SINGLEPOINT
+from autodft.qm.orca.defaults import LEGACY_HEADER_OPTIMIZATION, LEGACY_HEADER_SINGLEPOINT
 
 
 def _meta(flags=None) -> dict:
@@ -36,12 +36,12 @@ def test_metadata_carries_only_set_categories():
 def test_ir_without_freq_exits():
     flags = cli._category_options_to_flags(uvvis=False, ir=True, esd=False, esd_ht=False, nmr=False)
     with pytest.raises(typer.Exit):
-        cli._check_categories("c1ccccc1", flags, "!B3LYP Opt\n", DEFAULT_HEADER_SINGLEPOINT, Settings())
+        cli._check_categories("c1ccccc1", flags, "!B3LYP Opt\n", LEGACY_HEADER_SINGLEPOINT, Settings())
 
 
 def test_defaults_pass():
     flags = cli._category_options_to_flags(uvvis=True, ir=True, esd=False, esd_ht=False, nmr=False)
-    cli._check_categories("c1ccccc1", flags, DEFAULT_HEADER_OPTIMIZATION, DEFAULT_HEADER_SINGLEPOINT, Settings())
+    cli._check_categories("c1ccccc1", flags, LEGACY_HEADER_OPTIMIZATION, LEGACY_HEADER_SINGLEPOINT, Settings())
 
 
 def test_uvvis_options_ride_with_the_category():
@@ -103,7 +103,7 @@ def test_nbo_without_an_executable_exits():
     flags = cli._category_options_to_flags(uvvis=False, ir=False, esd=False, esd_ht=False, nmr=False, nbo=True)
     with pytest.raises(typer.Exit):
         cli._check_categories(
-            "c1ccccc1", flags, DEFAULT_HEADER_OPTIMIZATION, DEFAULT_HEADER_SINGLEPOINT, Settings(),
+            "c1ccccc1", flags, LEGACY_HEADER_OPTIMIZATION, LEGACY_HEADER_SINGLEPOINT, Settings(),
         )
 
 
@@ -112,5 +112,5 @@ def test_nbo_with_a_configured_executable_passes():
     settings = Settings()
     settings.orca.nbo_exe = "/path/to/nbo7.i8.exe"
     cli._check_categories(
-        "c1ccccc1", flags, DEFAULT_HEADER_OPTIMIZATION, DEFAULT_HEADER_SINGLEPOINT, settings,
+        "c1ccccc1", flags, LEGACY_HEADER_OPTIMIZATION, LEGACY_HEADER_SINGLEPOINT, settings,
     )

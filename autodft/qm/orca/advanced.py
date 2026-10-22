@@ -25,25 +25,29 @@ CHOICES: dict[str, tuple[str, ...]] = {
     "solvation": ("CPCM", "SMD", "omit"),
 }
 _GEOM_ORDER = ("Loose", "Normal", "Tight", "VeryTight")
-_SOLVENT_RE = re.compile(r"[A-Za-z0-9 ,()-]+")
+_SOLVENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ,-]*")
 _SOLVENT_MAX = 40
 _RANGES = {"nprocs": (1, 64), "maxcore": (250, 16000)}
 _MAX_TOTAL_MB = 400000
 
 _SCF_LEVELS = r"(?:Sloppy|Loose|Normal|Medium|Strong|Tight|VeryTight|Extreme)"
+_RESOURCE_TOKENS = ((r"PAL\d+", "set the cores under Advanced instead"),)
 _OWNED_TOKENS = (
     (r"DEFGRID\d", "set the grid under Advanced instead"),
     (rf"{_SCF_LEVELS}SCF", "set the SCF convergence under Advanced instead"),
     (r"RIJCOSX|RIJONX|RI-J|RIJK|NoRI|RI", "set the RI approximation under Advanced instead"),
     (r"\S+/JK?|AutoAux", "set the auxiliary basis under Advanced instead"),
     (r"(?:CPCMC?|SMD)(?:\(.*\))?", "set the solvation under Advanced instead"),
-    (r"PAL\d+", "set the cores under Advanced instead"),
+    *_RESOURCE_TOKENS,
     (r"(?:Tight|VeryTight|Loose|Normal|Sloppy)?Opt|Freq|NumFreq|AnFreq", "the pipeline adds Opt and Freq itself"),
     (r"KeepDens", "the pipeline manages densities itself"),
 )
-_OWNED_BLOCKS = (
+_RESOURCE_BLOCKS = (
     ("pal", "set the cores under Advanced instead"),
     ("maxcore", "set the memory under Advanced instead"),
+)
+_OWNED_BLOCKS = (
+    *_RESOURCE_BLOCKS,
     ("geom", "set the geometry convergence under Advanced instead"),
     ("cpcm", "set the solvation under Advanced instead"),
 )
@@ -63,7 +67,7 @@ def _check(stage: str, key: str, value) -> Optional[str]:
             return f"{field}: {value!r} is not one of {', '.join(CHOICES[key])}"
     elif key == "solvent":
         if not (isinstance(value, str) and _SOLVENT_RE.fullmatch(value) and len(value) <= _SOLVENT_MAX):
-            return f"{field}: {value!r} is not a solvent name (letters, digits, space , ( ) -; up to {_SOLVENT_MAX})"
+            return f"{field}: {value!r} is not a solvent name (letters, digits, space , -; up to {_SOLVENT_MAX})"
     else:
         low, high = _RANGES[key]
         if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
@@ -142,17 +146,21 @@ def effective_header(header_text: str, metadata: dict, stage: str) -> str:
     return render_settings(header_text, advanced[stage], stage)
 
 
-def owned_keyword(header: str) -> Optional[str]:
-    """A message naming the first setting-owned keyword in *header*, or None."""
+def owned_keyword(header: str, *, resources_only: bool = False) -> Optional[str]:
+    """A message naming the first setting-owned (or only cores/memory) keyword in *header*, or None."""
+    owned_tokens, owned_blocks = ((_RESOURCE_TOKENS, _RESOURCE_BLOCKS) if resources_only
+                                  else (_OWNED_TOKENS, _OWNED_BLOCKS))
     for line in _keyword_lines(header):
         for token in line.lstrip()[1:].split():
-            for pattern, what in _OWNED_TOKENS:
+            for pattern, what in owned_tokens:
                 if re.fullmatch(pattern, token, re.IGNORECASE):
                     return f"{token} in the header: {what}"
     masked = "\n".join(line.partition("#")[0] for line in header.splitlines())
-    for name, what in _OWNED_BLOCKS:
+    for name, what in owned_blocks:
         if has_block(masked, name):
-            return f"%{name} in the header: set {what}"
+            return f"%{name} in the header: {what}"
+    if resources_only:
+        return None
     for match in _SCF_BLOCK_RE.finditer(masked):
         if re.search(r"\bConvergence\b", match.group(1), re.IGNORECASE):
             return "%scf Convergence in the header: set the SCF convergence under Advanced instead"
@@ -162,3 +170,19 @@ def owned_keyword(header: str) -> Optional[str]:
 def is_legacy_header(header: str) -> bool:
     """Whether *header* sets what Advanced owns."""
     return owned_keyword(header) is not None
+
+
+def header_error(headers: tuple) -> Optional[str]:
+    """Why the (confsearch, optimization, singlepoint) *headers* cannot take Advanced settings, or None."""
+    for stage, text in zip(STAGES, headers):
+        message = text and owned_keyword(text, resources_only=stage == "confsearch")
+        if message:
+            return f"{message} ({stage} header)"
+    return None
+
+
+def for_submission(requested, headers: tuple, settings: Settings) -> tuple[Optional[dict], Optional[str]]:
+    """*requested* resolved for a submission with *headers*, or ``(None, error)``."""
+    full, error = resolve(requested, settings)
+    error = error or header_error(headers)
+    return (None, error) if error else (full, None)

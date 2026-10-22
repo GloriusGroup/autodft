@@ -14,26 +14,41 @@ from autodft.qm.orca.defaults import (
     DEFAULT_HEADER_OPTIMIZATION,
     DEFAULT_HEADER_SINGLEPOINT,
     GFN2_HEADER_CONFSEARCH,
+    LEGACY_GFN2_HEADER_CONFSEARCH,
+    LEGACY_HEADER_CONFSEARCH,
+    LEGACY_HEADER_OPTIMIZATION,
+    LEGACY_HEADER_SINGLEPOINT,
     QZVPD_MECN_HEADER_SINGLEPOINT,
     SEED_HEADERS,
     TZVP_MECN_HEADER_OPTIMIZATION,
 )
 
 
-def test_default_optimization_header_is_svp_with_cpcm():
-    assert DEFAULT_HEADER_OPTIMIZATION == (
+def test_default_headers_are_method_only():
+    assert DEFAULT_HEADER_OPTIMIZATION == "!wB97X-D3 def2-SVP\n"
+    assert DEFAULT_HEADER_SINGLEPOINT == "!wB97X-D3 def2-TZVP\n"
+
+
+def test_default_confsearch_header_is_goat_gxtb_without_resources():
+    assert DEFAULT_HEADER_CONFSEARCH.startswith('!GOAT XTB\n%xtb\n  XTBInputString "--gxtb"\nend\n%GOAT\n')
+    assert GFN2_HEADER_CONFSEARCH.startswith("!GOAT XTB2\n%GOAT\n")
+    for header in (DEFAULT_HEADER_CONFSEARCH, GFN2_HEADER_CONFSEARCH):
+        assert "%pal" not in header and "%maxcore" not in header
+    assert LEGACY_HEADER_CONFSEARCH == DEFAULT_HEADER_CONFSEARCH.replace(
+        "%GOAT\n", "%maxcore 500\n%pal nprocs 32 end\n%GOAT\n")
+    assert LEGACY_GFN2_HEADER_CONFSEARCH == GFN2_HEADER_CONFSEARCH.replace(
+        "%GOAT\n", "%maxcore 500\n%pal nprocs 32 end\n%GOAT\n")
+
+
+def test_legacy_optimization_header_is_svp_with_cpcm():
+    assert LEGACY_HEADER_OPTIMIZATION == (
         "!wB97X-D3 def2-SVP def2/J RIJCOSX DEFGRID3 Opt TightSCF CPCM(MeCN) Freq\n"
         "%maxcore 2000\n%pal nprocs 12 end\n"
     )
 
 
-def test_default_confsearch_header_is_goat_gxtb():
-    assert DEFAULT_HEADER_CONFSEARCH.startswith('!GOAT XTB\n%xtb\n  XTBInputString "--gxtb"\nend\n')
-    assert GFN2_HEADER_CONFSEARCH.startswith("!GOAT XTB2\n")
-
-
-def test_default_singlepoint_header_is_tzvp_with_cpcm():
-    assert DEFAULT_HEADER_SINGLEPOINT == (
+def test_legacy_singlepoint_header_is_tzvp_with_cpcm():
+    assert LEGACY_HEADER_SINGLEPOINT == (
         "!wB97X-D3 def2-TZVP def2/J RIJCOSX DEFGRID3 TightSCF CPCM(MeCN) KeepDens\n"
         "%maxcore 1500\n%pal nprocs 8 end\n"
     )
@@ -41,16 +56,16 @@ def test_default_singlepoint_header_is_tzvp_with_cpcm():
 
 def test_seed_headers_contains_exactly_these_six_headers():
     assert [(h["kind"], h["description"], h["header_text"]) for h in SEED_HEADERS] == [
-        ("confsearch", "GOAT GFN2-xTB conformer ensemble", GFN2_HEADER_CONFSEARCH),
-        ("confsearch", "GOAT g-xTB conformer ensemble", DEFAULT_HEADER_CONFSEARCH),
+        ("confsearch", "GOAT GFN2-xTB conformer ensemble", LEGACY_GFN2_HEADER_CONFSEARCH),
+        ("confsearch", "GOAT g-xTB conformer ensemble", LEGACY_HEADER_CONFSEARCH),
         ("optimization", "wB97X-D3 / def2-TZVP TightOpt + Freq + CPCM(MeCN)",
          TZVP_MECN_HEADER_OPTIMIZATION),
         ("singlepoint", "wB97X-D3 / def2-QZVPD KeepDens + CPCM(MeCN)",
          QZVPD_MECN_HEADER_SINGLEPOINT),
         ("optimization", "wB97X-D3 / def2-SVP Opt + Freq + CPCM(MeCN)",
-         DEFAULT_HEADER_OPTIMIZATION),
+         LEGACY_HEADER_OPTIMIZATION),
         ("singlepoint", "wB97X-D3 / def2-TZVP KeepDens + CPCM(MeCN)",
-         DEFAULT_HEADER_SINGLEPOINT),
+         LEGACY_HEADER_SINGLEPOINT),
     ]
 
 
@@ -72,7 +87,7 @@ def test_api_headers_defaults_carry_the_new_texts(client):
     c, headers = client
     data = c.get("/api/headers", headers=headers).json()
     by_kind = {d["kind"]: d for d in data["defaults"]}
-    assert by_kind["optimization"]["text"] == DEFAULT_HEADER_OPTIMIZATION
-    assert by_kind["singlepoint"]["text"] == DEFAULT_HEADER_SINGLEPOINT
+    assert by_kind["optimization"]["text"] == LEGACY_HEADER_OPTIMIZATION
+    assert by_kind["singlepoint"]["text"] == LEGACY_HEADER_SINGLEPOINT
     assert "CPCM(MeCN)" in by_kind["optimization"]["label"]
     assert "CPCM(MeCN)" in by_kind["singlepoint"]["label"]

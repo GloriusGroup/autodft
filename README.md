@@ -202,9 +202,13 @@ first run:
 | 5 | optimization | wB97X-D3 / def2-SVP Opt + Freq + CPCM(MeCN)          |
 | 6 | singlepoint  | wB97X-D3 / def2-TZVP KeepDens + CPCM(MeCN)           |
 
-Headers 2, 5 and 6 are the package defaults (`autodft/qm/orca/defaults.py`)
-applied when a submission sets neither `header_*` nor `header_*_id`; 3
-and 4 are the same method on the larger def2-TZVP/def2-QZVPD basis pair,
+Headers 2, 5 and 6 are the full headers of before Advanced settings
+(`LEGACY_*` in `autodft/qm/orca/defaults.py`); a submission that sets
+neither `header_*` nor `header_*_id` now gets the method-only defaults
+(`!wB97X-D3 def2-SVP`, `!wB97X-D3 def2-TZVP`, GOAT g-xTB without `%pal` /
+`%maxcore`) plus the `advanced` settings below, whose defaults set the
+grid, convergence, RI, solvation, cores and memory of 2, 5 and 6; 3 and 4
+are the same method on the larger def2-TZVP/def2-QZVPD basis pair,
 kept as a seeded alternative. All four DFT headers run in CPCM(MeCN).
 The defaults request 12 cores × 2000 MB (optimisation) and 8 cores × 1500 MB
 (singlepoint), below the CPU nodes' ~2600 MB/core. Measured on a 45-atom
@@ -444,10 +448,22 @@ Every submission path (CLI, REST, Python) ends up writing the same
   −300 to 0) — every optimisation, ESD's S1 included, fails on any
   imaginary mode below it (cm⁻¹) and is retried; exports leave such
   conformers out. `-10` accepts noise modes down to −10 cm⁻¹.
+* `advanced` (CLI `--opt-grid`, `--sp-grid`, `--opt-scf-convergence`,
+  `--sp-scf-convergence`, `--opt-geom-convergence`, `--opt-ri` / `--sp-ri`,
+  `--opt-aux-basis` / `--sp-aux-basis`, `--opt-solvation` / `--sp-solvation`,
+  `--opt-solvent` / `--sp-solvent`, `--cs-nprocs` / `--opt-nprocs` /
+  `--sp-nprocs`, `--cs-maxcore` / `--opt-maxcore` / `--sp-maxcore`) — grid,
+  SCF and geometry convergence, RI and auxiliary basis, solvation, cores
+  and memory per stage, rendered into every job; missing ones take the
+  config `[advanced.*]` defaults (`GET /api/advanced-defaults`). Headers
+  then hold only the method: one with e.g. `DEFGRID3`, `TightSCF`,
+  `CPCM(...)`, `Opt`, `Freq`, `KeepDens`, `%pal` or `%maxcore` is refused,
+  naming the setting. Without `advanced`, a submission to a project whose
+  molecules ran on exactly these (full) headers stays as it was; see
+  [`docs/API.md`](docs/API.md#post-apisubmit).
 * `header_confsearch_id / _optimization_id / _singlepoint_id` — pick a
-  stored header by ID. Or pass raw `header_*` text. Defaults from
-  `autodft/qm/orca/defaults.py` (= seeded DB rows) apply when neither
-  is set.
+  stored header by ID. Or pass raw `header_*` text. The method-only
+  defaults from `autodft/qm/orca/defaults.py` apply when neither is set.
 
 `request_S1` is not exposed — S1 isn't supported yet.
 
@@ -518,7 +534,8 @@ autodft submit submit \
     --max-conformers-red 2 \
     --header-confsearch path/to/cs_header.txt \
     --header-opt        path/to/opt_header.txt \
-    --header-sp         path/to/sp_header.txt
+    --header-sp         path/to/sp_header.txt \
+    --sp-grid DEFGRID2 --opt-nprocs 16 --sp-solvation SMD --sp-solvent water
 
 # batch from CSV — same flags accepted, same defaults
 autodft submit submit-batch --file batch.csv --project phenols --priority 20

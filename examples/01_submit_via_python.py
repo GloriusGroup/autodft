@@ -30,6 +30,7 @@ from autodft.db import get_session, init_db
 from autodft.engine.entrypoint_processor import validate_smiles
 from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.models.header import ComputationHeader
+from autodft.qm.orca.advanced import for_submission
 from autodft.qm.orca.defaults import (
     DEFAULT_HEADER_CONFSEARCH,
     DEFAULT_HEADER_OPTIMIZATION,
@@ -101,6 +102,7 @@ def make_metadata(
     max_conformers_ox: int = 1,
     max_conformers_red: int = 1,
     imag_freq_tolerance: float = 0.0,
+    advanced: dict | None = None,
 ) -> str:
     """Build the ``request_metadata`` JSON blob the controller consumes.
 
@@ -111,9 +113,10 @@ def make_metadata(
     controller matches molecules on this string verbatim. Use
     :func:`qualified_project` to build it. ``author`` is a provenance
     label; over REST the server forces it to the caller's username, so
-    record the owning account here too.
+    record the owning account here too. ``advanced`` is the resolved
+    Advanced settings; None writes none (legacy headers only).
     """
-    return json.dumps({
+    metadata = {
         "project_name": project,
         "project_author": author,
         "request_S1": False,
@@ -131,7 +134,10 @@ def make_metadata(
         "max_conformers_red": max_conformers_red,
         # cm^-1, -300 to 0: optimisations fail on any imaginary mode below it.
         "imag_freq_tolerance": imag_freq_tolerance,
-    })
+    }
+    if advanced is not None:
+        metadata["advanced"] = advanced
+    return json.dumps(metadata)
 
 
 def submit(
@@ -143,6 +149,8 @@ def submit(
     header_confsearch: str | None = DEFAULT_HEADER_CONFSEARCH,
     header_optimization: str | None = DEFAULT_HEADER_OPTIMIZATION,
     header_singlepoint: str | None = DEFAULT_HEADER_SINGLEPOINT,
+    advanced: dict | None = None,
+    legacy: bool = False,
     **metadata_kwargs,
 ) -> int:
     """Validate, then queue one entrypoint. Returns the new row id.
@@ -151,19 +159,29 @@ def submit(
     before the row is written, the same way ``POST /api/submit`` qualifies
     it with the caller's.
 
-    Raises ``ValueError`` if the SMILES is invalid — same check the
-    REST endpoint runs before writing the row.
+    *advanced* (e.g. ``{"singlepoint": {"grid": "DEFGRID2"}}``) is filled
+    from the config defaults, as ``POST /api/submit`` does; ``legacy=True``
+    records none, for the full headers of before Advanced settings.
+
+    Raises ``ValueError`` if the SMILES or the Advanced settings are
+    invalid — same checks the REST endpoint runs before writing the row.
     """
     check = validate_smiles(smiles)
     if not check["valid"]:
         raise ValueError(f"Invalid SMILES {smiles!r}: {check['error']}")
+    if not legacy:
+        headers = (header_confsearch, header_optimization, header_singlepoint)
+        advanced, error = for_submission(advanced, headers, SETTINGS)
+        if error:
+            raise ValueError(error)
 
     qualified, author = qualified_project(project, user)
 
     with get_session() as session:
         entry = CalculationEntrypoint(
             smiles=smiles,
-            request_metadata=make_metadata(qualified, author, **metadata_kwargs),
+            request_metadata=make_metadata(qualified, author, advanced=None if legacy else advanced,
+                                           **metadata_kwargs),
             priority=priority,
             header_confsearch=header_confsearch,
             header_optimization=header_optimization,
@@ -227,7 +245,8 @@ if __name__ == "__main__":
     )
     print(f"#{eid}  CC   (skip_confsearch)")
 
-    # 4) Pick stored headers from the seeded rows by description.
+    # 4) Pick stored headers from the seeded rows by description. They are
+    #    full headers of before Advanced settings, so the row is legacy.
     tzvp_opt = header_by_description("optimization", "TZVP")
     qzvpd_sp = header_by_description("singlepoint", "QZVPD")
     if tzvp_opt and qzvpd_sp:
@@ -237,6 +256,7 @@ if __name__ == "__main__":
             request_t1=True,
             header_optimization=tzvp_opt.header_text,
             header_singlepoint=qzvpd_sp.header_text,
+            legacy=True,
         )
         print(f"#{eid}  CCN  (wB97X-D3 TZVP opt #{tzvp_opt.id} + QZVPD sp #{qzvpd_sp.id})")
 

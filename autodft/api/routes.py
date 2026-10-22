@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -217,6 +217,8 @@ class SubmitRequest(BaseModel):
     esd_ht_method: str = "sp"
     # Every optimisation fails on any imaginary mode below this (cm^-1, -300 to 0).
     imag_freq_tolerance: float = 0.0
+    # {confsearch|optimization|singlepoint: {setting: value}}; checked by advanced.resolve (400).
+    advanced: Any = None
     density_eldens: bool = True
     density_spindens: bool = True
     density_grid: int = 75
@@ -1238,9 +1240,9 @@ def api_headers(
     ``?include_deleted=true`` to see them (used by the manager view).
     """
     from autodft.qm.orca.defaults import (
-        DEFAULT_HEADER_CONFSEARCH,
-        DEFAULT_HEADER_OPTIMIZATION,
-        DEFAULT_HEADER_SINGLEPOINT,
+        LEGACY_HEADER_CONFSEARCH,
+        LEGACY_HEADER_OPTIMIZATION,
+        LEGACY_HEADER_SINGLEPOINT,
     )
 
     defaults = [
@@ -1249,21 +1251,21 @@ def api_headers(
             "label": "GOAT g-xTB (default)",
             "description": "GOAT conformer ensemble at g-xTB; MAXEN 10, ENDIFF 0.2, RMSD 0.15.",
             "kind": "confsearch",
-            "text": DEFAULT_HEADER_CONFSEARCH,
+            "text": LEGACY_HEADER_CONFSEARCH,
         },
         {
             "id": "default_optimization",
             "label": "wB97X-D3 / def2-SVP Opt Freq CPCM(MeCN) (default)",
             "description": "Geometry optimisation + frequencies at wB97X-D3/def2-SVP with RIJCOSX def2/J and CPCM(MeCN).",
             "kind": "optimization",
-            "text": DEFAULT_HEADER_OPTIMIZATION,
+            "text": LEGACY_HEADER_OPTIMIZATION,
         },
         {
             "id": "default_singlepoint",
             "label": "wB97X-D3 / def2-TZVP KeepDens CPCM(MeCN) (default)",
             "description": "Single-point at wB97X-D3/def2-TZVP with RIJCOSX, KeepDens for downstream densities, CPCM(MeCN).",
             "kind": "singlepoint",
-            "text": DEFAULT_HEADER_SINGLEPOINT,
+            "text": LEGACY_HEADER_SINGLEPOINT,
         },
     ]
 
@@ -2074,6 +2076,15 @@ def api_validate_smiles(body: ValidateSmilesRequest):
     return validate_smiles(body.smiles)
 
 
+@router.get("/api/advanced-defaults")
+def api_advanced_defaults(identity: Identity = Depends(current_identity)):
+    """The config defaults and choices of the Advanced settings, for the submit form."""
+    from autodft.qm.orca import advanced
+
+    return {"advanced": advanced.defaults(get_active_settings()), "choices": advanced.CHOICES,
+            "imag_freq_tolerance": 0.0}
+
+
 def _category_flags(body: SubmitRequest) -> dict:
     """The category part of *body*, keyed as in ``request_metadata``."""
     from autodft import categories
@@ -2157,7 +2168,30 @@ def _tolerance_error(body: SubmitRequest) -> Optional[JSONResponse]:
     )})
 
 
-def _reject_reason(body: SubmitRequest, smiles: str, headers) -> tuple[Optional[str], dict]:
+def _submission_advanced(session, body: SubmitRequest, project: str, headers) -> tuple[Optional[dict], Optional[str]]:
+    """*body*'s resolved ``advanced`` (None in legacy mode), or ``(None, error)``.
+
+    Without ``advanced``, a submission to a project whose legacy S0 states use
+    exactly *headers* stays legacy; every other one gets the config defaults.
+    """
+    from autodft.engine.entrypoint_processor import legacy_submission
+    from autodft.qm.orca import advanced
+
+    if body.advanced is None and legacy_submission(session, project, headers):
+        return None, None
+    return advanced.for_submission(body.advanced, headers, get_active_settings())
+
+
+def _target_project(session, identity: Identity, body: SubmitRequest) -> str:
+    """The qualified project *body* goes to, without creating it (see ``_submission_owner``)."""
+    from autodft import accounts
+
+    user = accounts.get_user_by_username(session, identity.username)
+    return accounts.qualify(user.username, body.project) if user is not None else body.project
+
+
+def _reject_reason(body: SubmitRequest, smiles: str, headers,
+                   advanced: Optional[dict] = None) -> tuple[Optional[str], dict]:
     """Why *smiles* cannot be queued under *body*'s options (None if it can),
     with the validation result."""
     from autodft import categories
@@ -2196,7 +2230,7 @@ def _reject_reason(body: SubmitRequest, smiles: str, headers) -> tuple[Optional[
             check,
         )
 
-    return categories.rejection(check, _category_flags(body), headers[1], headers[2]), check
+    return categories.rejection(check, _category_flags(body), headers[1], headers[2], advanced), check
 
 
 @router.post("/api/submit")
@@ -2218,7 +2252,10 @@ def api_submit(
         return bad
     with get_session() as session:
         headers = _resolved_headers(session, body)
-        detail, check = _reject_reason(body, body.smiles, headers)
+        advanced, detail = _submission_advanced(session, body, _target_project(session, identity, body), headers)
+        if detail is not None:
+            return JSONResponse(status_code=400, content={"detail": detail})
+        detail, check = _reject_reason(body, body.smiles, headers, advanced)
         if detail is not None:
             return JSONResponse(
                 status_code=400, content={"detail": detail, "validation": check},
@@ -2243,7 +2280,7 @@ def api_submit(
             project_jobs.assert_no_active_job(session, project_name)
         except project_jobs.JobInProgress as exc:
             return JSONResponse(status_code=409, content={"detail": str(exc)})
-        entry = _new_entrypoint(session, body, body.smiles, project_name, author, headers)
+        entry = _new_entrypoint(session, body, body.smiles, project_name, author, headers, advanced)
         session.add(entry)
         session.commit()
         session.refresh(entry)
@@ -2361,6 +2398,9 @@ def api_extend(name: str, body: SubmitBatchRequest, identity: Identity = Depends
     bad = _reject_bad_project(name) or _tolerance_error(body)
     if bad is not None:
         return bad
+    if body.advanced is not None:
+        return JSONResponse(status_code=400, content={
+            "detail": "An extension runs at the project's own Advanced settings; send no advanced."})
     with get_session() as session:
         name = resolve_project(session, identity, name)
         scope = _extend_scope(session, name)
@@ -2372,12 +2412,15 @@ def api_extend(name: str, body: SubmitBatchRequest, identity: Identity = Depends
             return JSONResponse(status_code=409, content={"detail": str(exc)})
         headers = tuple(h["text"] if h else None for h in (scope["headers"][k] for k in
                                                             ("confsearch", "optimization", "singlepoint")))
+        advanced, detail = _submission_advanced(session, body, name, headers)
+        if detail is not None:
+            return JSONResponse(status_code=400, content={"detail": detail})
         wanted = categories.requested(_category_flags(body))
         states = {d for d, on in (("T1", body.request_t1), ("ox", body.request_ox), ("red", body.request_red)) if on}
         known = set(scope["smiles"])
         accepted, rejected, skipped = [], [], []
         for smiles in body.smiles_list or scope["smiles"]:
-            detail, check = _reject_reason(body, smiles, headers)
+            detail, check = _reject_reason(body, smiles, headers, advanced)
             if detail is None and check["canonical"] not in known:
                 detail = f"{smiles} is not an unarchived molecule of {name}."
             added: set = set()
@@ -2389,7 +2432,7 @@ def api_extend(name: str, body: SubmitBatchRequest, identity: Identity = Depends
             if not added and states <= _state_descriptions(session, name, check["canonical"]):
                 skipped.append(smiles)
                 continue
-            entry = _new_entrypoint(session, body, check["canonical"], name, identity.username, headers)
+            entry = _new_entrypoint(session, body, check["canonical"], name, identity.username, headers, advanced)
             entry.request_metadata = json.dumps({**json.loads(entry.request_metadata), "extend": True})
             session.add(entry)
             accepted.append((smiles, entry))
@@ -2452,6 +2495,9 @@ def api_submit_batch(
             unavailable = categories.nbo_unavailable(get_active_settings())
             if unavailable:
                 return JSONResponse(status_code=400, content={"detail": unavailable})
+        advanced, detail = _submission_advanced(session, body, project_name, headers)
+        if detail is not None:
+            return JSONResponse(status_code=400, content={"detail": detail})
         requested_options = {**categories.options(flags), categories.ESD_HT: bool(flags.get(categories.ESD_HT))}
         for smiles in body.smiles_list:
             if len(smiles) > 512:
@@ -2460,7 +2506,7 @@ def api_submit_batch(
                 # thread of the controller process.
                 rejected.append({"smiles": smiles[:120], "detail": "SMILES too long (>512)."})
                 continue
-            detail, check = _reject_reason(body, smiles, headers)
+            detail, check = _reject_reason(body, smiles, headers, advanced)
             if detail is None:
                 detail = categories.existing_conflict(
                     session, project_name, check["canonical"], wanted, requested_options,
@@ -2468,7 +2514,7 @@ def api_submit_batch(
             if detail is not None:
                 rejected.append({"smiles": smiles, "detail": detail})
                 continue
-            entry = _new_entrypoint(session, body, smiles, project_name, author, headers)
+            entry = _new_entrypoint(session, body, smiles, project_name, author, headers, advanced)
             session.add(entry)
             accepted.append((smiles, entry))
 
@@ -2525,9 +2571,9 @@ def _submission_owner(session, identity: Identity, body: SubmitRequest) -> tuple
 def _new_entrypoint(
     session, body: SubmitRequest, smiles: str,
     project_name: Optional[str] = None, author: Optional[str] = None,
-    headers: Optional[tuple] = None,
+    headers: Optional[tuple] = None, advanced: Optional[dict] = None,
 ) -> CalculationEntrypoint:
-    """Build (but do not add) the entrypoint row for one SMILES."""
+    """Build (but do not add) the entrypoint row for one SMILES; ``advanced`` None is legacy."""
     from autodft import categories
 
     # If only the legacy `max_conformers` was supplied, apply it as a
@@ -2559,6 +2605,8 @@ def _new_entrypoint(
     # Only set categories are written, so an unflagged submission's row is
     # exactly what it always was.
     request_metadata.update(categories.snapshot(_category_flags(body)))
+    if advanced is not None:
+        request_metadata["advanced"] = advanced
 
     h_cs, h_opt, h_sp = headers if headers is not None else _resolved_headers(session, body)
     return CalculationEntrypoint(

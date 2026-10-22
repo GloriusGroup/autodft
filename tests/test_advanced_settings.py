@@ -141,3 +141,23 @@ def test_config_defaults_match_toml():
     s = load_settings()
     assert s.advanced == Settings().advanced
     assert (s.advanced.optimization.nprocs, s.advanced.confsearch.maxcore) == (12, 500)
+
+
+@pytest.mark.parametrize("solvent", ["x) Opt (", " ", "()", "", "-MeCN", "a" * 41])
+def test_solvent_refused(settings, solvent):
+    assert resolve({"singlepoint": {"solvent": solvent}}, settings)[0] is None
+
+
+@pytest.mark.parametrize("solvent", ["MeCN", "1,2-dichloroethane", "n-hexane", "carbon tetrachloride"])
+def test_solvent_accepted(settings, solvent):
+    assert resolve({"optimization": {"solvent": solvent}}, settings)[1] is None
+
+
+def test_block_message_reads_once():
+    assert owned_keyword("!B3LYP\n%pal nprocs 4 end\n") == "%pal in the header: set the cores under Advanced instead"
+
+
+def test_resources_only_ignores_method_keywords():
+    assert owned_keyword("!B3LYP Opt DEFGRID3\n", resources_only=True) is None
+    assert "cores" in owned_keyword("!GOAT XTB PAL8\n", resources_only=True)
+    assert "memory" in owned_keyword("!GOAT XTB\n%maxcore 500\n", resources_only=True)

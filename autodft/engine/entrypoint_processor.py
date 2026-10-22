@@ -27,6 +27,7 @@ from autodft.models.molecule import Molecule
 from autodft.models.state import MoleculeState
 from autodft.models.task import ComputationTask
 from autodft.models.enums import TaskType, TaskStatus
+from autodft.qm.orca import advanced
 
 logger = logging.getLogger(__name__)
 
@@ -140,12 +141,20 @@ def _process_entrypoint_body(
             f"resubmit without request_T1 to get S0 / ox / red."
         )
 
+    # The API and CLI decided the mode: an entrypoint without ``advanced`` is legacy.
+    headers = (entrypoint.header_confsearch, entrypoint.header_optimization, entrypoint.header_singlepoint)
+    if "advanced" in metadata:
+        resolved, reason = advanced.for_submission(metadata["advanced"], headers, settings)
+        if reason:
+            raise ValueError(f"{reason} Nothing was submitted for this molecule.")
+        metadata["advanced"] = resolved
+
     # Opt-in categories. Validated here as well as at the API, because the
     # CLI and direct inserts skip the API.
     reason = categories.rejection(
         {"multiplicity": multiplicity,
          "max_atomic_number": validate_smiles(smiles).get("max_atomic_number")}, metadata,
-        entrypoint.header_optimization, entrypoint.header_singlepoint,
+        entrypoint.header_optimization, entrypoint.header_singlepoint, metadata.get("advanced"),
     )
     if reason:
         raise ValueError(f"{reason} Nothing was submitted for this molecule.")
@@ -655,6 +664,24 @@ def _canonicalize_smiles(smiles: str) -> str:
     return smiles
 
 
+def legacy_submission(session: Session, project: str, headers: tuple) -> bool:
+    """Whether *project* has S0 states without ``advanced`` under exactly these header texts."""
+    ids = [session.exec(select(ComputationHeader.id).where(ComputationHeader.header_text == text)).first()
+           if text else None for text in headers]
+    if any(text and hid is None for text, hid in zip(headers, ids)):
+        return False
+    rows = session.exec(
+        select(MoleculeState.metadata_json).join(Molecule, Molecule.id == MoleculeState.molecule_id).where(
+            Molecule.project_name == project,
+            MoleculeState.description == "S0",
+            MoleculeState.confsearch_header_id == ids[0],
+            MoleculeState.optimization_header_id == ids[1],
+            MoleculeState.singlepoint_header_id == ids[2],
+        )
+    ).all()
+    return any("advanced" not in json.loads(m or "{}") for m in rows)
+
+
 def _get_or_create_header(
     session: Session, header_text: Optional[str],
 ) -> Optional[ComputationHeader]:
@@ -759,6 +786,9 @@ def _create_state(
     # only S0's -- harmless for S1, which has none. {} when neither is
     # requested, so this never contradicts the snapshot above.
     state_metadata.update(categories.every_state_snapshot(metadata))
+
+    if "advanced" in metadata:
+        state_metadata["advanced"] = metadata["advanced"]
 
     if extra_metadata:
         state_metadata.update(extra_metadata)

@@ -191,11 +191,12 @@ def rejection(
     metadata: dict,
     header_optimization: Optional[str],
     header_singlepoint: Optional[str],
+    advanced: Optional[dict] = None,
 ) -> Optional[str]:
     """Why the requested categories cannot run for this molecule, or None.
 
     *check* carries the reference's ``multiplicity``; the closed-shell rules of
-    later categories read only that.
+    later categories read only that. With *advanced* the optimisations always run Freq.
     """
     if metadata.get(ESD_HT) and not metadata.get(ESD):
         return "request_esd_ht only applies together with request_esd."
@@ -225,7 +226,7 @@ def rejection(
                 "ESD needs the energy singlepoint stage; its energies pick the "
                 "lowest conformer and set the rates."
             )
-        if not _FREQ_RE.search(header_optimization or ""):
+        if advanced is None and not _FREQ_RE.search(header_optimization or ""):
             return (
                 "ESD needs Freq in the optimisation header; the rates are built "
                 "from the S0, S1 and T1 Hessians."
@@ -312,7 +313,7 @@ def rejection(
                 f"(Z = {check.get('max_atomic_number')}). Use the singlepoint method instead."
             )
 
-    if IR in wanted and not _FREQ_RE.search(header_optimization or ""):
+    if IR in wanted and advanced is None and not _FREQ_RE.search(header_optimization or ""):
         return (
             "IR needs Freq in the optimisation header; its spectrum comes from "
             "the frequency calculation."

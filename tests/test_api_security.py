@@ -269,7 +269,7 @@ class TestBatchSubmission:
 
         _submit(
             smiles_list=["CCO", "c1ccccc1"], project="p", priority=3,
-            skip_confsearch=True, header_optimization="!B3LYP OPT\n",
+            skip_confsearch=True, header_optimization="!B3LYP def2-SVP\n",
         )
         with get_session(db) as session:
             rows = session.exec(select(CalculationEntrypoint)).all()
@@ -278,7 +278,7 @@ class TestBatchSubmission:
         for row in rows:
             assert row.priority == 3
             assert row.header_confsearch is None  # skip_confsearch
-            assert row.header_optimization == "!B3LYP OPT\n"
+            assert row.header_optimization == "!B3LYP def2-SVP\n"
             assert json.loads(row.request_metadata)["request_confsearch"] is False
 
     def test_an_empty_list_is_a_400(self, db, _submit):

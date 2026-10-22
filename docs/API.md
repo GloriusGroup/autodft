@@ -162,7 +162,9 @@ Queue one calculation entrypoint. The server validates the SMILES first
 (same validator as above) and returns `400` if invalid. Resolves any
 `header_*_id` against the `computation_headers` table; if neither
 `header_*_id` nor `header_*` (raw text) is provided, falls back to the
-package defaults in `autodft/qm/orca/defaults.py`.
+package defaults in `autodft/qm/orca/defaults.py`: method only
+(`!wB97X-D3 def2-SVP`, `!wB97X-D3 def2-TZVP`, GOAT g-xTB without `%pal` /
+`%maxcore`), everything else comes from `advanced`.
 
 **Body — every option:**
 
@@ -187,20 +189,21 @@ package defaults in `autodft/qm/orca/defaults.py`.
 | `header_confsearch`                         | str?   | `null`        | Raw ORCA header block (multi-line). Used if no header id is set.                            |
 | `header_optimization`                       | str?   | `null`        | Raw ORCA header block. Used if no header id is set.                                         |
 | `header_singlepoint`                        | str?   | `null`        | Raw ORCA header block. **Must not contain `Opt` or `Freq`.**                                |
+| `advanced` | object? | `null` | Advanced settings per stage: `{"confsearch": {...}, "optimization": {...}, "singlepoint": {...}}`. Keys: confsearch `nprocs`, `maxcore`; optimization `grid`, `scf_convergence`, `geom_convergence`, `ri`, `aux_basis`, `solvation`, `solvent`, `nprocs`, `maxcore`; singlepoint the same without `geom_convergence`. Choices: `grid` DEFGRID1/2/3; `scf_convergence` Normal/Strong/Tight/VeryTight/Extreme; `geom_convergence` Loose/Normal/Tight/VeryTight; `ri` RIJCOSX/RI-J/RIJK/NoRI; `aux_basis` def2/J, def2/JK, AutoAux; `solvation` CPCM/SMD; each also `omit` (ORCA default); `solvent` an ORCA name (letters, digits, space `,` `-`; max 40); `nprocs` 1–64; `maxcore` 250–16000 MB; `nprocs` × `maxcore` ≤ 400 000 MB. Missing keys take the config defaults (`[advanced.*]`, `GET /api/advanced-defaults`); unknown stages or keys, a wrong value or a non-object answer 400. Rendered into each job: a second `!` line (RI, aux basis, grid, solvation; `Opt Freq` on optimisations) and `%maxcore`, `%pal`, `%scf`, `%geom` blocks. The resolved dict is stored on every state. With `advanced` (or without it, see below) the headers must be method only: a header with `DEFGRIDn`, `*SCF`, RI or aux-basis keywords, `CPCM`/`SMD`, `PALn`, any `Opt`, `Freq`, `KeepDens`, `%pal`, `%maxcore`, `%geom`, `%cpcm` or `%scf Convergence` answers 400 naming the setting (the confsearch header only for `PALn`, `%pal`, `%maxcore`). Without `advanced`, a submission to a project whose S0 states ran on exactly these headers without Advanced settings stays legacy (headers used as they are, nothing stored); every other one gets the defaults. CLI: `--opt-grid`, `--sp-grid`, `--opt-scf-convergence`, `--sp-scf-convergence`, `--opt-geom-convergence`, `--opt-ri`, `--sp-ri`, `--opt-aux-basis`, `--sp-aux-basis`, `--opt-solvation`, `--sp-solvation`, `--opt-solvent`, `--sp-solvent`, `--cs-nprocs`, `--opt-nprocs`, `--sp-nprocs`, `--cs-maxcore`, `--opt-maxcore`, `--sp-maxcore`. |
 | `header_confsearch_id`                      | int?   | `null`        | ID of a stored `ComputationHeader`. Wins over the raw text version.                         |
 | `header_optimization_id`                    | int?   | `null`        | Same.                                                                                       |
 | `header_singlepoint_id`                     | int?   | `null`        | Same.                                                                                       |
 | `request_spec_uvvis`                        | bool   | `false`       | UV/Vis: a TDDFT singlepoint (`%tddft nroots <uvvis_nroots> tda <uvvis_tda>`, appended to the singlepoint header) on every optimised S0 conformer. The singlepoint header must not already contain `%tddft`, `%cis`, `%eprnmr`, `%esd`, the `NMR` or `ESD` keyword, a frequency keyword (`Freq`/`NumFreq`/`AnFreq`) or an optimisation keyword (`Opt`/`OptTS`/`OptH`/…) — the same rule applies to NMR and ESD. |
 | `uvvis_nroots`                              | int    | `20`          | UV/Vis excited states (1–100). Stored only when UV/Vis is requested.                        |
 | `uvvis_tda`                                 | bool   | `false`       | Tamm–Dancoff approximation for the UV/Vis TDDFT. Stored only when UV/Vis is requested.      |
-| `request_spec_ir`                           | bool   | `false`       | IR: read from the S0 optimisation's frequency calculation — no extra job. Needs `Freq` in the optimisation header. |
+| `request_spec_ir`                           | bool   | `false`       | IR: read from the S0 optimisation's frequency calculation — no extra job. A legacy submission needs `Freq` in the optimisation header. |
 | `request_spec_nmr`                          | bool   | `false`       | NMR: a singlepoint on every optimised S0 conformer in the `nmr_method`. Shifts are referenced to chloroform or TMS (`nmr_reference`, ¹H/¹³C) and CFCl₃ (¹⁹F), which the pipeline computes itself — once per optimisation/singlepoint header pair and `nmr_method` — in the protected `admin/reference_systems` project. Closed-shell molecules only. |
 | `nmr_nuclei`                                | list   | `["H","C","F"]` | Nuclei to report; stored only with NMR.                                                  |
 | `nmr_method`                                | string | `"singlepoint"` | `"singlepoint"`: the singlepoint header with `NMR` added to its `!` line. `"dh"`: `!revDSD-PBEP86-D4/2021 PCSSEG-3 AUTOAUX NMR NOFROZENCORE TightSCF` plus the singlepoint header's solvation keywords and `%cpcm` only, on its own `nmr_dh_nprocs` × `nmr_dh_maxcore`; refused for elements past Kr (no `pcSseg-3`). Stored only with NMR. |
 | `nmr_reference`                             | string | `"chcl3"`       | ¹H/¹³C reference compound: `"chcl3"` (chloroform; its experimental shift in the calculation's solvent is added, Fulmer et al. 2010, e.g. 7.58 / 79.17 ppm in MeCN) or `"tms"`. ¹⁹F always CFCl₃. Stored only with NMR; molecules from before the option read as `"chcl3"`; a different value is no conflict with an existing molecule. |
 | `nmr_dh_nprocs`                             | int    | `12`            | Cores of a `dh` NMR job (1–64). Stored only with `nmr_method` `"dh"`; a different value is no conflict with an existing molecule. |
 | `nmr_dh_maxcore`                            | int    | `6000`          | MB per core of a `dh` NMR job (1000–16000; cores × (MB + 50) at most 400 GB). The MP2 response needs about 5.8 GB per core already at 30 atoms, whatever the core count; a retry raises it by what ORCA reports missing. Stored only with `nmr_method` `"dh"`. |
-| `request_esd` | bool | `false` | Excited-state dynamics: S1 and T1 optimised from the lowest S0 conformer, SOC TDDFT, ORCA ESD rates (ISC, RISC, fluorescence, T1→S0 ISC, phosphorescence; IC with `esd_ic`). Needs a closed-shell singlet, `Freq` in the optimisation header, the energy singlepoint, and a functional whose TDDFT gradients ORCA supports (native B88 functionals such as B3LYP need `LibXC(...)`). Molecules with an element past Kr (ECP in def2, e.g. I) need `ZORA`/`DKH`/`X2C` in the singlepoint header. |
+| `request_esd` | bool | `false` | Excited-state dynamics: S1 and T1 optimised from the lowest S0 conformer, SOC TDDFT, ORCA ESD rates (ISC, RISC, fluorescence, T1→S0 ISC, phosphorescence; IC with `esd_ic`). Needs a closed-shell singlet, `Freq` in the optimisation header (legacy submissions only), the energy singlepoint, and a functional whose TDDFT gradients ORCA supports (native B88 functionals such as B3LYP need `LibXC(...)`). Molecules with an element past Kr (ECP in def2, e.g. I) need `ZORA`/`DKH`/`X2C` in the singlepoint header. |
 | `request_esd_ht` | bool | `false` | Herzberg–Teller where it matters: fluorescence, phosphorescence, and ISC channels whose SOCME is below 5 cm⁻¹ (RISC more than 10 kT uphill stays FC); only with `request_esd`. |
 | `esd_ht_scope` | string | `"all"` | With `request_esd_ht`: `"all"` rates, or `"s1"` — fluorescence and S1→Tn ISC only (phosphorescence, T1→S0 ISC and RISC stay FC). Stored only with ESD. |
 | `esd_ht_method` | string | `"sp"` | With `request_esd_ht`: HT jobs at the singlepoint header's level (`"sp"`) or the optimisation header's (`"opt"`, e.g. def2-SVP; several times cheaper). Energies and FC couplings stay at the singlepoint level. Stored only with ESD. |
@@ -298,7 +301,15 @@ caller can log what was refused and keep the rest:
 }
 ```
 
-`400` is returned only when `smiles_list` is empty.
+`400` is returned for the whole batch only when `smiles_list` is empty, or
+`advanced` or a header is refused (as for `POST /api/submit`).
+
+### `GET /api/advanced-defaults`
+
+The config defaults and choices of the Advanced settings, for the submit
+form: `{"advanced": {confsearch, optimization, singlepoint}, "choices":
+{grid, scf_convergence, geom_convergence, ri, aux_basis, solvation},
+"imag_freq_tolerance": 0.0}`. Any signed-in account.
 
 ```bash
 curl -X POST http://reaction.uni-muenster.de:60001/api/submit-batch \
@@ -701,7 +712,8 @@ Adds calculations to the project's molecules — all unarchived ones, or
 those in `smiles_list` — without recomputing anything. The body is a
 [`submit-batch`](#post-apisubmit-batch) body: tick the categories and states
 to have (present ones may stay ticked); headers in the body are ignored and
-the project's own are used. Each molecule gains only what it lacks:
+the project's own are used, and a body with `advanced` answers 400: a legacy
+project stays legacy. Each molecule gains only what it lacks:
 T1/ox/red states (with their conformer search), UV/Vis and NMR singlepoints
 for its finished S0 conformers (running ones get them when they finish),
 IR, and ESD (S1 plus a triplet seeded from the lowest S0 conformer —
