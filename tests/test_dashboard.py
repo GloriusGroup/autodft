@@ -275,9 +275,9 @@ def test_a_project_can_be_extended_from_its_page(client):
         assert needle in html, needle
 
 
-def test_the_submit_form_offers_strict_convergence(client):
+def test_the_submit_form_offers_the_imaginary_frequency_tolerance(client):
     c, headers = client
     html = c.get("/", headers=headers).text
-    for needle in ('id="submitOptions"', 'id="strictConvergence" checked',
-                   "strict_convergence: document.getElementById('strictConvergence').checked"):
+    for needle in ('id="submitOptions"', 'id="imagFreqTolerance"',
+                   "imag_freq_tolerance: parseFloat(document.getElementById('imagFreqTolerance').value) || 0"):
         assert needle in html, needle

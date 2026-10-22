@@ -25,22 +25,11 @@ logger = logging.getLogger(__name__)
 # routinely produce -20 to -50 cm^-1 modes that no amount of re-optimisation
 # removes; failing on them burns the whole retry budget for nothing.
 IMAGINARY_FREQ_THRESHOLD = -50.0
-# Strict convergence (default) on a ground-state optimisation.
-IMAGINARY_FREQ_THRESHOLD_STRICT = -10.0
-# Without strict convergence: S1's Hessian is numerical, floppy aryl/tBu/CF3 rotors
-# land at -50 to -65 cm^-1, and a retry repeats the day-long Hessian. ESD reads
-# them as real (flagged).
+# A legacy ESD S1 state submitted without strict convergence: its Hessian is
+# numerical and floppy aryl/tBu/CF3 rotors land at -50 to -65 cm^-1.
 IMAGINARY_FREQ_THRESHOLD_S1 = -100.0
-# Check types of an ESD S1 optimisation, with and without strict convergence.
-EXCITED_OPTIMIZATION = ("optimization_excited", "optimization_excited_relaxed")
-
-
-def _imaginary_threshold(task_type: str) -> float:
-    if task_type == "optimization_excited_relaxed":
-        return IMAGINARY_FREQ_THRESHOLD_S1
-    if task_type == "optimization_strict":
-        return IMAGINARY_FREQ_THRESHOLD_STRICT
-    return IMAGINARY_FREQ_THRESHOLD
+# The lowest imag_freq_tolerance a submission may set (cm^-1).
+IMAG_FREQ_TOLERANCE_MIN = -300.0
 
 
 # Written into output.out by submit.cmd when its watchdog kills a hung ORCA.
@@ -107,13 +96,16 @@ class OrcaParser(QMEngine):
     # QMEngine interface
     # ------------------------------------------------------------------
 
-    def check_output(self, job_path: Path, task_type: str) -> QMResult:
+    def check_output(
+        self, job_path: Path, task_type: str, imag_freq_tolerance: Optional[float] = None,
+    ) -> QMResult:
         """Run all checks on an ORCA output and return a :class:`QMResult`.
 
         Args:
             job_path: Directory containing ``output.out``.
             task_type: E.g. ``"optimization"``, ``"singlepoint"``,
                        ``"confsearch"``.
+            imag_freq_tolerance: Fail on any mode below it (cm^-1); None: -50.
 
         Returns:
             Populated :class:`QMResult`.
@@ -140,7 +132,7 @@ class OrcaParser(QMEngine):
             "SCF Convergence": self._check_scf_convergence(content),
             "Imaginary Frequencies": self._check_for_imaginary_frequencies(
                 content,
-                _imaginary_threshold(task_type),
+                IMAGINARY_FREQ_THRESHOLD if imag_freq_tolerance is None else imag_freq_tolerance,
             ),
             # ORCA prints its normal-termination banner even after an
             # internal module has given up, so the banner alone is not
@@ -165,7 +157,7 @@ class OrcaParser(QMEngine):
 
             checks["Shieldings"] = bool(parse_shieldings(content))
         if task_type == "singlepoint_soc" or task_type.startswith("esd_") \
-                or task_type in EXCITED_OPTIMIZATION:
+                or task_type == "optimization_excited":
             from autodft.qm.orca import esd_parser
 
             if task_type == "singlepoint_soc":
@@ -183,7 +175,7 @@ class OrcaParser(QMEngine):
                 checks["ESD Rate"] = bool(found) and all(math.isfinite(r.rate) for r in found) and (
                     main_jobs is None or len(found) == main_jobs
                 )
-            if task_type in EXCITED_OPTIMIZATION:
+            if task_type == "optimization_excited":
                 # Below 0.1 eV the followed root has collapsed onto S0.
                 gap = esd_parser.followed_root_energy(content)
                 checks["Excited Root"] = gap is not None and gap >= 0.1 * esd_parser.EV_TO_EH

@@ -24,6 +24,7 @@ from autodft.models.result import JobResult
 
 FIXTURES = Path(__file__).parent / "fixtures" / "orca"
 PROJECT = "nho/p"
+TOLERANCE = {"imag_freq_tolerance": -10.0}
 
 
 @pytest.fixture()
@@ -37,11 +38,12 @@ def db(tmp_path):
 
 
 def _state(session, metadata: Optional[dict] = None, description="S0") -> MoleculeState:
+    """A state at tolerance -10 by default; ``{}`` is a legacy state without one."""
     mol = Molecule(smiles="c1ccccc1", project_name=PROJECT)
     session.add(mol)
     session.commit()
     state = MoleculeState(molecule_id=mol.id, description=description, multiplicity=1, charge=0,
-                          metadata_json=json.dumps(metadata or {}))
+                          metadata_json=json.dumps(TOLERANCE if metadata is None else metadata))
     session.add(state)
     session.commit()
     return state
@@ -87,13 +89,14 @@ def _reported(all_conformers=False):
 
 class TestExclusion:
     @pytest.mark.parametrize("metadata, imaginary, note", [
-        ({}, [-15.0], "imaginary mode -15.0 cm-1"),
-        ({}, [-9.5], None),
-        ({"strict_convergence": True}, [-12.0, -30.04], "imaginary mode -30.0 cm-1"),
-        ({"strict_convergence": False}, [-15.0], None),
+        (TOLERANCE, [-15.0], "imaginary mode -15.0 cm-1"),
+        (TOLERANCE, [-9.5], None),
+        (TOLERANCE, [-12.0, -30.04], "imaginary mode -30.0 cm-1"),
+        ({}, [-15.0], None),
         ({"strict_convergence": False}, [-60.0], "imaginary mode -60.0 cm-1"),
-        ({"esd_role": "S1"}, [-80.0], None),
-        ({}, [], None),
+        ({"esd_role": "S1"}, [-80.0], "imaginary mode -80.0 cm-1"),
+        ({"esd_role": "S1", "strict_convergence": False}, [-80.0], None),
+        (TOLERANCE, [], None),
     ])
     def test_cutoffs(self, db, metadata, imaginary, note):
         with get_session() as session:
@@ -124,9 +127,9 @@ def test_only_conformer_excluded_drops_state(db):
     assert _reported() == []
 
 
-def test_non_strict_keeps_minus_15(db):
+def test_a_legacy_state_keeps_minus_15(db):
     with get_session() as session:
-        state = _state(session, {"strict_convergence": False})
+        state = _state(session, {})
         opt = _conformer(session, db, state, "a", [-15.0], -2.0).id
     assert [(r.opt_task_id, r.note) for r in _reported()] == [(opt, None)]
 
@@ -207,7 +210,7 @@ def test_state_analysis_without_exclusions_has_no_excluded_key(db):
 def test_photophysics_skips_excluded(db):
     uvvis = (FIXTURES / "uvvis_absorption.out").read_text()
     with get_session() as session:
-        state = _state(session, {categories.UVVIS: True})
+        state = _state(session, {categories.UVVIS: True, **TOLERANCE})
         ids = []
         for name, imaginary in (("low", [-15.0]), ("high", [])):
             opt = _conformer(session, db, state, name, imaginary, -1.0)
@@ -224,8 +227,8 @@ def test_photophysics_skips_excluded(db):
     assert (summary["excluded"], summary["excluded_conformers"]) == (1, excluded)
 
 
-@pytest.mark.parametrize("metadata", [{}, {"esd_role": "T1"}])
-def test_t1_state_gets_the_strict_cutoff(db, metadata):
+@pytest.mark.parametrize("metadata", [TOLERANCE, {"esd_role": "T1", **TOLERANCE}])
+def test_t1_state_gets_its_tolerance(db, metadata):
     with get_session() as session:
         state = _state(session, metadata, description="T1")
         opt = _conformer(session, db, state, "a", [-15.0], -1.0)

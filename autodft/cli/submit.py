@@ -18,6 +18,7 @@ from autodft.qm.orca.defaults import (
     DEFAULT_HEADER_OPTIMIZATION,
     DEFAULT_HEADER_SINGLEPOINT,
 )
+from autodft.qm.orca.parser import IMAG_FREQ_TOLERANCE_MIN
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -194,7 +195,7 @@ def _build_request_metadata(
     max_conformers_ox: int,
     max_conformers_red: int,
     category_flags: Optional[dict] = None,
-    strict_convergence: bool = True,
+    imag_freq_tolerance: float = 0.0,
 ) -> str:
     """Build the request_metadata JSON string."""
     metadata = {
@@ -213,7 +214,7 @@ def _build_request_metadata(
         "max_conformers_T1": max_conformers_t1,
         "max_conformers_ox": max_conformers_ox,
         "max_conformers_red": max_conformers_red,
-        "strict_convergence": strict_convergence,
+        "imag_freq_tolerance": imag_freq_tolerance,
     }
 
     from autodft import categories
@@ -280,9 +281,9 @@ def submit(
     ),
     esd_ht_scope: str = typer.Option("all", "--esd-ht-scope", help="With --esd-ht: all (every rate) or s1 (fluorescence and S1->Tn ISC only)"),
     esd_ht_method: str = typer.Option("sp", "--esd-ht-method", help="With --esd-ht: sp (singlepoint header level) or opt (optimisation header level, cheaper)"),
-    strict_convergence: bool = typer.Option(
-        True, "--strict-convergence/--no-strict-convergence",
-        help="Retry optimisations with imaginary modes below -50 cm-1; off, ESD's S1 accepts down to -100 cm-1 (flagged)",
+    imag_freq_tolerance: float = typer.Option(
+        0.0, "--imag-freq-tolerance", min=IMAG_FREQ_TOLERANCE_MIN, max=0.0,
+        help="Fail optimisations with an imaginary mode below this (cm-1, -300 to 0); e.g. -10 accepts noise modes",
     ),
     nmr_method: str = typer.Option(
         "singlepoint", "--nmr-method",
@@ -340,7 +341,7 @@ def submit(
         max_conformers_ox=max_conformers_ox,
         max_conformers_red=max_conformers_red,
         category_flags=flags,
-        strict_convergence=strict_convergence,
+        imag_freq_tolerance=imag_freq_tolerance,
     )
 
     entry = CalculationEntrypoint(
@@ -420,9 +421,9 @@ def submit_batch(
     ),
     esd_ht_scope: str = typer.Option("all", "--esd-ht-scope", help="With --esd-ht: all (every rate) or s1 (fluorescence and S1->Tn ISC only)"),
     esd_ht_method: str = typer.Option("sp", "--esd-ht-method", help="With --esd-ht: sp (singlepoint header level) or opt (optimisation header level, cheaper)"),
-    strict_convergence: bool = typer.Option(
-        True, "--strict-convergence/--no-strict-convergence",
-        help="Retry optimisations with imaginary modes below -50 cm-1; off, ESD's S1 accepts down to -100 cm-1 (flagged)",
+    imag_freq_tolerance: float = typer.Option(
+        0.0, "--imag-freq-tolerance", min=IMAG_FREQ_TOLERANCE_MIN, max=0.0,
+        help="Fail optimisations with an imaginary mode below this (cm-1, -300 to 0); e.g. -10 accepts noise modes",
     ),
     nmr_method: str = typer.Option(
         "singlepoint", "--nmr-method",
@@ -476,7 +477,7 @@ def submit_batch(
         max_conformers_ox=max_conformers_ox,
         max_conformers_red=max_conformers_red,
         category_flags=flags,
-        strict_convergence=strict_convergence,
+        imag_freq_tolerance=imag_freq_tolerance,
     )
 
     h_cs = _read_header_file(header_confsearch) if header_confsearch else (None if skip_confsearch else DEFAULT_HEADER_CONFSEARCH)

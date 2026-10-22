@@ -26,7 +26,6 @@ from autodft.models import (
     ComputationHeader, ComputationTask, Molecule, MoleculeGeometry, MoleculeState, TaskStatus, TaskType,
 )
 from autodft.qm.orca import blocks, esd_inputs
-from autodft.qm.orca.parser import IMAGINARY_FREQ_THRESHOLD_STRICT
 
 logger = logging.getLogger(__name__)
 
@@ -152,11 +151,9 @@ def _no_seed(s0: MoleculeState, conformers: list, intact: list) -> str:
         return "Every S0 conformer's optimised geometry lost bonds of the molecule."
     finished = [c for c in intact if c.e_singlepoint is not None]
     if finished and all(results.excludes(c.note) for c in finished):
-        cutoff = results.imaginary_cutoff(s0)
-        kind = "strict" if cutoff == IMAGINARY_FREQ_THRESHOLD_STRICT else "relaxed"
         notes = "; ".join(f"conformer {c.conformer_index}: {c.note}" for c in finished)
-        return (f"Every finished S0 conformer has an imaginary mode below the {kind} cutoff "
-                f"of {cutoff:.0f} cm-1 ({notes}).")
+        return (f"Every finished S0 conformer has an imaginary mode below the imaginary-frequency "
+                f"tolerance of {results.imaginary_cutoff(s0):g} cm-1 ({notes}).")
     return "No S0 conformer finished both its optimisation and its energy singlepoint."
 
 

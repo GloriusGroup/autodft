@@ -66,7 +66,7 @@ def test_a_finished_goat_job_stores_them(session, sample_state, sample_header, t
     session.commit()
 
     class Engine:
-        def check_output(self, job_path, task_type):
+        def check_output(self, job_path, task_type, imag_freq_tolerance=None):
             return QMResult(success=True, conformers=["x", "y"], conformer_energies=[0.0, 0.5],
                             conformer_degeneracies=[2, 1])
 

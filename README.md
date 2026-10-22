@@ -420,6 +420,10 @@ Every submission path (CLI, REST, Python) ends up writing the same
   open-shell verticals (~350–450 GB of `.gbw` per 1,000 molecules). Needs
   `[orca].nbo_exe` and a singlepoint header without Hirshfeld, NBO,
   `%elprop`, `%nbo` or `STABPerform`; submission only, not Extend.
+* `imag_freq_tolerance` (CLI `--imag-freq-tolerance`, default **0**,
+  −300 to 0) — every optimisation, ESD's S1 included, fails on any
+  imaginary mode below it (cm⁻¹) and is retried; exports leave such
+  conformers out. `-10` accepts noise modes down to −10 cm⁻¹.
 * `header_confsearch_id / _optimization_id / _singlepoint_id` — pick a
   stored header by ID. Or pass raw `header_*` text. Defaults from
   `autodft/qm/orca/defaults.py` (= seeded DB rows) apply when neither

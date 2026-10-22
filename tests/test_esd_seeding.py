@@ -194,10 +194,14 @@ def test_an_excluded_s0_conformer_is_never_s0_star(session, esd, monkeypatch):
 
 
 def test_every_s0_conformer_excluded_says_so(session, esd, monkeypatch):
+    s0 = esd["s0"]
+    s0.metadata_json = json.dumps({categories.ESD: True, "imag_freq_tolerance": -10.0})
+    session.add(s0)
+    session.commit()
     _with_notes(monkeypatch, esd, ["imaginary mode -15.0 cm-1", "imaginary mode -22.0 cm-1"])
     photophysics.advance_photophysics(session, Settings())
     assert json.loads(esd["s1"].metadata_json)["esd_seed"] == {"error": (
-        "Every finished S0 conformer has an imaginary mode below the strict cutoff of -10 cm-1 "
+        "Every finished S0 conformer has an imaginary mode below the imaginary-frequency tolerance of -10 cm-1 "
         "(conformer 1: imaginary mode -15.0 cm-1; conformer 2: imaginary mode -22.0 cm-1)."
     )}
     assert _tasks(session, esd["s1"]) == [] and _tasks(session, esd["t1"]) == []
@@ -213,7 +217,7 @@ def test_an_excluded_conformer_beside_an_unfinished_one_names_the_exclusion(sess
                 energies={opts[0].id: (-10.0, -9.9), opts[1].id: (None, None)})
     photophysics.advance_photophysics(session, Settings())
     assert json.loads(esd["s1"].metadata_json)["esd_seed"] == {"error": (
-        "Every finished S0 conformer has an imaginary mode below the relaxed cutoff of -50 cm-1 "
+        "Every finished S0 conformer has an imaginary mode below the imaginary-frequency tolerance of -50 cm-1 "
         "(conformer 1: imaginary mode -60.0 cm-1)."
     )}
 

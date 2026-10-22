@@ -740,9 +740,8 @@ def _create_state(
     if description == "S0":
         state_metadata.update(categories.snapshot(metadata))
 
-    # Stored only when off, so a default submission's metadata stays as it was.
-    if metadata.get("strict_convergence") is False:
-        state_metadata["strict_convergence"] = False
+    # Every optimisation fails on a mode below it (cm-1); see results.imaginary_cutoff.
+    state_metadata["imag_freq_tolerance"] = float(metadata.get("imag_freq_tolerance", 0.0))
 
     # Densities, NBO and Reactivity apply to every state's own energy singlepoint, not
     # only S0's -- harmless for S1, which has none. {} when neither is

@@ -1346,9 +1346,10 @@
                     <details id="submitOptions" style="margin: 4px 0 12px;">
                         <summary style="cursor: pointer; font-size: 0.9rem; color: var(--text-secondary);">Options</summary>
                         <div class="form-row" style="margin-top: 10px;">
-                            <div class="checkbox-group" title="On: every optimisation with an imaginary mode below -50 cm⁻¹ is retried. Off: ESD's S1 optimisation (numerical Hessian, where floppy aryl/tBu/CF₃ rotors land at -50 to -65 cm⁻¹ and a retry repeats a day-long Hessian) accepts modes down to -100 cm⁻¹ and flags them; ESD reads them as real. Ground states keep -50 cm⁻¹ either way.">
-                                <input type="checkbox" id="strictConvergence" checked>
-                                <label for="strictConvergence">Strict convergence (retry imaginary modes below −50 cm⁻¹; off: S1 accepts down to −100 cm⁻¹)</label>
+                            <div class="form-group" style="min-width: 220px;">
+                                <label for="imagFreqTolerance">Imaginary-frequency tolerance (cm⁻¹)</label>
+                                <input type="number" id="imagFreqTolerance" value="0" max="0" min="-300" step="1" style="width: 100px;">
+                                <div class="cat-detail-note">0 = no imaginary mode; e.g. −10 accepts noise modes down to −10 cm⁻¹</div>
                             </div>
                         </div>
                     </details>
@@ -3320,7 +3321,7 @@
                 request_densities:  document.getElementById('requestDensities').checked,
                 request_singlepoint_nbo: document.getElementById('requestNbo').checked,
                 request_sp_reactivity: document.getElementById('requestReactivity').checked,
-                strict_convergence: document.getElementById('strictConvergence').checked,
+                imag_freq_tolerance: parseFloat(document.getElementById('imagFreqTolerance').value) || 0,
                 max_conformers_S0:  intOrDefault('maxConfS0',  1),
                 max_conformers_T1:  intOrDefault('maxConfT1',  1),
                 max_conformers_ox:  intOrDefault('maxConfOx',  1),
