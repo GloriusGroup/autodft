@@ -67,7 +67,8 @@ def _check(stage: str, key: str, value) -> Optional[str]:
             return f"{field}: {value!r} is not one of {', '.join(CHOICES[key])}"
     elif key == "solvent":
         if not (isinstance(value, str) and _SOLVENT_RE.fullmatch(value) and len(value) <= _SOLVENT_MAX):
-            return f"{field}: {value!r} is not a solvent name (letters, digits, ',' or '-', no spaces; up to {_SOLVENT_MAX})"
+            return (f"{field}: {value!r} is not a solvent name "
+                    f"(letters, digits, ',' or '-', no spaces; up to {_SOLVENT_MAX})")
     else:
         low, high = _RANGES[key]
         if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:

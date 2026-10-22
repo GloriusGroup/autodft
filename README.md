@@ -193,37 +193,39 @@ subdirectories, the SQLite database, all tables, **and seeds the six
 standard ORCA headers** into the `computation_headers` table on the
 first run:
 
-| # | kind         | description                                        |
-| - | ------------ | --------------------------------------------------- |
-| 1 | confsearch   | GOAT GFN2-xTB conformer ensemble                     |
-| 2 | confsearch   | GOAT g-xTB conformer ensemble                        |
-| 3 | optimization | wB97X-D3 / def2-TZVP TightOpt + Freq + CPCM(MeCN)    |
-| 4 | singlepoint  | wB97X-D3 / def2-QZVPD KeepDens + CPCM(MeCN)          |
-| 5 | optimization | wB97X-D3 / def2-SVP Opt + Freq + CPCM(MeCN)          |
-| 6 | singlepoint  | wB97X-D3 / def2-TZVP KeepDens + CPCM(MeCN)           |
+| # | kind         | description                      |
+| - | ------------ | -------------------------------- |
+| 1 | confsearch   | GOAT GFN2-xTB conformer ensemble |
+| 2 | confsearch   | GOAT g-xTB conformer ensemble    |
+| 3 | singlepoint  | wB97X-D3 / def2-QZVPD            |
+| 4 | optimization | wB97X-D3 / def2-SVP              |
+| 5 | optimization | wB97X-D3 / def2-TZVP             |
+| 6 | singlepoint  | wB97X-D3 / def2-TZVP             |
 
-Headers 2, 5 and 6 are the full headers of before Advanced settings
-(`LEGACY_*` in `autodft/qm/orca/defaults.py`); a submission that sets
-neither `header_*` nor `header_*_id` now gets the method-only defaults
-(`!wB97X-D3 def2-SVP`, `!wB97X-D3 def2-TZVP`, GOAT g-xTB without `%pal` /
-`%maxcore`) plus the `advanced` settings below, whose defaults set the
-grid, convergence, RI, solvation, cores and memory of 2, 5 and 6; 3 and 4
-are the same method on the larger def2-TZVP/def2-QZVPD basis pair,
-kept as a seeded alternative. All four DFT headers run in CPCM(MeCN).
-The defaults request 12 cores × 2000 MB (optimisation) and 8 cores × 1500 MB
-(singlepoint), below the CPU nodes' ~2600 MB/core. Measured on a 45-atom
-acridine: opt+Freq is 8 % faster at 2000 than at 1250 MB, UV/Vis and SOC
-TDDFT are unchanged between 1000 and 2500 MB, and singlepoints peak at
-2–8 GB. The double-hybrid NMR option inherits the singlepoint `%maxcore`;
-give it a larger singlepoint header if it runs short.
+All six are method only: functional and basis (GOAT and its xTB level
+for the conformer searches), without `%pal` / `%maxcore`. Grid,
+convergence, RI, solvation, cores and memory are the `advanced`
+settings below, whose defaults reproduce the full headers of before
+Advanced settings (`LEGACY_*` in `autodft/qm/orca/defaults.py`:
+DEFGRID3, TightSCF, RIJCOSX def2/J, CPCM(MeCN)). A submission that sets
+neither `header_*` nor `header_*_id` gets 2, 4 and 6; 5 and 3 are the
+same method on the larger def2-TZVP/def2-QZVPD basis pair, kept as a
+seeded alternative. The defaults request 12 cores × 2000 MB
+(optimisation) and 8 cores × 1500 MB (singlepoint), below the CPU
+nodes' ~2600 MB/core. Measured on a 45-atom acridine: opt+Freq is 8 %
+faster at 2000 than at 1250 MB, UV/Vis and SOC TDDFT are unchanged
+between 1000 and 2500 MB, and singlepoints peak at 2–8 GB. The
+double-hybrid NMR option runs on its own cores and memory
+(`nmr_dh_nprocs` × `nmr_dh_maxcore`).
 
 The headers can be edited / extended in the dashboard's **Headers** page
 (full headers of before Advanced settings carry a "legacy" badge and are
-not offered on the submit form) or via the `/api/headers` endpoints. All six belong to `admin`; anyone
-may use them, only their owner or admin may change them. When a submission
-form or CLI/API call leaves a header slot on its default, the dashboard's
-header dropdown preselects the stored row whose text equals the package
-default, so what you see selected is what will actually run.
+not offered on the submit form) or via the `/api/headers` endpoints.
+All six belong to `admin`; anyone may use them, only their owner or
+admin may change them. When a submission form or CLI/API call leaves a
+header slot on its default, the dashboard's header dropdown preselects
+the stored row whose text equals the package default, so what you see
+selected is what will actually run.
 
 The same first run also **creates the `admin` account and logs its API
 key once**, in a banner. That key is stored only as a hash, so copy it
@@ -317,11 +319,11 @@ sees the whole database:
   dropdowns (legacy full headers left out) and a collapsed **Advanced**
   section: grid, SCF / geometry convergence, RI, auxiliary basis,
   solvation, cores and memory per stage plus the imaginary-frequency
-  tolerance, pre-filled from the config defaults. The Submit button is disabled while the SMILES isn't
-  valid; the server re-validates anyway, so direct API users also get
-  HTTP 400 on bad input. The Author field is pre-filled with your
-  username and is read-only unless you are admin, and the project you
-  type lands in your own namespace.
+  tolerance, pre-filled from the config defaults. The Submit button is
+  disabled while the SMILES isn't valid; the server re-validates anyway,
+  so direct API users also get HTTP 400 on bad input. The Author field
+  is pre-filled with your username and is read-only unless you are
+  admin, and the project you type lands in your own namespace.
 * **Current Status** — five live stat cards (Queued / Pending /
   Running / Failed / Molecules), three tables (queued entrypoints,
   SLURM-pending jobs, currently running jobs), and a **Failed
@@ -333,9 +335,9 @@ sees the whole database:
   status with a rendered structure), **State Analysis** (triplet /
   redox energies, downloadable as XLSX), **Photophysics** and **Methods**
   (read-only: headers, every setting and its source, cutoffs, the full
-  ORCA input of every job type and the pipeline settings). The Export panel has three
-  buttons: **Export Project**, **Export and Delete** and **Delete
-  Project** (see below).
+  ORCA input of every job type and the pipeline settings). The Export
+  panel has three buttons: **Export Project**, **Export and Delete** and
+  **Delete Project** (see below).
 * **Headers** — create, edit, soft-delete computation headers. Each
   has a `kind` (confsearch / optimization / singlepoint / any), a
   free-form description (shown in the submission dropdowns), and the
@@ -649,7 +651,7 @@ is either scoped to the caller's own projects or deliberately shared
 | GET    | `/api/projects/{name}/state-analysis` | triplet / redox / reorganisation energies                   |
 | POST   | `/api/projects/{name}/state-analysis/export` | the same, as a multi-sheet XLSX (background job)    |
 | GET    | `/api/projects/{name}/photophysics` | UV/Vis, IR, NMR and ESD results per molecule (`?molecule_id=`) |
-| GET    | `/api/projects/{name}/methods`      | headers, settings and sources, cutoffs, ORCA inputs, pipeline config |
+| GET    | `/api/projects/{name}/methods`      | headers, settings, cutoffs, ORCA inputs, pipeline config      |
 | GET    | `/api/projects/{name}/extend-info`  | what the project's molecules already have (for Extend)        |
 | POST   | `/api/projects/{name}/extend`       | add categories / states to the project's molecules            |
 | POST   | `/api/projects/{name}/export`       | trigger CSV/JSON/files/photophysics/reactivity export (`?format=&all_conformers=&keep_gbw=`) |
@@ -742,13 +744,17 @@ from autodft.engine.entrypoint_processor import validate_smiles
 from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.qm.orca.defaults import (
     DEFAULT_HEADER_CONFSEARCH,        # GOAT g-xTB
-    DEFAULT_HEADER_OPTIMIZATION,      # wB97X-D3 / def2-SVP + CPCM(MeCN)
-    DEFAULT_HEADER_SINGLEPOINT,       # wB97X-D3 / def2-TZVP + CPCM(MeCN)
+    DEFAULT_HEADER_OPTIMIZATION,      # wB97X-D3 / def2-SVP, method only
+    DEFAULT_HEADER_SINGLEPOINT,       # wB97X-D3 / def2-TZVP, method only
     GFN2_HEADER_CONFSEARCH,           # GOAT GFN2-xTB alternate
-    TZVP_MECN_HEADER_OPTIMIZATION,    # larger-basis alternate
-    QZVPD_MECN_HEADER_SINGLEPOINT,    # larger-basis alternate
+    QZVPD_HEADER_SINGLEPOINT,         # larger-basis alternate
 )
+from autodft.qm.orca.advanced import for_submission  # resolves `advanced`
 ```
+
+An entrypoint inserted without `advanced` runs its headers as they are,
+so the controller refuses one whose optimization header is method only;
+`for_submission` fills `advanced` from the config defaults.
 
 ---
 

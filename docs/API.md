@@ -920,23 +920,27 @@ present, addressed by the string ids `default_confsearch` /
 {
   "defaults": [ { "id": "default_confsearch", "label": "...",
                   "description": "...", "kind": "confsearch",
-                  "text": "!GOAT XTB\n%xtb\n  XTBInputString \"--gxtb\"\nend\n..." } ],
+                  "text": "!GOAT XTB\n%xtb\n  XTBInputString \"--gxtb\"\nend\n...",
+                  "legacy": false } ],
   "custom":  [ { "id": 1, "label": "GOAT GFN2-xTB conformer ensemble",
                  "description": "...", "kind": "confsearch",
                  "validated": true, "deleted": false,
-                 "text": "!GOAT XTB2\n..." } ]
+                 "text": "!GOAT XTB2\n...", "legacy": false } ]
 }
 ```
 
 Strict `kind` filter: untagged custom headers are intentionally hidden
 from slot-specific responses; they're still listed when no `kind` is
 passed. Soft-deleted headers are excluded unless `include_deleted=true`.
+`legacy` marks a header a submission with Advanced settings refuses
+(see `advanced` under `POST /api/submit`): for a confsearch header only
+`PALn`, `%pal` and `%maxcore`, for the others anything Advanced owns.
 
 ### `POST /api/headers`
 
 ```json
-{ "header_text": "!wB97X-D3 def2-TZVP TIGHTSCF\n%maxcore 4000\n%pal nprocs 16 end\n",
-  "description": "wB97X-D3/def2-TZVP TightSCF singlepoint",
+{ "header_text": "!wB97X-D3 def2-TZVPD\n",
+  "description": "wB97X-D3/def2-TZVPD singlepoint",
   "kind":        "singlepoint",
   "validated":   false }
 ```

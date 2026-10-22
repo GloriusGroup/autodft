@@ -421,10 +421,8 @@ def _analyze_project_uncached(project_name: str) -> dict:
             ).all()
             if header_ids else []
         )
-        # ...but decide per molecule when emitting potentials. A project-wide
-        # any() meant one solvated header anywhere switched E vs SCE on for
-        # every molecule in the project, including gas-phase ones, whose
-        # "potential" would then be referenced against a solvated SCE scale.
+        # Decided per molecule: one solvated header must not reference a
+        # gas-phase molecule's potential against the solvated SCE scale.
         # Each header is read as rendered with its state's Advanced settings.
         _header_by_id = {h.id: h for h in headers}
         mecn_by_molecule: dict[int, bool] = {}
