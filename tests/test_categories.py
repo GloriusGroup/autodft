@@ -262,7 +262,6 @@ _LEGACY_S0_KEYS = {
     "request_singlepoint_vertical_excitations",
     "request_singlepoint_nbo",
     "max_conformers_S0",
-    "imag_freq_tolerance",
 }
 
 

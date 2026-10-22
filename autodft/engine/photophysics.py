@@ -152,8 +152,9 @@ def _no_seed(s0: MoleculeState, conformers: list, intact: list) -> str:
     finished = [c for c in intact if c.e_singlepoint is not None]
     if finished and all(results.excludes(c.note) for c in finished):
         notes = "; ".join(f"conformer {c.conformer_index}: {c.note}" for c in finished)
+        tolerance = results.imaginary_cutoff(s0) + 0.0  # -0.0 prints as 0
         return (f"Every finished S0 conformer has an imaginary mode below the imaginary-frequency "
-                f"tolerance of {results.imaginary_cutoff(s0):g} cm-1 ({notes}).")
+                f"tolerance of {tolerance:g} cm-1 ({notes}).")
     return "No S0 conformer finished both its optimisation and its energy singlepoint."
 
 

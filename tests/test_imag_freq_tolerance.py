@@ -23,7 +23,7 @@ from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.qm.orca.parser import OrcaParser
 from autodft.qm.orca.retry import FailureInfo, PerturbImaginaryMode, build_strategies
 from tests.test_esd_states import _expand
-from tests.test_extend import _queue
+from tests.test_extend import _finish_s0, _queue
 from tests.test_orca_parser import (
     ENERGY_OUTPUT, NORMAL_TERMINATION, OPTIMIZATION_CONVERGED, VIBRATIONAL_FREQUENCIES_CLEAN,
 )
@@ -136,6 +136,17 @@ def test_the_engine_checks_against_the_states_cutoff(session, tmp_path, descript
     assert ("Imaginary Frequencies" in (job.fail_reason or "")) is fails
 
 
+@pytest.mark.parametrize("tolerance, shown", [(-0.0, "tolerance of 0 cm-1"), (-10.0, "tolerance of -10 cm-1")])
+def test_the_esd_seed_error_names_the_tolerance(tolerance, shown):
+    from types import SimpleNamespace
+
+    from autodft.engine.photophysics import _no_seed
+
+    s0 = MoleculeState(metadata_json=json.dumps({"imag_freq_tolerance": tolerance}))
+    conformer = SimpleNamespace(e_singlepoint=-1.0, note="imaginary mode -12.0 cm-1", conformer_index=1)
+    assert shown in _no_seed(s0, [conformer], [conformer])
+
+
 def test_check_type_no_longer_encodes_the_threshold(session, tmp_path):
     ground, _ = _finished_opt(session, tmp_path, "S0", {"imag_freq_tolerance": -10.0}, -1.0)
     s1, _ = _finished_opt(session, tmp_path, "S1", {"esd_role": "S1", "strict_convergence": False}, -1.0)
@@ -158,20 +169,58 @@ def test_every_new_state_stores_the_tolerance(engine, tmp_path, monkeypatch):
         assert not any("strict_convergence" in s.metadata_json for s in session.exec(select(MoleculeState)).all())
 
 
-def test_the_default_tolerance_is_zero(engine, tmp_path, monkeypatch):
+def _cutoffs(session):
+    return {s.description: results.imaginary_cutoff(s) for s in session.exec(select(MoleculeState)).all()}
+
+
+def _strict(session):
+    return {s.description: json.loads(s.metadata_json).get("strict_convergence", "missing")
+            for s in session.exec(select(MoleculeState)).all()}
+
+
+def test_a_zero_tolerance_in_the_request_lands_on_every_state(engine, tmp_path, monkeypatch):
     with Session(engine) as session:
-        _queue(session, strict_convergence=False, **{categories.ESD: True})
+        _queue(session, imag_freq_tolerance=0.0, **{categories.ESD: True})
         _expand(session, tmp_path, monkeypatch)
         assert _tolerances(session) == {"S0": 0.0, "S1": 0.0, "T1": 0.0}
 
 
-def test_extend_keeps_the_existing_states_value(engine, tmp_path, monkeypatch):
+@pytest.mark.parametrize("request_keys, strict, cutoffs", [
+    ({}, "missing", {"S0": -50.0, "S1": -50.0, "T1": -50.0}),
+    ({"strict_convergence": True}, "missing", {"S0": -50.0, "S1": -50.0, "T1": -50.0}),
+    ({"strict_convergence": False}, False, {"S0": -50.0, "S1": -100.0, "T1": -50.0}),
+])
+def test_an_entrypoint_queued_before_the_tolerance_keeps_the_legacy_rule(
+    engine, tmp_path, monkeypatch, request_keys, strict, cutoffs,
+):
+    with Session(engine) as session:
+        _queue(session, **request_keys, **{categories.ESD: True})
+        _expand(session, tmp_path, monkeypatch)
+        assert set(_tolerances(session).values()) == {"missing"}
+        assert set(_strict(session).values()) == {strict}
+        assert _cutoffs(session) == cutoffs
+
+
+def test_extend_gives_new_states_the_s0_tolerance(engine, tmp_path, monkeypatch):
     with Session(engine) as session:
         _queue(session, imag_freq_tolerance=-10.0)
         _expand(session, tmp_path, monkeypatch)
-        _queue(session, extend=True, request_ox=True, imag_freq_tolerance=0.0)
+        _finish_s0(session, tmp_path)
+        _queue(session, extend=True, request_ox=True, imag_freq_tolerance=0.0, **{categories.ESD: True})
         _expand(session, tmp_path, monkeypatch)
-        assert _tolerances(session) == {"S0": -10.0, "ox": 0.0}
+        assert _tolerances(session) == {"S0": -10.0, "S1": -10.0, "T1": -10.0, "ox": -10.0}
+
+
+def test_extend_of_a_legacy_s0_keeps_the_legacy_rule(engine, tmp_path, monkeypatch):
+    with Session(engine) as session:
+        _queue(session, strict_convergence=False)
+        _expand(session, tmp_path, monkeypatch)
+        _finish_s0(session, tmp_path)
+        _queue(session, extend=True, request_ox=True, imag_freq_tolerance=0.0, **{categories.ESD: True})
+        _expand(session, tmp_path, monkeypatch)
+        assert set(_tolerances(session).values()) == {"missing"}
+        assert set(_strict(session).values()) == {False}
+        assert _cutoffs(session) == {"S0": -50.0, "S1": -100.0, "T1": -50.0, "ox": -50.0}
 
 
 # -- API -----------------------------------------------------------------------
