@@ -194,6 +194,7 @@ class SubmitRequest(BaseModel):
     request_spec_nmr: bool = False
     request_densities: bool = False
     request_singlepoint_nbo: bool = False
+    request_sp_reactivity: bool = False
     # Settings of the categories above; recorded only when the category is.
     uvvis_nroots: int = 20
     uvvis_tda: bool = False
@@ -2072,6 +2073,7 @@ def _category_flags(body: SubmitRequest) -> dict:
         categories.NMR: body.request_spec_nmr,
         categories.DENSITIES: body.request_densities,
         categories.NBO: body.request_singlepoint_nbo,
+        categories.REACTIVITY: body.request_sp_reactivity,
         "uvvis_nroots": body.uvvis_nroots,
         "uvvis_tda": body.uvvis_tda,
         "nmr_nuclei": body.nmr_nuclei,
@@ -2189,7 +2191,7 @@ def api_submit(
                 status_code=400, content={"detail": detail, "validation": check},
             )
         flags = _category_flags(body)
-        if categories.NBO in categories.requested(flags):
+        if categories.NBO_NEEDED & categories.requested(flags):
             unavailable = categories.nbo_unavailable(get_active_settings())
             if unavailable:
                 return JSONResponse(
@@ -2410,7 +2412,7 @@ def api_submit_batch(
             return JSONResponse(status_code=409, content={"detail": str(exc)})
         flags = _category_flags(body)
         wanted = categories.requested(flags)
-        if categories.NBO in wanted:
+        if categories.NBO_NEEDED & wanted:
             unavailable = categories.nbo_unavailable(get_active_settings())
             if unavailable:
                 return JSONResponse(status_code=400, content={"detail": unavailable})

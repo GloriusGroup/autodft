@@ -81,6 +81,8 @@ _REACTIVITY_CONFLICTS = (
     (re.compile(r"^\s*!.*\bHirshfeld\b", re.IGNORECASE | re.MULTILINE), "the Hirshfeld keyword"),
     (re.compile(r"%elprop\b", re.IGNORECASE), "%elprop"),
     *_NBO_CONFLICTS,
+    # Comments masked like blocks.with_stability.
+    (re.compile(r"^[^#\n]*\bSTABPerform\b", re.IGNORECASE | re.MULTILINE), "STABPerform"),
 )
 # No leading "-" (submit.cmd's `cp *.cube` would read it as an option) or
 # "." (a dotfile the same glob never matches).
@@ -368,7 +370,7 @@ def rejection(
             if pattern.search(header_singlepoint or ""):
                 return (
                     f"The singlepoint header already contains {label}. Reactivity adds "
-                    f"Hirshfeld, %elprop and NBO itself; pick a header without it."
+                    f"Hirshfeld, %elprop, NBO and stability analysis itself; pick a header without it."
                 )
 
     if wanted & _ON_SP_HEADER:
@@ -383,7 +385,7 @@ def rejection(
 
 
 def nbo_unavailable(settings) -> Optional[str]:
-    """Why NBO cannot run given *settings*, or None.
+    """Why NBO (and so Reactivity) cannot run given *settings*, or None.
 
     Kept apart from ``rejection`` (which is settings-free) so the API and CLI
     can check it once, against the process's own configuration.
@@ -395,6 +397,8 @@ def nbo_unavailable(settings) -> Optional[str]:
 
 # Run inside the energy singlepoints, so a finished molecule cannot gain them.
 SUBMIT_ONLY = (DENSITIES, NBO, REACTIVITY)
+# Categories that need [orca].nbo_exe.
+NBO_NEEDED = frozenset({NBO, REACTIVITY})
 
 
 def extension(

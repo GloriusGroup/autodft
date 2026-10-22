@@ -139,10 +139,18 @@ def test_each_category_has_a_settings_panel_shown_only_when_ticked(client):
     panels = re.findall(r'<div class="cat-detail" data-requires="(\w+)" style="display:none;">', html)
     assert panels == [
         "requestUvvis", "requestIr", "requestNmr", "requestEsd",
-        "requestDensities", "requestNbo",
+        "requestDensities", "requestNbo", "requestReactivity",
     ]
     for needle in ('id="uvvisNroots"', 'id="uvvisTda"', 'id="irHeaderNote"',
                    'id="uvvisHeaderNote"', "commonBody.uvvis_nroots", "commonBody.uvvis_tda"):
+        assert needle in html, needle
+
+
+def test_the_dashboard_offers_reactivity(client):
+    c, headers = client
+    html = c.get("/", headers=headers).text
+    for needle in ('id="requestReactivity"', 'id="reactivityHeaderNote"',
+                   "request_sp_reactivity", "REACTIVITY_CONFLICT_RE"):
         assert needle in html, needle
 
 
