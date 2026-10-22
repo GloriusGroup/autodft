@@ -57,6 +57,13 @@ def test_tighten_is_idempotent_on_blocks():
     assert _tighten(once) == once
 
 
+def test_tighten_skips_a_one_line_scf_block():
+    inp = "!B3LYP def2-SVP Opt Freq\n%scf MaxIter 100 end\n%geom\n  Convergence Loose\nend\n" + XYZ
+    out = _tighten(inp)
+    assert out.startswith("!B3LYP def2-SVP Opt Freq TightSCF\n%scf MaxIter 100 end\n")
+    assert "%geom\n  Convergence Tight\nend" in out
+
+
 def test_recover_scf_relaxes_block_convergence():
     inp = _sp(scf_convergence="Tight")
     strategy = RecoverSinglepointSCF()

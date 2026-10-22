@@ -344,7 +344,7 @@ class IncreaseMaxIter(RetryStrategy):
 # Convergence level ranks (Medium = Normal).
 _RANK = {"sloppy": 0, "loose": 1, "medium": 2, "normal": 2, "strong": 3,
          "tight": 4, "verytight": 5, "extreme": 6}
-_SCF_BLOCK = re.compile(r"^%scf\b.*?^\s*end\b", re.IGNORECASE | re.DOTALL | re.MULTILINE)
+_SCF_BLOCK = re.compile(r"^%scf[ \t]*$.*?^\s*end\b", re.IGNORECASE | re.DOTALL | re.MULTILINE)
 _CONV_LINE = re.compile(r"(Convergence[ \t]+)(\w+)", re.IGNORECASE)
 
 
