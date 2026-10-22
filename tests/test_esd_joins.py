@@ -305,13 +305,12 @@ class TestJobFiles:
 
 
 def test_stored_records_build_the_same_rate_job_input(session, esd, tmp_path):
-    """prepare_rate_job reads the stored SOC record, not output.out, once one exists."""
+    """rate_job_input reads the stored SOC record, not output.out, once one exists."""
     photophysics.advance_photophysics(session, Settings())
     task = _rates(session, esd)[TaskType.esd_isc]
     state = esd["states"]["S1"]
 
-    before_path = tmp_path / "before"
-    before_text, before_hess = photophysics.prepare_rate_job(session, task, state, SP, before_path)
+    before_text, before_record, before_hess = photophysics.rate_job_input(session, task, state, SP)
 
     for job in session.exec(select(ComputationJob).where(ComputationJob.success == True)).all():  # noqa: E712
         job_task = session.get(ComputationTask, job.task_id)
@@ -321,13 +320,11 @@ def test_stored_records_build_the_same_rate_job_input(session, esd, tmp_path):
     for name in ("S0", "S1", "T1"):
         (esd["tmp_path"] / "jobs" / f"soc_{name}" / "output.out").unlink()
 
-    after_path = tmp_path / "after"
-    after_text, after_hess = photophysics.prepare_rate_job(session, task, state, SP, after_path)
+    after_text, after_record, after_hess = photophysics.rate_job_input(session, task, state, SP)
 
     assert after_text == before_text
-    assert after_hess == before_hess
-    for filename in after_hess:
-        assert (after_path / filename).read_bytes() == (before_path / filename).read_bytes()
+    assert after_record == before_record
+    assert after_hess == before_hess and all(path.exists() for path in after_hess.values())
 
 
 def _flag_broken(session, task, detail="dissociated: 2 fragments (C4H8F + H); C-H bonds 9 -> 8"):

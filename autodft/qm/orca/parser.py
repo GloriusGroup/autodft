@@ -222,21 +222,13 @@ class OrcaParser(QMEngine):
             conformer_degeneracies=conformer_degeneracies,
         )
 
-    def generate_input(
-        self,
-        job_path: Path,
-        header: str,
-        charge: int,
-        multiplicity: int,
-        xyz_data: str,
-    ) -> None:
-        """Delegated to :func:`input_generator.generate_orca_input`."""
-        from autodft.qm.orca.input_generator import generate_orca_input, write_xyz_file
+    def render_input(self, header: str, charge: int, multiplicity: int) -> str:
+        """Delegated to :func:`input_generator.render_orca_input`."""
+        from autodft.qm.orca.input_generator import render_orca_input
 
-        generate_orca_input(job_path, header, charge, multiplicity, xyz_data)
-        write_xyz_file(job_path, xyz_data)
+        return render_orca_input(header, charge, multiplicity)
 
-    def generate_submit_script(
+    def render_submit_script(
         self,
         job_path: Path,
         job_name: str,
@@ -252,16 +244,16 @@ class OrcaParser(QMEngine):
         keep_esd_files: bool = False,
         extra_inputs: Optional[list[str]] = None,
         keep_wavefunction: bool = False,
-    ) -> None:
-        """Delegated to :func:`input_generator.generate_submit_script`.
+    ) -> str:
+        """Delegated to :func:`input_generator.render_submit_script`.
 
         Threads through the :class:`OrcaConfig` injected at construction
         time so the resulting script uses the correct ORCA binary and
         optional MPI / NBO / tmp-dir settings.
         """
-        from autodft.qm.orca.input_generator import generate_submit_script
+        from autodft.qm.orca.input_generator import render_submit_script
 
-        generate_submit_script(
+        return render_submit_script(
             job_path=job_path,
             job_name=job_name,
             nprocs=nprocs,

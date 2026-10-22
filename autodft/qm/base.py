@@ -60,27 +60,18 @@ class QMEngine(ABC):
         ...
 
     @abstractmethod
-    def generate_input(
-        self,
-        job_path: Path,
-        header: str,
-        charge: int,
-        multiplicity: int,
-        xyz_data: str,
-    ) -> None:
-        """Write a program-specific input file into *job_path*.
+    def render_input(self, header: str, charge: int, multiplicity: int) -> str:
+        """The program-specific input file's text; the geometry is read from ``input.xyz``.
 
         Args:
-            job_path: Target directory.
             header: Engine-specific header / route section.
             charge: Molecular charge.
             multiplicity: Spin multiplicity.
-            xyz_data: XYZ-format geometry (atom lines only, no header).
         """
         ...
 
     @abstractmethod
-    def generate_submit_script(
+    def render_submit_script(
         self,
         job_path: Path,
         job_name: str,
@@ -96,8 +87,8 @@ class QMEngine(ABC):
         keep_esd_files: bool = False,
         extra_inputs: Optional[list[str]] = None,
         keep_wavefunction: bool = False,
-    ) -> None:
-        """Write a cluster submit script (e.g. SLURM) into *job_path*.
+    ) -> str:
+        """The text of a cluster submit script (e.g. SLURM) for a job in *job_path*.
 
         Args:
             job_path: Target directory.

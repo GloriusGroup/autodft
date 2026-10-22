@@ -13,6 +13,8 @@ from jinja2 import Environment, FileSystemLoader
 __all__ = [
     "generate_orca_input",
     "generate_submit_script",
+    "render_orca_input",
+    "render_submit_script",
     "write_xyz_file",
 ]
 
@@ -33,6 +35,15 @@ def _get_jinja_env() -> Environment:
 # ------------------------------------------------------------------
 # ORCA input file
 # ------------------------------------------------------------------
+
+
+def render_orca_input(header_text: str, charge: int, multiplicity: int) -> str:
+    """The text of ``input.inp``."""
+    return _get_jinja_env().get_template("orca_input.inp.j2").render(
+        header_text=header_text.rstrip(),
+        charge=charge,
+        multiplicity=multiplicity,
+    )
 
 
 def generate_orca_input(
@@ -59,16 +70,8 @@ def generate_orca_input(
     job_path = Path(job_path)
     job_path.mkdir(parents=True, exist_ok=True)
 
-    env = _get_jinja_env()
-    template = env.get_template("orca_input.inp.j2")
-    rendered = template.render(
-        header_text=header_text.rstrip(),
-        charge=charge,
-        multiplicity=multiplicity,
-    )
-
     input_path = job_path / "input.inp"
-    input_path.write_text(rendered, encoding="utf-8")
+    input_path.write_text(render_orca_input(header_text, charge, multiplicity), encoding="utf-8")
     logger.debug("Wrote ORCA input file: %s", input_path)
     return input_path
 
@@ -76,6 +79,61 @@ def generate_orca_input(
 # ------------------------------------------------------------------
 # SLURM submit script
 # ------------------------------------------------------------------
+
+
+def render_submit_script(
+    job_path: Path,
+    job_name: str,
+    nprocs: int,
+    mem_per_core: int,
+    time_limit: str,
+    partition: str,
+    nice: int = 0,
+    orca_path: str = "orca",
+    orca_extra_args: str = "",
+    nbo_exe: str | None = None,
+    mpi_env: str = "",
+    tmp_dir: str = "/tmp",
+    keep_wavefunction: bool = False,
+    keep_densities: bool = False,
+    keep_hessian: bool = False,
+    keep_cubes: bool = False,
+    runs_nbo: bool = False,
+    keep_mp2resp: bool = False,
+    keep_esd_files: bool = False,
+    extra_inputs: Optional[list[str]] = None,
+    stall_minutes: int = 0,
+    sync_minutes: int = 0,
+) -> str:
+    """The text of ``submit.cmd``; see :func:`generate_submit_script`."""
+    total_mem = nprocs * (mem_per_core + 50)
+
+    env = _get_jinja_env()
+    template = env.get_template("submit.cmd.j2")
+    return template.render(
+        job_name=job_name,
+        job_path=str(job_path),
+        nprocs=nprocs,
+        total_mem=total_mem,
+        time_limit=time_limit,
+        partition=partition,
+        nice=nice,
+        orca_path=orca_path,
+        orca_extra_args=orca_extra_args,
+        nbo_exe=nbo_exe,
+        mpi_env=mpi_env,
+        tmp_dir=tmp_dir,
+        keep_wavefunction=keep_wavefunction,
+        keep_densities=keep_densities,
+        keep_hessian=keep_hessian,
+        keep_cubes=keep_cubes,
+        runs_nbo=runs_nbo,
+        keep_mp2resp=keep_mp2resp,
+        keep_esd_files=keep_esd_files,
+        extra_inputs=extra_inputs or [],
+        stall_minutes=stall_minutes,
+        sync_minutes=sync_minutes,
+    )
 
 
 def generate_submit_script(
@@ -142,34 +200,12 @@ def generate_submit_script(
     """
     job_path = Path(job_path)
     job_path.mkdir(parents=True, exist_ok=True)
-
-    total_mem = nprocs * (mem_per_core + 50)
-
-    env = _get_jinja_env()
-    template = env.get_template("submit.cmd.j2")
-    rendered = template.render(
-        job_name=job_name,
-        job_path=str(job_path),
-        nprocs=nprocs,
-        total_mem=total_mem,
-        time_limit=time_limit,
-        partition=partition,
-        nice=nice,
-        orca_path=orca_path,
-        orca_extra_args=orca_extra_args,
-        nbo_exe=nbo_exe,
-        mpi_env=mpi_env,
-        tmp_dir=tmp_dir,
-        keep_wavefunction=keep_wavefunction,
-        keep_densities=keep_densities,
-        keep_hessian=keep_hessian,
-        keep_cubes=keep_cubes,
-        runs_nbo=runs_nbo,
-        keep_mp2resp=keep_mp2resp,
-        keep_esd_files=keep_esd_files,
-        extra_inputs=extra_inputs or [],
-        stall_minutes=stall_minutes,
-        sync_minutes=sync_minutes,
+    rendered = render_submit_script(
+        job_path, job_name, nprocs, mem_per_core, time_limit, partition, nice=nice, orca_path=orca_path,
+        orca_extra_args=orca_extra_args, nbo_exe=nbo_exe, mpi_env=mpi_env, tmp_dir=tmp_dir,
+        keep_wavefunction=keep_wavefunction, keep_densities=keep_densities, keep_hessian=keep_hessian,
+        keep_cubes=keep_cubes, runs_nbo=runs_nbo, keep_mp2resp=keep_mp2resp, keep_esd_files=keep_esd_files,
+        extra_inputs=extra_inputs, stall_minutes=stall_minutes, sync_minutes=sync_minutes,
     )
 
     submit_path = job_path / "submit.cmd"

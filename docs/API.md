@@ -694,6 +694,47 @@ A molecule any of whose state family's optimisations lost bonds adds
 `broken_bonds` (summary and detail): `[{"state": "T1", "state_id": 23,
 "conformer_index": 1, "opt_task_id": 95, "detail": "dissociated: ..."}]`.
 
+### `GET /api/projects/{name}/methods`
+
+What the project ran with, for checking. States are grouped by their
+three header ids, their Advanced settings, the molecule's S0 request
+flags and category options, and the imaginary-frequency tolerance:
+
+    {"groups": [{
+       "molecules": 949, "states": {"S0": 949, "T1": 949},
+       "headers": {"confsearch": "!GOAT XTB ...", "optimization": "!wB97X-D3 def2-SVP\n",
+                   "singlepoint": "!wB97X-D3 def2-TZVP\n"},
+       "advanced": {"confsearch": {...}, "optimization": {...}, "singlepoint": {...}},
+       "settings": {"optimization": {"grid": {"value": "DEFGRID3", "source": "setting"},
+                                     "geom_convergence": {"value": "Normal", "source": "ORCA default"}, ...}},
+       "imag_cutoff": {"S0": {"value": -50.0, "rule": "legacy: -50"}},
+       "categories": {"request_sp_reactivity": true, "max_conformers": {"S0": 5}, ...},
+       "inputs": [{"task_type": "singlepoint_vert_ox", "multiplicity": 2, "states": ["S0"],
+                   "input": "!wB97X-D3 def2-TZVP\n...", "retried_jobs": 3}]}],
+     "pipeline": {"max_attempts": 3, "retry": {"IncreaseResources": "..."},
+                  "stages": {"optimization": {"time_limit": "1-00:00:00", "default_nprocs": 16,
+                                              "default_mem_per_core": 1000}, ...},
+                  "slurm": {"partition": "CPU", "nice": 1000},
+                  "orca": {"path": "orca", "mpi_env": ""},
+                  "orca_versions": {"optimization": "6.1.0"}}}
+
+* `settings` has one row per Advanced key of each stage. `source` is
+  `setting` (the state's Advanced settings), `header` (a legacy state,
+  read from the header text) or `ORCA default` (value `DEFGRID2` for the
+  grid, `Normal` for the geometry convergence, `null` otherwise).
+  `advanced` is `null` for a legacy group.
+* `imag_cutoff` is per state description; `rule` is `imag_freq_tolerance`,
+  `legacy: -50`, or `legacy: -100 (ESD S1 with strict_convergence off)`.
+* `inputs` holds the full `input.inp` a fresh job gets, per task type, job
+  multiplicity (closed- vs open-shell verticals) and ESD role present in
+  the group, rendered by the job-generation code without writing files. A
+  retry may modify it; `retried_jobs` counts the group's jobs of that type
+  that ran as retries. An input that cannot be built shows
+  `Cannot render: <reason>`.
+* `pipeline` is the controller's current config, not what earlier jobs
+  ran with; `orca_versions` is read from the newest successful output of
+  each task type (`null` when that file is gone).
+
 ### `GET /api/projects/{name}/extend-info`
 
 What the project's unarchived molecules already have, for Extend:

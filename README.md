@@ -329,9 +329,11 @@ sees the whole database:
   tasks.
 * **Project Overview** — pick a project from the dropdown to see its
   molecules, submission progress, success rate, and per-row task
-  counts. Three subpages: **Summary**, **Molecules** (per-conformer
-  status with a rendered structure) and **State Analysis** (triplet /
-  redox energies, downloadable as XLSX). The Export panel has three
+  counts. Subpages: **Summary**, **Molecules** (per-conformer
+  status with a rendered structure), **State Analysis** (triplet /
+  redox energies, downloadable as XLSX), **Photophysics** and **Methods**
+  (read-only: headers, every setting and its source, cutoffs, the full
+  ORCA input of every job type and the pipeline settings). The Export panel has three
   buttons: **Export Project**, **Export and Delete** and **Delete
   Project** (see below).
 * **Headers** — create, edit, soft-delete computation headers. Each
@@ -647,6 +649,7 @@ is either scoped to the caller's own projects or deliberately shared
 | GET    | `/api/projects/{name}/state-analysis` | triplet / redox / reorganisation energies                   |
 | POST   | `/api/projects/{name}/state-analysis/export` | the same, as a multi-sheet XLSX (background job)    |
 | GET    | `/api/projects/{name}/photophysics` | UV/Vis, IR, NMR and ESD results per molecule (`?molecule_id=`) |
+| GET    | `/api/projects/{name}/methods`      | headers, settings and sources, cutoffs, ORCA inputs, pipeline config |
 | GET    | `/api/projects/{name}/extend-info`  | what the project's molecules already have (for Extend)        |
 | POST   | `/api/projects/{name}/extend`       | add categories / states to the project's molecules            |
 | POST   | `/api/projects/{name}/export`       | trigger CSV/JSON/files/photophysics/reactivity export (`?format=&all_conformers=&keep_gbw=`) |

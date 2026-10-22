@@ -1060,6 +1060,7 @@
             <a class="nav-item nav-sub" data-route="projects.molecules"      href="#/projects/molecules">Molecules</a>
             <a class="nav-item nav-sub" data-route="projects.state-analysis" href="#/projects/state-analysis">State Analysis</a>
             <a class="nav-item nav-sub" data-route="projects.photophysics"   href="#/projects/photophysics">Photophysics</a>
+            <a class="nav-item nav-sub" data-route="projects.methods"        href="#/projects/methods">Methods</a>
             <a class="nav-item" data-route="headers"  href="#/headers"> <span class="nav-icon">&#9881;</span> Headers</a>
             <a class="nav-item" data-route="admin"    href="#/admin">   <span class="nav-icon">&#9888;</span> Admin</a>
             <div class="sidebar-footer">
@@ -2011,6 +2012,28 @@
         </section>
         <!-- /PAGE: Project Overview > Photophysics -->
 
+        <!-- ============================================================ -->
+        <!-- PAGE: Project Overview > Methods                              -->
+        <!-- ============================================================ -->
+        <section class="page" data-page="projects.methods">
+        <div class="page-header">
+            <div>
+                <h1>Project Overview · Methods</h1>
+                <div class="subtitle">What the project ran with: headers, every setting and its source, cutoffs, the ORCA input of every job type, and the pipeline settings.</div>
+            </div>
+            <div class="form-group" style="min-width: 240px;">
+                <label for="projectSelectMethods">Project</label>
+                <select id="projectSelectMethods"><option value="">Loading...</option></select>
+            </div>
+        </div>
+
+        <div id="mtEmptyState" class="empty-state" style="padding: 60px 16px;">
+            Select a project to see its methods.
+        </div>
+        <div id="mtCards" class="sa-cards" style="display: none;"></div>
+        </section>
+        <!-- /PAGE: Project Overview > Methods -->
+
     </div>  <!-- /container -->
     </div>  <!-- /app -->
 
@@ -2081,6 +2104,8 @@
         //   #/projects/summary
         //   #/projects/molecules
         //   #/projects/state-analysis
+        //   #/projects/photophysics
+        //   #/projects/methods
         //   #/headers
         // Each route maps to a <section data-page="..."> and (optionally)
         // a nav-item with matching data-route.
@@ -2088,7 +2113,7 @@
         var ROUTES = [
             'submit', 'status',
             'projects.summary', 'projects.molecules', 'projects.state-analysis',
-            'projects.photophysics',
+            'projects.photophysics', 'projects.methods',
             'headers', 'admin',
         ];
 
@@ -2121,6 +2146,7 @@
             if (route === 'projects.molecules')      fetchProjects().then(loadMoleculesPage);
             if (route === 'projects.state-analysis') fetchProjects().then(loadStateAnalysisPage);
             if (route === 'projects.photophysics')   fetchProjects().then(loadPhotophysicsPage);
+            if (route === 'projects.methods')        fetchProjects().then(loadMethodsPage);
             if (route === 'status')                  fetchFailed();
             if (route === 'admin')                   loadAdminPage();
         }
@@ -3665,8 +3691,10 @@
                 var selMols   = document.getElementById('projectSelectMols');
                 var selSA     = document.getElementById('projectSelectSA');
                 var selPP     = document.getElementById('projectSelectPP');
+                var selMT     = document.getElementById('projectSelectMethods');
                 var prev      = sel.value || (selMols && selMols.value)
-                                || (selSA && selSA.value) || (selPP && selPP.value) || '';
+                                || (selSA && selSA.value) || (selPP && selPP.value)
+                                || (selMT && selMT.value) || '';
 
                 if (!projectCache || projectCache.length === 0) {
                     var empty = '<option value="">(no projects yet)</option>';
@@ -3674,6 +3702,7 @@
                     if (selMols) selMols.innerHTML = empty;
                     if (selSA)   selSA.innerHTML   = empty;
                     if (selPP)   selPP.innerHTML   = empty;
+                    if (selMT)   selMT.innerHTML   = empty;
                     document.getElementById('projectCards').style.display = 'none';
                     document.getElementById('projectExportSection').style.display = 'none';
                     document.getElementById('projectMoleculesSection').style.display = 'none';
@@ -3690,6 +3719,10 @@
                         document.getElementById('ppEmptyState').style.display = 'block';
                         document.getElementById('ppCards').style.display = 'none';
                     }
+                    if (document.getElementById('mtEmptyState')) {
+                        document.getElementById('mtEmptyState').style.display = 'block';
+                        document.getElementById('mtCards').style.display = 'none';
+                    }
                     return;
                 }
                 document.getElementById('projectEmptyState').style.display = 'none';
@@ -3705,12 +3738,14 @@
                 if (selMols) selMols.innerHTML = html;
                 if (selSA)   selSA.innerHTML   = html;
                 if (selPP)   selPP.innerHTML   = html;
+                if (selMT)   selMT.innerHTML   = html;
 
                 if (prev && projectCache.some(function (p) { return p.name === prev; })) {
                     sel.value = prev;
                     if (selMols) selMols.value = prev;
                     if (selSA)   selSA.value   = prev;
                     if (selPP)   selPP.value   = prev;
+                    if (selMT)   selMT.value   = prev;
                 }
                 loadProjectDetail(sel.value);
             } catch (err) {
@@ -3957,7 +3992,8 @@
 
         (function () {
             function syncSelects(value) {
-                ['projectSelect', 'projectSelectMols', 'projectSelectSA', 'projectSelectPP'].forEach(function (id) {
+                ['projectSelect', 'projectSelectMols', 'projectSelectSA', 'projectSelectPP',
+                 'projectSelectMethods'].forEach(function (id) {
                     var el = document.getElementById(id);
                     if (el && el.value !== value) el.value = value;
                 });
@@ -3988,6 +4024,14 @@
                     currentProject = this.value;
                     syncSelects(this.value);
                     loadPhotophysicsPage();
+                });
+            }
+            var altMT = document.getElementById('projectSelectMethods');
+            if (altMT) {
+                altMT.addEventListener('change', function () {
+                    currentProject = this.value;
+                    syncSelects(this.value);
+                    loadMethodsPage();
                 });
             }
             document.getElementById('exportProjectBtn').addEventListener('click', function () { openExportModal(false); });
@@ -4820,6 +4864,143 @@
                 ppState.project = name;
                 ppState.payload = payload;
                 renderPhotophysics(payload);
+            } catch (err) {
+                host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Network error: ' +
+                                 escHtml(err.message) + '</div>';
+            }
+        }
+
+        // ── Methods subpage ─────────────────────────────────────────────
+
+        function methodsValue(v) {
+            if (v == null) return '–';
+            return escHtml(typeof v === 'object' ? JSON.stringify(v) : String(v));
+        }
+
+        function methodsGroupCard(g, index) {
+            var stages = ['confsearch', 'optimization', 'singlepoint'];
+            var keys = [['grid', 'Grid'], ['scf_convergence', 'SCF convergence'],
+                        ['geom_convergence', 'Geometry convergence'], ['ri', 'RI'], ['aux_basis', 'Aux basis'],
+                        ['solvation', 'Solvation'], ['solvent', 'Solvent'], ['nprocs', 'Cores'],
+                        ['maxcore', 'Memory per core (MB)']];
+            var tags = {'setting': 'badge-successful', 'header': 'badge-pending', 'ORCA default': 'badge-created'};
+            var pre = '<pre class="mono" style="background: var(--bg-input); border: 1px solid var(--border); ' +
+                      'border-radius: 6px; padding: 8px 10px; font-size: 0.78rem; white-space: pre-wrap; ' +
+                      'word-break: break-all; margin: 4px 0;">';
+            var states = Object.keys(g.states).map(function (d) {
+                return escHtml(d) + ' ×' + g.states[d];
+            }).join(', ');
+            var headers = stages.map(function (s) {
+                return '<div class="sa-card-note">' + escHtml(s) + '</div>' + pre +
+                       (g.headers[s] == null ? '–' : escHtml(g.headers[s])) + '</pre>';
+            }).join('');
+            var cols = stages.filter(function (s) { return g.settings[s]; });
+            var rows = keys.filter(function (k) {
+                return cols.some(function (s) { return g.settings[s][k[0]]; });
+            }).map(function (k) {
+                return '<tr><td>' + escHtml(k[1]) + '</td>' + cols.map(function (s) {
+                    var c = g.settings[s][k[0]];
+                    if (!c) return '<td>–</td>';
+                    return '<td class="mono">' + methodsValue(c.value) + ' <span class="badge ' +
+                           (tags[c.source] || 'badge-created') + '" style="font-size: 0.68rem; padding: 1px 6px;">' +
+                           escHtml(c.source) + '</span></td>';
+                }).join('') + '</tr>';
+            }).join('');
+            var table = '<table><thead><tr><th>Setting</th>' + cols.map(function (s) {
+                return '<th>' + escHtml(s) + '</th>';
+            }).join('') + '</tr></thead><tbody>' + rows + '</tbody></table>';
+            var cutoffs = Object.keys(g.imag_cutoff).map(function (d) {
+                var c = g.imag_cutoff[d];
+                return '<div>' + escHtml(d) + ': ' + methodsValue(c.value) + ' cm⁻¹ <span style="color: var(--text-muted);">(' +
+                       escHtml(c.rule) + ')</span></div>';
+            }).join('');
+            var cats = Object.keys(g.categories).sort().map(function (k) {
+                return '<div><code>' + escHtml(k) + '</code> = ' + methodsValue(g.categories[k]) + '</div>';
+            }).join('');
+            var inputs = g.inputs.map(function (i) {
+                return '<details style="margin-top: 6px;"><summary class="mono" style="cursor: pointer;">' +
+                       escHtml(i.task_type) + ' · multiplicity ' + escHtml(i.multiplicity) +
+                       (i.states ? ' · ' + escHtml(i.states.join(', ')) : '') + ' · ' +
+                       escHtml(i.retried_jobs) + ' retried</summary>' + pre + escHtml(i.input) + '</pre></details>';
+            }).join('');
+            return '<div class="sa-card">' +
+                   '<div class="sa-card-head"><span class="sa-mol-id">Group ' + (index + 1) + '</span>' +
+                   '<span>' + escHtml(g.molecules) + ' molecule' + (g.molecules === 1 ? '' : 's') + ' · ' + states +
+                   '</span></div>' +
+                   '<div class="sa-col-title">Headers</div>' + headers +
+                   '<div class="sa-col-title" style="margin-top: 14px;">Settings</div>' +
+                   '<div class="table-scroll">' + table + '</div>' +
+                   '<div class="sa-col-title" style="margin-top: 14px;">Imaginary-frequency cutoffs</div>' +
+                   '<div class="sa-picks">' + cutoffs + '</div>' +
+                   '<div class="sa-col-title" style="margin-top: 14px;">Categories and options</div>' +
+                   '<div class="sa-picks">' + (cats || '–') + '</div>' +
+                   '<div class="sa-col-title" style="margin-top: 14px;">ORCA inputs</div>' +
+                   '<div class="sa-card-note">What a fresh job gets; a retry may change it (see the retry strategies ' +
+                   'below). "retried" counts the jobs of that type that ran as retries.</div>' + inputs +
+                   '</div>';
+        }
+
+        function methodsPipelineCard(p) {
+            var stages = Object.keys(p.stages).map(function (name) {
+                var s = p.stages[name];
+                return '<tr><td>' + escHtml(name) + '</td><td class="mono">' + escHtml(s.time_limit) +
+                       '</td><td class="mono">' + escHtml(s.default_nprocs) + '</td><td class="mono">' +
+                       escHtml(s.default_mem_per_core) + '</td></tr>';
+            }).join('');
+            var retry = Object.keys(p.retry).map(function (name) {
+                return '<div><code>' + escHtml(name) + '</code> ' + escHtml(p.retry[name]) + '</div>';
+            }).join('');
+            var versions = Object.keys(p.orca_versions).map(function (t) {
+                return '<div><code>' + escHtml(t) + '</code> ' +
+                       (p.orca_versions[t] == null ? 'unknown' : escHtml(p.orca_versions[t])) + '</div>';
+            }).join('');
+            return '<div class="sa-card">' +
+                   '<div class="sa-card-head"><span class="sa-mol-id">Pipeline (current config)</span></div>' +
+                   '<div class="sa-picks"><div>Max attempts: ' + escHtml(p.max_attempts) + '</div>' +
+                   '<div>SLURM partition <code>' + escHtml(p.slurm.partition) + '</code>, nice ' +
+                   escHtml(p.slurm.nice) + '</div>' +
+                   '<div>ORCA <code>' + escHtml(p.orca.path) + '</code>, mpi_env <code>' +
+                   escHtml(p.orca.mpi_env || '–') + '</code></div></div>' +
+                   '<div class="sa-col-title" style="margin-top: 14px;">Retry strategies</div>' +
+                   '<div class="sa-picks">' + retry + '</div>' +
+                   '<div class="sa-col-title" style="margin-top: 14px;">Stages</div>' +
+                   '<div class="table-scroll"><table><thead><tr><th>Stage</th><th>Time limit</th>' +
+                   '<th>Default cores</th><th>Default MB/core</th></tr></thead><tbody>' + stages + '</tbody></table></div>' +
+                   '<div class="sa-col-title" style="margin-top: 14px;">ORCA version (newest output per job type)</div>' +
+                   '<div class="sa-picks">' + (versions || '–') + '</div>' +
+                   '</div>';
+        }
+
+        function methodsCards(payload) {
+            var groups = payload.groups.length
+                ? payload.groups.map(methodsGroupCard).join('')
+                : '<div class="empty-state" style="padding: 30px 0;">No states in this project yet.</div>';
+            return groups + methodsPipelineCard(payload.pipeline);
+        }
+
+        async function loadMethodsPage() {
+            var sel  = document.getElementById('projectSelectMethods');
+            var name = sel ? sel.value : currentProject;
+            var empty = document.getElementById('mtEmptyState');
+            var host  = document.getElementById('mtCards');
+            if (!name) {
+                empty.style.display = 'block';
+                host.style.display = 'none';
+                return;
+            }
+            empty.style.display = 'none';
+            host.style.display = 'block';
+            host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Reading methods…</div>';
+            try {
+                var resp = await fetch('/api/projects/' + projectPath(name) + '/methods');
+                var payload = await safeJson(resp);
+                if (!resp.ok || !payload.groups) {
+                    host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Error: ' +
+                                     escHtml(payload.detail || payload._err || ('HTTP ' + resp.status)) +
+                                     '</div>';
+                    return;
+                }
+                host.innerHTML = methodsCards(payload);
             } catch (err) {
                 host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Network error: ' +
                                  escHtml(err.message) + '</div>';

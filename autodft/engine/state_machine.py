@@ -11,7 +11,7 @@ import logging
 from datetime import datetime, timezone
 from time import monotonic
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
 
 from sqlmodel import Session, col, select
 
@@ -1082,6 +1082,118 @@ def _xyz_atoms(xyz_data: str) -> Optional[list[str]]:
     return [r[0] for r in rows]
 
 
+class JobInputError(ValueError):
+    """Why a job's input cannot be built."""
+
+
+class _RenderedJob(NamedTuple):
+    input_text: str
+    submit_text: str
+    # A rate job's inputs_json record and Hessians (file name -> source); None otherwise.
+    rate_record: Optional[dict] = None
+    hessians: Optional[dict[str, Path]] = None
+
+
+def render_job_input(
+    session: Session, settings: Settings, task: ComputationTask, state: MoleculeState, multiplicity: int,
+    *, job: Optional[ComputationJob] = None, qm_engine: Optional[QMEngine] = None,
+) -> tuple[str, str]:
+    """(input.inp, submit.cmd) a fresh job of *task* gets; writes nothing.
+
+    Without *job* the submit script names a placeholder job directory.
+    Raises :class:`JobInputError` when the input cannot be built.
+    """
+    rendered = _render_job(session, settings, task, state, multiplicity, job, qm_engine)
+    return rendered.input_text, rendered.submit_text
+
+
+def _render_job(
+    session: Session, settings: Settings, task: ComputationTask, state: MoleculeState, multiplicity: int,
+    job: Optional[ComputationJob], qm_engine: Optional[QMEngine],
+) -> _RenderedJob:
+    qm_engine = qm_engine or OrcaParser(settings.orca)
+    header = session.get(ComputationHeader, task.header_id)
+    if header is None:
+        raise JobInputError(f"Header {task.header_id} not found")
+    header_text = header.header_text
+    try:
+        charge, _ = _get_job_charge_multiplicity(task.task_type, state)
+    except ValueError as exc:
+        raise JobInputError(f"Cannot resolve charge/multiplicity: {exc}") from exc
+
+    metadata = json.loads(state.metadata_json) if state.metadata_json else {}
+    if "advanced" in metadata:
+        # Advanced settings render onto the method-only header before anything composes it.
+        from autodft.qm.orca.advanced import render_settings, stage_for
+        from autodft.qm.orca.blocks import is_tight_optimization
+
+        stage = stage_for(task.task_type.value)
+        floor = "Tight" if is_tight_optimization(task.task_type.value, metadata) else None
+        header_text = render_settings(header_text, metadata["advanced"][stage], stage, geom_floor=floor)
+
+    record: Optional[dict] = None
+    hessians: Optional[dict[str, Path]] = None
+    if task.task_type.value.startswith("esd_"):
+        # Rate jobs are built from other tasks' results and Hessians.
+        from autodft.engine.photophysics import rate_job_input
+        from autodft.qm.orca.esd_inputs import EsdInputError
+
+        try:
+            header_text, record, hessians = rate_job_input(session, task, state, header_text)
+        except (OSError, KeyError, ValueError) as exc:  # EsdInputError is a ValueError
+            detail = str(exc) if isinstance(exc, EsdInputError) else f"{type(exc).__name__}: {exc}"
+            raise JobInputError(f"ESD inputs: {detail}") from exc
+    else:
+        # Category tasks add their own blocks; every other type runs the
+        # header verbatim.
+        from autodft.qm.orca.blocks import HeaderConflict, compose_header
+
+        if _runs_nbo(state, task):
+            unavailable = categories.nbo_unavailable(settings)
+            if unavailable:
+                raise JobInputError(unavailable)
+        try:
+            header_text = compose_header(
+                task.task_type.value, header_text, metadata, multiplicity=multiplicity,
+            )
+        except HeaderConflict as exc:
+            raise JobInputError(str(exc)) from exc
+
+    input_text = qm_engine.render_input(header_text, charge, multiplicity)
+
+    # --- Gap 3 fix: Parse resources from header, fall back to config ---
+    nprocs, mem_per_core = _parse_resources_from_header(header_text)
+    computed = record.get("computed") if record is not None else None
+    stage_config = _get_stage_config(settings, task.task_type, state, computed)
+    if nprocs is None:
+        nprocs = stage_config.default_nprocs
+    if mem_per_core is None:
+        mem_per_core = stage_config.default_mem_per_core
+
+    if job is not None:
+        job_path, job_name = Path(job.job_path), f"autodft_{job.id}_{task.task_type.value}"
+    else:
+        job_path, job_name = Path(task.task_path or ".") / "job_N", f"autodft_N_{task.task_type.value}"
+    submit_text = qm_engine.render_submit_script(
+        job_path=job_path,
+        job_name=job_name,
+        nprocs=nprocs,
+        mem_per_core=mem_per_core,
+        time_limit=stage_config.time_limit,
+        partition=settings.slurm.partition,
+        nice=settings.slurm.nice,
+        keep_hessian=_keeps_hessian(state, task),
+        keep_cubes=_keeps_cubes(state, task),
+        runs_nbo=_runs_nbo(state, task),
+        keep_wavefunction=_keeps_wavefunction(state, task),
+        # Its log names how much memory per rank an MP2 response lacked.
+        keep_mp2resp=task.task_type == TaskType.singlepoint_nmr,
+        keep_esd_files=task.task_type.value.startswith("esd_"),
+        extra_inputs=list(hessians) if hessians is not None else None,
+    )
+    return _RenderedJob(input_text, submit_text, record, hessians)
+
+
 def _generate_job_files(
     session: Session,
     job: ComputationJob,
@@ -1100,12 +1212,6 @@ def _generate_job_files(
     """
     job_path = Path(job.job_path)
 
-    # Fetch header text
-    header = session.get(ComputationHeader, task.header_id)
-    if header is None:
-        return _fail_task(session, task, job, f"Header {task.header_id} not found")
-    header_text = header.header_text
-
     # Fetch state for base charge / multiplicity
     state = session.get(MoleculeState, task.state_id)
     if state is None:
@@ -1120,42 +1226,10 @@ def _generate_job_files(
         return _fail_task(session, task, job,
                           f"Cannot resolve charge/multiplicity: {exc}")
 
-    metadata = json.loads(state.metadata_json) if state.metadata_json else {}
-    if "advanced" in metadata:
-        # Advanced settings render onto the method-only header before anything composes it.
-        from autodft.qm.orca.advanced import render_settings, stage_for
-        from autodft.qm.orca.blocks import is_tight_optimization
-
-        stage = stage_for(task.task_type.value)
-        floor = "Tight" if is_tight_optimization(task.task_type.value, metadata) else None
-        header_text = render_settings(header_text, metadata["advanced"][stage], stage, geom_floor=floor)
-
-    extra_inputs: Optional[list[str]] = None
-    if task.task_type.value.startswith("esd_"):
-        # Rate jobs are built from other tasks' results and Hessians.
-        from autodft.engine.photophysics import prepare_rate_job
-        from autodft.qm.orca.esd_inputs import EsdInputError
-
-        try:
-            header_text, extra_inputs = prepare_rate_job(session, task, state, header_text, job_path)
-        except (OSError, KeyError, ValueError) as exc:  # EsdInputError is a ValueError
-            detail = str(exc) if isinstance(exc, EsdInputError) else f"{type(exc).__name__}: {exc}"
-            return _fail_task(session, task, job, f"ESD inputs: {detail}")
-    else:
-        # Category tasks add their own blocks; every other type runs the
-        # header verbatim.
-        from autodft.qm.orca.blocks import HeaderConflict, compose_header
-
-        if _runs_nbo(state, task):
-            unavailable = categories.nbo_unavailable(settings)
-            if unavailable:
-                return _fail_task(session, task, job, unavailable)
-        try:
-            header_text = compose_header(
-                task.task_type.value, header_text, metadata, multiplicity=multiplicity,
-            )
-        except HeaderConflict as exc:
-            return _fail_task(session, task, job, str(exc))
+    try:
+        rendered = _render_job(session, settings, task, state, multiplicity, job, qm_engine)
+    except JobInputError as exc:
+        return _fail_task(session, task, job, str(exc))
 
     # Fetch input geometry
     geom = session.get(MoleculeGeometry, task.input_geometry_id)
@@ -1166,44 +1240,20 @@ def _generate_job_files(
     if task.task_type == TaskType.optimization and previous_failed_job is not None:
         xyz_data = _restart_geometry(previous_failed_job, xyz_data)
 
-    # Write QM input
-    qm_engine.generate_input(
-        job_path=job_path,
-        header=header_text,
-        charge=charge,
-        multiplicity=multiplicity,
-        xyz_data=xyz_data,
-    )
+    if rendered.hessians is not None:
+        from autodft.engine.photophysics import copy_rate_hessians
 
-    # --- Gap 3 fix: Parse resources from header, fall back to config ---
-    nprocs, mem_per_core = _parse_resources_from_header(header_text)
-    computed = json.loads(task.inputs_json or "{}").get("computed") if extra_inputs is not None else None
-    stage_config = _get_stage_config(settings, task.task_type, state, computed)
-    if nprocs is None:
-        nprocs = stage_config.default_nprocs
-    if mem_per_core is None:
-        mem_per_core = stage_config.default_mem_per_core
-    time_limit = stage_config.time_limit
+        try:
+            copy_rate_hessians(rendered.hessians, job_path)
+        except OSError as exc:
+            return _fail_task(session, task, job, f"ESD inputs: {type(exc).__name__}: {exc}")
+        task.inputs_json = json.dumps(rendered.rate_record)
+        session.add(task)
 
-    # Write submit script
-    job_name = f"autodft_{job.id}_{task.task_type.value}"
-    qm_engine.generate_submit_script(
-        job_path=job_path,
-        job_name=job_name,
-        nprocs=nprocs,
-        mem_per_core=mem_per_core,
-        time_limit=time_limit,
-        partition=settings.slurm.partition,
-        nice=settings.slurm.nice,
-        keep_hessian=_keeps_hessian(state, task),
-        keep_cubes=_keeps_cubes(state, task),
-        runs_nbo=_runs_nbo(state, task),
-        keep_wavefunction=_keeps_wavefunction(state, task),
-        # Its log names how much memory per rank an MP2 response lacked.
-        keep_mp2resp=task.task_type == TaskType.singlepoint_nmr,
-        keep_esd_files=task.task_type.value.startswith("esd_"),
-        extra_inputs=extra_inputs,
-    )
+    job_path.mkdir(parents=True, exist_ok=True)
+    (job_path / "input.inp").write_text(rendered.input_text, encoding="utf-8")
+    (job_path / "input.xyz").write_text(xyz_data, encoding="utf-8")
+    (job_path / "submit.cmd").write_text(rendered.submit_text, encoding="utf-8")
 
     # --- Gap 1 fix: Apply failure-specific retry strategies on retries ---
     if attempt > 1 and previous_failed_job is not None:

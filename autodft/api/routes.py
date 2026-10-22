@@ -845,6 +845,22 @@ def api_project_state_analysis(
     return analyze_project(name)
 
 
+@router.get("/api/projects/{name}/methods")
+def api_project_methods(
+    name: str, identity: Identity = Depends(current_identity),
+):
+    """What a project ran with: headers, settings and their sources, cutoffs,
+    the ORCA input of every job type, and the current pipeline config."""
+    bad = _reject_bad_project(name)
+    if bad is not None:
+        return bad
+    from autodft.analysis.methods import project_methods
+
+    with get_session() as session:
+        name = resolve_project(session, identity, name)
+        return project_methods(session, get_active_settings(), name)
+
+
 @router.post("/api/projects/{name}/state-analysis/export")
 def api_project_state_analysis_export(
     name: str, identity: Identity = Depends(current_identity),

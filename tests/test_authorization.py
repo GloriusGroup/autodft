@@ -60,6 +60,7 @@ SCOPED = {
     "/api/projects/{name}/state-analysis",
     "/api/projects/{name}/state-analysis/export",
     "/api/projects/{name}/photophysics",
+    "/api/projects/{name}/methods",
     # The owner (or admin) adds calculations to their own molecules.
     "/api/projects/{name}/extend-info",
     "/api/projects/{name}/extend",

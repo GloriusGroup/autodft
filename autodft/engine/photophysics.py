@@ -253,12 +253,12 @@ def wanted_rates(metadata: dict) -> tuple[str, ...]:
     return tuple(rate for rate in esd_inputs.RATES if rate != "esd_ic" or metadata.get("esd_ic"))
 
 
-def prepare_rate_job(
-    session: Session, task: ComputationTask, state: MoleculeState, sp_header: str, job_path: Path,
-) -> tuple[str, list[str]]:
-    """A rate job's input text, with its Hessians copied into *job_path*.
+def rate_job_input(
+    session: Session, task: ComputationTask, state: MoleculeState, sp_header: str,
+) -> tuple[str, dict, dict[str, Path]]:
+    """A rate job's input text, its ``inputs_json`` record and its Hessians (file name -> source).
 
-    What went into it (energies, DELE, SOCME) is kept under ``inputs_json["computed"]``.
+    What went into it (energies, DELE, SOCME) is kept under the record's ``"computed"``.
     """
     stored = json.loads(task.inputs_json or "{}")
     roles = {name: stored[name] for name in ("S0", "S1", "T1") if name in stored}
@@ -266,7 +266,7 @@ def prepare_rate_job(
     extractor = PipelineExtractor(molecule.project_name if molecule is not None else "")
     data = _rate_data(session, roles)
     _, _, hessians = esd_inputs.RATES[task.task_type.value]
-    job_path.mkdir(parents=True, exist_ok=True)
+    sources = {}
     for filename, name in hessians.items():
         folder = extractor.successful_job_path(session, roles[name]["opt"])
         source = folder / "input.hess" if folder is not None else None
@@ -274,7 +274,7 @@ def prepare_rate_job(
             raise esd_inputs.EsdInputError(
                 f"the {name} optimisation (task {roles[name]['opt']}) left no input.hess"
             )
-        shutil.copyfile(source, job_path / filename)
+        sources[filename] = source
     rate = task.task_type.value
     ht_header = _ht_header(session, state)
     if "part" in stored:
@@ -291,9 +291,14 @@ def prepare_rate_job(
         roles = {**roles, **{key: stored[key] for key in ("part", "parts", "plan")}}
     else:
         text, computed = esd_inputs.build(rate, data, _metadata(state), sp_header, state.charge, ht_header)
-    task.inputs_json = json.dumps({**roles, "computed": computed})
-    session.add(task)
-    return text, list(hessians)
+    return text, {**roles, "computed": computed}, sources
+
+
+def copy_rate_hessians(sources: dict[str, Path], job_path: Path) -> None:
+    """Copy a rate job's Hessians (file name -> source) into *job_path*."""
+    job_path.mkdir(parents=True, exist_ok=True)
+    for filename, source in sources.items():
+        shutil.copyfile(source, job_path / filename)
 
 
 def _rate_data(session: Session, roles: dict) -> dict[str, esd_inputs.StateData]:
