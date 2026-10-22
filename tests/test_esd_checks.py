@@ -214,7 +214,7 @@ def test_check_type(session):
     opt = ComputationTask(task_type=TaskType.optimization, state_id=esd_s1.id, header_id=1)
     assert _check_type(session, opt) == "optimization_excited"
     opt.state_id = plain.id
-    assert _check_type(session, opt) == "optimization"
+    assert _check_type(session, opt) == "optimization_strict"
     rate = ComputationTask(task_type=TaskType.esd_isc, state_id=esd_s1.id, header_id=1)
     assert _check_type(session, rate) == "esd_isc"
 

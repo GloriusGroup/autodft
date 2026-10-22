@@ -340,7 +340,7 @@ elements are all-electron in def2 and need nothing extra.
 (sum of K\*K over 7) is flagged as unreliable rather than dropped. A
 negative rate is clamped to 0 and flagged. Soft imaginary modes that the
 optimisation's checks let through are flagged — ORCA's ESD module treats
-them as real. The checks retry anything below −50 cm⁻¹; with
+them as real. The S1 check retries anything below −50 cm⁻¹; with
 `strict_convergence` off, the S1 optimisation (numerical Hessian, where
 ortho-substituted 9-aryl rotors end at −50 to −65 cm⁻¹ in about a third of
 the acridines) accepts modes down to −100 cm⁻¹ instead of repeating its
