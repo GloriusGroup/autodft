@@ -636,6 +636,31 @@ class TestPriorityThrottle:
         session.refresh(job)
         assert job.slurm_jobid == 4242
 
+    def test_optimizations_go_before_older_singlepoints(self, session, sample_task, tmp_path):
+        """A finished optimisation unlocks its own singlepoints, so its retry
+        must not wait behind thousands of singlepoint jobs with lower ids."""
+        sp_task = ComputationTask(
+            task_type=TaskType.singlepoint, status=TaskStatus.pending,
+            state_id=sample_task.state_id, header_id=sample_task.header_id,
+        )
+        session.add(sp_task)
+        session.commit()
+        sp_dir = tmp_path / "sp"
+        sp_dir.mkdir()
+        (sp_dir / "submit.cmd").write_text("#!/bin/bash\n")
+        sp_job = ComputationJob(task_id=sp_task.id, attempt=1, job_path=str(sp_dir))
+        session.add(sp_job)
+        session.commit()
+        opt_job = self._ready(session, sample_task, tmp_path, priority=1)
+        assert sp_job.id < opt_job.id
+
+        # Room for one job: 9 waiting, cap 10.
+        submit_pending_jobs(session, _StubScheduler(queue_length=9, queues=True), Settings())
+        session.refresh(opt_job)
+        session.refresh(sp_job)
+        assert opt_job.slurm_jobid == 4242
+        assert sp_job.slurm_jobid is None
+
     def test_archived_molecules_are_not_submitted(self, session, sample_task, tmp_path):
         """Archiving wipes the comp_data tree; submitting into it would burn
         the retry budget against directories that no longer exist."""

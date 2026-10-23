@@ -13,6 +13,7 @@ from time import monotonic
 from pathlib import Path
 from typing import NamedTuple, Optional
 
+from sqlalchemy import case
 from sqlmodel import Session, col, select
 
 from autodft import categories
@@ -839,6 +840,9 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
     # highest-priority work first. Because the cap scales with priority,
     # the first job that doesn't fit ends the loop: everything after it has
     # an equal or lower priority, hence an equal or lower cap.
+    # Within a priority, jobs that unlock follow-ups (confsearch, optimisation,
+    # ESD) go before singlepoints, so a retry never waits behind older singlepoints.
+    singlepoint_types = [t for t in TaskType if t.value.startswith("singlepoint")]
     statement = (
         select(ComputationJob, col(Molecule.priority))
         .join(ComputationTask, col(ComputationTask.id) == col(ComputationJob.task_id))
@@ -850,7 +854,11 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
             col(ComputationJob.success).is_(None),
             col(Molecule.archived).is_(False),
         )
-        .order_by(col(Molecule.priority).desc(), col(ComputationJob.id).asc())
+        .order_by(
+            col(Molecule.priority).desc(),
+            case((col(ComputationTask.task_type).in_(singlepoint_types), 1), else_=0),
+            col(ComputationJob.id).asc(),
+        )
     )
     # Don't submit a paused project's jobs: an archive/export is in flight and
     # a running calculation would race its file operations.
