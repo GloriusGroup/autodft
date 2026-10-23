@@ -72,8 +72,8 @@ nice = 1000
 path       = "/mnt/share/public/software/orca-6.1.1-gxtb/orca"
 # Second arg to ORCA — controls MPI binding. Empty string disables it.
 extra_args = "--bind-to none"
-# Optional script sourced before ORCA runs, e.g. Open MPI 4.1.8 instead of the image's 5.0.3:
-mpi_env    = "/home/employee/n_hoel07/opt/openmpi-4.1.8/env.sh"
+# Optional script sourced before ORCA runs. Empty: the image's Open MPI 5.0.3 (4.1.8 needs installing in the worker images first).
+mpi_env    = ""
 # Optional NBO 7 executable (exported as NBOEXE when set).
 nbo_exe    = "/mnt/share/public/software/nbo7/bin/nbo7.i8.exe"
 # Per-job scratch directory parent. Empty string runs ORCA inside the
