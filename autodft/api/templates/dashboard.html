@@ -1065,21 +1065,65 @@
             text-align: center;
             cursor: default;
         }
-        .loading-animal { width: 96px; height: 60px; display: block; margin: 0 auto 4px; }
-        .loading-animal .hh-spikes { fill: var(--accent); }
-        .loading-animal .hh-face { fill: var(--bg-input); stroke: var(--accent); stroke-width: 1.2; }
-        .loading-animal .hh-dark { fill: var(--text-primary); }
-        .loading-animal .hh-ground { stroke: var(--border); stroke-width: 1.5; stroke-dasharray: 6 5; }
-        .loading-animal .hh-body { animation: hh-bob 0.32s ease-in-out infinite alternate; }
-        .loading-animal .hh-leg {
-            stroke: var(--accent); stroke-width: 2.4; stroke-linecap: round;
-            transform-box: fill-box; transform-origin: top; animation: hh-step 0.32s ease-in-out infinite alternate;
+        .loading-animal { width: 120px; height: 72px; display: none; margin: 0 auto 4px; overflow: hidden; }
+        .loading-card[data-animal="hedgehog"] .la-hedgehog,
+        .loading-card[data-animal="rabbit"] .la-rabbit,
+        .loading-card[data-animal="orca"] .la-orca { display: block; }
+        .loading-animal .la-ground { stroke: var(--border); stroke-width: 1.5; stroke-linecap: round; stroke-dasharray: 5 6; animation: la-run 0.5s linear infinite; }
+        .loading-animal .la-eye { fill: #1b130d; }
+        .loading-animal .la-glint { fill: #fff; }
+        /* Hedgehog */
+        .la-hedgehog .hh-coat { fill: #6f4a2c; }
+        .la-hedgehog .hh-tips { stroke: #b48a5c; stroke-width: 1.1; stroke-linecap: round; }
+        .la-hedgehog .hh-face { fill: #ecd3ab; }
+        .la-hedgehog .hh-ear { fill: #d8b383; }
+        .la-hedgehog .hh-cheek { fill: #f19a92; opacity: 0.55; }
+        .la-hedgehog .hh-body { animation: la-bob 0.3s ease-in-out infinite alternate; }
+        .la-hedgehog .hh-leg {
+            stroke: #4e321d; stroke-width: 3; stroke-linecap: round;
+            transform-box: fill-box; transform-origin: top; animation: hh-step 0.3s ease-in-out infinite alternate;
         }
-        .loading-animal .hh-leg.b { animation-direction: alternate-reverse; }
-        .loading-animal .hh-ground { animation: hh-run 0.55s linear infinite; }
-        @keyframes hh-bob  { from { transform: translateY(0); } to { transform: translateY(-1.5px); } }
-        @keyframes hh-step { from { transform: rotate(-28deg); } to { transform: rotate(28deg); } }
-        @keyframes hh-run  { from { stroke-dashoffset: 0; } to { stroke-dashoffset: 11; } }
+        .la-hedgehog .hh-leg.b { animation-direction: alternate-reverse; }
+        /* Rabbit: two gallop poses swapped */
+        .la-rabbit .rb-fur { fill: #c2a689; }
+        .la-rabbit .rb-far { fill: #9e8266; }
+        .la-rabbit .rb-leg { stroke: #c2a689; stroke-width: 4.2; stroke-linecap: round; fill: none; }
+        .la-rabbit .rb-leg.far { stroke: #9e8266; }
+        .la-rabbit .rb-leg.near { stroke: #b39576; }
+        .la-rabbit .rb-inner { fill: #f1b4ae; }
+        .la-rabbit .rb-tail { fill: #faf6f0; stroke: #9e8266; stroke-width: 0.6; }
+        .la-rabbit .rb-nose { fill: #e48d8d; }
+        .la-rabbit .rb-a { animation: rb-a 0.42s steps(1) infinite; }
+        .la-rabbit .rb-b { animation: rb-b 0.42s steps(1) infinite; }
+        /* Orca: jumps out of the water and dives back */
+        .la-orca .oc-black { fill: #14171c; stroke: #8b93a1; stroke-width: 0.5; stroke-linejoin: round; }
+        .la-orca .oc-white { fill: #f7f8fa; }
+        .la-orca .oc-saddle { fill: #9aa3ae; }
+        .la-orca .oc-water { fill: #3b82f6; opacity: 0.18; }
+        .la-orca .oc-wave { fill: none; stroke: #60a5fa; stroke-width: 1.6; stroke-linecap: round; animation: oc-wave 1.2s linear infinite; }
+        .la-orca .oc-body {
+            transform-box: view-box; transform-origin: 0 0; transform: translate(40px, 15px);
+            animation: oc-jump 1.6s ease-in-out infinite;
+        }
+        .la-orca .oc-drop { fill: #60a5fa; opacity: 0; transform-box: fill-box; transform-origin: center; }
+        .la-orca .oc-drop.out { animation: oc-out 1.6s ease-out infinite; }
+        .la-orca .oc-drop.in { animation: oc-in 1.6s ease-out infinite; }
+        @keyframes la-run { from { stroke-dashoffset: 0; } to { stroke-dashoffset: 11; } }
+        @keyframes la-bob { from { transform: translateY(0); } to { transform: translateY(-1.5px); } }
+        @keyframes hh-step { from { transform: rotate(-30deg); } to { transform: rotate(30deg); } }
+        @keyframes rb-a { 0% { opacity: 1; } 50% { opacity: 0; } }
+        @keyframes rb-b { 0% { opacity: 0; } 50% { opacity: 1; } }
+        @keyframes oc-wave { from { transform: translateX(0); } to { transform: translateX(-16px); } }
+        @keyframes oc-jump {
+            0%   { transform: translate(10px, 54px) rotate(-55deg); }
+            15%  { transform: translate(18px, 30px) rotate(-38deg); }
+            38%  { transform: translate(40px, 15px) rotate(0deg); }
+            61%  { transform: translate(62px, 30px) rotate(38deg); }
+            76%  { transform: translate(70px, 54px) rotate(55deg); }
+            100% { transform: translate(70px, 54px) rotate(55deg); }
+        }
+        @keyframes oc-out { 0%, 5% { opacity: 0; transform: translateY(0); } 12% { opacity: 0.9; } 30% { opacity: 0; transform: translateY(-7px); } 100% { opacity: 0; } }
+        @keyframes oc-in { 0%, 66% { opacity: 0; transform: translateY(0); } 72% { opacity: 0.9; } 90% { opacity: 0; transform: translateY(-7px); } 100% { opacity: 0; } }
         .loading-label { font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 10px; }
         .loading-bar { height: 6px; border-radius: 3px; background: var(--bg-input); overflow: hidden; }
         .loading-fill { height: 100%; width: 0; background: var(--accent); border-radius: 3px; transition: width 0.15s; }
@@ -1098,6 +1142,7 @@
         @media (prefers-reduced-motion: reduce) {
             .loading-overlay { transition: none; }
             .loading-animal * { animation: none !important; }
+            .la-rabbit .rb-b { display: none; }
             .loading-bar.indeterminate .loading-fill { animation: none; width: 100%; opacity: 0.45; }
         }
     </style>
@@ -2134,21 +2179,85 @@
 
     <!-- Page-blocking loading overlay (user-initiated loads only) -->
     <div class="loading-overlay" id="loadingOverlay">
-        <div class="loading-card" role="status" aria-live="polite">
-            <svg class="loading-animal" viewBox="0 0 64 40" aria-hidden="true">
-                <line class="hh-ground" x1="2" y1="38.5" x2="62" y2="38.5"/>
-                <g class="hh-legs">
-                    <line class="hh-leg a" x1="17" y1="31" x2="17" y2="36"/>
-                    <line class="hh-leg b" x1="22" y1="31" x2="22" y2="36"/>
-                    <line class="hh-leg b" x1="38" y1="31" x2="38" y2="36"/>
-                    <line class="hh-leg a" x1="43" y1="31" x2="43" y2="36"/>
-                </g>
+        <div class="loading-card" id="loadingCard" data-animal="hedgehog" role="status" aria-live="polite">
+            <svg class="loading-animal la-hedgehog" viewBox="0 0 80 48" aria-hidden="true">
+                <line class="la-ground" x1="2" y1="46" x2="78" y2="46"/>
+                <line class="hh-leg a" x1="20" y1="40" x2="20" y2="44.5"/>
+                <line class="hh-leg b" x1="26" y1="40.5" x2="26" y2="44.5"/>
+                <line class="hh-leg b" x1="41" y1="40.5" x2="41" y2="44.5"/>
+                <line class="hh-leg a" x1="47" y1="40" x2="47" y2="44.5"/>
                 <g class="hh-body">
-                    <path class="hh-spikes" d="M8 27 L5 21 L10 19 L8 13 L14 13 L14 7 L20 9 L23 3 L27 8 L32 3 L34 9 L40 6 L40 12 L46 12 L44 18 L49 20 L46 27 Q30 35 8 27 Z"/>
-                    <ellipse class="hh-spikes" cx="28" cy="25" rx="18" ry="8"/>
-                    <ellipse class="hh-face" cx="48" cy="26" rx="9" ry="6.5"/>
-                    <circle class="hh-dark" cx="57" cy="25" r="1.8"/>
-                    <circle class="hh-dark" cx="50" cy="23.5" r="1.2"/>
+                    <path class="hh-coat" d="M7.1 39.1 L12.5 35.4 L8.5 31.6 L14.0 29.8 L10.8 24.2 L17.8 25.0 L17.6 19.5 L23.4 21.4 L24.9 14.9 L30.1 19.7 L33.9 15.0 L37.3 19.9 L42.8 15.4 L43.9 22.0 L49.7 20.4 L49.2 25.8 L56.1 25.6 L52.5 30.9 Q50 40 33 41.5 Q14 42 7.1 39.1 Z"/>
+                    <g class="hh-tips">
+                        <line x1="19" y1="36" x2="13" y2="35"/><line x1="21" y1="32" x2="15" y2="29.5"/>
+                        <line x1="24" y1="29" x2="19.5" y2="25"/><line x1="28" y1="27" x2="25.5" y2="21.5"/>
+                        <line x1="32.5" y1="26.5" x2="32" y2="20.5"/><line x1="37" y1="27" x2="39" y2="21.5"/>
+                        <line x1="41" y1="28.5" x2="44.5" y2="24"/>
+                    </g>
+                    <path class="hh-face" d="M47 26.5 Q55 26 66 35.5 Q57 41.5 46 40.5 Q43 33 47 26.5 Z"/>
+                    <circle class="hh-ear" cx="49" cy="27.5" r="2.6"/>
+                    <circle class="hh-cheek" cx="56" cy="37" r="2"/>
+                    <circle class="la-eye" cx="55.5" cy="32" r="1.6"/>
+                    <circle class="la-glint" cx="56" cy="31.5" r="0.5"/>
+                    <circle class="la-eye" cx="66" cy="35.4" r="1.9"/>
+                </g>
+            </svg>
+            <svg class="loading-animal la-rabbit" viewBox="0 0 80 48" aria-hidden="true">
+                <line class="la-ground" x1="2" y1="46" x2="78" y2="46"/>
+                <g class="rb-a">
+                    <g transform="translate(0 -4)">
+                        <line class="rb-leg far" x1="27" y1="32" x2="11" y2="38"/>
+                        <line class="rb-leg far" x1="48" y1="33" x2="63" y2="35"/>
+                        <ellipse class="rb-far" cx="45" cy="15.5" rx="8.5" ry="2.6" transform="rotate(-24 45 15.5)"/>
+                        <ellipse class="rb-fur" cx="38" cy="29" rx="15.5" ry="7.5" transform="rotate(-6 38 29)"/>
+                        <ellipse class="rb-fur" cx="26.5" cy="30" rx="6.5" ry="5.5"/>
+                        <line class="rb-leg near" x1="26" y1="33" x2="9" y2="40"/>
+                        <line class="rb-leg near" x1="49" y1="34" x2="65" y2="38"/>
+                        <circle class="rb-tail" cx="20.5" cy="25.5" r="3.6"/>
+                        <ellipse class="rb-fur" cx="56" cy="23.5" rx="8" ry="6.2" transform="rotate(-14 56 23.5)"/>
+                        <ellipse class="rb-fur" cx="47" cy="17" rx="9" ry="2.9" transform="rotate(-18 47 17)"/>
+                        <ellipse class="rb-inner" cx="46.5" cy="17.2" rx="6.5" ry="1.3" transform="rotate(-18 46.5 17.2)"/>
+                        <circle class="la-eye" cx="58.5" cy="21.6" r="1.3"/>
+                        <circle class="la-glint" cx="58.9" cy="21.2" r="0.4"/>
+                        <circle class="rb-nose" cx="63.6" cy="24.4" r="1"/>
+                    </g>
+                </g>
+                <g class="rb-b">
+                    <line class="rb-leg far" x1="31" y1="39" x2="49" y2="43.5"/>
+                    <line class="rb-leg far" x1="47" y1="36" x2="40" y2="44"/>
+                    <ellipse class="rb-far" cx="40" cy="20" rx="8.5" ry="2.6" transform="rotate(-8 40 20)"/>
+                    <ellipse class="rb-fur" cx="37" cy="31.5" rx="13" ry="8" transform="rotate(-10 37 31.5)"/>
+                    <ellipse class="rb-fur" cx="28.5" cy="35" rx="6.8" ry="6.2"/>
+                    <line class="rb-leg near" x1="29" y1="40" x2="51" y2="45"/>
+                    <line class="rb-leg near" x1="45" y1="37" x2="36.5" y2="45"/>
+                    <circle class="rb-tail" cx="22.5" cy="31" r="3.6"/>
+                    <ellipse class="rb-fur" cx="51.5" cy="25.5" rx="7.5" ry="6.2" transform="rotate(12 51.5 25.5)"/>
+                    <ellipse class="rb-fur" cx="42" cy="20" rx="9" ry="2.9" transform="rotate(-4 42 20)"/>
+                    <ellipse class="rb-inner" cx="41.5" cy="20.1" rx="6.5" ry="1.3" transform="rotate(-4 41.5 20.1)"/>
+                    <circle class="la-eye" cx="54" cy="24.5" r="1.3"/>
+                    <circle class="la-glint" cx="54.4" cy="24.1" r="0.4"/>
+                    <circle class="rb-nose" cx="58.3" cy="28.1" r="1"/>
+                </g>
+            </svg>
+            <svg class="loading-animal la-orca" viewBox="0 0 80 48" aria-hidden="true">
+                <defs><clipPath id="ocAbove"><rect x="0" y="0" width="80" height="38.5"/></clipPath></defs>
+                <rect class="oc-water" x="0" y="38" width="80" height="10"/>
+                <circle class="oc-drop out" cx="7" cy="36" r="1.1"/>
+                <circle class="oc-drop out" cx="21" cy="34.5" r="0.9"/>
+                <circle class="oc-drop in" cx="62" cy="35" r="1.1"/>
+                <circle class="oc-drop in" cx="75" cy="36" r="0.9"/>
+                <g clip-path="url(#ocAbove)">
+                    <g class="oc-body">
+                        <path class="oc-black" d="M-1 -6.6 C-2 -11 -4 -14.5 -6.5 -16.5 C-1 -14 2.5 -10 5 -6.6 Z"/>
+                        <path class="oc-black" d="M20 0 C18.5 -5.5 8 -7.5 -4 -6.5 C-11 -6 -16 -3 -19.5 -1.2 L-25 -5 C-24.5 -2.5 -23.5 -0.5 -22.5 0 C-23.5 0.5 -24.5 2.5 -25 5 L-19.5 1.2 C-14 3.5 -4 7 6 6.2 C13 5.6 19 3.5 20 0 Z"/>
+                        <path class="oc-white" d="M18.6 1.6 C12 5.6 1 6.4 -7 3.8 C1 3.6 10 3 18.6 1.6 Z"/>
+                        <ellipse class="oc-white" cx="10" cy="-2.6" rx="3.3" ry="1.25" transform="rotate(-8 10 -2.6)"/>
+                        <ellipse class="oc-saddle" cx="-6.5" cy="-5.2" rx="4.2" ry="0.9"/>
+                        <path class="oc-black" d="M5 4 L1.5 10 L9 5 Z"/>
+                    </g>
+                </g>
+                <g class="oc-wave">
+                    <path d="M0 38.5 q4 -2 8 0 t8 0 t8 0 t8 0 t8 0 t8 0 t8 0 t8 0 t8 0 t8 0 t8 0"/>
                 </g>
             </svg>
             <div class="loading-label" id="loadingLabel">Loading…</div>
@@ -2229,6 +2338,7 @@
         var LOADING_HANG_MS = 60000;
         // A body is parsed after a timer tick in Chrome: the next step of a chain needs a real margin.
         var LOADING_GRACE_MS = 100;
+        var LOADING_ANIMALS = ['rabbit', 'hedgehog', 'orca'];
         var STOPPED_WAITING = 'Stopped waiting. The server may still finish this; check before trying again.';
         var loading = { active: false, gen: 0, entries: [], reqs: [], focus: null,
                         showTimer: null, hangTimer: null, idleTimer: null };
@@ -2302,6 +2412,8 @@
             if (!loading.active) {
                 loading.active = true;
                 loading.focus = document.activeElement;
+                document.getElementById('loadingCard').setAttribute('data-animal',
+                    LOADING_ANIMALS[Math.floor(Math.random() * LOADING_ANIMALS.length)]);
                 document.getElementById('loadingOverlay').style.display = 'flex';
                 setPageInert(true);
                 loading.showTimer = setTimeout(function () {

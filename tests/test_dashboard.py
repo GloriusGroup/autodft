@@ -507,6 +507,28 @@ def test_a_user_load_blocks_at_once_and_shows_after_the_delay():
     assert not out["done"]["blocked"] and not out["done"]["inert"]
 
 
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_each_overlay_picks_one_of_the_animals_at_random():
+    out = _run_overlay("""
+        out.picked = [];
+        for (var i = 0; i < 60; i++) {
+            var p = loadingFetch('Loading…', '/api/x');
+            out.picked.push(document.getElementById('loadingCard').attrs['data-animal']);
+            calls[i].resolve('{}');
+            await p;
+            await idle();
+        }
+    """)
+    assert set(out["picked"]) == {"rabbit", "hedgehog", "orca"}
+
+
+def test_every_animal_has_a_drawing():
+    html = (TEMPLATE / "dashboard.html").read_text()
+    for animal in ("rabbit", "hedgehog", "orca"):
+        assert f'<svg class="loading-animal la-{animal}"' in html
+        assert f'.loading-card[data-animal="{animal}"] .la-{animal}' in html
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_polling_and_timers_never_show_the_overlay():
     out = _run_overlay("""
