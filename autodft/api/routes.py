@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from pathlib import Path
 from typing import Any, Optional
 
@@ -869,13 +870,17 @@ def api_project_sp_energies(
     energies.update(stored.resolve_pending(pending, ("energy",)))
     corrections.update(stored.resolve_pending(pending_opts, ("free_energy_correction",)))
 
+    def finite(found: Optional[dict], key: str) -> Optional[float]:
+        value = (found or {}).get(key)
+        return value if isinstance(value, (int, float)) and math.isfinite(value) else None
+
     out = {}
     for t in sps:
-        energy = (energies.get(t.id) or {}).get("energy")
+        energy = finite(energies.get(t.id), "energy")
         if energy is None:
             continue
         correction = (
-            (corrections.get(t.depends_on_task_id) or {}).get("free_energy_correction")
+            finite(corrections.get(t.depends_on_task_id), "free_energy_correction")
             if t.task_type == TaskType.singlepoint else None
         )
         out[t.id] = {"energy": energy, "gibbs": energy + correction if correction is not None else None}

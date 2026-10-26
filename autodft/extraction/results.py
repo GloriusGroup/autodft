@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
-from sqlmodel import Session, col, func, select
+from sqlmodel import Session, case, col, func, select
 
 from autodft import categories
 from autodft.db import get_session
@@ -255,8 +255,10 @@ def stored_values(
 
     Current records matching their job answer here, without decoding them.
     The rest come back as ``pending`` for :func:`resolve_pending`, which may
-    read output files and so belongs after the session is closed.
+    read output files and so belongs after the session is closed -- so do
+    records SQLite's JSON cannot read (NaN or Infinity from json.dumps).
     """
+    valid = func.json_valid(JobResult.data_json) == 1
     latest = latest_successful_jobs(session, types)
     rows: dict = {}
     for chunk in _chunks([j.id for j in latest.values()], 500):
@@ -265,38 +267,39 @@ def stored_values(
             for row in session.exec(
                 select(
                     JobResult.job_id, JobResult.task_id, JobResult.job_path, JobResult.finished_at,
-                    JobResult.parser_version,
-                    *(func.json_extract(JobResult.data_json, f"$.{key}").label(key) for key in keys),
+                    JobResult.parser_version, valid.label("valid"),
+                    *(case((valid, func.json_extract(JobResult.data_json, f"$.{key}")), else_=None).label(key)
+                      for key in keys),
                 ).where(col(JobResult.job_id).in_(chunk))
             ).all()
         })
     found: dict[int, dict] = {}
-    stale: dict[int, int] = {}
-    missing: list[tuple] = []
+    # job id -> (task id, whether the record is current)
+    decode: dict[int, tuple[int, bool]] = {}
+    pending: list[tuple] = []
     for task_id, job in latest.items():
         row = rows.get(job.id)
         if not _same_job(row, job):
-            missing.append((task_id, types[task_id], job.job_path, None))
-        elif row.parser_version == PARSER_VERSION:
+            pending.append((task_id, types[task_id], job.job_path, None, False))
+        elif row.parser_version == PARSER_VERSION and row.valid:
             found[task_id] = {key: getattr(row, key) for key in keys}
         else:
-            stale[job.id] = task_id
-    pending = list(missing)
-    for chunk in _chunks(sorted(stale), 500):
+            decode[job.id] = (task_id, row.parser_version == PARSER_VERSION)
+    for chunk in _chunks(sorted(decode), 500):
         for job_id, data_json in session.exec(
             select(JobResult.job_id, JobResult.data_json).where(col(JobResult.job_id).in_(chunk))
         ).all():
-            task_id = stale[job_id]
-            pending.append((task_id, types[task_id], latest[task_id].job_path, data_json))
+            task_id, current = decode[job_id]
+            pending.append((task_id, types[task_id], latest[task_id].job_path, data_json, current))
     return found, pending
 
 
 def resolve_pending(pending: list[tuple], keys: tuple[str, ...]) -> dict[int, dict]:
     """The :func:`stored_values` the session could not answer, by :func:`resolve`; needs no session."""
     out = {}
-    for task_id, task_type, job_path, data_json in pending:
+    for task_id, task_type, job_path, data_json, current in pending:
         record = json.loads(data_json) if data_json is not None else None
-        found = resolve(job_path, task_type, record, False)
+        found = resolve(job_path, task_type, record, current)
         if found is not None:
             out[task_id] = {key: found.get(key) for key in keys}
     return out

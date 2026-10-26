@@ -567,3 +567,19 @@ class TestPerKindFlags:
     def test_no_spindens_when_it_was_off(self, env):
         assert self._flags(env, density_spindens=False)["spindens"] is False
         assert _cube(env, "sp3", "spindens").status_code == 404
+
+    def test_a_record_with_nan_neither_breaks_the_request_nor_shows(self, world):
+        env, session, w, state = world
+        opt = _bare(session, w, state, TaskType.optimization)
+        sp = _bare(session, w, state, TaskType.singlepoint, parent=opt)
+        nan = _bare(session, w, state, TaskType.singlepoint_vert_ox)
+        _job(session, opt, w.root / "opt", 1, record={"energy": -1.0, "free_energy_correction": float("nan")})
+        _job(session, sp, w.root / "sp", 1, record={"energy": -2.0})
+        _job(session, nan, w.root / "nan", 1, output=_output(-9.0), record={"energy": float("inf")})
+        response = _get(env, "/api/projects/owner:p/sp-energies")
+        assert response.status_code == 200
+        tasks = response.json()["tasks"]
+        assert tasks[str(sp.id)] == {"energy": -2.0, "gibbs": None}
+        # A current record is not re-parsed, only dropped.
+        assert str(nan.id) not in tasks
+        assert str(env["ids"]["sp"]) in tasks
