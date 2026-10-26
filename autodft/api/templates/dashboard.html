@@ -769,6 +769,16 @@
             overflow: hidden;
         }
         .mol-table div.struct svg { display: block; }
+        .sp-extra:empty { display: none; }
+        .sp-energy { font-family: 'SF Mono','Fira Code','Consolas',monospace; font-size: 0.7rem; color: var(--text-secondary); white-space: nowrap; }
+        .sp-dens { display: flex; gap: 4px; justify-content: center; margin-top: 3px; }
+        .sp-dens .btn-mini { padding: 1px 6px; font-size: 0.7rem; }
+        .mols-toggles { display: flex; gap: 16px; align-items: center; }
+        .mols-toggles .checkbox-group { margin: 0; }
+        .density-modal { max-width: 960px; }
+        .density-viewer { position: relative; width: 100%; height: 540px; background: #fff; border-radius: 8px; margin-top: 10px; }
+        .density-controls { display: flex; gap: 10px; align-items: center; font-size: 0.85rem; color: var(--text-secondary); }
+        .density-controls input[type="range"] { flex: 1; }
         .mol-table .tick      { color: var(--green); font-weight: 700; }
         .mol-table .cross     { color: var(--red);   font-weight: 700; }
         .mol-table .inflight  { color: var(--yellow); }
@@ -1880,6 +1890,15 @@
                 <select id="projectSelectMols"><option value="">Loading...</option></select>
             </div>
         </div>
+        <div class="mols-toggles" style="margin: -12px 0 12px;">
+            <label class="checkbox-group" title="E of every successful singlepoint; the relaxed SP also G = E(SP) + G-E(el) of its optimisation (raw ORCA, no quasi-RRHO). Hartree.">
+                <input type="checkbox" id="showEnergies"><span>Show energies</span>
+            </label>
+            <label class="checkbox-group" title="ElDens / SpinDens viewers for singlepoints whose densities were requested and whose cube (or saved .densities) is still on disk.">
+                <input type="checkbox" id="showDensities"><span>Show densities</span>
+            </label>
+            <span id="spExtrasStatus" style="font-size:0.8rem; color:var(--text-muted);"></span>
+        </div>
 
         <div id="moleculesEmptyState" class="empty-state" style="padding: 60px 16px;">
             Select a project to see its molecules.
@@ -1915,6 +1934,23 @@
                         <tr><td colspan="13" class="empty-state">Loading...</td></tr>
                     </tbody>
                 </table>
+            </div>
+        </div>
+
+        <!-- Density isosurface viewer of the Molecules page (hidden by default) -->
+        <div class="modal-backdrop" id="densityModal" style="display:none;">
+            <div class="modal density-modal">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+                    <h2 id="densityModalTitle" style="margin-bottom:0;">Density</h2>
+                    <button type="button" class="btn-mini" id="densityCloseBtn">Close</button>
+                </div>
+                <div class="density-controls" id="densityControls" style="display:none; margin-top:12px;">
+                    <label for="densityIso">Isovalue</label>
+                    <input type="range" id="densityIso" min="-4" max="0" step="0.05" value="-1.7">
+                    <span id="densityIsoValue" class="mono" style="min-width: 90px;"></span>
+                </div>
+                <div id="densityStatus" class="pp-waiting"></div>
+                <div id="densityViewer" class="density-viewer"></div>
             </div>
         </div>
         </section>
@@ -4161,6 +4197,7 @@
             wrap.style.display = 'block';
             tbody.innerHTML = '<tr><td colspan="13" class="empty-state">Loading...</td></tr>';
 
+            molsSp = { project: name, energies: null, densities: null };
             var resp = await fetch('/api/projects/' + projectPath(name) + '/molecules-detail');
             var data = await resp.json();
             if (!data.molecules || data.molecules.length === 0) {
@@ -4206,12 +4243,12 @@
                         }
                         cells.push('<td class="mol-conf">' + escHtml(c.index) + brokenBadge(c.connectivity) + '</td>');
                         cells.push('<td>' + statusCell(c.optimization) + '</td>');
-                        cells.push('<td>' + statusCell(c.singlepoint) + '</td>');
-                        cells.push('<td>' + statusCell(c.singlepoint_vert_ox) + '</td>');
-                        cells.push('<td>' + statusCell(c.singlepoint_vert_red) + '</td>');
-                        cells.push('<td>' + statusCell(c.singlepoint_vert_spin_change) + '</td>');
-                        cells.push('<td>' + statusCell(c.singlepoint_uvvis) + '</td>');
-                        cells.push('<td>' + statusCell(c.singlepoint_nmr) + '</td>');
+                        cells.push('<td>' + statusCell(c.singlepoint) + spExtraSlot(c, 'singlepoint') + '</td>');
+                        cells.push('<td>' + statusCell(c.singlepoint_vert_ox) + spExtraSlot(c, 'singlepoint_vert_ox') + '</td>');
+                        cells.push('<td>' + statusCell(c.singlepoint_vert_red) + spExtraSlot(c, 'singlepoint_vert_red') + '</td>');
+                        cells.push('<td>' + statusCell(c.singlepoint_vert_spin_change) + spExtraSlot(c, 'singlepoint_vert_spin_change') + '</td>');
+                        cells.push('<td>' + statusCell(c.singlepoint_uvvis) + spExtraSlot(c, 'singlepoint_uvvis') + '</td>');
+                        cells.push('<td>' + statusCell(c.singlepoint_nmr) + spExtraSlot(c, 'singlepoint_nmr') + '</td>');
                         cells.push('<td>' + statusCell(c.esd) + '</td>');
                         var firstRowClass = (!molRendered ? '' : '') + (cells.some(function (c) { return c.indexOf('rowspan') !== -1 && c.indexOf('mol-id') !== -1; }) ? ' mol-first' : '');
                         rows.push('<tr class="' + (firstRowClass.trim()) + '">' + cells.join('') + '</tr>');
@@ -4225,7 +4262,190 @@
             tbody.querySelectorAll('div.struct').forEach(function (div) {
                 drawStructureInto(div, div.dataset.smiles);
             });
+            applySpExtras();
         }
+
+        // ── Molecules page: SP energies and density viewer ──────────────
+
+        // Fetched only once a tickbox is ticked; reset per project load.
+        var molsSp = { project: null, energies: null, densities: null };
+
+        function spExtraSlot(c, type) {
+            var tid = c.tasks && c.tasks[type];
+            if (c[type] !== 'successful' || !tid) return '';
+            return '<div class="sp-extra" data-tid="' + escHtml(tid) + '" data-type="' + type + '"></div>';
+        }
+
+        function spExtraHtml(tid, type, showE, showD) {
+            var parts = [];
+            var e = showE && molsSp.energies && molsSp.energies[tid];
+            if (e) {
+                parts.push('<div class="sp-energy" title="electronic energy">E ' + fmtFixed(e.energy, 6) + ' Eh</div>');
+                if (type === 'singlepoint' && e.gibbs !== null && e.gibbs !== undefined) {
+                    parts.push('<div class="sp-energy" title="E(SP) + G-E(el) of the optimisation (raw ORCA, no quasi-RRHO)">G '
+                        + fmtFixed(e.gibbs, 6) + ' Eh</div>');
+                }
+            }
+            var d = showD && molsSp.densities && molsSp.densities[tid];
+            if (d) {
+                var btns = [];
+                if (d.eldens) btns.push('<button type="button" class="btn-mini sp-dens-btn" data-tid="' + escHtml(tid) + '" data-kind="eldens">ElDens</button>');
+                if (d.spindens) btns.push('<button type="button" class="btn-mini sp-dens-btn" data-tid="' + escHtml(tid) + '" data-kind="spindens">SpinDens</button>');
+                parts.push('<div class="sp-dens">' + btns.join('') + '</div>');
+            }
+            return parts.join('');
+        }
+
+        async function fetchSpTasks(project, what) {
+            var resp = await fetch('/api/projects/' + projectPath(project) + '/' + what);
+            if (!resp.ok) throw new Error(what + ': HTTP ' + resp.status);
+            return (await resp.json()).tasks || {};
+        }
+
+        async function applySpExtras() {
+            var project = molsSp.project;
+            var showE = document.getElementById('showEnergies').checked;
+            var showD = document.getElementById('showDensities').checked;
+            var status = document.getElementById('spExtrasStatus');
+            if (!project) return;
+            try {
+                if (showE && !molsSp.energies) {
+                    status.textContent = 'Loading energies…';
+                    var energies = await fetchSpTasks(project, 'sp-energies');
+                    if (molsSp.project === project) molsSp.energies = energies;
+                }
+                if (showD && !molsSp.densities) {
+                    status.textContent = 'Looking for density files…';
+                    var dens = await fetchSpTasks(project, 'sp-densities');
+                    if (molsSp.project === project) molsSp.densities = dens;
+                }
+                status.textContent = '';
+            } catch (e) {
+                status.textContent = 'Failed: ' + e.message;
+            }
+            if (molsSp.project !== project) return;
+            showE = document.getElementById('showEnergies').checked;
+            showD = document.getElementById('showDensities').checked;
+            document.querySelectorAll('#moleculesTableBody .sp-extra').forEach(function (div) {
+                div.innerHTML = spExtraHtml(div.dataset.tid, div.dataset.type, showE, showD);
+            });
+        }
+
+        // Pinned; loaded on the first viewer opened.
+        var THREEDMOL_URL = 'https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.4.2/3Dmol-min.js';
+        var _3dmolPromise = null;
+        function load3Dmol() {
+            if (window.$3Dmol) return Promise.resolve(window.$3Dmol);
+            if (!_3dmolPromise) {
+                _3dmolPromise = new Promise(function (resolve, reject) {
+                    var s = document.createElement('script');
+                    s.src = THREEDMOL_URL;
+                    s.onload = function () {
+                        if (window.$3Dmol) resolve(window.$3Dmol);
+                        else reject(new Error('3Dmol.js did not initialise'));
+                    };
+                    s.onerror = function () { _3dmolPromise = null; reject(new Error('could not load 3Dmol.js')); };
+                    document.head.appendChild(s);
+                });
+            }
+            return _3dmolPromise;
+        }
+
+        var DENSITY_ISO = { eldens: 0.02, spindens: 0.004 };
+        var densityView = { token: 0, viewer: null, volume: null, kind: null };
+
+        function closeDensityModal() {
+            densityView.token++;
+            if (densityView.viewer) { try { densityView.viewer.clear(); } catch (_) {} }
+            densityView.viewer = null;
+            densityView.volume = null;
+            document.getElementById('densityViewer').innerHTML = '';
+            document.getElementById('densityModal').style.display = 'none';
+        }
+
+        async function openDensityModal(tid, kind) {
+            var token = ++densityView.token;
+            var project = molsSp.project;
+            var avail = (molsSp.densities && molsSp.densities[tid]) || {};
+            var building = !!(avail.build && avail.build[kind]);
+            var status = document.getElementById('densityStatus');
+            document.getElementById('densityModalTitle').textContent =
+                (kind === 'spindens' ? 'Spin density' : 'Electron density') + ' · task ' + tid;
+            document.getElementById('densityControls').style.display = 'none';
+            document.getElementById('densityViewer').innerHTML = '';
+            status.className = 'pp-waiting';
+            status.textContent = building
+                ? 'Building cube with orca_plot… this can take a few minutes.'
+                : 'Loading cube…';
+            document.getElementById('densityModal').style.display = 'flex';
+            try {
+                var lib = load3Dmol();
+                var resp = await fetch('/api/projects/' + projectPath(project) + '/densities/'
+                    + encodeURIComponent(tid) + '/' + kind);
+                if (!resp.ok) {
+                    var msg = 'HTTP ' + resp.status;
+                    try { msg = (await resp.json()).detail || msg; } catch (_) {}
+                    throw new Error(msg);
+                }
+                var cube = await resp.text();
+                if (avail.build) avail.build[kind] = false;
+                var $3D = await lib;
+                if (token !== densityView.token) return;
+                status.textContent = '';
+                renderDensity($3D, cube, kind);
+            } catch (e) {
+                if (token !== densityView.token) return;
+                status.className = 'pp-waiting pp-warn';
+                status.textContent = 'Failed: ' + e.message;
+            }
+        }
+
+        function renderDensity($3D, cube, kind) {
+            var el = document.getElementById('densityViewer');
+            el.innerHTML = '';
+            var viewer = $3D.createViewer(el, { backgroundColor: 'white' });
+            viewer.addModel(cube, 'cube');
+            viewer.setStyle({}, { stick: { radius: 0.12 }, sphere: { scale: 0.22 } });
+            densityView.viewer = viewer;
+            densityView.volume = new $3D.VolumeData(cube, 'cube');
+            densityView.kind = kind;
+            document.getElementById('densityIso').value = Math.log10(DENSITY_ISO[kind]).toFixed(2);
+            document.getElementById('densityControls').style.display = 'flex';
+            drawIsosurfaces();
+            viewer.zoomTo();
+            viewer.render();
+        }
+
+        function drawIsosurfaces() {
+            var viewer = densityView.viewer;
+            if (!viewer) return;
+            var iso = Math.pow(10, parseFloat(document.getElementById('densityIso').value));
+            var spin = densityView.kind === 'spindens';
+            document.getElementById('densityIsoValue').textContent = (spin ? '± ' : '') + iso.toPrecision(2);
+            viewer.removeAllShapes();
+            viewer.addIsosurface(densityView.volume, { isoval: iso, color: '#2563eb', opacity: spin ? 0.85 : 0.7 });
+            if (spin) viewer.addIsosurface(densityView.volume, { isoval: -iso, color: '#dc2626', opacity: 0.85 });
+            viewer.render();
+        }
+
+        (function () {
+            document.getElementById('showEnergies').addEventListener('change', applySpExtras);
+            document.getElementById('showDensities').addEventListener('change', applySpExtras);
+            document.getElementById('moleculesTableBody').addEventListener('click', function (e) {
+                var btn = e.target.closest('.sp-dens-btn');
+                if (btn) openDensityModal(btn.dataset.tid, btn.dataset.kind);
+            });
+            document.getElementById('densityIso').addEventListener('input', drawIsosurfaces);
+            document.getElementById('densityCloseBtn').addEventListener('click', closeDensityModal);
+            document.getElementById('densityModal').addEventListener('click', function (e) {
+                if (e.target === this) closeDensityModal();
+            });
+            document.addEventListener('keydown', function (e) {
+                if (e.key === 'Escape' && document.getElementById('densityModal').style.display !== 'none') {
+                    closeDensityModal();
+                }
+            });
+        })();
 
         // ── Project Overview > State Analysis subpage ───────────────────
 

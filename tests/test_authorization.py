@@ -61,6 +61,9 @@ SCOPED = {
     "/api/projects/{name}/state-analysis/export",
     "/api/projects/{name}/photophysics",
     "/api/projects/{name}/methods",
+    "/api/projects/{name}/sp-energies",
+    "/api/projects/{name}/sp-densities",
+    "/api/projects/{name}/densities/{task_id}/{kind}",
     # The owner (or admin) adds calculations to their own molecules.
     "/api/projects/{name}/extend-info",
     "/api/projects/{name}/extend",

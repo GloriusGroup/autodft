@@ -188,18 +188,7 @@ def _connectivity(session: Session, state_id: int, job_path: Path) -> Optional[d
 
 def connectivity_by_task(session: Session, task_ids: Iterable[int]) -> dict[int, dict]:
     """Stored connectivity checks of these optimisations' latest successful jobs, by task id."""
-    ids = sorted(set(task_ids))
-    if not ids:
-        return {}
-    latest: dict[int, ComputationJob] = {}
-    for job in session.exec(
-        select(ComputationJob).where(
-            col(ComputationJob.task_id).in_(ids), ComputationJob.success == True,  # noqa: E712
-        )
-    ).all():
-        best = latest.get(job.task_id)
-        if best is None or (job.attempt, job.id) > (best.attempt, best.id):
-            latest[job.task_id] = job
+    latest = latest_successful_jobs(session, task_ids)
     rows = {
         row.job_id: row for row in session.exec(
             select(JobResult).where(
@@ -238,6 +227,51 @@ def latest_successful_job(session: Session, task_id: int) -> Optional[Computatio
     ).first()
 
 
+def latest_successful_jobs(session: Session, task_ids: Iterable[int]) -> dict:
+    """latest_successful_job() of many tasks at once, by task id.
+
+    Rows of id, task_id, attempt, job_path and time_end, not ORM objects: a
+    project's worth of those is most of the time spent.
+    """
+    latest: dict = {}
+    for chunk in _chunks(sorted(set(task_ids)), 500):
+        for job in session.exec(
+            select(
+                ComputationJob.id, ComputationJob.task_id, ComputationJob.attempt,
+                ComputationJob.job_path, ComputationJob.time_end,
+            ).where(
+                col(ComputationJob.task_id).in_(chunk), ComputationJob.success == True,  # noqa: E712
+            )
+        ).all():
+            best = latest.get(job.task_id)
+            if best is None or (job.attempt, job.id) > (best.attempt, best.id):
+                latest[job.task_id] = job
+    return latest
+
+
+def for_tasks(session: Session, types: dict[int, str], require: Iterable[str] = ()) -> dict[int, dict]:
+    """for_task() of many tasks at once, from task id -> task type; tasks without a record are left out."""
+    latest = latest_successful_jobs(session, types)
+    rows: dict = {}
+    for chunk in _chunks([j.id for j in latest.values()], 500):
+        rows.update({
+            row.job_id: row
+            for row in session.exec(
+                select(
+                    JobResult.job_id, JobResult.task_id, JobResult.job_path, JobResult.finished_at,
+                    JobResult.parser_version, JobResult.data_json,
+                ).where(col(JobResult.job_id).in_(chunk))
+            ).all()
+        })
+    out = {}
+    for task_id, job in latest.items():
+        row = rows.get(job.id)
+        found = resolve(job.job_path, types[task_id], *_row_record(row, job), require)
+        if found is not None:
+            out[task_id] = found
+    return out
+
+
 def _same_instant(a: Optional[datetime], b: Optional[datetime]) -> bool:
     """Compare timestamps that may have lost their tzinfo in a SQLite round trip."""
     to_iso = lambda d: d.replace(tzinfo=None).isoformat() if d is not None else None  # noqa: E731
@@ -261,7 +295,11 @@ def for_job(
 
 def stored(session: Session, job: ComputationJob) -> tuple[Optional[dict], bool]:
     """*job*'s stored record if the row still belongs to it, and whether its parser version is current."""
-    row = session.exec(select(JobResult).where(JobResult.job_id == job.id)).first()
+    return _row_record(session.exec(select(JobResult).where(JobResult.job_id == job.id)).first(), job)
+
+
+def _row_record(row, job) -> tuple[Optional[dict], bool]:
+    """stored() from a JobResult and a job, ORM objects or rows."""
     same_identity = (
         row is not None
         and row.task_id == job.task_id

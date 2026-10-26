@@ -746,6 +746,7 @@ def api_project_molecules_detail(
             if state_ids else []
         )
 
+        from autodft.analysis import densities
         from autodft.extraction import results as stored
 
         checks = stored.connectivity_by_task(
@@ -794,6 +795,8 @@ def api_project_molecules_detail(
                     ]),
                     # Only optimisations judged since the bond check existed carry one.
                     **({"connectivity": checks[opt.id]} if opt.id in checks else {}),
+                    # Singlepoint task ids, for the lazily fetched energies and densities.
+                    "tasks": {t.value: d.id for t, d in deps.items() if t in densities.SP_TYPES},
                 })
             # Confsearch status for the state — useful when no opt tasks exist yet.
             cs = next((t for t in tasks_by_state.get(st.id, [])
@@ -817,6 +820,148 @@ def api_project_molecules_detail(
         })
 
     return {"name": name, "molecules": out_mols}
+
+
+def _project_tasks(session, name: str, task_types, *extra):
+    """``(id, task_type, state_id, depends_on_task_id)`` of one project's successful tasks of *task_types*."""
+    return session.exec(
+        select(
+            ComputationTask.id, ComputationTask.task_type, ComputationTask.state_id,
+            ComputationTask.depends_on_task_id,
+        )
+        .join(MoleculeState, ComputationTask.state_id == MoleculeState.id)
+        .join(Molecule, MoleculeState.molecule_id == Molecule.id)
+        .where(
+            Molecule.project_name == name,
+            ComputationTask.status == TaskStatus.successful,
+            col(ComputationTask.task_type).in_(list(task_types)),
+            *extra,
+        )
+    ).all()
+
+
+@router.get("/api/projects/{name}/sp-energies")
+def api_project_sp_energies(
+    name: str, identity: Identity = Depends(current_identity),
+):
+    """E (Eh) of every successful singlepoint; the relaxed one also G = E + G-E(el).
+
+    G-E(el) is the raw ORCA correction of the optimisation the singlepoint
+    depends on (no quasi-RRHO), as the extractor uses it; no correction, no G.
+    """
+    bad = _reject_bad_project(name)
+    if bad is not None:
+        return bad
+    from autodft.analysis import densities
+    from autodft.extraction import results as stored
+
+    with get_session() as session:
+        name = resolve_project(session, identity, name)
+        sps = _project_tasks(session, name, densities.SP_TYPES)
+        parents = {t.depends_on_task_id for t in sps if t.task_type == TaskType.singlepoint}
+        energies = stored.for_tasks(session, {t.id: t.task_type.value for t in sps})
+        corrections = stored.for_tasks(session, {i: TaskType.optimization.value for i in parents if i is not None})
+
+    out = {}
+    for t in sps:
+        energy = (energies.get(t.id) or {}).get("energy")
+        if energy is None:
+            continue
+        correction = (
+            (corrections.get(t.depends_on_task_id) or {}).get("free_energy_correction")
+            if t.task_type == TaskType.singlepoint else None
+        )
+        out[t.id] = {"energy": energy, "gibbs": energy + correction if correction is not None else None}
+    return {"name": name, "tasks": out}
+
+
+@router.get("/api/projects/{name}/sp-densities")
+def api_project_sp_densities(
+    name: str, identity: Identity = Depends(current_identity),
+):
+    """Which successful singlepoints have density cubes to show.
+
+    Only where densities were requested (molecule or state metadata) and the
+    job folder holds the cube, or the .gbw/.densities/.densitiesinfo that
+    orca_plot rebuilds it from; SpinDens only for an open-shell job. ``build``
+    says which of them orca_plot must make first.
+    """
+    bad = _reject_bad_project(name)
+    if bad is not None:
+        return bad
+    from autodft.analysis import densities
+    from autodft.extraction import results as stored
+
+    with get_session() as session:
+        name = resolve_project(session, identity, name)
+        states = {
+            st.id: (st, m) for st, m in session.exec(
+                select(MoleculeState, Molecule)
+                .join(Molecule, MoleculeState.molecule_id == Molecule.id)
+                .where(Molecule.project_name == name)
+            ).all()
+            if densities.requested(m, st)
+        }
+        opts = {state_id: densities.options(m, st) for state_id, (st, m) in states.items()}
+        wanted = [t for t in _project_tasks(session, name, densities.SP_TYPES) if t.state_id in states]
+        jobs = stored.latest_successful_jobs(session, [t.id for t in wanted])
+    checks = [
+        (t.id, Path(jobs[t.id].job_path), opts[t.state_id],
+         densities.multiplicity(t.task_type, states[t.state_id][0]) > 1)
+        for t in wanted if t.id in jobs and jobs[t.id].job_path
+    ]
+
+    found = densities.availability_many(checks)
+    return {
+        "name": name,
+        "tasks": {task_id: a for task_id, a in found.items() if a["eldens"] or a["spindens"]},
+    }
+
+
+@router.get("/api/projects/{name}/densities/{task_id}/{kind}")
+def api_project_density_cube(
+    name: str, task_id: int, kind: str, identity: Identity = Depends(current_identity),
+):
+    """One singlepoint's ElDens or SpinDens cube, built with orca_plot first when only its densities are kept.
+
+    The build is cached in the job folder; it can take minutes on a fine grid.
+    """
+    bad = _reject_bad_project(name)
+    if bad is not None:
+        return bad
+    from fastapi.responses import FileResponse
+
+    from autodft.analysis import densities
+    from autodft.extraction import results as stored
+
+    if kind not in densities.KINDS:
+        return JSONResponse(status_code=400, content={"detail": f"kind must be one of {', '.join(densities.KINDS)}."})
+    with get_session() as session:
+        name = resolve_project(session, identity, name)
+        task = next(iter(_project_tasks(session, name, densities.SP_TYPES, ComputationTask.id == task_id)), None)
+        if task is None:
+            return JSONResponse(status_code=404, content={"detail": f"No successful singlepoint {task_id} in {name}."})
+        state = session.get(MoleculeState, task.state_id)
+        molecule = session.get(Molecule, state.molecule_id)
+        if not densities.requested(molecule, state):
+            return JSONResponse(status_code=404, content={"detail": "Densities were not requested for this molecule."})
+        if kind == "spindens" and densities.multiplicity(task.task_type, state) == 1:
+            return JSONResponse(status_code=404, content={"detail": "A closed-shell singlepoint has no spin density."})
+        job = stored.latest_successful_job(session, task.id)
+        opts = densities.options(molecule, state)
+
+    job_dir = Path(job.job_path) if job is not None and job.job_path else None
+    if job_dir is None or not job_dir.is_dir():
+        return JSONResponse(status_code=404, content={"detail": "The job folder is no longer on disk."})
+    try:
+        path = densities.ensure_cube(
+            job_dir, kind, opts, densities.orca_plot_binary(get_active_settings().orca.path),
+        )
+    except densities.CubeError as exc:
+        return JSONResponse(status_code=500, content={"detail": str(exc)})
+    if path.resolve().parent != job_dir.resolve():
+        return JSONResponse(status_code=404, content={"detail": "The cube is not inside the job folder."})
+    return FileResponse(path, media_type="text/plain", filename=f"{task_id}_{kind}.cube")
 
 
 @router.get("/api/projects/{name}/state-analysis")
