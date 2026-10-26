@@ -424,7 +424,7 @@ def test_orca_plot_sits_next_to_orca():
 def test_the_molecules_page_has_the_toggles_and_viewer():
     html = (Path(__file__).resolve().parents[1] / "autodft" / "api" / "templates" / "dashboard.html").read_text()
     for needle in ('id="showEnergies"', 'id="showDensities"', 'id="densityModal"', 'id="densityIso"',
-                   "'sp-energies'", "'sp-densities'", "'/densities/'", "{ method: 'POST' }", "energiesP",
+                   "'sp-energies'", "'sp-densities'", "'/densities/'", "{ method: 'POST', signal: ctl.signal }", "energiesP",
                    "https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.4.2/3Dmol-min.js"):
         assert needle in html, needle
     assert html.count("spExtraSlot(c, '") == 6

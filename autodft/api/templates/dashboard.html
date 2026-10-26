@@ -1094,6 +1094,7 @@
             font-size: 0.82rem;
             color: var(--text-muted);
         }
+        .retry-link { color: var(--accent); }
         @media (prefers-reduced-motion: reduce) {
             .loading-overlay { transition: none; }
             .loading-animal * { animation: none !important; }
@@ -2238,6 +2239,28 @@
             return isAbort(err) ? 'Cancelled.' : prefix + err.message;
         }
 
+        var CANCELLED_HTML = '<a href="#" class="retry-link" data-retry="1">Cancelled — click to retry.</a>';
+
+        function errHtml(prefix, err) {
+            return isAbort(err) ? CANCELLED_HTML : escHtml(prefix + err.message);
+        }
+
+        function ignoreAbort(err) {
+            if (!isAbort(err)) throw err;
+        }
+
+        // After Cancel: what still says "Loading..." on the page offers a retry instead.
+        var LOADING_TEXT = /^(Loading\.\.\.|Computing analysis…|Reading spectra…|Reading methods…)$/;
+
+        function restoreLoadingSlots() {
+            document.querySelectorAll('.page.active .empty-state, .page.active .admin-summary, .page.active option')
+                .forEach(function (el) {
+                    if (!LOADING_TEXT.test(el.textContent.trim())) return;
+                    if (el.tagName === 'OPTION') el.textContent = 'Cancelled';
+                    else el.innerHTML = CANCELLED_HTML;
+                });
+        }
+
         function setPageInert(on) {
             ['.app', '.top-fabs'].forEach(function (sel) {
                 var el = document.querySelector(sel);
@@ -2315,6 +2338,8 @@
             loading.gen++;
             loadingReset();
             reqs.forEach(function (r) { r.ctl.abort(); });
+            // After the callers' catch blocks have run.
+            setTimeout(restoreLoadingSlots, 0);
         }
 
         // fetch under the overlay: abortable by Cancel, body streamed for the progress bar.
@@ -2368,6 +2393,11 @@
         }
 
         document.getElementById('loadingCancel').addEventListener('click', loadingCancel);
+        document.addEventListener('click', function (e) {
+            if (!e.target.closest || !e.target.closest('[data-retry]')) return;
+            e.preventDefault();
+            activateRoute(currentRoute());
+        });
 
         // ── Sidebar hash routing ────────────────────────────────────────
         // Routes:
@@ -2427,7 +2457,7 @@
         function loadProjectPage(label, loader) {
             return withLoading(label, function (live) {
                 return fetchProjects(true).then(function () { if (live()) return loader(); });
-            });
+            }).catch(ignoreAbort);
         }
 
         window.addEventListener('hashchange', function () { activateRoute(currentRoute()); });
@@ -2520,7 +2550,9 @@
         async function loadUsers(ui) {
             var list = document.getElementById('adminUserList');
             if (!list) { return; }
-            var out = await adminJSON('GET', '/api/admin/users', undefined, ui ? 'Loading users…' : null);
+            var out;
+            try { out = await adminJSON('GET', '/api/admin/users', undefined, ui ? 'Loading users…' : null); }
+            catch (err) { ignoreAbort(err); return; }
             if (!out.ok) {
                 list.innerHTML = '<div class="empty-state">Could not load users.</div>';
                 return;
@@ -2706,7 +2738,7 @@
         }
 
         function reloadAdminPage() {
-            return withLoading('Loading admin page…', function () { return loadAdminPage(true); });
+            return withLoading('Loading admin page…', function () { return loadAdminPage(true); }).catch(ignoreAbort);
         }
 
         // --- disk usage, on demand ---------------------------------------
@@ -2776,7 +2808,9 @@
             var existing = row.parentNode.querySelector('.admin-confirm');
             if (existing) existing.remove();
 
-            var res = await adminJSON('GET', '/api/projects/' + projectPath(name) + '/wipe-preview', undefined, 'Measuring what a wipe deletes…');
+            var res;
+            try { res = await adminJSON('GET', '/api/projects/' + projectPath(name) + '/wipe-preview', undefined, 'Measuring what a wipe deletes…'); }
+            catch (err) { ignoreAbort(err); return; }
             if (!res.ok) { alert('Could not load preview: ' + (res.data.detail || res.status)); return; }
             var p = res.data;
 
@@ -2874,7 +2908,9 @@
                 target.innerHTML = '<div class="submit-feedback error">Enter a molecule ID.</div>';
                 return;
             }
-            var res = await adminJSON('GET', '/api/molecules/' + id + '/wipe-preview', undefined, 'Measuring what a wipe deletes…');
+            var res;
+            try { res = await adminJSON('GET', '/api/molecules/' + id + '/wipe-preview', undefined, 'Measuring what a wipe deletes…'); }
+            catch (err) { ignoreAbort(err); return; }
             if (!res.ok) {
                 target.innerHTML = '<div class="submit-feedback error">'
                     + adminEscape(res.data.detail || ('HTTP ' + res.status)) + '</div>';
@@ -4057,7 +4093,7 @@
                 }
                 loadProjectDetail(sel.value, ui);
             } catch (err) {
-                console.warn('Failed to fetch projects:', err);
+                if (!isAbort(err)) console.warn('Failed to fetch projects:', err);
             }
         }
 
@@ -4153,7 +4189,7 @@
                     }).join('');
                 }
             } catch (err) {
-                console.warn('Failed to load project detail:', err);
+                if (!isAbort(err)) console.warn('Failed to load project detail:', err);
             }
         }
 
@@ -4469,22 +4505,30 @@
             wrap.style.display = 'block';
             tbody.innerHTML = '<tr><td colspan="13" class="empty-state">Loading...</td></tr>';
 
+            var token = ++molsRender.token;
+            if (molsRender.observer) molsRender.observer.disconnect();
+            molsRender.observer = null;
             molsSp = { project: name, energies: null, densities: null, energiesP: null, densitiesP: null };
             try {
                 var resp = await loadingFetch('Loading molecules…', '/api/projects/' + projectPath(name) + '/molecules-detail');
                 var data = await resp.json();
             } catch (err) {
-                tbody.innerHTML = '<tr><td colspan="13" class="empty-state">' + escHtml(errText('Failed: ', err)) + '</td></tr>';
+                if (token === molsRender.token) {
+                    tbody.innerHTML = '<tr><td colspan="13" class="empty-state">' + errHtml('Failed: ', err) + '</td></tr>';
+                }
                 return;
             }
+            if (token !== molsRender.token) return;
             if (!data.molecules || data.molecules.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="13" class="empty-state">No molecules yet for this project.</td></tr>';
                 return;
             }
 
-            // Build the rowspan-merged HTML in one pass.
+            // Build the rowspan-merged HTML in one pass, one group of rows per molecule.
             var rows = [];
+            var groups = [];
             data.molecules.forEach(function (m) {
+                var groupStart = rows.length;
                 // total conformer rows for this molecule (sum across states, at least 1 per state for a placeholder)
                 var molRows = 0;
                 m.states.forEach(function (s) { molRows += Math.max(1, s.conformers.length); });
@@ -4531,15 +4575,45 @@
                         rows.push('<tr class="' + (firstRowClass.trim()) + '">' + cells.join('') + '</tr>');
                     });
                 });
+                groups.push(rows.slice(groupStart).join(''));
             });
-            // Mark the row that opens each molecule with a thicker border. Simplest: every row that has a td.mol-id descendant.
-            tbody.innerHTML = rows.join('');
-
-            // Now render every <canvas data-smiles="…"> with SmilesDrawer.
-            tbody.querySelectorAll('div.struct').forEach(function (div) {
-                drawStructureInto(div, div.dataset.smiles);
-            });
+            tbody.innerHTML = '';
+            // Structures are drawn when they scroll into view.
+            if (window.IntersectionObserver) {
+                molsRender.observer = new IntersectionObserver(function (entries, obs) {
+                    entries.forEach(function (e) {
+                        if (!e.isIntersecting) return;
+                        obs.unobserve(e.target);
+                        drawStructureInto(e.target, e.target.dataset.smiles);
+                    });
+                }, { rootMargin: '300px' });
+            }
+            // The first chunk goes in now, the rest after this returns.
+            appendMolChunks(tbody, groups, token, 0);
             applySpExtras();
+        }
+
+        // Rows go in MOLS_CHUNK molecules at a time, yielding to the event loop between chunks.
+        var MOLS_CHUNK = 50;
+        var molsRender = { token: 0, observer: null };
+
+        function appendMolChunks(tbody, groups, token, start) {
+            if (token !== molsRender.token) return;
+            var end = Math.min(start + MOLS_CHUNK, groups.length);
+            var tmp = document.createElement('tbody');
+            tmp.innerHTML = groups.slice(start, end).join('');
+            var showE = document.getElementById('showEnergies').checked;
+            var showD = document.getElementById('showDensities').checked;
+            tmp.querySelectorAll('.sp-extra').forEach(function (div) {
+                div.innerHTML = spExtraHtml(div.dataset.tid, div.dataset.type, showE, showD);
+            });
+            var structs = tmp.querySelectorAll('div.struct');
+            while (tmp.firstChild) tbody.appendChild(tmp.firstChild);
+            structs.forEach(function (div) {
+                if (molsRender.observer) molsRender.observer.observe(div);
+                else drawStructureInto(div, div.dataset.smiles);
+            });
+            if (end < groups.length) setTimeout(function () { appendMolChunks(tbody, groups, token, end); }, 0);
         }
 
         // ── Molecules page: SP energies and density viewer ──────────────
@@ -4607,7 +4681,7 @@
                 }
                 if (sp === molsSp) status.textContent = '';
             } catch (e) {
-                if (sp === molsSp) status.textContent = errText('Failed: ', e);
+                if (sp === molsSp) status.innerHTML = errHtml('Failed: ', e);
             }
             if (sp !== molsSp) return;
             showE = document.getElementById('showEnergies').checked;
@@ -4638,10 +4712,12 @@
         }
 
         var DENSITY_ISO = { eldens: 0.02, spindens: 0.004 };
-        var densityView = { token: 0, viewer: null, volume: null, kind: null };
+        var densityView = { token: 0, viewer: null, volume: null, kind: null, ctl: null };
 
         function closeDensityModal() {
             densityView.token++;
+            if (densityView.ctl) densityView.ctl.abort();
+            densityView.ctl = null;
             if (densityView.viewer) { try { densityView.viewer.clear(); } catch (_) {} }
             densityView.viewer = null;
             densityView.volume = null;
@@ -4649,8 +4725,11 @@
             document.getElementById('densityModal').style.display = 'none';
         }
 
+        // Not under the loading overlay: the modal shows its own state and Close aborts the request.
         async function openDensityModal(tid, kind) {
+            if (densityView.ctl) densityView.ctl.abort();
             var token = ++densityView.token;
+            var ctl = densityView.ctl = new AbortController();
             var project = molsSp.project;
             var avail = (molsSp.densities && molsSp.densities[tid]) || {};
             var building = !!(avail.build && avail.build[kind]);
@@ -4664,32 +4743,29 @@
                 ? 'Building cube with orca_plot… this can take a few minutes.'
                 : 'Loading cube…';
             document.getElementById('densityModal').style.display = 'flex';
-            // The overlay covers the POST and 3Dmol.js; the modal keeps the status line.
-            var label = (building ? 'Building the ' : 'Loading the ') + (kind === 'spindens' ? 'SpinDens' : 'ElDens') + ' cube…';
             try {
-                await withLoading(label, async function (live) {
-                    var lib = load3Dmol();
-                    var resp = await loadingFetch(label, '/api/projects/' + projectPath(project) + '/densities/'
-                        + encodeURIComponent(tid) + '/' + kind, { method: 'POST' });
-                    if (!resp.ok) {
-                        var msg = 'HTTP ' + resp.status;
-                        try { msg = (await resp.json()).detail || msg; } catch (_) {}
-                        var err = new Error(msg);
-                        err.busy = resp.status === 503;
-                        throw err;
-                    }
-                    var cube = await resp.text();
-                    if (avail.build) avail.build[kind] = false;
-                    var $3D = await lib;
-                    if (token !== densityView.token) return;
-                    if (!live()) { status.textContent = 'Cancelled.'; return; }
-                    status.textContent = '';
-                    renderDensity($3D, cube, kind);
-                });
+                var lib = load3Dmol();
+                var resp = await fetch('/api/projects/' + projectPath(project) + '/densities/'
+                    + encodeURIComponent(tid) + '/' + kind, { method: 'POST', signal: ctl.signal });
+                if (!resp.ok) {
+                    var msg = 'HTTP ' + resp.status;
+                    try { msg = (await resp.json()).detail || msg; } catch (_) {}
+                    var err = new Error(msg);
+                    err.busy = resp.status === 503;
+                    throw err;
+                }
+                var cube = await resp.text();
+                if (avail.build) avail.build[kind] = false;
+                var $3D = await lib;
+                if (token !== densityView.token) return;
+                densityView.ctl = null;
+                status.textContent = '';
+                renderDensity($3D, cube, kind);
             } catch (e) {
                 if (token !== densityView.token) return;
+                densityView.ctl = null;
                 status.className = 'pp-waiting pp-warn';
-                status.textContent = e.busy ? e.message : errText('Failed: ', e);
+                status.textContent = (e.busy ? '' : 'Failed: ') + e.message;
             }
         }
 
@@ -4931,7 +5007,7 @@
                 renderSaCards(payload, saState.mode, saState.unit);
             } catch (err) {
                 host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">' +
-                                 escHtml(errText('Network error: ', err)) + '</div>';
+                                 errHtml('Network error: ', err) + '</div>';
                 renderSaMetaLine(null);
             }
         }
@@ -5336,7 +5412,7 @@
             } catch (err) {
                 mols.forEach(function (m) {
                     ppState.details[ppKey(m)] = { data: null,
-                        html: '<div class="pp-waiting">' + escHtml(errText('Could not load spectra: ', err)) + '</div>' };
+                        html: '<div class="pp-waiting">' + errHtml('Could not load spectra: ', err) + '</div>' };
                 });
             }
             renderPhotophysics(ppState.payload);
@@ -5379,7 +5455,7 @@
                 renderPhotophysics(payload);
             } catch (err) {
                 host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">' +
-                                 escHtml(errText('Network error: ', err)) + '</div>';
+                                 errHtml('Network error: ', err) + '</div>';
             }
         }
 
@@ -5517,7 +5593,7 @@
                 host.innerHTML = methodsCards(payload);
             } catch (err) {
                 host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">' +
-                                 escHtml(errText('Network error: ', err)) + '</div>';
+                                 errHtml('Network error: ', err) + '</div>';
             }
         }
 

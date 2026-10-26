@@ -424,10 +424,13 @@ El.prototype.setAttribute = function (k, v) { this.attrs[k] = String(v); };
 El.prototype.removeAttribute = function (k) { delete this.attrs[k]; };
 El.prototype.addEventListener = function (t, f) { this.on[t] = f; };
 var els = {};
+var slots = [];
 var document = {
     activeElement: null, body: {},
     getElementById: function (id) { return els[id] || (els[id] = new El(id)); },
     querySelector: function (sel) { return els[sel] || (els[sel] = new El(sel)); },
+    querySelectorAll: function () { return slots; },
+    addEventListener: function () {},
 };
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 // Each call parks until the test settles it; an abort rejects it as fetch does.
@@ -584,6 +587,9 @@ def test_cancel_after_the_hang_delay_aborts_and_the_page_recovers():
             if (live()) steps.push('went on');
         });
         var post = loadingFetch('Submitting…', '/b', { method: 'POST' });
+        slots = [{ tagName: 'TD', textContent: 'Loading...', innerHTML: 'Loading...' },
+                 { tagName: 'OPTION', textContent: 'Loading...' },
+                 { tagName: 'DIV', textContent: 'No molecules yet.', innerHTML: 'No molecules yet.' }];
         await sleep(100);
         out.early = seen();
         await sleep(150);
@@ -593,6 +599,8 @@ def test_cancel_after_the_hang_delay_aborts_and_the_page_recovers():
         try { await post; } catch (e) { out.post = e.name + ': ' + e.message; }
         await flow;
         out.steps = steps;
+        await sleep(5);
+        out.slots = [slots[0].innerHTML, slots[1].textContent, slots[2].innerHTML];
         out.aborted = calls.map(function (c) { return c.opts.signal.aborted; });
         // Next load starts clean.
         var next = loadingFetch('Again…', '/c');
@@ -608,6 +616,8 @@ def test_cancel_after_the_hang_delay_aborts_and_the_page_recovers():
     assert not out["cancelled"]["blocked"] and not out["cancelled"]["inert"]
     assert out["post"] == "AbortError: Cancelled."
     assert out["steps"] == ["AbortError"] and out["aborted"] == [True, True]
+    assert "data-retry" in out["slots"][0] and "Cancelled" in out["slots"][0]
+    assert out["slots"][1:] == ["Cancelled", "No molecules yet."]
     assert out["next"]["visible"] and not out["next"]["hang"] and out["next"]["label"] == "Again…"
     assert out["text"] == "ok" and not out["end"]["blocked"]
 
@@ -641,3 +651,66 @@ def test_the_bar_follows_the_streamed_bytes_across_requests():
     assert not out["both"]["indeterminate"] and out["both"]["width"] == "12.5%"
     assert out["later"]["width"] == "87.5%"
     assert out["sizes"] == [10, 30]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_molecule_rows_go_in_by_chunks_and_structures_wait_for_the_observer():
+    script = """
+function Body() { this.children = []; }
+Object.defineProperty(Body.prototype, 'innerHTML', { set: function (v) {
+    var self = this;
+    this.children = v.split('</tr>').filter(Boolean).map(function (r) { return { html: r, parent: self }; });
+} });
+Object.defineProperty(Body.prototype, 'firstChild', { get: function () { return this.children[0] || null; } });
+Body.prototype.appendChild = function (n) {
+    if (n.parent) n.parent.children.splice(n.parent.children.indexOf(n), 1);
+    n.parent = this;
+    this.children.push(n);
+};
+Body.prototype.querySelectorAll = function (sel) {
+    return this.children.filter(function (c) { return c.html.indexOf(sel === 'div.struct' ? 'struct' : 'sp-extra') !== -1; })
+        .map(function (c) { return { row: c, dataset: { tid: '1', type: 'singlepoint', smiles: 'C' } }; });
+};
+var document = {
+    createElement: function () { return new Body(); },
+    getElementById: function () { return { checked: true }; },
+};
+var drawn = 0, observed = 0;
+function drawStructureInto() { drawn++; }
+function spExtraHtml() { return 'E'; }
+var MOLS_CHUNK = 50;
+var molsRender = { token: 1, observer: null };
+""" + _functions("appendMolChunks") + """
+function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+var groups = [];
+for (var i = 0; i < 120; i++) groups.push('<tr><td><div class="struct"></div><div class="sp-extra"></div></td></tr>');
+(async function () {
+    var out = {};
+    var tbody = new Body();
+    molsRender.observer = { observe: function () { observed++; } };
+    appendMolChunks(tbody, groups, 1, 0);
+    out.first = tbody.children.length;
+    await sleep(30);
+    out.all = tbody.children.length;
+    out.observed = observed; out.drawn = drawn;
+    // A newer load stops the old one after its current chunk.
+    var stale = new Body();
+    molsRender.observer = null;
+    appendMolChunks(stale, groups, 1, 0);
+    molsRender.token = 2;
+    await sleep(30);
+    out.stale = stale.children.length;
+    out.drawnWithoutObserver = drawn;
+    process.stdout.write(JSON.stringify(out));
+})();
+"""
+    out = json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
+    assert out["first"] == 50 and out["all"] == 120
+    assert out["observed"] == 120 and out["drawn"] == 0
+    assert out["stale"] == 50 and out["drawnWithoutObserver"] == 50
+
+
+def test_the_density_viewer_is_not_under_the_overlay_and_close_aborts():
+    body = _functions("openDensityModal", "closeDensityModal")
+    assert "loadingFetch" not in body and "withLoading" not in body
+    assert "signal: ctl.signal" in body and "densityView.ctl.abort()" in body
