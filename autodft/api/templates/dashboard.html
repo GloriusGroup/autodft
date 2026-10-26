@@ -5763,8 +5763,8 @@
         }
 
         // Initial load
-        // Routed once, after whoami: the Admin page depends on it.
-        loadIdentity().catch(function () {}).then(function () { activateRoute(currentRoute()); });
+        // Routed once, after whoami (the Admin page depends on it); the overlay covers the wait.
+        withLoading('Connecting…', loadIdentity).catch(function () {}).then(function () { activateRoute(currentRoute()); });
         fetchHeaders();
         fetchAdvancedDefaults();
         refreshAll();

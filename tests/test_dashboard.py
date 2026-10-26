@@ -872,3 +872,27 @@ def test_navigation_retires_the_old_pages_reads_but_not_actions():
     assert out["steps"] == ["AbortError"] and out["aborted"] == [True, False]
     assert out["during"]["visible"] and out["during"]["label"] == "Submitting…"
     assert out["post"] == "queued" and not out["end"]["blocked"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_start_up_waits_for_whoami_under_the_overlay_and_routes_once():
+    html = (TEMPLATE / "dashboard.html").read_text()
+    start = html[html.index("        // Routed once, after whoami"):html.index("setInterval(refreshAll, POLL_INTERVAL);")]
+    assert start.count("activateRoute(") == 1
+    out = _run_overlay("""
+        var routed = [];
+        function activateRoute(r) { routed.push(r); }
+        function currentRoute() { return 'projects.molecules'; }
+        async function loadIdentity() { await fetch('/api/whoami'); }
+    """ + "\n".join(line.strip() for line in start.splitlines() if line.strip().startswith("withLoading(")) + """
+        await sleep(60);
+        out.waiting = seen();
+        out.routed = routed.slice();
+        calls[0].resolve('{}');
+        await idle();
+        out.routedAfter = routed;
+        out.end = seen();
+    """)
+    assert out["waiting"]["visible"] and out["waiting"]["label"] == "Connecting…"
+    assert out["routed"] == [] and out["routedAfter"] == ["projects.molecules"]
+    assert not out["end"]["blocked"]
