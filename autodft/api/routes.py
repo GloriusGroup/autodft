@@ -845,7 +845,7 @@ def _project_tasks(session, name: str, task_types, *extra):
 def api_project_sp_energies(
     name: str, identity: Identity = Depends(current_identity),
 ):
-    """E (Eh) of every successful singlepoint; the relaxed one also G = E + G-E(el).
+    """E (Eh) of every successful singlepoint but NMR and UV/Vis; the relaxed one also G = E + G-E(el).
 
     G-E(el) is the raw ORCA correction of the successful optimisation the
     singlepoint depends on (no quasi-RRHO), as the extractor uses it; no
@@ -860,7 +860,9 @@ def api_project_sp_energies(
 
     with get_session() as session:
         name = resolve_project(session, identity, name)
-        sps = _project_tasks(session, name, densities.SP_TYPES)
+        sps = _project_tasks(
+            session, name, densities.SP_TYPES - {TaskType.singlepoint_nmr, TaskType.singlepoint_uvvis},
+        )
         opts = {t.id for t in _project_tasks(session, name, [TaskType.optimization])}
         parents = {t.depends_on_task_id for t in sps if t.task_type == TaskType.singlepoint} & opts
         energies, pending = stored.stored_values(session, {t.id: t.task_type.value for t in sps}, ("energy",))

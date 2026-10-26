@@ -171,8 +171,19 @@ class TestEnergies:
         tasks = _get(env, "/api/projects/owner:p/sp-energies").json()["tasks"]
         assert tasks[str(ids["sp"])] == {"energy": -100.5, "gibbs": pytest.approx(-100.35)}
         assert tasks[str(ids["ox"])] == {"energy": -100.2, "gibbs": None}
-        assert tasks[str(ids["nmr"])] == {"energy": -100.7, "gibbs": None}
         assert tasks[str(ids["sp3"])]["gibbs"] == pytest.approx(-50.4)
+
+    def test_nmr_and_uvvis_have_no_energy(self, world):
+        env, session, w, state = world
+        opt = w.task(state, TaskType.optimization, output=_output(-1.0, 0.1))
+        kept = [w.task(state, t, parent=opt, output=_output(-1.5)) for t in (
+            TaskType.singlepoint, TaskType.singlepoint_vert_ox, TaskType.singlepoint_vert_red,
+            TaskType.singlepoint_vert_spin_change)]
+        dropped = [w.task(state, t, parent=opt, output=_output(-1.5), record={"energy": -1.5})
+                   for t in (TaskType.singlepoint_nmr, TaskType.singlepoint_uvvis)]
+        tasks = _energies(env)
+        assert all(str(t.id) in tasks for t in kept)
+        assert not ({str(t.id) for t in dropped} | {str(env["ids"]["nmr"])}) & set(tasks)
 
     def test_no_correction_no_g(self, env):
         tasks = _get(env, "/api/projects/owner:p/sp-energies").json()["tasks"]
@@ -181,7 +192,7 @@ class TestEnergies:
     def test_optimisations_and_unfinished_tasks_show_nothing(self, env):
         tasks = _get(env, "/api/projects/owner:p/sp-energies").json()["tasks"]
         assert str(env["ids"]["opt"]) not in tasks
-        assert len(tasks) == 6
+        assert len(tasks) == 5
 
     def test_only_the_callers_project(self, env):
         assert _get(env, "/api/projects/owner:p/sp-energies", "stranger").status_code == 404
