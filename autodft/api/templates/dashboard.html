@@ -1951,10 +1951,10 @@
         </div>
         <div class="mols-toggles" style="margin: -12px 0 12px;">
             <label class="checkbox-group" title="E of every successful singlepoint; the relaxed SP also G = E(SP) + G-E(el) of its optimisation (raw ORCA, no quasi-RRHO). Hartree.">
-                <input type="checkbox" id="showEnergies"><span>Show energies</span>
+                <input type="checkbox" id="showEnergies" autocomplete="off"><span>Show energies</span>
             </label>
             <label class="checkbox-group" title="ElDens / SpinDens viewers for singlepoints whose densities were requested and whose cube (or saved .densities) is still on disk.">
-                <input type="checkbox" id="showDensities"><span>Show densities</span>
+                <input type="checkbox" id="showDensities" autocomplete="off"><span>Show densities</span>
             </label>
             <span id="spExtrasStatus" style="font-size:0.8rem; color:var(--text-muted);"></span>
         </div>
@@ -2227,6 +2227,8 @@
 
         var LOADING_DELAY_MS = 250;
         var LOADING_HANG_MS = 60000;
+        // A body is parsed after a timer tick in Chrome: the next step of a chain needs a real margin.
+        var LOADING_GRACE_MS = 100;
         var STOPPED_WAITING = 'Stopped waiting. The server may still finish this; check before trying again.';
         var loading = { active: false, gen: 0, entries: [], reqs: [], focus: null,
                         showTimer: null, hangTimer: null, idleTimer: null };
@@ -2253,12 +2255,18 @@
         var LOADING_TEXT = /^(Loading\.\.\.|Computing analysis…|Reading spectra…|Reading methods…)$/;
 
         function restoreLoadingSlots() {
+            var option = false;
             document.querySelectorAll('.page.active .empty-state, .page.active .admin-summary, .page.active option')
                 .forEach(function (el) {
                     if (!LOADING_TEXT.test(el.textContent.trim())) return;
-                    if (el.tagName === 'OPTION') el.textContent = 'Cancelled';
+                    if (el.tagName === 'OPTION') { el.textContent = 'Cancelled'; option = true; }
                     else el.innerHTML = CANCELLED_HTML;
                 });
+            // A project select with nothing to pick: say so under the page header.
+            var header = document.querySelector('.page.active .page-header');
+            if (option && header && !document.querySelector('.page.active .cancelled-note')) {
+                header.insertAdjacentHTML('afterend', '<div class="empty-state cancelled-note">' + CANCELLED_HTML + '</div>');
+            }
         }
 
         function setPageInert(on) {
@@ -2311,8 +2319,8 @@
                 if (i === -1) return;  // cleared by Cancel
                 loading.entries.splice(i, 1);
                 loadingRender();
-                // One tick of grace, so back-to-back requests keep one overlay.
-                if (!loading.entries.length) loading.idleTimer = setTimeout(loadingReset, 0);
+                // Grace, so back-to-back requests keep one overlay.
+                if (!loading.entries.length) loading.idleTimer = setTimeout(loadingReset, LOADING_GRACE_MS);
             };
         }
 
@@ -2331,6 +2339,12 @@
             var focus = loading.focus;
             loading.focus = null;
             if (focus && focus.isConnected && focus !== document.body && focus.focus) focus.focus({ preventScroll: true });
+        }
+
+        // Navigation (also Back/Forward) retires the previous page's reads; actions run on.
+        function loadingRetireReads() {
+            loading.gen++;
+            loading.reqs.forEach(function (r) { if (!r.done && !r.mutating) r.ctl.abort(); });
         }
 
         function loadingCancel() {
@@ -2436,6 +2450,8 @@
 
         function activateRoute(route) {
             if (ROUTES.indexOf(route) === -1) route = 'submit';
+            loadingRetireReads();
+            document.querySelectorAll('.cancelled-note').forEach(function (el) { el.remove(); });
             document.querySelectorAll('.page').forEach(function (el) {
                 el.classList.toggle('active', el.dataset.page === route);
             });
@@ -2445,7 +2461,7 @@
                 var match = (r === route) || (r === 'projects' && route.indexOf('projects.') === 0);
                 el.classList.toggle('active', match);
             });
-            if (route === 'projects.summary')        fetchProjects(true);
+            if (route === 'projects.summary')        withLoading('Loading projects…', function () { return fetchProjects(true); });
             if (route === 'projects.molecules')      loadProjectPage('Loading molecules…', loadMoleculesPage);
             if (route === 'projects.state-analysis') loadProjectPage('Computing state analysis…', loadStateAnalysisPage);
             if (route === 'projects.photophysics')   loadProjectPage('Reading spectra…', loadPhotophysicsPage);
@@ -2585,6 +2601,7 @@
                     var out = await adminJSON('POST', '/api/admin/users/'
                         + encodeURIComponent(name) + '/rotate-key', undefined, 'Rotating key…');
                     if (out.ok) { showNewKey(row.querySelector('.adm-userkey'), out.data); }
+                    else { row.querySelector('.adm-userkey').textContent = out.data.detail || ('HTTP ' + out.status); }
                 });
             });
             list.querySelectorAll('.adm-toggle').forEach(function (btn) {
@@ -2592,9 +2609,10 @@
                     var row = btn.closest('.admin-row');
                     var name = row.getAttribute('data-user');
                     var activate = btn.textContent.trim() === 'Reactivate';
-                    await adminJSON('POST', '/api/admin/users/'
+                    var out = await adminJSON('POST', '/api/admin/users/'
                         + encodeURIComponent(name) + '?active=' + activate, undefined,
                         activate ? 'Reactivating user…' : 'Deactivating user…');
+                    if (out.status === 0) { row.querySelector('.adm-userkey').textContent = out.data.detail; return; }
                     loadUsers(true);
                 });
             });
@@ -4213,10 +4231,10 @@
         // returns 202 with a job, the work continues server-side even if this
         // page is closed, and we poll /jobs for the outcome.
 
-        async function startProjectJob(url, fetchOpts) {
+        async function startProjectJob(url, fetchOpts, label) {
             // -> {ok:true, project, job} or {ok:false, status?, detail}
             var resp;
-            try { resp = await loadingFetch('Starting the export…', url, fetchOpts); }
+            try { resp = await loadingFetch(label || 'Starting the export…', url, fetchOpts); }
             catch (err) { return { ok: false, detail: isAbort(err) ? STOPPED_WAITING : 'Network error: ' + err.message }; }
             var data = await safeJson(resp);
             if (data._err) {
@@ -4505,6 +4523,10 @@
             wrap.style.display = 'block';
             tbody.innerHTML = '<tr><td colspan="13" class="empty-state">Loading...</td></tr>';
 
+            // Off for every project load; ticking fetches.
+            document.getElementById('showEnergies').checked = false;
+            document.getElementById('showDensities').checked = false;
+            document.getElementById('spExtrasStatus').textContent = '';
             var token = ++molsRender.token;
             if (molsRender.observer) molsRender.observer.disconnect();
             molsRender.observer = null;
@@ -4671,13 +4693,17 @@
             var status = document.getElementById('spExtrasStatus');
             if (!sp.project) return;
             try {
-                if (showE && !sp.energies) {
-                    status.textContent = 'Loading energies…';
-                    sp.energies = await spTasksPromise(sp, 'sp-energies');
-                }
-                if (showD && !sp.densities) {
-                    status.textContent = 'Looking for density files…';
-                    sp.densities = await spTasksPromise(sp, 'sp-densities');
+                if ((showE && !sp.energies) || (showD && !sp.densities)) {
+                    await withLoading('Loading singlepoint data…', async function () {
+                        if (showE && !sp.energies) {
+                            status.textContent = 'Loading energies…';
+                            sp.energies = await spTasksPromise(sp, 'sp-energies');
+                        }
+                        if (showD && !sp.densities) {
+                            status.textContent = 'Looking for density files…';
+                            sp.densities = await spTasksPromise(sp, 'sp-densities');
+                        }
+                    });
                 }
                 if (sp === molsSp) status.textContent = '';
             } catch (e) {
@@ -4810,7 +4836,7 @@
                 if (e.target === this) closeDensityModal();
             });
             document.addEventListener('keydown', function (e) {
-                if (e.key === 'Escape' && !loading.active && document.getElementById('densityModal').style.display !== 'none') {
+                if (e.key === 'Escape' && document.getElementById('densityModal').style.display !== 'none') {
                     closeDensityModal();
                 }
             });
@@ -5042,7 +5068,7 @@
                     // download the produced file.
                     var started = await startProjectJob(
                         '/api/projects/' + projectPath(name) + '/state-analysis/export',
-                        { method: 'POST' }
+                        { method: 'POST' }, 'Starting the State Analysis workbook…'
                     );
                     if (!started.ok) {
                         alert('Export failed: ' + started.detail);
@@ -5621,7 +5647,7 @@
                     // project); poll, then download the workbook.
                     var started = await startProjectJob(
                         '/api/projects/' + projectPath(name) + '/export?format=photophysics',
-                        { method: 'POST' }
+                        { method: 'POST' }, 'Starting the photophysics workbook…'
                     );
                     if (!started.ok) {
                         alert('Export failed: ' + started.detail);
@@ -5737,11 +5763,11 @@
         }
 
         // Initial load
-        loadIdentity().then(function () { activateRoute(currentRoute()); });
+        // Routed once, after whoami: the Admin page depends on it.
+        loadIdentity().catch(function () {}).then(function () { activateRoute(currentRoute()); });
         fetchHeaders();
         fetchAdvancedDefaults();
         refreshAll();
-        activateRoute(currentRoute());
 
         // Poll every 5 seconds
         setInterval(refreshAll, POLL_INTERVAL);

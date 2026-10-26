@@ -423,16 +423,30 @@ function El(id) {
 El.prototype.setAttribute = function (k, v) { this.attrs[k] = String(v); };
 El.prototype.removeAttribute = function (k) { delete this.attrs[k]; };
 El.prototype.addEventListener = function (t, f) { this.on[t] = f; };
+El.prototype.insertAdjacentHTML = function (where, html) { this.inserted = html; };
 var els = {};
 var slots = [];
 var document = {
     activeElement: null, body: {},
     getElementById: function (id) { return els[id] || (els[id] = new El(id)); },
-    querySelector: function (sel) { return els[sel] || (els[sel] = new El(sel)); },
+    querySelector: function (sel) {
+        if (sel.indexOf('cancelled-note') !== -1) return null;
+        return els[sel] || (els[sel] = new El(sel));
+    },
     querySelectorAll: function () { return slots; },
     addEventListener: function () {},
 };
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+// Past the grace that ends a session.
+function idle() { return sleep(LOADING_GRACE_MS + 20); }
+// As in Chrome, a body is parsed only after a timer tick.
+['text', 'json', 'arrayBuffer'].forEach(function (k) {
+    var read = Response.prototype[k];
+    Response.prototype[k] = function () {
+        var self = this;
+        return sleep(0).then(function () { return read.call(self); });
+    };
+});
 // Each call parks until the test settles it; an abort rejects it as fetch does.
 var calls = [];
 globalThis.fetch = function (url, opts) {
@@ -465,7 +479,7 @@ def _loading_block() -> str:
 
 def _run_overlay(body: str, *extra: str) -> dict:
     script = (_DOM_STUB + _loading_block() + "\n".join(extra)
-              + "\nLOADING_DELAY_MS = 30; LOADING_HANG_MS = 200;\n"
+              + "\nLOADING_DELAY_MS = 30; LOADING_HANG_MS = 200; LOADING_GRACE_MS = 20;\n"
               + "(async function () {\n" + body + "\n})().then(function () {"
               + " process.stdout.write(JSON.stringify(out)); }, function (e) { console.error(e); process.exit(1); });\n")
     result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=30)
@@ -482,7 +496,7 @@ def test_a_user_load_blocks_at_once_and_shows_after_the_delay():
         out.later = seen();
         calls[0].resolve('{"a": 1}');
         out.body = await (await p).json();
-        await sleep(5);
+        await idle();
         out.done = seen();
         out.signal = calls[0].opts.signal instanceof AbortSignal;
     """)
@@ -541,9 +555,12 @@ def test_overlapping_loads_keep_one_overlay_until_the_last_ends():
         out.one = seen();
         calls[1].resolve('b');
         await b;
-        await sleep(5);
+        await idle();
         out.none = seen();
-        // Back to back, as in a multi-step load: no gap.
+        // Back to back, as in a multi-step load: no gap while the body is parsed.
+        var app = document.querySelector('.app'), inert = [];
+        Object.defineProperty(app, 'inert', { get: function () { return inert[inert.length - 1]; },
+                                              set: function (v) { inert.push(v); } });
         var c = loadingFetch('Third…', '/c');
         calls[2].resolve('c');
         await (await c).text();
@@ -551,14 +568,15 @@ def test_overlapping_loads_keep_one_overlay_until_the_last_ends():
         out.chained = seen();
         calls[3].resolve('d');
         await d;
-        await sleep(5);
+        await idle();
         out.end = seen();
+        out.inert = inert;
     """)
     assert out["both"]["visible"] and out["both"]["label"] == "Second…"
     assert out["one"]["visible"] and out["one"]["label"] == "Second…"
     assert not out["none"]["blocked"]
     assert out["chained"]["blocked"] and out["chained"]["label"] == "Fourth…"
-    assert not out["end"]["blocked"]
+    assert not out["end"]["blocked"] and out["inert"] == [True, False]
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -571,7 +589,7 @@ def test_an_error_clears_the_overlay():
         calls[0].reject(new TypeError('Failed to fetch'));
         try { await p; } catch (e) { out.error = e.name + ': ' + e.message; }
         out.thrown = await w;
-        await sleep(5);
+        await idle();
         out.after = seen();
     """)
     assert out["error"] == "TypeError: Failed to fetch" and out["thrown"] == "boom"
@@ -601,6 +619,7 @@ def test_cancel_after_the_hang_delay_aborts_and_the_page_recovers():
         out.steps = steps;
         await sleep(5);
         out.slots = [slots[0].innerHTML, slots[1].textContent, slots[2].innerHTML];
+        out.note = document.querySelector('.page.active .page-header').inserted;
         out.aborted = calls.map(function (c) { return c.opts.signal.aborted; });
         // Next load starts clean.
         var next = loadingFetch('Again…', '/c');
@@ -608,7 +627,7 @@ def test_cancel_after_the_hang_delay_aborts_and_the_page_recovers():
         out.next = seen();
         calls[2].resolve('ok');
         out.text = await (await next).text();
-        await sleep(5);
+        await idle();
         out.end = seen();
     """)
     assert not out["early"]["hang"]
@@ -618,6 +637,7 @@ def test_cancel_after_the_hang_delay_aborts_and_the_page_recovers():
     assert out["steps"] == ["AbortError"] and out["aborted"] == [True, True]
     assert "data-retry" in out["slots"][0] and "Cancelled" in out["slots"][0]
     assert out["slots"][1:] == ["Cancelled", "No molecules yet."]
+    assert "cancelled-note" in out["note"] and "data-retry" in out["note"]
     assert out["next"]["visible"] and not out["next"]["hang"] and out["next"]["label"] == "Again…"
     assert out["text"] == "ok" and not out["end"]["blocked"]
 
@@ -655,11 +675,90 @@ def test_the_bar_follows_the_streamed_bytes_across_requests():
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_molecule_rows_go_in_by_chunks_and_structures_wait_for_the_observer():
-    script = """
+    out = _run_molecules("""
+        var tbody = new Body();
+        molsRender.token = 1;
+        molsRender.observer = { observe: function () { observed++; } };
+        appendMolChunks(tbody, groups(120), 1, 0);
+        out.first = tbody.children.length;
+        out.queued = timers.length;
+        flush();
+        out.all = tbody.children.length;
+        out.observed = observed; out.drawn = drawn;
+        // A newer load stops the old one after its current chunk.
+        var stale = new Body();
+        molsRender.observer = null;
+        appendMolChunks(stale, groups(120), 1, 0);
+        molsRender.token = 2;
+        flush();
+        out.stale = stale.children.length;
+        out.drawnWithoutObserver = drawn;
+    """)
+    assert out["first"] == 50 and out["queued"] == 1 and out["all"] == 120
+    assert out["observed"] == 120 and out["drawn"] == 0
+    assert out["stale"] == 50 and out["drawnWithoutObserver"] == 50
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_project_load_unticks_the_boxes_and_a_newer_load_wins():
+    out = _run_molecules("""
+        els.showEnergies.checked = true; els.showDensities.checked = true;
+        var a = loadMoleculesPage();
+        out.unticked = [els.showEnergies.checked, els.showDensities.checked];
+        fetches[0].resolve(molecules(2, 'A'));
+        await a;
+        out.observers = observers.length;
+        // B is overtaken by C while its fetch is in flight.
+        var b = loadMoleculesPage();
+        out.disconnected = observers[0].disconnected;
+        var c = loadMoleculesPage();
+        fetches[2].resolve(molecules(3, 'C'));
+        await c;
+        fetches[1].resolve(molecules(3, 'B'));
+        await b;
+        flush();
+        out.urls = fetches.map(function (f) { return f.url; });
+        out.rows = els.moleculesTableBody.children.map(function (r) { return r.smiles; });
+        out.observed = observers.map(function (o) { return o.observed; });
+    """)
+    assert out["unticked"] == [False, False]
+    assert out["urls"] == ["/api/projects/p/molecules-detail"] * 3
+    assert out["observers"] == 1 and out["disconnected"] is True
+    assert out["rows"] == ["C0", "C1", "C2"] and out["observed"] == [2, 3]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_energies_that_land_mid_chunking_reach_the_later_chunks():
+    out = _run_molecules("""
+        var page = loadMoleculesPage();
+        fetches[0].resolve(molecules(120, 'M'));
+        await page;
+        out.first = els.moleculesTableBody.children.length;
+        els.showEnergies.checked = true;
+        var ticked = applySpExtras();
+        for (var n = 0; fetches.length < 2 && n < 100; n++) await null;
+        fetches[1].resolve({ tasks: { 7: { energy: -1.5, gibbs: null } } });
+        await ticked;
+        flush();
+        var rows = els.moleculesTableBody.children;
+        out.all = rows.length;
+        out.withE = rows.filter(function (r) { return r.extra.indexOf('E -1.500000 Eh') !== -1; }).length;
+        out.urls = fetches.map(function (f) { return f.url; });
+    """)
+    assert out["first"] == 50 and out["all"] == 120
+    assert out["withE"] == 120
+    assert out["urls"][1] == "/api/projects/p/sp-energies"
+
+
+_MOLECULES_STUB = r"""
+// Rows as objects; enough of tbody for loadMoleculesPage and appendMolChunks.
 function Body() { this.children = []; }
 Object.defineProperty(Body.prototype, 'innerHTML', { set: function (v) {
     var self = this;
-    this.children = v.split('</tr>').filter(Boolean).map(function (r) { return { html: r, parent: self }; });
+    this.children = v.split('</tr>').filter(Boolean).map(function (r) {
+        var m = /data-smiles="([^"]*)"/.exec(r), t = /class="sp-extra" data-tid="(\d+)"/.exec(r);
+        return { html: r, parent: self, smiles: m ? m[1] : null, tid: t ? t[1] : null, extra: '' };
+    });
 } });
 Object.defineProperty(Body.prototype, 'firstChild', { get: function () { return this.children[0] || null; } });
 Body.prototype.appendChild = function (n) {
@@ -668,49 +767,108 @@ Body.prototype.appendChild = function (n) {
     this.children.push(n);
 };
 Body.prototype.querySelectorAll = function (sel) {
-    return this.children.filter(function (c) { return c.html.indexOf(sel === 'div.struct' ? 'struct' : 'sp-extra') !== -1; })
-        .map(function (c) { return { row: c, dataset: { tid: '1', type: 'singlepoint', smiles: 'C' } }; });
+    return this.children.filter(function (c) { return sel === 'div.struct' ? c.smiles !== null : c.tid !== null; })
+        .map(function (c) {
+            var el = { row: c, dataset: { tid: c.tid, type: 'singlepoint', smiles: c.smiles } };
+            Object.defineProperty(el, 'innerHTML', { set: function (v) { c.extra = v; } });
+            return el;
+        });
+};
+var els = {
+    moleculesTableBody: new Body(), projectSelectMols: { value: 'p' }, showEnergies: { checked: false },
+    showDensities: { checked: false }, spExtrasStatus: { textContent: '' },
+    moleculesEmptyState: { style: {} }, moleculesTableWrapper: { style: {} },
 };
 var document = {
     createElement: function () { return new Body(); },
-    getElementById: function () { return { checked: true }; },
+    getElementById: function (id) { return els[id]; },
+    querySelectorAll: function () { return els.moleculesTableBody.querySelectorAll('.sp-extra'); },
 };
+var observers = [];
+var window = { IntersectionObserver: function () {
+    this.observed = 0; this.disconnected = false;
+    this.observe = function () { this.observed++; };
+    this.disconnect = function () { this.disconnected = true; };
+    observers.push(this);
+} };
+var IntersectionObserver = window.IntersectionObserver;
 var drawn = 0, observed = 0;
 function drawStructureInto() { drawn++; }
-function spExtraHtml() { return 'E'; }
-var MOLS_CHUNK = 50;
-var molsRender = { token: 1, observer: null };
-""" + _functions("appendMolChunks") + """
-function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
-var groups = [];
-for (var i = 0; i < 120; i++) groups.push('<tr><td><div class="struct"></div><div class="sp-extra"></div></td></tr>');
-(async function () {
-    var out = {};
-    var tbody = new Body();
-    molsRender.observer = { observe: function () { observed++; } };
-    appendMolChunks(tbody, groups, 1, 0);
-    out.first = tbody.children.length;
-    await sleep(30);
-    out.all = tbody.children.length;
-    out.observed = observed; out.drawn = drawn;
-    // A newer load stops the old one after its current chunk.
-    var stale = new Body();
-    molsRender.observer = null;
-    appendMolChunks(stale, groups, 1, 0);
-    molsRender.token = 2;
-    await sleep(30);
-    out.stale = stale.children.length;
-    out.drawnWithoutObserver = drawn;
-    process.stdout.write(JSON.stringify(out));
-})();
+function projectPath(n) { return n; }
+function withLoading(label, fn) { return Promise.resolve().then(function () { return fn(function () { return true; }); }); }
+var fetches = [];
+function loadingFetch(label, url) {
+    return new Promise(function (resolve) {
+        fetches.push({ url: url, resolve: function (body) { resolve(new Response(JSON.stringify(body))); } });
+    });
+}
+function molecules(n, prefix) {
+    var out = [];
+    for (var i = 0; i < n; i++) out.push({ id: i, smiles: prefix + i, states: [{ description: 'S0', charge: 0, multiplicity: 1,
+        conformers: [{ index: 1, optimization: 'successful', singlepoint: 'successful', tasks: { singlepoint: 7 } }] }] });
+    return { molecules: out };
+}
+function groups(n) {
+    var out = [];
+    for (var i = 0; i < n; i++) out.push('<tr><td><div class="struct" data-smiles="s' + i + '"></div><div class="sp-extra" data-tid="7"></div></td></tr>');
+    return out;
+}
+// Chunks are queued, then flushed by hand: no dependence on wall-clock time.
+var timers = [];
+function flush() { while (timers.length) timers.shift()(); }
 """
-    out = json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
-    assert out["first"] == 50 and out["all"] == 120
-    assert out["observed"] == 120 and out["drawn"] == 0
-    assert out["stale"] == 50 and out["drawnWithoutObserver"] == 50
+
+
+def _run_molecules(body: str) -> dict:
+    html = (TEMPLATE / "dashboard.html").read_text()
+    code = _functions("escHtml", "isAbort", "errHtml", "fmtFixed", "brokenBadge", "statusCell", "spExtraSlot",
+                      "spExtraHtml", "fetchSpTasks", "spTasksPromise", "applySpExtras", "loadMoleculesPage",
+                      "appendMolChunks")
+    consts = "\n".join(re.search(rf"\n *var {n} = [^\n]*\n", html).group(0)
+                       for n in ("MOLS_CHUNK", "molsRender", "molsSp", "CANCELLED_HTML"))
+    script = (_MOLECULES_STUB
+              + "(function (setTimeout) {\n" + consts + code
+              + "\nreturn (async function () { var out = {};\n" + body + "\nreturn out; })();\n"
+              + "})(function (f) { timers.push(f); }).then(function (out) { process.stdout.write(JSON.stringify(out)); },"
+              + " function (e) { console.error(e); process.exit(1); });\n")
+    result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def test_the_tickboxes_are_off_and_not_restored_by_the_browser():
+    html = (TEMPLATE / "dashboard.html").read_text()
+    assert '<input type="checkbox" id="showEnergies" autocomplete="off">' in html
+    assert '<input type="checkbox" id="showDensities" autocomplete="off">' in html
 
 
 def test_the_density_viewer_is_not_under_the_overlay_and_close_aborts():
     body = _functions("openDensityModal", "closeDensityModal")
     assert "loadingFetch" not in body and "withLoading" not in body
     assert "signal: ctl.signal" in body and "densityView.ctl.abort()" in body
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_navigation_retires_the_old_pages_reads_but_not_actions():
+    out = _run_overlay("""
+        var steps = [];
+        var flow = withLoading('Loading molecules…', async function (live) {
+            try { await loadingFetch('Loading projects…', '/a'); } catch (e) { steps.push(e.name); }
+            if (live()) steps.push('went on');
+        });
+        var post = loadingFetch('Submitting…', '/b', { method: 'POST' });
+        await sleep(60);
+        loadingRetireReads();
+        await flow;
+        out.steps = steps;
+        out.aborted = calls.map(function (c) { return c.opts.signal.aborted; });
+        await idle();
+        out.during = seen();
+        calls[1].resolve('queued');
+        out.post = await (await post).text();
+        await idle();
+        out.end = seen();
+    """)
+    assert out["steps"] == ["AbortError"] and out["aborted"] == [True, False]
+    assert out["during"]["visible"] and out["during"]["label"] == "Submitting…"
+    assert out["post"] == "queued" and not out["end"]["blocked"]
