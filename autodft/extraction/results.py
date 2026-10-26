@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
-from sqlmodel import Session, col, select
+from sqlmodel import Session, col, func, select
 
 from autodft import categories
 from autodft.db import get_session
@@ -200,8 +200,7 @@ def connectivity_by_task(session: Session, task_ids: Iterable[int]) -> dict[int,
     out = {}
     for task_id, job in latest.items():
         row = rows.get(job.id)
-        if (row is None or row.task_id != job.task_id or row.job_path != job.job_path
-                or not _same_instant(row.finished_at, job.time_end)):
+        if not _same_job(row, job):
             continue
         found = json.loads(row.data_json).get("connectivity")
         if found is not None:
@@ -249,8 +248,15 @@ def latest_successful_jobs(session: Session, task_ids: Iterable[int]) -> dict:
     return latest
 
 
-def for_tasks(session: Session, types: dict[int, str], require: Iterable[str] = ()) -> dict[int, dict]:
-    """for_task() of many tasks at once, from task id -> task type; tasks without a record are left out."""
+def stored_values(
+    session: Session, types: dict[int, str], keys: tuple[str, ...],
+) -> tuple[dict[int, dict], list[tuple]]:
+    """Scalar *keys* of many tasks' records, from task id -> task type, read in SQL.
+
+    Current records matching their job answer here, without decoding them.
+    The rest come back as ``pending`` for :func:`resolve_pending`, which may
+    read output files and so belongs after the session is closed.
+    """
     latest = latest_successful_jobs(session, types)
     rows: dict = {}
     for chunk in _chunks([j.id for j in latest.values()], 500):
@@ -259,16 +265,40 @@ def for_tasks(session: Session, types: dict[int, str], require: Iterable[str] = 
             for row in session.exec(
                 select(
                     JobResult.job_id, JobResult.task_id, JobResult.job_path, JobResult.finished_at,
-                    JobResult.parser_version, JobResult.data_json,
+                    JobResult.parser_version,
+                    *(func.json_extract(JobResult.data_json, f"$.{key}").label(key) for key in keys),
                 ).where(col(JobResult.job_id).in_(chunk))
             ).all()
         })
-    out = {}
+    found: dict[int, dict] = {}
+    stale: dict[int, int] = {}
+    missing: list[tuple] = []
     for task_id, job in latest.items():
         row = rows.get(job.id)
-        found = resolve(job.job_path, types[task_id], *_row_record(row, job), require)
+        if not _same_job(row, job):
+            missing.append((task_id, types[task_id], job.job_path, None))
+        elif row.parser_version == PARSER_VERSION:
+            found[task_id] = {key: getattr(row, key) for key in keys}
+        else:
+            stale[job.id] = task_id
+    pending = list(missing)
+    for chunk in _chunks(sorted(stale), 500):
+        for job_id, data_json in session.exec(
+            select(JobResult.job_id, JobResult.data_json).where(col(JobResult.job_id).in_(chunk))
+        ).all():
+            task_id = stale[job_id]
+            pending.append((task_id, types[task_id], latest[task_id].job_path, data_json))
+    return found, pending
+
+
+def resolve_pending(pending: list[tuple], keys: tuple[str, ...]) -> dict[int, dict]:
+    """The :func:`stored_values` the session could not answer, by :func:`resolve`; needs no session."""
+    out = {}
+    for task_id, task_type, job_path, data_json in pending:
+        record = json.loads(data_json) if data_json is not None else None
+        found = resolve(job_path, task_type, record, False)
         if found is not None:
-            out[task_id] = found
+            out[task_id] = {key: found.get(key) for key in keys}
     return out
 
 
@@ -298,17 +328,20 @@ def stored(session: Session, job: ComputationJob) -> tuple[Optional[dict], bool]
     return _row_record(session.exec(select(JobResult).where(JobResult.job_id == job.id)).first(), job)
 
 
-def _row_record(row, job) -> tuple[Optional[dict], bool]:
-    """stored() from a JobResult and a job, ORM objects or rows."""
-    same_identity = (
+def _row_record(row: Optional[JobResult], job: ComputationJob) -> tuple[Optional[dict], bool]:
+    if not _same_job(row, job):
+        return None, False
+    return json.loads(row.data_json), row.parser_version == PARSER_VERSION
+
+
+def _same_job(row, job) -> bool:
+    """Whether a JobResult (row) was parsed from this job (row), not one that reused its id."""
+    return (
         row is not None
         and row.task_id == job.task_id
         and row.job_path == job.job_path
         and _same_instant(row.finished_at, job.time_end)
     )
-    if not same_identity:
-        return None, False
-    return json.loads(row.data_json), row.parser_version == PARSER_VERSION
 
 
 def resolve(

@@ -846,8 +846,10 @@ def api_project_sp_energies(
 ):
     """E (Eh) of every successful singlepoint; the relaxed one also G = E + G-E(el).
 
-    G-E(el) is the raw ORCA correction of the optimisation the singlepoint
-    depends on (no quasi-RRHO), as the extractor uses it; no correction, no G.
+    G-E(el) is the raw ORCA correction of the successful optimisation the
+    singlepoint depends on (no quasi-RRHO), as the extractor uses it; no
+    correction, no G. Records are read in SQL; any re-parse waits until the
+    session is closed.
     """
     bad = _reject_bad_project(name)
     if bad is not None:
@@ -858,9 +860,14 @@ def api_project_sp_energies(
     with get_session() as session:
         name = resolve_project(session, identity, name)
         sps = _project_tasks(session, name, densities.SP_TYPES)
-        parents = {t.depends_on_task_id for t in sps if t.task_type == TaskType.singlepoint}
-        energies = stored.for_tasks(session, {t.id: t.task_type.value for t in sps})
-        corrections = stored.for_tasks(session, {i: TaskType.optimization.value for i in parents if i is not None})
+        opts = {t.id for t in _project_tasks(session, name, [TaskType.optimization])}
+        parents = {t.depends_on_task_id for t in sps if t.task_type == TaskType.singlepoint} & opts
+        energies, pending = stored.stored_values(session, {t.id: t.task_type.value for t in sps}, ("energy",))
+        corrections, pending_opts = stored.stored_values(
+            session, dict.fromkeys(parents, TaskType.optimization.value), ("free_energy_correction",),
+        )
+    energies.update(stored.resolve_pending(pending, ("energy",)))
+    corrections.update(stored.resolve_pending(pending_opts, ("free_energy_correction",)))
 
     out = {}
     for t in sps:
@@ -918,13 +925,14 @@ def api_project_sp_densities(
     }
 
 
-@router.get("/api/projects/{name}/densities/{task_id}/{kind}")
+@router.post("/api/projects/{name}/densities/{task_id}/{kind}")
 def api_project_density_cube(
     name: str, task_id: int, kind: str, identity: Identity = Depends(current_identity),
 ):
     """One singlepoint's ElDens or SpinDens cube, built with orca_plot first when only its densities are kept.
 
-    The build is cached in the job folder; it can take minutes on a fine grid.
+    POST, since it may build: the cube is cached in the job folder, which can
+    take minutes on a fine grid. 503 while no build slot is free.
     """
     bad = _reject_bad_project(name)
     if bad is not None:
@@ -947,8 +955,10 @@ def api_project_density_cube(
             return JSONResponse(status_code=404, content={"detail": "Densities were not requested for this molecule."})
         if kind == "spindens" and densities.multiplicity(task.task_type, state) == 1:
             return JSONResponse(status_code=404, content={"detail": "A closed-shell singlepoint has no spin density."})
-        job = stored.latest_successful_job(session, task.id)
         opts = densities.options(molecule, state)
+        if not opts.wanted[kind]:
+            return JSONResponse(status_code=404, content={"detail": f"density_{kind} was off at submission."})
+        job = stored.latest_successful_job(session, task.id)
 
     job_dir = Path(job.job_path) if job is not None and job.job_path else None
     if job_dir is None or not job_dir.is_dir():
@@ -957,6 +967,8 @@ def api_project_density_cube(
         path = densities.ensure_cube(
             job_dir, kind, opts, densities.orca_plot_binary(get_active_settings().orca.path),
         )
+    except densities.CubeBusy as exc:
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
     except densities.CubeError as exc:
         return JSONResponse(status_code=500, content={"detail": str(exc)})
     if path.resolve().parent != job_dir.resolve():

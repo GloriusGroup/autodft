@@ -33,20 +33,29 @@ SP_TYPES = frozenset({
 # orca_plot's menu: plot type 2 = SCF electron density, 3 = SCF spin density.
 _PLOT_TYPE = {"eldens": 2, "spindens": 3}
 PLOT_TIMEOUT_S = 300
+# orca_plot runs on the controller host: at most this many at once, the rest are turned away.
+MAX_BUILDS = 2
 _STAT_THREADS = 16
 
-_locks: dict[str, threading.Lock] = {}
-_locks_guard = threading.Lock()
+_slots = threading.BoundedSemaphore(MAX_BUILDS)
+_building: set[str] = set()
+_guard = threading.Lock()
 
 
 class CubeError(Exception):
     """A cube could not be served or built; the message is shown to the user."""
 
 
+class CubeBusy(CubeError):
+    """No build slot free, or this cube is being built already."""
+
+
 @dataclass(frozen=True)
 class Options:
     grid: int
     files: dict[str, str]
+    # density_eldens / density_spindens as submitted.
+    wanted: dict[str, bool]
 
 
 def _metadata(raw: Optional[str]) -> dict:
@@ -70,8 +79,11 @@ def options(molecule: Molecule, state: MoleculeState) -> Options:
         grid = min(max(int(merged["density_grid"]), 10), 300)
     except (TypeError, ValueError):
         grid = defaults["density_grid"]
-    return Options(grid, {"eldens": str(merged["density_eldens_file"]),
-                          "spindens": str(merged["density_spindens_file"])})
+    return Options(
+        grid,
+        {kind: str(merged[f"density_{kind}_file"]) for kind in KINDS},
+        {kind: bool(merged[f"density_{kind}"]) for kind in KINDS},
+    )
 
 
 def _known(metadata: dict) -> dict:
@@ -119,7 +131,7 @@ def availability(job_dir: Path, opts: Options, open_shell: bool) -> dict:
             cached = cube is not None and cube.is_file() and cube.stat().st_size > 0
         except OSError:
             cached = False
-        wanted = kind == "eldens" or open_shell
+        wanted = opts.wanted[kind] and (kind == "eldens" or open_shell)
         out[kind] = wanted and (cached or rebuild)
         out["build"][kind] = out[kind] and not cached
     return out
@@ -139,11 +151,6 @@ def orca_plot_binary(orca_path: str) -> str:
     return os.path.join(folder, "orca_plot") if folder else "orca_plot"
 
 
-def _lock(path: Path) -> threading.Lock:
-    with _locks_guard:
-        return _locks.setdefault(str(path), threading.Lock())
-
-
 def ensure_cube(job_dir: Path, kind: str, opts: Options, orca_plot: str) -> Path:
     """The cube of *kind* in *job_dir*, built with orca_plot and cached there when missing."""
     target = cube_path(job_dir, opts.files[kind])
@@ -151,7 +158,14 @@ def ensure_cube(job_dir: Path, kind: str, opts: Options, orca_plot: str) -> Path
         raise CubeError(f"Cube name {opts.files[kind]!r} is not a plain file name.")
     if _nonempty(target):
         return target
-    with _lock(target):
+    key = str(target)
+    with _guard:
+        if key in _building:
+            raise CubeBusy("This cube is being built already; try again in a minute.")
+        if not _slots.acquire(blocking=False):
+            raise CubeBusy("orca_plot is busy with other cubes; try again shortly.")
+        _building.add(key)
+    try:
         if _nonempty(target):
             return target
         try:
@@ -162,6 +176,10 @@ def ensure_cube(job_dir: Path, kind: str, opts: Options, orca_plot: str) -> Path
         if stem is None:
             raise CubeError("No cube and no .gbw/.densities/.densitiesinfo to build one from.")
         _build(job_dir, stem, kind, opts.grid, orca_plot, target)
+    finally:
+        with _guard:
+            _building.discard(key)
+            _slots.release()
     return target
 
 
@@ -183,19 +201,30 @@ def _build(job_dir: Path, stem: str, kind: str, grid: int, orca_plot: str, targe
             (work / f"{stem}.{ext}").symlink_to(job_dir / f"{stem}.{ext}")
         # Type, accept the default SCF density file, grid points, generate, exit.
         script = f"1\n{_PLOT_TYPE[kind]}\ny\n4\n{grid}\n11\n12\n"
+        log = work / "plot.log"
         try:
-            run = subprocess.run(
-                [orca_plot, f"{stem}.gbw", "-i"], cwd=work, input=script, capture_output=True,
-                text=True, timeout=PLOT_TIMEOUT_S,
-            )
+            with log.open("w") as out:
+                run = subprocess.run(
+                    [orca_plot, f"{stem}.gbw", "-i"], cwd=work, input=script, stdout=out,
+                    stderr=subprocess.STDOUT, text=True, timeout=PLOT_TIMEOUT_S,
+                )
         except subprocess.TimeoutExpired as exc:
             raise CubeError(f"orca_plot took longer than {PLOT_TIMEOUT_S} s.") from exc
         except OSError as exc:
             raise CubeError(f"orca_plot could not start: {exc}") from exc
         built = work / f"{stem}.{kind}.cube"
         if run.returncode != 0 or not _nonempty(built):
-            logger.warning("orca_plot failed in %s (exit %s): %s", job_dir, run.returncode, run.stdout[-2000:])
+            logger.warning("orca_plot failed in %s (exit %s): %s", job_dir, run.returncode, _tail(log))
             raise CubeError(f"orca_plot failed (exit {run.returncode}); no cube was written.")
         os.replace(built, target)
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def _tail(path: Path, size: int = 2000) -> str:
+    try:
+        with path.open("rb") as fh:
+            fh.seek(max(fh.seek(0, os.SEEK_END) - size, 0))
+            return fh.read().decode(errors="replace")
+    except OSError:
+        return ""

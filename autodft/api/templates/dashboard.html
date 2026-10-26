@@ -4197,7 +4197,7 @@
             wrap.style.display = 'block';
             tbody.innerHTML = '<tr><td colspan="13" class="empty-state">Loading...</td></tr>';
 
-            molsSp = { project: name, energies: null, densities: null };
+            molsSp = { project: name, energies: null, densities: null, energiesP: null, densitiesP: null };
             var resp = await fetch('/api/projects/' + projectPath(name) + '/molecules-detail');
             var data = await resp.json();
             if (!data.molecules || data.molecules.length === 0) {
@@ -4267,8 +4267,9 @@
 
         // ── Molecules page: SP energies and density viewer ──────────────
 
-        // Fetched only once a tickbox is ticked; reset per project load.
-        var molsSp = { project: null, energies: null, densities: null };
+        // Fetched only once a tickbox is ticked; reset per project load. The
+        // promises are kept so a tick mid-fetch never fetches twice.
+        var molsSp = { project: null, energies: null, densities: null, energiesP: null, densitiesP: null };
 
         function spExtraSlot(c, type) {
             var tid = c.tasks && c.tasks[type];
@@ -4302,28 +4303,35 @@
             return (await resp.json()).tasks || {};
         }
 
+        function spTasksPromise(sp, what) {
+            var key = what === 'sp-energies' ? 'energiesP' : 'densitiesP';
+            if (!sp[key]) {
+                // A failed fetch is forgotten, so ticking again retries.
+                sp[key] = fetchSpTasks(sp.project, what).catch(function (e) { sp[key] = null; throw e; });
+            }
+            return sp[key];
+        }
+
         async function applySpExtras() {
-            var project = molsSp.project;
+            var sp = molsSp;
             var showE = document.getElementById('showEnergies').checked;
             var showD = document.getElementById('showDensities').checked;
             var status = document.getElementById('spExtrasStatus');
-            if (!project) return;
+            if (!sp.project) return;
             try {
-                if (showE && !molsSp.energies) {
+                if (showE && !sp.energies) {
                     status.textContent = 'Loading energies…';
-                    var energies = await fetchSpTasks(project, 'sp-energies');
-                    if (molsSp.project === project) molsSp.energies = energies;
+                    sp.energies = await spTasksPromise(sp, 'sp-energies');
                 }
-                if (showD && !molsSp.densities) {
+                if (showD && !sp.densities) {
                     status.textContent = 'Looking for density files…';
-                    var dens = await fetchSpTasks(project, 'sp-densities');
-                    if (molsSp.project === project) molsSp.densities = dens;
+                    sp.densities = await spTasksPromise(sp, 'sp-densities');
                 }
-                status.textContent = '';
+                if (sp === molsSp) status.textContent = '';
             } catch (e) {
-                status.textContent = 'Failed: ' + e.message;
+                if (sp === molsSp) status.textContent = 'Failed: ' + e.message;
             }
-            if (molsSp.project !== project) return;
+            if (sp !== molsSp) return;
             showE = document.getElementById('showEnergies').checked;
             showD = document.getElementById('showDensities').checked;
             document.querySelectorAll('#moleculesTableBody .sp-extra').forEach(function (div) {
@@ -4381,11 +4389,13 @@
             try {
                 var lib = load3Dmol();
                 var resp = await fetch('/api/projects/' + projectPath(project) + '/densities/'
-                    + encodeURIComponent(tid) + '/' + kind);
+                    + encodeURIComponent(tid) + '/' + kind, { method: 'POST' });
                 if (!resp.ok) {
                     var msg = 'HTTP ' + resp.status;
                     try { msg = (await resp.json()).detail || msg; } catch (_) {}
-                    throw new Error(msg);
+                    var err = new Error(msg);
+                    err.busy = resp.status === 503;
+                    throw err;
                 }
                 var cube = await resp.text();
                 if (avail.build) avail.build[kind] = false;
@@ -4396,7 +4406,7 @@
             } catch (e) {
                 if (token !== densityView.token) return;
                 status.className = 'pp-waiting pp-warn';
-                status.textContent = 'Failed: ' + e.message;
+                status.textContent = (e.busy ? '' : 'Failed: ') + e.message;
             }
         }
 

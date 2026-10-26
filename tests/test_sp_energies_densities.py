@@ -234,7 +234,7 @@ class TestAvailability:
 
 
 def _cube(env, key, kind="eldens", who="owner", project="owner:p"):
-    return _get(env, f"/api/projects/{project}/densities/{env['ids'][key]}/{kind}", who)
+    return env["client"].post(f"/api/projects/{project}/densities/{env['ids'][key]}/{kind}", headers=env[who])
 
 
 class TestCubeEndpoint:
@@ -311,7 +311,7 @@ class TestBuild:
         assert call["input"] == "1\n3\ny\n4\n40\n11\n12\n"
         assert call["timeout"] == densities.PLOT_TIMEOUT_S
         assert call["cwd"].parent == folder
-        assert call["linked"] == ["input.densities", "input.densitiesinfo", "input.gbw"]
+        assert call["linked"] == ["input.densities", "input.densitiesinfo", "input.gbw", "plot.log"]
         # Second click: served from the cache.
         assert _cube(env, "sp3", "spindens").text == "built spindens\n"
         assert len(calls) == 1
@@ -343,20 +343,65 @@ class TestBuild:
         response = _cube(env, "ox")
         assert response.status_code == 500 and "longer than 300 s" in response.json()["detail"]
 
-    def test_concurrent_clicks_build_once(self, tmp_path, monkeypatch):
+    def test_concurrent_clicks_build_once_and_the_rest_are_told_to_wait(self, tmp_path, monkeypatch):
         calls = []
-        monkeypatch.setattr(densities.subprocess, "run", _fake_orca_plot(calls, delay=0.2))
+        monkeypatch.setattr(densities.subprocess, "run", _fake_orca_plot(calls, delay=0.3))
         for ext in ("gbw", "densities", "densitiesinfo"):
             (tmp_path / f"input.{ext}").write_text("x")
-        opts = densities.Options(20, {"eldens": "ElDens.cube", "spindens": "SpinDens.cube"})
-        threads = [threading.Thread(target=densities.ensure_cube, args=(tmp_path, "eldens", opts, "orca_plot"))
-                   for _ in range(4)]
+        opts = densities.Options(20, {"eldens": "ElDens.cube", "spindens": "SpinDens.cube"},
+                                 {"eldens": True, "spindens": True})
+        busy = []
+
+        def click():
+            try:
+                densities.ensure_cube(tmp_path, "eldens", opts, "orca_plot")
+            except densities.CubeBusy as exc:
+                busy.append(str(exc))
+
+        threads = [threading.Thread(target=click) for _ in range(4)]
         for t in threads:
             t.start()
         for t in threads:
             t.join()
-        assert len(calls) == 1
+        assert len(calls) == 1 and len(busy) == 3
+        assert all("being built already" in b for b in busy)
         assert (tmp_path / "ElDens.cube").read_text() == "built eldens\n"
+        assert not densities._building
+
+    def test_no_free_slot_is_a_503(self, env, monkeypatch):
+        calls = []
+        monkeypatch.setattr(densities.subprocess, "run", _fake_orca_plot(calls))
+        for _ in range(densities.MAX_BUILDS):
+            assert densities._slots.acquire(blocking=False)
+        try:
+            response = _cube(env, "ox")
+        finally:
+            for _ in range(densities.MAX_BUILDS):
+                densities._slots.release()
+        assert response.status_code == 503 and "busy" in response.json()["detail"]
+        assert calls == []
+        # Serving a cube that exists needs no slot.
+        assert _cube(env, "sp").status_code == 200
+
+    def test_the_build_is_a_post(self, env):
+        assert _get(env, f"/api/projects/owner:p/densities/{env['ids']['sp']}/eldens").status_code == 405
+
+    def test_the_log_goes_to_a_file_not_to_memory(self, tmp_path, monkeypatch):
+        seen = {}
+
+        def run(args, cwd, input, **kwargs):
+            seen.update(kwargs)
+            kwargs["stdout"].write("menu\n" * 10)
+            return subprocess.CompletedProcess(args, 64)
+        monkeypatch.setattr(densities.subprocess, "run", run)
+        for ext in ("gbw", "densities", "densitiesinfo"):
+            (tmp_path / f"input.{ext}").write_text("x")
+        opts = densities.Options(20, {"eldens": "ElDens.cube", "spindens": "S.cube"},
+                                 {"eldens": True, "spindens": True})
+        with pytest.raises(densities.CubeError, match="exit 64"):
+            densities.ensure_cube(tmp_path, "eldens", opts, "orca_plot")
+        assert "capture_output" not in seen and seen["stderr"] == subprocess.STDOUT
+        assert sorted(p.name for p in tmp_path.iterdir()) == ["input.densities", "input.densitiesinfo", "input.gbw"]
 
 
 def test_orca_plot_sits_next_to_orca():
@@ -368,7 +413,7 @@ def test_orca_plot_sits_next_to_orca():
 def test_the_molecules_page_has_the_toggles_and_viewer():
     html = (Path(__file__).resolve().parents[1] / "autodft" / "api" / "templates" / "dashboard.html").read_text()
     for needle in ('id="showEnergies"', 'id="showDensities"', 'id="densityModal"', 'id="densityIso"',
-                   "'sp-energies'", "'sp-densities'", "'/densities/'",
+                   "'sp-energies'", "'sp-densities'", "'/densities/'", "{ method: 'POST' }", "energiesP",
                    "https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.4.2/3Dmol-min.js"):
         assert needle in html, needle
     assert html.count("spExtraSlot(c, '") == 6
@@ -396,3 +441,129 @@ def test_a_cell_shows_e_g_and_the_density_buttons():
     assert 'data-kind="eldens"' in both and "SpinDens" not in both
     assert neither == ""
     assert "E -100.500000 Eh" in vertical and "G " not in vertical
+
+
+def _job(session, task, folder: Path, attempt, success=True, output=None, record=None,
+         version=results.PARSER_VERSION, record_path=None):
+    folder.mkdir(parents=True)
+    if output is not None:
+        (folder / "output.out").write_text(output)
+    job = ComputationJob(task_id=task.id, attempt=attempt, job_path=str(folder), success=success,
+                         time_end=datetime(2026, 10, attempt, tzinfo=timezone.utc))
+    session.add(job)
+    session.commit()
+    if record is not None:
+        session.add(JobResult(job_id=job.id, task_id=task.id, job_path=record_path or job.job_path,
+                              finished_at=job.time_end, parser_version=version, data_json=json.dumps(record)))
+        session.commit()
+    return job
+
+
+@pytest.fixture()
+def world(env, tmp_path):
+    """A fresh densities molecule in owner/p, with a World to hang tasks off."""
+    with get_session() as session:
+        w = World(session, tmp_path / "more")
+        state = w.state(w.molecule("owner/p", DENS))
+        yield env, session, w, state
+
+
+def _energies(env):
+    return _get(env, "/api/projects/owner:p/sp-energies").json()["tasks"]
+
+
+def _bare(session, w, state, task_type, parent=None):
+    """A successful task with no job yet."""
+    task = w.task(state, task_type, status=TaskStatus.created, parent=parent)
+    task.status = TaskStatus.successful
+    session.add(task)
+    session.commit()
+    return task
+
+
+class TestRecords:
+    def test_the_latest_successful_attempt_wins_and_a_failed_one_is_ignored(self, world):
+        env, session, w, state = world
+        opt = _bare(session, w, state, TaskType.optimization)
+        sp = _bare(session, w, state, TaskType.singlepoint, parent=opt)
+        for attempt, ok, g in ((1, True, 0.1), (2, True, 0.2), (3, False, 0.3)):
+            _job(session, opt, w.root / f"opt{attempt}", attempt, ok,
+                 record={"energy": -1.0, "free_energy_correction": g})
+            _job(session, sp, w.root / f"sp{attempt}", attempt, ok, record={"energy": -float(attempt)})
+        assert _energies(env)[str(sp.id)] == {"energy": -2.0, "gibbs": pytest.approx(-1.8)}
+
+    def test_a_stale_record_is_reparsed_and_kept_when_the_output_is_gone(self, world):
+        env, session, w, state = world
+        sp = _bare(session, w, state, TaskType.singlepoint_vert_red)
+        gone = _bare(session, w, state, TaskType.singlepoint_vert_ox)
+        old = results.PARSER_VERSION - 1
+        _job(session, sp, w.root / "sp", 1, output=_output(-6.0), record={"energy": -5.0}, version=old)
+        _job(session, gone, w.root / "gone", 1, record={"energy": -5.0}, version=old)
+        tasks = _energies(env)
+        assert tasks[str(sp.id)]["energy"] == -6.0
+        assert tasks[str(gone.id)]["energy"] == -5.0
+
+    def test_a_record_of_another_job_is_not_served(self, world):
+        env, session, w, state = world
+        sp = _bare(session, w, state, TaskType.singlepoint_vert_red)
+        bare = _bare(session, w, state, TaskType.singlepoint_vert_ox)
+        _job(session, sp, w.root / "sp", 1, output=_output(-8.0), record={"energy": -7.0}, record_path="/elsewhere")
+        _job(session, bare, w.root / "bare", 1, record={"energy": -7.0}, record_path="/elsewhere")
+        tasks = _energies(env)
+        assert tasks[str(sp.id)]["energy"] == -8.0
+        assert str(bare.id) not in tasks
+
+    def test_no_g_while_the_optimisation_is_not_successful(self, world):
+        env, session, w, state = world
+        opt = w.task(state, TaskType.optimization, output=_output(-1.0, 0.1))
+        sp = w.task(state, TaskType.singlepoint, parent=opt, output=_output(-1.5))
+        opt.status = TaskStatus.pending
+        session.add(opt)
+        session.commit()
+        assert _energies(env)[str(sp.id)] == {"energy": -1.5, "gibbs": None}
+
+    def test_nothing_is_written(self, world):
+        from sqlmodel import func, select
+
+        env, session, w, state = world
+        sp = w.task(state, TaskType.singlepoint_vert_red, output=_output(-3.0))
+        before = session.exec(select(func.count()).select_from(JobResult)).one()
+        assert _energies(env)[str(sp.id)]["energy"] == -3.0
+        assert session.exec(select(func.count()).select_from(JobResult)).one() == before
+
+    def test_files_are_read_only_after_the_session(self, world, monkeypatch):
+        env, session, w, state = world
+        sp = w.task(state, TaskType.singlepoint_vert_red, output=_output(-4.0))
+        real = results._read
+        monkeypatch.setattr(results, "_read", lambda path: pytest.fail("read inside the session"))
+        found, pending = results.stored_values(session, {sp.id: "singlepoint_vert_red"}, ("energy",))
+        assert sp.id not in found and [p[0] for p in pending] == [sp.id]
+        monkeypatch.setattr(results, "_read", real)
+        assert results.resolve_pending(pending, ("energy",)) == {sp.id: {"energy": -4.0}}
+
+    def test_connectivity_follows_the_latest_successful_attempt(self, world):
+        env, session, w, state = world
+        opt = _bare(session, w, state, TaskType.optimization)
+        for attempt, ok in ((1, True), (2, True), (3, False)):
+            _job(session, opt, w.root / f"c{attempt}", attempt, ok,
+                 record={"energy": -1.0, "connectivity": {"ok": True, "detail": f"attempt {attempt}"}})
+        assert results.connectivity_by_task(session, [opt.id]) == {opt.id: {"ok": True, "detail": "attempt 2"}}
+
+
+class TestPerKindFlags:
+    def _flags(self, env, **flags):
+        with get_session() as session:
+            state = session.get(MoleculeState, session.get(ComputationTask, env["ids"]["sp3"]).state_id)
+            state.metadata_json = json.dumps({**json.loads(state.metadata_json), **flags})
+            session.add(state)
+            session.commit()
+        return _get(env, "/api/projects/owner:p/sp-densities").json()["tasks"].get(str(env["ids"]["sp3"]))
+
+    def test_no_eldens_when_it_was_off(self, env):
+        assert self._flags(env, density_eldens=False) == {
+            "eldens": False, "spindens": True, "build": {"eldens": False, "spindens": True}}
+        assert _cube(env, "sp3", "eldens").status_code == 404
+
+    def test_no_spindens_when_it_was_off(self, env):
+        assert self._flags(env, density_spindens=False)["spindens"] is False
+        assert _cube(env, "sp3", "spindens").status_code == 404
