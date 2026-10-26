@@ -1041,6 +1041,64 @@
         .pp-nmr { border-collapse: collapse; font-size: 0.8rem; margin-top: 4px; }
         .pp-nmr th, .pp-nmr td { padding: 2px 10px; border-bottom: 1px solid var(--border); text-align: left; }
         .pp-nmr td.num { text-align: right; font-variant-numeric: tabular-nums; }
+        /* Page-blocking loading overlay: blocks at once, shows after LOADING_DELAY_MS. */
+        .loading-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 1000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.45);
+            opacity: 0;
+            transition: opacity 0.15s;
+        }
+        .loading-overlay.visible { opacity: 1; cursor: progress; }
+        .loading-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 18px 24px 20px;
+            width: 320px;
+            max-width: calc(100% - 32px);
+            box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+            text-align: center;
+            cursor: default;
+        }
+        .loading-animal { width: 96px; height: 60px; display: block; margin: 0 auto 4px; }
+        .loading-animal .hh-spikes { fill: var(--accent); }
+        .loading-animal .hh-face { fill: var(--bg-input); stroke: var(--accent); stroke-width: 1.2; }
+        .loading-animal .hh-dark { fill: var(--text-primary); }
+        .loading-animal .hh-ground { stroke: var(--border); stroke-width: 1.5; stroke-dasharray: 6 5; }
+        .loading-animal .hh-body { animation: hh-bob 0.32s ease-in-out infinite alternate; }
+        .loading-animal .hh-leg {
+            stroke: var(--accent); stroke-width: 2.4; stroke-linecap: round;
+            transform-box: fill-box; transform-origin: top; animation: hh-step 0.32s ease-in-out infinite alternate;
+        }
+        .loading-animal .hh-leg.b { animation-direction: alternate-reverse; }
+        .loading-animal .hh-ground { animation: hh-run 0.55s linear infinite; }
+        @keyframes hh-bob  { from { transform: translateY(0); } to { transform: translateY(-1.5px); } }
+        @keyframes hh-step { from { transform: rotate(-28deg); } to { transform: rotate(28deg); } }
+        @keyframes hh-run  { from { stroke-dashoffset: 0; } to { stroke-dashoffset: 11; } }
+        .loading-label { font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 10px; }
+        .loading-bar { height: 6px; border-radius: 3px; background: var(--bg-input); overflow: hidden; }
+        .loading-fill { height: 100%; width: 0; background: var(--accent); border-radius: 3px; transition: width 0.15s; }
+        .loading-bar.indeterminate .loading-fill { width: 35%; animation: loading-slide 1.2s ease-in-out infinite; }
+        @keyframes loading-slide { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+        .loading-hang {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin-top: 14px;
+            font-size: 0.82rem;
+            color: var(--text-muted);
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .loading-overlay { transition: none; }
+            .loading-animal * { animation: none !important; }
+            .loading-bar.indeterminate .loading-fill { animation: none; width: 100%; opacity: 0.45; }
+        }
     </style>
 </head>
 <body>
@@ -2073,6 +2131,36 @@
     </div>  <!-- /container -->
     </div>  <!-- /app -->
 
+    <!-- Page-blocking loading overlay (user-initiated loads only) -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-card" role="status" aria-live="polite">
+            <svg class="loading-animal" viewBox="0 0 64 40" aria-hidden="true">
+                <line class="hh-ground" x1="2" y1="38.5" x2="62" y2="38.5"/>
+                <g class="hh-legs">
+                    <line class="hh-leg a" x1="17" y1="31" x2="17" y2="36"/>
+                    <line class="hh-leg b" x1="22" y1="31" x2="22" y2="36"/>
+                    <line class="hh-leg b" x1="38" y1="31" x2="38" y2="36"/>
+                    <line class="hh-leg a" x1="43" y1="31" x2="43" y2="36"/>
+                </g>
+                <g class="hh-body">
+                    <path class="hh-spikes" d="M8 27 L5 21 L10 19 L8 13 L14 13 L14 7 L20 9 L23 3 L27 8 L32 3 L34 9 L40 6 L40 12 L46 12 L44 18 L49 20 L46 27 Q30 35 8 27 Z"/>
+                    <ellipse class="hh-spikes" cx="28" cy="25" rx="18" ry="8"/>
+                    <ellipse class="hh-face" cx="48" cy="26" rx="9" ry="6.5"/>
+                    <circle class="hh-dark" cx="57" cy="25" r="1.8"/>
+                    <circle class="hh-dark" cx="50" cy="23.5" r="1.2"/>
+                </g>
+            </svg>
+            <div class="loading-label" id="loadingLabel">Loading…</div>
+            <div class="loading-bar indeterminate" id="loadingBar" role="progressbar" aria-label="Loading">
+                <div class="loading-fill" id="loadingFill"></div>
+            </div>
+            <div class="loading-hang" id="loadingHang">
+                <span id="loadingHangText">Still loading…</span>
+                <button type="button" class="btn-mini" id="loadingCancel">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <!-- RDKit-JS (WASM) — client-side 2-D structures on the Molecules page.
          Bigger (~5 MB) than SmilesDrawer but accurate on all aromatic
          systems / charged species / stereo etc. Cached aggressively by
@@ -2132,6 +2220,155 @@
             }
         }
 
+        // ── Loading overlay ──────────────────────────────────────────────
+        // Blocks the page during user-initiated loads only; polling and
+        // other timers call plain fetch and never show it.
+
+        var LOADING_DELAY_MS = 250;
+        var LOADING_HANG_MS = 60000;
+        var STOPPED_WAITING = 'Stopped waiting. The server may still finish this; check before trying again.';
+        var loading = { active: false, gen: 0, entries: [], reqs: [], focus: null,
+                        showTimer: null, hangTimer: null, idleTimer: null };
+
+        function isAbort(err) {
+            return !!err && err.name === 'AbortError';
+        }
+
+        function errText(prefix, err) {
+            return isAbort(err) ? 'Cancelled.' : prefix + err.message;
+        }
+
+        function setPageInert(on) {
+            ['.app', '.top-fabs'].forEach(function (sel) {
+                var el = document.querySelector(sel);
+                if (el) el.inert = on;
+            });
+        }
+
+        function loadingRender() {
+            if (!loading.active) return;
+            var last = loading.entries[loading.entries.length - 1];
+            if (last) document.getElementById('loadingLabel').textContent = last.label;
+            // Determinate only while every open request has a known size.
+            var open = loading.reqs.filter(function (r) { return !r.done; });
+            var sized = loading.reqs.filter(function (r) { return r.total > 0; });
+            var determinate = open.length > 0 && open.every(function (r) { return r.total > 0; });
+            var done = 0, total = 0;
+            sized.forEach(function (r) { done += Math.min(r.loaded, r.total); total += r.total; });
+            var bar = document.getElementById('loadingBar');
+            bar.classList.toggle('indeterminate', !determinate);
+            document.getElementById('loadingFill').style.width = determinate ? (100 * done / total).toFixed(1) + '%' : '';
+            if (determinate) bar.setAttribute('aria-valuenow', Math.round(100 * done / total));
+            else bar.removeAttribute('aria-valuenow');
+            document.getElementById('loadingHangText').textContent = open.some(function (r) { return r.mutating; })
+                ? 'Still waiting… Cancel stops waiting; the server may still finish.'
+                : 'Still loading…';
+        }
+
+        function loadingBegin(label) {
+            var entry = { label: label };
+            clearTimeout(loading.idleTimer);
+            if (!loading.active) {
+                loading.active = true;
+                loading.focus = document.activeElement;
+                document.getElementById('loadingOverlay').style.display = 'flex';
+                setPageInert(true);
+                loading.showTimer = setTimeout(function () {
+                    document.getElementById('loadingOverlay').classList.add('visible');
+                }, LOADING_DELAY_MS);
+                loading.hangTimer = setTimeout(function () {
+                    document.getElementById('loadingHang').style.display = 'flex';
+                    loadingRender();
+                }, LOADING_HANG_MS);
+            }
+            loading.entries.push(entry);
+            loadingRender();
+            return function () {
+                var i = loading.entries.indexOf(entry);
+                if (i === -1) return;  // cleared by Cancel
+                loading.entries.splice(i, 1);
+                loadingRender();
+                // One tick of grace, so back-to-back requests keep one overlay.
+                if (!loading.entries.length) loading.idleTimer = setTimeout(loadingReset, 0);
+            };
+        }
+
+        function loadingReset() {
+            clearTimeout(loading.showTimer);
+            clearTimeout(loading.hangTimer);
+            clearTimeout(loading.idleTimer);
+            loading.active = false;
+            loading.entries = [];
+            loading.reqs = [];
+            var overlay = document.getElementById('loadingOverlay');
+            overlay.classList.remove('visible');
+            overlay.style.display = 'none';
+            document.getElementById('loadingHang').style.display = 'none';
+            setPageInert(false);
+            var focus = loading.focus;
+            loading.focus = null;
+            if (focus && focus.isConnected && focus !== document.body && focus.focus) focus.focus({ preventScroll: true });
+        }
+
+        function loadingCancel() {
+            var reqs = loading.reqs;
+            loading.gen++;
+            loadingReset();
+            reqs.forEach(function (r) { r.ctl.abort(); });
+        }
+
+        // fetch under the overlay: abortable by Cancel, body streamed for the progress bar.
+        async function loadingFetch(label, url, opts) {
+            var ctl = new AbortController();
+            var req = { ctl: ctl, loaded: 0, total: 0, done: false,
+                        mutating: !!(opts && opts.method && opts.method !== 'GET') };
+            loading.reqs.push(req);
+            var end = loadingBegin(label);
+            try {
+                var resp = await fetch(url, Object.assign({}, opts, { signal: ctl.signal }));
+                if (!resp.body) return resp;
+                // A compressed body streams more bytes than Content-Length says.
+                if (!resp.headers.get('Content-Encoding')) req.total = parseInt(resp.headers.get('Content-Length'), 10) || 0;
+                loadingRender();
+                var reader = resp.body.getReader();
+                var chunks = [];
+                for (;;) {
+                    var step = await reader.read();
+                    if (step.done) break;
+                    chunks.push(step.value);
+                    req.loaded += step.value.length;
+                    loadingRender();
+                }
+                return new Response(new Blob(chunks), { status: resp.status, statusText: resp.statusText, headers: resp.headers });
+            } catch (err) {
+                if (!ctl.signal.aborted) throw err;
+                var cancelled = new Error('Cancelled.');
+                cancelled.name = 'AbortError';
+                throw cancelled;
+            } finally {
+                req.done = true;
+                end();
+            }
+        }
+
+        // Plain fetch without a label: what polling and timers use.
+        function uiFetch(label, url, opts) {
+            return label ? loadingFetch(label, url, opts) : fetch(url, opts);
+        }
+
+        // Keeps one overlay across a multi-step load; live() turns false after Cancel.
+        async function withLoading(label, fn) {
+            var gen = loading.gen;
+            var end = loadingBegin(label);
+            try {
+                return await fn(function () { return gen === loading.gen; });
+            } finally {
+                end();
+            }
+        }
+
+        document.getElementById('loadingCancel').addEventListener('click', loadingCancel);
+
         // ── Sidebar hash routing ────────────────────────────────────────
         // Routes:
         //   #/submit
@@ -2178,13 +2415,19 @@
                 var match = (r === route) || (r === 'projects' && route.indexOf('projects.') === 0);
                 el.classList.toggle('active', match);
             });
-            if (route === 'projects.summary')        fetchProjects();
-            if (route === 'projects.molecules')      fetchProjects().then(loadMoleculesPage);
-            if (route === 'projects.state-analysis') fetchProjects().then(loadStateAnalysisPage);
-            if (route === 'projects.photophysics')   fetchProjects().then(loadPhotophysicsPage);
-            if (route === 'projects.methods')        fetchProjects().then(loadMethodsPage);
-            if (route === 'status')                  fetchFailed();
-            if (route === 'admin')                   loadAdminPage();
+            if (route === 'projects.summary')        fetchProjects(true);
+            if (route === 'projects.molecules')      loadProjectPage('Loading molecules…', loadMoleculesPage);
+            if (route === 'projects.state-analysis') loadProjectPage('Computing state analysis…', loadStateAnalysisPage);
+            if (route === 'projects.photophysics')   loadProjectPage('Reading spectra…', loadPhotophysicsPage);
+            if (route === 'projects.methods')        loadProjectPage('Reading methods…', loadMethodsPage);
+            if (route === 'status')                  fetchFailed(true);
+            if (route === 'admin')                   reloadAdminPage();
+        }
+
+        function loadProjectPage(label, loader) {
+            return withLoading(label, function (live) {
+                return fetchProjects(true).then(function () { if (live()) return loader(); });
+            });
         }
 
         window.addEventListener('hashchange', function () { activateRoute(currentRoute()); });
@@ -2201,13 +2444,20 @@
             });
         }
 
-        async function adminJSON(method, url, body) {
+        // With a label the call runs under the loading overlay. A cancelled
+        // read throws; a cancelled action comes back as not ok.
+        async function adminJSON(method, url, body, label) {
             var opts = { method: method, headers: { 'Accept': 'application/json' } };
             if (body !== undefined) {
                 opts.headers['Content-Type'] = 'application/json';
                 opts.body = JSON.stringify(body);
             }
-            var resp = await fetch(url, opts);
+            var resp;
+            try { resp = await uiFetch(label, url, opts); }
+            catch (err) {
+                if (method === 'GET' || !isAbort(err)) throw err;
+                return { ok: false, status: 0, data: { detail: STOPPED_WAITING } };
+            }
             var text = await resp.text();
             var data; try { data = JSON.parse(text); } catch (_) { data = { detail: text.slice(0, 300) }; }
             return { ok: resp.ok, status: resp.status, data: data };
@@ -2267,10 +2517,10 @@
                 + 'rotate it.</span></div>';
         }
 
-        async function loadUsers() {
+        async function loadUsers(ui) {
             var list = document.getElementById('adminUserList');
             if (!list) { return; }
-            var out = await adminJSON('GET', '/api/admin/users');
+            var out = await adminJSON('GET', '/api/admin/users', undefined, ui ? 'Loading users…' : null);
             if (!out.ok) {
                 list.innerHTML = '<div class="empty-state">Could not load users.</div>';
                 return;
@@ -2301,7 +2551,7 @@
                     if (!confirm('Rotate the key for ' + name + '? Their current key '
                                  + 'stops working immediately.')) { return; }
                     var out = await adminJSON('POST', '/api/admin/users/'
-                        + encodeURIComponent(name) + '/rotate-key');
+                        + encodeURIComponent(name) + '/rotate-key', undefined, 'Rotating key…');
                     if (out.ok) { showNewKey(row.querySelector('.adm-userkey'), out.data); }
                 });
             });
@@ -2311,8 +2561,9 @@
                     var name = row.getAttribute('data-user');
                     var activate = btn.textContent.trim() === 'Reactivate';
                     await adminJSON('POST', '/api/admin/users/'
-                        + encodeURIComponent(name) + '?active=' + activate);
-                    loadUsers();
+                        + encodeURIComponent(name) + '?active=' + activate, undefined,
+                        activate ? 'Reactivating user…' : 'Deactivating user…');
+                    loadUsers(true);
                 });
             });
         }
@@ -2332,7 +2583,7 @@
                     username: name,
                     display_name: document.getElementById('newUserDisplay').value.trim(),
                     role: document.getElementById('newUserRole').value,
-                });
+                }, 'Creating user…');
                 if (!out.ok) {
                     feedback.textContent = out.data.detail || ('HTTP ' + out.status);
                     feedback.className = 'submit-feedback error';
@@ -2343,11 +2594,13 @@
                 showNewKey(feedback, out.data);
                 document.getElementById('newUserName').value = '';
                 document.getElementById('newUserDisplay').value = '';
-                loadUsers();
+                loadUsers(true);
             });
         })();
 
-        async function loadAdminPage() {
+        // ui: under the loading overlay (navigation and button actions, not timers).
+        async function loadAdminPage(ui) {
+            var label = ui ? 'Loading admin page…' : null;
             refreshRemovalBanner();
 
             // The admin-only panels are removed from the DOM for a user, so
@@ -2355,12 +2608,12 @@
             // the console fills with errors that look like a broken page.
             if (!ME.is_admin) { return; }
 
-            loadUsers();
+            loadUsers(ui);
 
             // --- circuit breaker ----------------------------------------
             var breakerBox = document.getElementById('adminBreakerStatus');
             var breakerActions = document.getElementById('adminBreakerActions');
-            var b = await adminJSON('GET', '/api/admin/circuit-breaker');
+            var b = await adminJSON('GET', '/api/admin/circuit-breaker', undefined, label);
             if (!b.ok) {
                 breakerBox.textContent = 'Could not read breaker status.';
             } else {
@@ -2382,7 +2635,7 @@
             // --- submission hold ----------------------------------------
             var holdBox = document.getElementById('adminHoldStatus');
             var holdBtn = document.getElementById('adminHoldToggle');
-            var h = await adminJSON('GET', '/api/admin/submission-hold');
+            var h = await adminJSON('GET', '/api/admin/submission-hold', undefined, label);
             if (!h.ok) {
                 holdBox.textContent = 'Could not read hold status.';
             } else {
@@ -2404,7 +2657,7 @@
             // --- project list -------------------------------------------
             var list = document.getElementById('adminProjectList');
             list.innerHTML = '<div class="empty-state">Loading...</div>';
-            var res = await adminJSON('GET', '/api/projects');
+            var res = await adminJSON('GET', '/api/projects', undefined, label);
             if (!res.ok) {
                 list.innerHTML = '<div class="empty-state">Could not load projects.</div>';
             } else if (!res.data.length) {
@@ -2436,7 +2689,7 @@
             // Rows and project names only: this is a handful of COUNTs and
             // returns in milliseconds. Disk usage is the button below.
             var summary = document.getElementById('adminResetSummary');
-            var r = await adminJSON('GET', '/api/admin/reset-preview');
+            var r = await adminJSON('GET', '/api/admin/reset-preview', undefined, label);
             if (!r.ok) {
                 summary.textContent = 'Could not load database summary.';
             } else {
@@ -2448,8 +2701,12 @@
 
             // Show a measurement taken earlier in this session, but never
             // start one: arriving on this page must stay cheap.
-            var cached = await adminJSON('GET', '/api/admin/disk-usage');
+            var cached = await adminJSON('GET', '/api/admin/disk-usage', undefined, label);
             if (cached.ok && cached.data.usage) { adminRenderUsage(cached.data.usage); }
+        }
+
+        function reloadAdminPage() {
+            return withLoading('Loading admin page…', function () { return loadAdminPage(true); });
         }
 
         // --- disk usage, on demand ---------------------------------------
@@ -2495,7 +2752,7 @@
 
         async function adminStartUsage() {
             document.getElementById('adminUsageOut').textContent = 'starting...';
-            var res = await adminJSON('POST', '/api/admin/disk-usage');
+            var res = await adminJSON('POST', '/api/admin/disk-usage', undefined, 'Starting disk usage…');
             if (!res.ok) {
                 document.getElementById('adminUsageOut').textContent =
                     'Could not start: ' + (res.data.detail || res.status);
@@ -2519,7 +2776,7 @@
             var existing = row.parentNode.querySelector('.admin-confirm');
             if (existing) existing.remove();
 
-            var res = await adminJSON('GET', '/api/projects/' + projectPath(name) + '/wipe-preview');
+            var res = await adminJSON('GET', '/api/projects/' + projectPath(name) + '/wipe-preview', undefined, 'Measuring what a wipe deletes…');
             if (!res.ok) { alert('Could not load preview: ' + (res.data.detail || res.status)); return; }
             var p = res.data;
 
@@ -2555,7 +2812,7 @@
                 var out = await adminJSON('POST', '/api/projects/' + projectPath(name) + '/wipe', {
                     confirm: typed,
                     delete_exports: box.querySelector('.adm-exports').checked,
-                });
+                }, 'Wiping ' + name + '…');
                 if (!out.ok) {
                     feedback.textContent = out.data.detail || ('HTTP ' + out.status);
                     feedback.className = 'submit-feedback error adm-feedback';
@@ -2577,7 +2834,7 @@
         document.getElementById('adminBreakerReset').addEventListener('click', async function () {
             var feedback = document.getElementById('adminBreakerFeedback');
             this.disabled = true;
-            var out = await adminJSON('POST', '/api/admin/circuit-breaker/reset');
+            var out = await adminJSON('POST', '/api/admin/circuit-breaker/reset', undefined, 'Resetting the breaker…');
             this.disabled = false;
             if (!out.ok) {
                 feedback.textContent = out.data.detail || ('HTTP ' + out.status);
@@ -2586,7 +2843,7 @@
             }
             feedback.textContent = 'Breaker reset. Submissions resume on the next tick.';
             feedback.className = 'submit-feedback success';
-            loadAdminPage();
+            reloadAdminPage();
         });
 
         document.getElementById('adminHoldToggle').addEventListener('click', async function () {
@@ -2594,9 +2851,9 @@
             var held = !!this.dataset.held;
             this.disabled = true;
             var out = held
-                ? await adminJSON('POST', '/api/admin/submission-hold/release')
+                ? await adminJSON('POST', '/api/admin/submission-hold/release', undefined, 'Releasing the hold…')
                 : await adminJSON('POST', '/api/admin/submission-hold',
-                                  { reason: document.getElementById('adminHoldReason').value });
+                                  { reason: document.getElementById('adminHoldReason').value }, 'Holding submissions…');
             this.disabled = false;
             if (!out.ok) {
                 feedback.textContent = out.data.detail || ('HTTP ' + out.status);
@@ -2607,7 +2864,7 @@
                 ? 'Hold released. Submissions resume on the next tick.'
                 : 'Submissions held from the next tick on.';
             feedback.className = 'submit-feedback success';
-            loadAdminPage();
+            reloadAdminPage();
         });
 
         document.getElementById('adminMoleculeLookup').addEventListener('click', async function () {
@@ -2617,7 +2874,7 @@
                 target.innerHTML = '<div class="submit-feedback error">Enter a molecule ID.</div>';
                 return;
             }
-            var res = await adminJSON('GET', '/api/molecules/' + id + '/wipe-preview');
+            var res = await adminJSON('GET', '/api/molecules/' + id + '/wipe-preview', undefined, 'Measuring what a wipe deletes…');
             if (!res.ok) {
                 target.innerHTML = '<div class="submit-feedback error">'
                     + adminEscape(res.data.detail || ('HTTP ' + res.status)) + '</div>';
@@ -2649,7 +2906,7 @@
                 }
                 this.disabled = true;
                 var out = await adminJSON('POST', '/api/molecules/' + p.molecule_id + '/wipe',
-                                          { confirm: typed });
+                                          { confirm: typed }, 'Wiping molecule #' + p.molecule_id + '…');
                 if (!out.ok) {
                     feedback.textContent = out.data.detail || ('HTTP ' + out.status);
                     feedback.className = 'submit-feedback error';
@@ -2659,7 +2916,7 @@
                 feedback.textContent = 'Wiped molecule #' + out.data.molecule_id
                     + ', freed ' + out.data.freed_human + '.';
                 feedback.className = 'submit-feedback success';
-                loadAdminPage();
+                reloadAdminPage();
             });
         });
 
@@ -2678,7 +2935,7 @@
                 confirm: typed,
                 delete_files: document.getElementById('adminResetFiles').checked,
                 keep_headers: document.getElementById('adminKeepHeaders').checked,
-            });
+            }, 'Resetting the database…');
             this.disabled = false;
             if (!out.ok) {
                 feedback.textContent = out.data.detail || ('HTTP ' + out.status);
@@ -2689,7 +2946,7 @@
             feedback.textContent = 'Database reset. Removed ' + adminRowsLine(out.data.rows)
                 + '. ' + removalLine(out.data);
             feedback.className = 'submit-feedback success';
-            loadAdminPage();
+            reloadAdminPage();
         });
 
         // ── Skip Conformer Search toggle ─────────────────────────────────
@@ -3200,7 +3457,7 @@
             try {
                 var url    = editingHeaderId == null ? '/api/headers' : ('/api/headers/' + editingHeaderId);
                 var method = editingHeaderId == null ? 'POST'         : 'PUT';
-                var resp = await fetch(url, {
+                var resp = await loadingFetch('Saving header…', url, {
                     method: method,
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body),
@@ -3216,7 +3473,7 @@
                     fb.className = 'submit-feedback error';
                 }
             } catch (err) {
-                fb.textContent = 'Network error: ' + err.message;
+                fb.textContent = isAbort(err) ? STOPPED_WAITING : 'Network error: ' + err.message;
                 fb.className = 'submit-feedback error';
             }
         }
@@ -3224,7 +3481,7 @@
         async function deleteHeader(id) {
             if (!confirm('Delete header #' + id + '? This cannot be undone.')) return;
             try {
-                var resp = await fetch('/api/headers/' + id, { method: 'DELETE' });
+                var resp = await loadingFetch('Deleting header…', '/api/headers/' + id, { method: 'DELETE' });
                 if (resp.ok) {
                     await fetchHeaders();
                 } else {
@@ -3232,7 +3489,7 @@
                     alert('Cannot delete: ' + (data.detail || 'unknown error'));
                 }
             } catch (err) {
-                alert('Network error: ' + err.message);
+                alert(isAbort(err) ? STOPPED_WAITING : 'Network error: ' + err.message);
             }
         }
 
@@ -3301,7 +3558,13 @@
             var fb = document.getElementById('projectExtendFeedback');
             fb.textContent = '';
             fb.className = 'submit-feedback';
-            var resp = await fetch('/api/projects/' + projectPath(project) + '/extend-info');
+            var resp;
+            try { resp = await loadingFetch('Checking the project…', '/api/projects/' + projectPath(project) + '/extend-info'); }
+            catch (err) {
+                fb.textContent = errText('Network error: ', err);
+                fb.className = 'submit-feedback error';
+                return;
+            }
             var info; try { info = await resp.json(); } catch (_) { info = { detail: 'HTTP ' + resp.status }; }
             if (!resp.ok || !info.extendable) {
                 fb.textContent = info.reason || info.detail || ('HTTP ' + resp.status);
@@ -3395,7 +3658,7 @@
             var project = extendMode.project;
             feedback.textContent = 'Extending ' + project + ' …';
             try {
-                var resp = await fetch('/api/projects/' + projectPath(project) + '/extend', {
+                var resp = await loadingFetch('Extending ' + project + '…', '/api/projects/' + projectPath(project) + '/extend', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body)
@@ -3417,7 +3680,7 @@
                     if ((data.queued || []).length) exitExtendMode();
                 }
             } catch (err) {
-                feedback.textContent = err.message;
+                feedback.textContent = isAbort(err) ? STOPPED_WAITING : err.message;
                 feedback.className = 'submit-feedback error';
             }
             btn.disabled = false;
@@ -3562,7 +3825,7 @@
             feedback.textContent = 'Submitting ' + lines.length + ' molecule(s) …';
             feedback.className = 'submit-feedback';
             try {
-                var resp = await fetch('/api/submit-batch', {
+                var resp = await loadingFetch('Submitting ' + lines.length + ' molecule(s)…', '/api/submit-batch', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(Object.assign({}, commonBody, { smiles_list: lines }))
@@ -3581,6 +3844,14 @@
                     });
                 }
             } catch (err) {
+                if (isAbort(err)) {
+                    // The textarea is left as it was: the batch may have been queued.
+                    feedback.textContent = STOPPED_WAITING;
+                    feedback.className = 'submit-feedback error';
+                    refreshAll();
+                    btn.disabled = false;
+                    return;
+                }
                 failed = lines.map(function (smi) {
                     return { smiles: smi, error: err.message };
                 });
@@ -3694,9 +3965,9 @@
 
         // ── Failed entrypoints (surfaced on the Current Status page) ───
 
-        async function fetchFailed() {
+        async function fetchFailed(ui) {
             try {
-                var resp = await fetch('/api/entrypoints/failed');
+                var resp = await uiFetch(ui ? 'Loading failed entrypoints…' : null, '/api/entrypoints/failed');
                 var rows = await resp.json();
                 var tbody = document.getElementById('failedBody');
                 if (!rows || rows.length === 0) {
@@ -3719,9 +3990,10 @@
         var projectCache = [];
         var currentProject = null;
 
-        async function fetchProjects() {
+        // ui: under the loading overlay (navigation, not timers).
+        async function fetchProjects(ui) {
             try {
-                var resp = await fetch('/api/projects');
+                var resp = await uiFetch(ui ? 'Loading projects…' : null, '/api/projects');
                 projectCache = await resp.json();
                 var sel       = document.getElementById('projectSelect');
                 var selMols   = document.getElementById('projectSelectMols');
@@ -3783,17 +4055,17 @@
                     if (selPP)   selPP.value   = prev;
                     if (selMT)   selMT.value   = prev;
                 }
-                loadProjectDetail(sel.value);
+                loadProjectDetail(sel.value, ui);
             } catch (err) {
                 console.warn('Failed to fetch projects:', err);
             }
         }
 
-        async function loadProjectDetail(name) {
+        async function loadProjectDetail(name, ui) {
             if (!name) return;
             currentProject = name;
             try {
-                var resp = await fetch('/api/projects/' + projectPath(name));
+                var resp = await uiFetch(ui ? 'Loading project…' : null, '/api/projects/' + projectPath(name));
                 var data = await resp.json();
 
                 document.getElementById('projectCards').style.display = 'grid';
@@ -3908,8 +4180,8 @@
         async function startProjectJob(url, fetchOpts) {
             // -> {ok:true, project, job} or {ok:false, status?, detail}
             var resp;
-            try { resp = await fetch(url, fetchOpts); }
-            catch (err) { return { ok: false, detail: 'Network error: ' + err.message }; }
+            try { resp = await loadingFetch('Starting the export…', url, fetchOpts); }
+            catch (err) { return { ok: false, detail: isAbort(err) ? STOPPED_WAITING : 'Network error: ' + err.message }; }
             var data = await safeJson(resp);
             if (data._err) {
                 return { ok: false, status: resp.status,
@@ -4035,7 +4307,7 @@
                 });
             }
             document.getElementById('projectSelect').addEventListener('change', function () {
-                loadProjectDetail(this.value);
+                loadProjectDetail(this.value, true);
                 syncSelects(this.value);
             });
             var alt = document.getElementById('projectSelectMols');
@@ -4198,8 +4470,13 @@
             tbody.innerHTML = '<tr><td colspan="13" class="empty-state">Loading...</td></tr>';
 
             molsSp = { project: name, energies: null, densities: null, energiesP: null, densitiesP: null };
-            var resp = await fetch('/api/projects/' + projectPath(name) + '/molecules-detail');
-            var data = await resp.json();
+            try {
+                var resp = await loadingFetch('Loading molecules…', '/api/projects/' + projectPath(name) + '/molecules-detail');
+                var data = await resp.json();
+            } catch (err) {
+                tbody.innerHTML = '<tr><td colspan="13" class="empty-state">' + escHtml(errText('Failed: ', err)) + '</td></tr>';
+                return;
+            }
             if (!data.molecules || data.molecules.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="13" class="empty-state">No molecules yet for this project.</td></tr>';
                 return;
@@ -4298,7 +4575,8 @@
         }
 
         async function fetchSpTasks(project, what) {
-            var resp = await fetch('/api/projects/' + projectPath(project) + '/' + what);
+            var resp = await loadingFetch(what === 'sp-energies' ? 'Loading energies…' : 'Looking for density files…',
+                                          '/api/projects/' + projectPath(project) + '/' + what);
             if (!resp.ok) throw new Error(what + ': HTTP ' + resp.status);
             return (await resp.json()).tasks || {};
         }
@@ -4329,7 +4607,7 @@
                 }
                 if (sp === molsSp) status.textContent = '';
             } catch (e) {
-                if (sp === molsSp) status.textContent = 'Failed: ' + e.message;
+                if (sp === molsSp) status.textContent = errText('Failed: ', e);
             }
             if (sp !== molsSp) return;
             showE = document.getElementById('showEnergies').checked;
@@ -4386,27 +4664,32 @@
                 ? 'Building cube with orca_plot… this can take a few minutes.'
                 : 'Loading cube…';
             document.getElementById('densityModal').style.display = 'flex';
+            // The overlay covers the POST and 3Dmol.js; the modal keeps the status line.
+            var label = (building ? 'Building the ' : 'Loading the ') + (kind === 'spindens' ? 'SpinDens' : 'ElDens') + ' cube…';
             try {
-                var lib = load3Dmol();
-                var resp = await fetch('/api/projects/' + projectPath(project) + '/densities/'
-                    + encodeURIComponent(tid) + '/' + kind, { method: 'POST' });
-                if (!resp.ok) {
-                    var msg = 'HTTP ' + resp.status;
-                    try { msg = (await resp.json()).detail || msg; } catch (_) {}
-                    var err = new Error(msg);
-                    err.busy = resp.status === 503;
-                    throw err;
-                }
-                var cube = await resp.text();
-                if (avail.build) avail.build[kind] = false;
-                var $3D = await lib;
-                if (token !== densityView.token) return;
-                status.textContent = '';
-                renderDensity($3D, cube, kind);
+                await withLoading(label, async function (live) {
+                    var lib = load3Dmol();
+                    var resp = await loadingFetch(label, '/api/projects/' + projectPath(project) + '/densities/'
+                        + encodeURIComponent(tid) + '/' + kind, { method: 'POST' });
+                    if (!resp.ok) {
+                        var msg = 'HTTP ' + resp.status;
+                        try { msg = (await resp.json()).detail || msg; } catch (_) {}
+                        var err = new Error(msg);
+                        err.busy = resp.status === 503;
+                        throw err;
+                    }
+                    var cube = await resp.text();
+                    if (avail.build) avail.build[kind] = false;
+                    var $3D = await lib;
+                    if (token !== densityView.token) return;
+                    if (!live()) { status.textContent = 'Cancelled.'; return; }
+                    status.textContent = '';
+                    renderDensity($3D, cube, kind);
+                });
             } catch (e) {
                 if (token !== densityView.token) return;
                 status.className = 'pp-waiting pp-warn';
-                status.textContent = (e.busy ? '' : 'Failed: ') + e.message;
+                status.textContent = e.busy ? e.message : errText('Failed: ', e);
             }
         }
 
@@ -4451,7 +4734,7 @@
                 if (e.target === this) closeDensityModal();
             });
             document.addEventListener('keydown', function (e) {
-                if (e.key === 'Escape' && document.getElementById('densityModal').style.display !== 'none') {
+                if (e.key === 'Escape' && !loading.active && document.getElementById('densityModal').style.display !== 'none') {
                     closeDensityModal();
                 }
             });
@@ -4630,7 +4913,7 @@
             host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Computing analysis…</div>';
 
             try {
-                var resp = await fetch('/api/projects/' + projectPath(name) + '/state-analysis');
+                var resp = await loadingFetch('Computing state analysis…', '/api/projects/' + projectPath(name) + '/state-analysis');
                 var text = await resp.text();
                 var payload;
                 try { payload = JSON.parse(text); }
@@ -4648,7 +4931,7 @@
                 renderSaCards(payload, saState.mode, saState.unit);
             } catch (err) {
                 host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">' +
-                                 'Network error: ' + escHtml(err.message) + '</div>';
+                                 escHtml(errText('Network error: ', err)) + '</div>';
                 renderSaMetaLine(null);
             }
         }
@@ -5043,8 +5326,8 @@
                 return;
             }
             try {
-                var resp = await fetch('/api/projects/' + projectPath(ppState.project) +
-                                       '/photophysics?molecule_id=' + molId);
+                var resp = await loadingFetch('Loading spectra…', '/api/projects/' + projectPath(ppState.project) +
+                                              '/photophysics?molecule_id=' + molId);
                 var payload = await safeJson(resp);
                 if (!resp.ok || !payload.molecules) throw new Error(payload.detail || payload._err || ('HTTP ' + resp.status));
                 payload.molecules.forEach(function (d) {
@@ -5053,7 +5336,7 @@
             } catch (err) {
                 mols.forEach(function (m) {
                     ppState.details[ppKey(m)] = { data: null,
-                        html: '<div class="pp-waiting">Could not load spectra: ' + escHtml(err.message) + '</div>' };
+                        html: '<div class="pp-waiting">' + escHtml(errText('Could not load spectra: ', err)) + '</div>' };
                 });
             }
             renderPhotophysics(ppState.payload);
@@ -5081,7 +5364,7 @@
             host.style.display = 'block';
             host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Reading spectra…</div>';
             try {
-                var resp = await fetch('/api/projects/' + projectPath(name) + '/photophysics');
+                var resp = await loadingFetch('Reading spectra…', '/api/projects/' + projectPath(name) + '/photophysics');
                 // safeJson returns the parsed body, or {_err} when it is not JSON.
                 var payload = await safeJson(resp);
                 if (!resp.ok || !payload.molecules) {
@@ -5095,8 +5378,8 @@
                 ppState.payload = payload;
                 renderPhotophysics(payload);
             } catch (err) {
-                host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Network error: ' +
-                                 escHtml(err.message) + '</div>';
+                host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">' +
+                                 escHtml(errText('Network error: ', err)) + '</div>';
             }
         }
 
@@ -5223,7 +5506,7 @@
             host.style.display = 'block';
             host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Reading methods…</div>';
             try {
-                var resp = await fetch('/api/projects/' + projectPath(name) + '/methods');
+                var resp = await loadingFetch('Reading methods…', '/api/projects/' + projectPath(name) + '/methods');
                 var payload = await safeJson(resp);
                 if (!resp.ok || !payload.groups) {
                     host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Error: ' +
@@ -5233,8 +5516,8 @@
                 }
                 host.innerHTML = methodsCards(payload);
             } catch (err) {
-                host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Network error: ' +
-                                 escHtml(err.message) + '</div>';
+                host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">' +
+                                 escHtml(errText('Network error: ', err)) + '</div>';
             }
         }
 

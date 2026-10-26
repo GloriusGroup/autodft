@@ -389,7 +389,9 @@ def test_freq_is_no_longer_asked_of_the_optimisation_header(client):
 
 def _functions(*names: str) -> str:
     html = (TEMPLATE / "dashboard.html").read_text()
-    return "\n".join(re.search(rf"\n( +)function {n}\(.*?\n\1\}}\n", html, re.S).group(0) for n in names)
+    return "\n".join(
+        re.search(rf"\n( +)(?:async )?function {n}\(.*?\n\1\}}\n", html, re.S).group(0) for n in names
+    )
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -404,3 +406,238 @@ def test_the_project_wipe_preview_lists_exports_only_when_ticked(with_exports):
     out = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout
     assert ("exports    5 MB" in out) is with_exports
     assert ("total      1.005 GB" if with_exports else "total      1 GB") in out
+
+
+# ── Loading overlay ─────────────────────────────────────────────────────
+
+_DOM_STUB = """
+function El(id) {
+    var cls = {};
+    this.id = id; this.style = {}; this.textContent = ''; this.inert = false; this.attrs = {}; this.on = {};
+    this.classList = {
+        add: function (c) { cls[c] = true; }, remove: function (c) { delete cls[c]; },
+        toggle: function (c, on) { if (on) cls[c] = true; else delete cls[c]; },
+        contains: function (c) { return !!cls[c]; },
+    };
+}
+El.prototype.setAttribute = function (k, v) { this.attrs[k] = String(v); };
+El.prototype.removeAttribute = function (k) { delete this.attrs[k]; };
+El.prototype.addEventListener = function (t, f) { this.on[t] = f; };
+var els = {};
+var document = {
+    activeElement: null, body: {},
+    getElementById: function (id) { return els[id] || (els[id] = new El(id)); },
+    querySelector: function (sel) { return els[sel] || (els[sel] = new El(sel)); },
+};
+function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+// Each call parks until the test settles it; an abort rejects it as fetch does.
+var calls = [];
+globalThis.fetch = function (url, opts) {
+    return new Promise(function (resolve, reject) {
+        var call = { url: url, opts: opts || {}, reject: reject,
+                     resolve: function (body, headers) { resolve(new Response(body, { headers: headers || {} })); } };
+        if (call.opts.signal) call.opts.signal.addEventListener('abort', function () {
+            reject(new DOMException('The user aborted a request.', 'AbortError'));
+        });
+        calls.push(call);
+    });
+};
+function seen() {
+    var $ = function (id) { return document.getElementById(id); }, o = $('loadingOverlay');
+    return { blocked: o.style.display === 'flex', visible: o.classList.contains('visible'),
+             inert: document.querySelector('.app').inert && document.querySelector('.top-fabs').inert,
+             label: $('loadingLabel').textContent, hang: $('loadingHang').style.display === 'flex',
+             hangText: $('loadingHangText').textContent,
+             indeterminate: $('loadingBar').classList.contains('indeterminate'), width: $('loadingFill').style.width };
+}
+var out = {};
+"""
+
+
+def _loading_block() -> str:
+    html = (TEMPLATE / "dashboard.html").read_text()
+    start = html.index("        // ── Loading overlay")
+    return html[start:html.index("        // ── Sidebar hash routing", start)]
+
+
+def _run_overlay(body: str, *extra: str) -> dict:
+    script = (_DOM_STUB + _loading_block() + "\n".join(extra)
+              + "\nLOADING_DELAY_MS = 30; LOADING_HANG_MS = 200;\n"
+              + "(async function () {\n" + body + "\n})().then(function () {"
+              + " process.stdout.write(JSON.stringify(out)); }, function (e) { console.error(e); process.exit(1); });\n")
+    result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_user_load_blocks_at_once_and_shows_after_the_delay():
+    out = _run_overlay("""
+        var p = loadingFetch('Loading molecules…', '/api/x');
+        out.start = seen();
+        await sleep(60);
+        out.later = seen();
+        calls[0].resolve('{"a": 1}');
+        out.body = await (await p).json();
+        await sleep(5);
+        out.done = seen();
+        out.signal = calls[0].opts.signal instanceof AbortSignal;
+    """)
+    assert out["start"]["blocked"] and out["start"]["inert"] and not out["start"]["visible"]
+    assert out["later"]["visible"] and out["later"]["label"] == "Loading molecules…"
+    assert out["later"]["indeterminate"]
+    assert out["body"] == {"a": 1} and out["signal"]
+    assert not out["done"]["blocked"] and not out["done"]["inert"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_polling_and_timers_never_show_the_overlay():
+    out = _run_overlay("""
+        var polled = fetchFailed();
+        var admin = adminJSON('GET', '/api/wipe-status');
+        await sleep(60);
+        out.polling = seen();
+        calls.forEach(function (c) { c.resolve('[]'); });
+        await polled; await admin;
+        out.signals = calls.map(function (c) { return !!c.opts.signal; });
+        var nav = fetchFailed(true);
+        await sleep(60);
+        out.nav = seen();
+        calls[2].resolve('[]');
+        await nav;
+    """, _functions("escHtml", "fmtTime", "fetchFailed", "adminJSON"))
+    assert not out["polling"]["blocked"] and not out["polling"]["inert"]
+    assert out["signals"] == [False, False]
+    assert out["nav"]["visible"] and out["nav"]["label"] == "Loading failed entrypoints…"
+
+
+def test_the_polling_paths_call_plain_fetch():
+    html = (TEMPLATE / "dashboard.html").read_text()
+    assert "setInterval(refreshAll, POLL_INTERVAL);" in html
+    assert "await Promise.all([fetchOverview(), fetchQueue(), fetchJobs(), fetchFailed()]);" in html
+    for name in ("fetchOverview", "fetchQueue", "fetchJobs", "pollProjectJob", "adminPollUsage",
+                 "refreshRemovalBanner", "refreshAll"):
+        body = _functions(name)
+        assert "loadingFetch" not in body and "withLoading" not in body, name
+        assert not re.search(r"adminJSON\([^)]*,[^)]*,[^)]*,", body), name
+    # The timers that reload after a wipe or an archive pass no ui flag.
+    assert "if (onDone) { onDone(); } else { loadAdminPage(); fetchProjects(); }" in html
+    assert "setTimeout(function () { closeExportModal(); fetchProjects(); }, 1800);" in html
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_overlapping_loads_keep_one_overlay_until_the_last_ends():
+    out = _run_overlay("""
+        var a = loadingFetch('First…', '/a');
+        var b = loadingFetch('Second…', '/b');
+        await sleep(60);
+        out.both = seen();
+        calls[0].resolve('a');
+        await a;
+        await sleep(5);
+        out.one = seen();
+        calls[1].resolve('b');
+        await b;
+        await sleep(5);
+        out.none = seen();
+        // Back to back, as in a multi-step load: no gap.
+        var c = loadingFetch('Third…', '/c');
+        calls[2].resolve('c');
+        await (await c).text();
+        var d = loadingFetch('Fourth…', '/d');
+        out.chained = seen();
+        calls[3].resolve('d');
+        await d;
+        await sleep(5);
+        out.end = seen();
+    """)
+    assert out["both"]["visible"] and out["both"]["label"] == "Second…"
+    assert out["one"]["visible"] and out["one"]["label"] == "Second…"
+    assert not out["none"]["blocked"]
+    assert out["chained"]["blocked"] and out["chained"]["label"] == "Fourth…"
+    assert not out["end"]["blocked"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_an_error_clears_the_overlay():
+    out = _run_overlay("""
+        var p = loadingFetch('Loading…', '/x');
+        var w = withLoading('Working…', function () { throw new Error('boom'); })
+            .catch(function (e) { return e.message; });
+        await sleep(60);
+        calls[0].reject(new TypeError('Failed to fetch'));
+        try { await p; } catch (e) { out.error = e.name + ': ' + e.message; }
+        out.thrown = await w;
+        await sleep(5);
+        out.after = seen();
+    """)
+    assert out["error"] == "TypeError: Failed to fetch" and out["thrown"] == "boom"
+    assert not out["after"]["blocked"] and not out["after"]["visible"] and not out["after"]["inert"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_cancel_after_the_hang_delay_aborts_and_the_page_recovers():
+    out = _run_overlay("""
+        var steps = [];
+        var flow = withLoading('Loading molecules…', async function (live) {
+            try { await loadingFetch('Loading projects…', '/a'); } catch (e) { steps.push(e.name); }
+            if (live()) steps.push('went on');
+        });
+        var post = loadingFetch('Submitting…', '/b', { method: 'POST' });
+        await sleep(100);
+        out.early = seen();
+        await sleep(150);
+        out.hung = seen();
+        els.loadingCancel.on.click();
+        out.cancelled = seen();
+        try { await post; } catch (e) { out.post = e.name + ': ' + e.message; }
+        await flow;
+        out.steps = steps;
+        out.aborted = calls.map(function (c) { return c.opts.signal.aborted; });
+        // Next load starts clean.
+        var next = loadingFetch('Again…', '/c');
+        await sleep(60);
+        out.next = seen();
+        calls[2].resolve('ok');
+        out.text = await (await next).text();
+        await sleep(5);
+        out.end = seen();
+    """)
+    assert not out["early"]["hang"]
+    assert out["hung"]["hang"] and "server may still finish" in out["hung"]["hangText"]
+    assert not out["cancelled"]["blocked"] and not out["cancelled"]["inert"]
+    assert out["post"] == "AbortError: Cancelled."
+    assert out["steps"] == ["AbortError"] and out["aborted"] == [True, True]
+    assert out["next"]["visible"] and not out["next"]["hang"] and out["next"]["label"] == "Again…"
+    assert out["text"] == "ok" and not out["end"]["blocked"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_bar_follows_the_streamed_bytes_across_requests():
+    out = _run_overlay("""
+        function stream() {
+            var s = {};
+            s.body = new ReadableStream({ start: function (c) { s.c = c; } });
+            return s;
+        }
+        var a = stream(), b = stream();
+        var pa = loadingFetch('A…', '/a');
+        var pb = loadingFetch('B…', '/b');
+        calls[0].resolve(a.body, { 'Content-Length': '10' });
+        await sleep(5);
+        a.c.enqueue(new Uint8Array(5));
+        await sleep(5);
+        out.waiting = seen();
+        calls[1].resolve(b.body, { 'Content-Length': '30' });
+        await sleep(5);
+        out.both = seen();
+        b.c.enqueue(new Uint8Array(30)); b.c.close();
+        await sleep(5);
+        out.later = seen();
+        a.c.enqueue(new Uint8Array(5)); a.c.close();
+        out.sizes = [(await (await pa).arrayBuffer()).byteLength, (await (await pb).arrayBuffer()).byteLength];
+    """)
+    assert out["waiting"]["indeterminate"]
+    assert not out["both"]["indeterminate"] and out["both"]["width"] == "12.5%"
+    assert out["later"]["width"] == "87.5%"
+    assert out["sizes"] == [10, 30]
