@@ -455,6 +455,40 @@ existed adds `connectivity`: `{"ok": false, "lost": true, "fragments": 2,
 when only an extra bond appeared). Older conformers carry no key. See
 [`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.md#broken-bonds).
 
+### `GET /api/projects/{name}/sp-energies`
+
+`{"name": ..., "tasks": {"<task_id>": {"energy": -1234.56, "gibbs": -1234.33}}}`
+for every successful singlepoint except NMR and UV/Vis. `energy` is the
+final single-point energy in Eh. `gibbs` is set on a relaxed `singlepoint`
+only: `energy` + the raw G−E(el) of the successful optimisation it depends
+on (no quasi-RRHO), `null` without one. Singlepoints with no stored or
+parsable energy are left out.
+
+### `GET /api/projects/{name}/sp-densities`
+
+`{"name": ..., "tasks": {"<task_id>": {"eldens": true, "spindens": false, "build": {"eldens": true, "spindens": false}}}}`
+for the successful singlepoints whose molecule or state requested densities
+and whose latest successful job folder holds the cube, or the
+`.gbw` + `.densities` + `.densitiesinfo` orca_plot rebuilds it from. SpinDens
+only for an open-shell job. `build` says which kinds orca_plot must make first.
+
+### `POST /api/projects/{name}/densities/{task_id}/{kind}`
+
+`kind` is `eldens` or `spindens`. Returns the cube (`text/plain`,
+`<task_id>_<kind>.cube`), building it with orca_plot first and caching it in
+the job folder. At most two builds run at once; `503` while none is free.
+`404` when densities were not requested, the kind was off at submission, a
+closed-shell job is asked for SpinDens, or the job folder is gone.
+
+### `GET /api/projects/{name}/tasks/{task_id}/files/{kind}`
+
+`kind` is `out` (the `output.out` of a successful optimisation or
+singlepoint) or `xyz` (the final geometry of a successful optimisation),
+from the task's latest successful job. Named
+`mol<id>_<state>_conf<k>_<stem>.<kind>`, as in the export tree. `400` for
+another kind, `404` for a task that is not a successful opt/SP of the
+project, for `xyz` on a singlepoint, and when the file is no longer on disk.
+
 ### `GET /api/projects/{name}/state-analysis`
 
 Triplet energies, redox free energies / E vs SCE in MeCN, and 4-point

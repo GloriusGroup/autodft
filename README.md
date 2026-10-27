@@ -66,6 +66,11 @@ uv pip install -e ".[dev]"   # dev extras bring pytest + httpx
 source .venv/bin/activate
 ```
 
+On the controller, `.venv` is a symlink to `/tmp/.venv_autodft` (no venvs on
+NFS). `/tmp` is wiped on reboot; rebuild it with `uv venv /tmp/.venv_autodft`
+and `uv pip install --python /tmp/.venv_autodft/bin/python -r .git/venv_pins.txt`
+(the frozen package list) before restarting the controller.
+
 Without `uv`:
 
 ```bash
@@ -331,7 +336,13 @@ sees the whole database:
 * **Project Overview** — pick a project from the dropdown to see its
   molecules, submission progress, success rate, and per-row task
   counts. Subpages: **Summary**, **Molecules** (per-conformer
-  status with a rendered structure), **State Analysis** (triplet /
+  status with a rendered structure; three tickboxes, unticked on every
+  project load: **Show energies** puts E (Eh) under every successful
+  singlepoint but NMR/UV-Vis and G = E + G−E(el) of the parent opt (raw,
+  no quasi-RRHO) under the relaxed one, **Show densities** adds
+  ElDens/SpinDens buttons that open a 3Dmol pop-up, **Show downloads** adds
+  `.out` buttons to successful opts and singlepoints and `.xyz` to opts),
+  **State Analysis** (triplet /
   redox energies, downloadable as XLSX), **Photophysics** and **Methods**
   (read-only: headers, every setting and its source, cutoffs, the full
   ORCA input of every job type and the pipeline settings). The Export
@@ -396,6 +407,10 @@ S0 Hessians, which every optimisation keeps.
 
 Refresh poll is every 5 s; the sidebar footer shows connectivity and
 last-refresh time.
+
+A page load or user action that takes longer than 250 ms runs under a
+page-blocking loading overlay with real progress; Cancel appears after 60 s.
+Polling never shows it.
 
 ---
 
@@ -647,6 +662,10 @@ is either scoped to the caller's own projects or deliberately shared
 | GET    | `/api/projects`                     | list projects with summary counts                             |
 | GET    | `/api/projects/{name}`              | per-project molecules + progress + success rate               |
 | GET    | `/api/projects/{name}/molecules-detail` | per-conformer status for every molecule                   |
+| GET    | `/api/projects/{name}/sp-energies`  | E of successful singlepoints, G on relaxed ones               |
+| GET    | `/api/projects/{name}/sp-densities` | which singlepoints have ElDens/SpinDens cubes to show         |
+| POST   | `/api/projects/{name}/densities/{task_id}/{kind}` | one cube, built with orca_plot if needed (503 while busy) |
+| GET    | `/api/projects/{name}/tasks/{task_id}/files/{out\|xyz}` | a successful opt's/SP's `.out`, an opt's final `.xyz` |
 | GET    | `/api/projects/{name}/state-analysis` | triplet / redox / reorganisation energies                   |
 | POST   | `/api/projects/{name}/state-analysis/export` | the same, as a multi-sheet XLSX (background job)    |
 | GET    | `/api/projects/{name}/photophysics` | UV/Vis, IR, NMR and ESD results per molecule (`?molecule_id=`) |
