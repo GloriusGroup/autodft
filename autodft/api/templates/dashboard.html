@@ -2001,6 +2001,9 @@
             <label class="checkbox-group" title="ElDens / SpinDens viewers for singlepoints whose densities were requested and whose cube (or saved .densities) is still on disk.">
                 <input type="checkbox" id="showDensities" autocomplete="off"><span>Show densities</span>
             </label>
+            <label class="checkbox-group" title="The .out of every successful optimisation and singlepoint, and the optimised geometry (.xyz), from its latest successful job.">
+                <input type="checkbox" id="showDownloads" autocomplete="off"><span>Show downloads</span>
+            </label>
             <span id="spExtrasStatus" style="font-size:0.8rem; color:var(--text-muted);"></span>
         </div>
 
@@ -4638,6 +4641,7 @@
             // Off for every project load; ticking fetches.
             document.getElementById('showEnergies').checked = false;
             document.getElementById('showDensities').checked = false;
+            document.getElementById('showDownloads').checked = false;
             document.getElementById('spExtrasStatus').textContent = '';
             var token = ++molsRender.token;
             if (molsRender.observer) molsRender.observer.disconnect();
@@ -4697,7 +4701,7 @@
                             cells.push('<td rowspan="' + rowsForState + '" class="mol-state" title="charge ' + st.charge + ' / mult ' + st.multiplicity + '">' + escHtml(st.description) + '</td>');
                         }
                         cells.push('<td class="mol-conf">' + escHtml(c.index) + brokenBadge(c.connectivity) + '</td>');
-                        cells.push('<td>' + statusCell(c.optimization) + '</td>');
+                        cells.push('<td>' + statusCell(c.optimization) + spExtraSlot(c, 'optimization') + '</td>');
                         cells.push('<td>' + statusCell(c.singlepoint) + spExtraSlot(c, 'singlepoint') + '</td>');
                         cells.push('<td>' + statusCell(c.singlepoint_vert_ox) + spExtraSlot(c, 'singlepoint_vert_ox') + '</td>');
                         cells.push('<td>' + statusCell(c.singlepoint_vert_red) + spExtraSlot(c, 'singlepoint_vert_red') + '</td>');
@@ -4738,8 +4742,9 @@
             tmp.innerHTML = groups.slice(start, end).join('');
             var showE = document.getElementById('showEnergies').checked;
             var showD = document.getElementById('showDensities').checked;
+            var showF = document.getElementById('showDownloads').checked;
             tmp.querySelectorAll('.sp-extra').forEach(function (div) {
-                div.innerHTML = spExtraHtml(div.dataset.tid, div.dataset.type, showE, showD);
+                div.innerHTML = spExtraHtml(div.dataset.tid, div.dataset.type, showE, showD, showF);
             });
             var structs = tmp.querySelectorAll('div.struct');
             while (tmp.firstChild) tbody.appendChild(tmp.firstChild);
@@ -4762,7 +4767,7 @@
             return '<div class="sp-extra" data-tid="' + escHtml(tid) + '" data-type="' + type + '"></div>';
         }
 
-        function spExtraHtml(tid, type, showE, showD) {
+        function spExtraHtml(tid, type, showE, showD, showF) {
             var parts = [];
             var e = showE && molsSp.energies && molsSp.energies[tid];
             if (e) {
@@ -4778,6 +4783,13 @@
                 if (d.eldens) btns.push('<button type="button" class="btn-mini sp-dens-btn" data-tid="' + escHtml(tid) + '" data-kind="eldens">ElDens</button>');
                 if (d.spindens) btns.push('<button type="button" class="btn-mini sp-dens-btn" data-tid="' + escHtml(tid) + '" data-kind="spindens">SpinDens</button>');
                 parts.push('<div class="sp-dens">' + btns.join('') + '</div>');
+            }
+            if (showF) {
+                var files = type === 'optimization' ? ['xyz', 'out'] : ['out'];
+                parts.push('<div class="sp-dens">' + files.map(function (kind) {
+                    return '<button type="button" class="btn-mini sp-file-btn" data-tid="' + escHtml(tid)
+                        + '" data-kind="' + kind + '">.' + kind + '</button>';
+                }).join('') + '</div>');
             }
             return parts.join('');
         }
@@ -4824,9 +4836,35 @@
             if (sp !== molsSp) return;
             showE = document.getElementById('showEnergies').checked;
             showD = document.getElementById('showDensities').checked;
+            var showF = document.getElementById('showDownloads').checked;
             document.querySelectorAll('#moleculesTableBody .sp-extra').forEach(function (div) {
-                div.innerHTML = spExtraHtml(div.dataset.tid, div.dataset.type, showE, showD);
+                div.innerHTML = spExtraHtml(div.dataset.tid, div.dataset.type, showE, showD, showF);
             });
+        }
+
+        // Fetched under the overlay, so a missing file says so instead of downloading an error.
+        async function downloadTaskFile(tid, kind) {
+            var status = document.getElementById('spExtrasStatus');
+            try {
+                var resp = await loadingFetch('Downloading .' + kind + '…', '/api/projects/' + projectPath(molsSp.project)
+                    + '/tasks/' + encodeURIComponent(tid) + '/files/' + kind);
+                if (!resp.ok) {
+                    var msg = 'HTTP ' + resp.status;
+                    try { msg = (await resp.json()).detail || msg; } catch (_) {}
+                    throw new Error(msg);
+                }
+                var m = /filename="?([^";]+)"?/.exec(resp.headers.get('Content-Disposition') || '');
+                var a = document.createElement('a');
+                a.href = URL.createObjectURL(await resp.blob());
+                a.download = m ? m[1] : 'task' + tid + '.' + kind;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+                status.textContent = '';
+            } catch (e) {
+                status.innerHTML = errHtml('Download failed: ', e);
+            }
         }
 
         // Pinned; loaded on the first viewer opened.
@@ -4938,9 +4976,12 @@
         (function () {
             document.getElementById('showEnergies').addEventListener('change', applySpExtras);
             document.getElementById('showDensities').addEventListener('change', applySpExtras);
+            document.getElementById('showDownloads').addEventListener('change', applySpExtras);
             document.getElementById('moleculesTableBody').addEventListener('click', function (e) {
                 var btn = e.target.closest('.sp-dens-btn');
                 if (btn) openDensityModal(btn.dataset.tid, btn.dataset.kind);
+                var file = e.target.closest('.sp-file-btn');
+                if (file) downloadTaskFile(file.dataset.tid, file.dataset.kind);
             });
             document.getElementById('densityIso').addEventListener('input', drawIsosurfaces);
             document.getElementById('densityCloseBtn').addEventListener('click', closeDensityModal);

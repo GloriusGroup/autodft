@@ -724,9 +724,9 @@ def test_molecule_rows_go_in_by_chunks_and_structures_wait_for_the_observer():
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_a_project_load_unticks_the_boxes_and_a_newer_load_wins():
     out = _run_molecules("""
-        els.showEnergies.checked = true; els.showDensities.checked = true;
+        els.showEnergies.checked = true; els.showDensities.checked = true; els.showDownloads.checked = true;
         var a = loadMoleculesPage();
-        out.unticked = [els.showEnergies.checked, els.showDensities.checked];
+        out.unticked = [els.showEnergies.checked, els.showDensities.checked, els.showDownloads.checked];
         fetches[0].resolve(molecules(2, 'A'));
         await a;
         out.observers = observers.length;
@@ -743,7 +743,7 @@ def test_a_project_load_unticks_the_boxes_and_a_newer_load_wins():
         out.rows = els.moleculesTableBody.children.map(function (r) { return r.smiles; });
         out.observed = observers.map(function (o) { return o.observed; });
     """)
-    assert out["unticked"] == [False, False]
+    assert out["unticked"] == [False, False, False]
     assert out["urls"] == ["/api/projects/p/molecules-detail"] * 3
     assert out["observers"] == 1 and out["disconnected"] is True
     assert out["rows"] == ["C0", "C1", "C2"] and out["observed"] == [2, 3]
@@ -798,7 +798,7 @@ Body.prototype.querySelectorAll = function (sel) {
 };
 var els = {
     moleculesTableBody: new Body(), projectSelectMols: { value: 'p' }, showEnergies: { checked: false },
-    showDensities: { checked: false }, spExtrasStatus: { textContent: '' },
+    showDensities: { checked: false }, showDownloads: { checked: false }, spExtrasStatus: { textContent: '' },
     moleculesEmptyState: { style: {} }, moleculesTableWrapper: { style: {} },
 };
 var document = {
@@ -862,6 +862,7 @@ def test_the_tickboxes_are_off_and_not_restored_by_the_browser():
     html = (TEMPLATE / "dashboard.html").read_text()
     assert '<input type="checkbox" id="showEnergies" autocomplete="off">' in html
     assert '<input type="checkbox" id="showDensities" autocomplete="off">' in html
+    assert '<input type="checkbox" id="showDownloads" autocomplete="off">' in html
 
 
 def test_the_density_viewer_is_not_under_the_overlay_and_close_aborts():

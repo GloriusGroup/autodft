@@ -204,7 +204,7 @@ class TestEnergies:
         conf = mols[0]["states"][0]["conformers"][0]
         assert conf["tasks"]["singlepoint"] == env["ids"]["sp"]
         assert conf["tasks"]["singlepoint_vert_ox"] == env["ids"]["ox"]
-        assert "optimization" not in conf["tasks"]
+        assert conf["tasks"]["optimization"] == env["ids"]["opt"]
 
 
 class TestAvailability:
@@ -293,6 +293,64 @@ class TestCubeEndpoint:
     def test_missing_folder(self, env):
         shutil.rmtree(env["folders"]["sp"])
         assert _cube(env, "sp").status_code == 404
+
+
+def _file(env, key, kind="out", who="owner", project="owner:p"):
+    return env["client"].get(f"/api/projects/{project}/tasks/{env['ids'][key]}/files/{kind}", headers=env[who])
+
+
+class TestTaskFiles:
+    def test_the_output_of_an_optimisation_and_a_singlepoint(self, env):
+        response = _file(env, "opt")
+        assert response.status_code == 200 and "FINAL SINGLE POINT ENERGY      -100.000000" in response.text
+        assert f'filename="mol{env["ids"]["m"]}_S0_conf1_opt.out"' in response.headers["content-disposition"]
+        response = _file(env, "sp2")
+        assert response.text.startswith("FINAL SINGLE POINT ENERGY      -100.400000")
+        assert f'filename="mol{env["ids"]["m"]}_S0_conf2_sp.out"' in response.headers["content-disposition"]
+
+    def test_the_optimised_geometry(self, env):
+        (env["folders"]["opt"] / "input.xyz").write_text("1\n\nH 0 0 0\n")
+        response = _file(env, "opt", "xyz")
+        assert response.status_code == 200 and response.text == "1\n\nH 0 0 0\n"
+        assert response.headers["content-disposition"].endswith('_S0_conf1_opt.xyz"')
+
+    def test_a_singlepoint_has_no_geometry(self, env):
+        (env["folders"]["sp"] / "input.xyz").write_text("1\n\nH 0 0 0\n")
+        assert _file(env, "sp", "xyz").status_code == 404
+
+    def test_the_vertical_is_named_by_its_stem_and_state(self, env):
+        response = _file(env, "sp3")
+        assert response.headers["content-disposition"].endswith('_red_conf1_sp.out"')
+        assert _file(env, "ox").headers["content-disposition"].endswith('_S0_conf1_vert_ox.out"')
+
+    def test_unknown_kind(self, env):
+        assert _file(env, "opt", "gbw").status_code == 400
+
+    def test_someone_else_gets_404(self, env):
+        assert _file(env, "opt", who="stranger").status_code == 404
+        assert _file(env, "opt", who="stranger", project="p").status_code == 404
+
+    def test_an_unfinished_task_has_nothing(self, world):
+        env, session, w, state = world
+        failed = w.task(state, TaskType.optimization, status=TaskStatus.failed)
+        response = env["client"].get(f"/api/projects/owner:p/tasks/{failed.id}/files/out", headers=env["owner"])
+        assert response.status_code == 404
+
+    def test_a_file_gone_from_disk(self, env):
+        assert _file(env, "opt", "xyz").status_code == 404
+        (env["folders"]["opt"] / "output.out").unlink()
+        response = _file(env, "opt")
+        assert response.status_code == 404 and "no longer on disk" in response.json()["detail"]
+        shutil.rmtree(env["folders"]["sp"])
+        assert _file(env, "sp").status_code == 404
+
+    def test_a_symlink_out_of_the_folder_is_refused(self, env, tmp_path):
+        (tmp_path / "secret.txt").write_text("secret\n")
+        out = env["folders"]["sp"] / "output.out"
+        out.unlink()
+        out.symlink_to(tmp_path / "secret.txt")
+        response = _file(env, "sp")
+        assert response.status_code == 404 and "secret" not in response.text
 
 
 def _fake_orca_plot(calls, returncode=0, write=True, delay=0.0):
@@ -427,9 +485,10 @@ def test_the_molecules_page_has_the_toggles_and_viewer():
                    "'sp-energies'", "'sp-densities'", "'/densities/'", "{ method: 'POST', signal: ctl.signal }", "energiesP",
                    "https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.4.2/3Dmol-min.js"):
         assert needle in html, needle
-    assert html.count("spExtraSlot(c, '") == 6
+    assert html.count("spExtraSlot(c, '") == 7
     # Off by default.
-    assert 'id="showEnergies" checked' not in html and 'id="showDensities" checked' not in html
+    for box in ("showEnergies", "showDensities", "showDownloads"):
+        assert f'id="{box}" checked' not in html
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -444,9 +503,13 @@ def test_a_cell_shows_e_g_and_the_density_buttons():
               + f"var c = {json.dumps(conf)};\n"
               + "process.stdout.write(JSON.stringify([spExtraSlot(c, 'singlepoint'), spExtraSlot(c, 'singlepoint_nmr'),"
               + " spExtraHtml('7', 'singlepoint', true, true), spExtraHtml('7', 'singlepoint', false, false),"
-              + " spExtraHtml('7', 'singlepoint_vert_ox', true, false)]));\n")
+              + " spExtraHtml('7', 'singlepoint_vert_ox', true, false),"
+              + " spExtraHtml('7', 'singlepoint', false, false, true), spExtraHtml('3', 'optimization', true, true, true)]));\n")
     out = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout
-    slot, pending, both, neither, vertical = json.loads(out)
+    slot, pending, both, neither, vertical, sp_files, opt_files = json.loads(out)
+    assert "sp-file-btn" not in both
+    assert 'data-kind="out"' in sp_files and 'data-kind="xyz"' not in sp_files and "E " not in sp_files
+    assert opt_files.index('data-kind="xyz"') < opt_files.index('data-kind="out"') and "E " not in opt_files
     assert 'data-tid="7"' in slot and pending == ""
     assert "E -100.500000 Eh" in both and "G -100.350000 Eh" in both
     assert 'data-kind="eldens"' in both and "SpinDens" not in both
@@ -594,3 +657,36 @@ class TestPerKindFlags:
         # A current record is not re-parsed, only dropped.
         assert str(nan.id) not in tasks
         assert str(env["ids"]["sp"]) in tasks
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_download_click_saves_under_the_server_name_or_says_what_is_missing():
+    from tests.test_dashboard import _functions
+
+    script = (_functions("projectPath", "escHtml", "isAbort", "errHtml", "downloadTaskFile") + """
+var CANCELLED_HTML = 'cancelled';
+var status = { textContent: 'old', innerHTML: '' };
+var saved = [], urls = [];
+var document = {
+    getElementById: function () { return status; },
+    createElement: function () { return { click: function () { saved.push(this.download); }, remove: function () {} }; },
+    body: { appendChild: function () {} },
+};
+var URL = { createObjectURL: function () { return 'blob:1'; }, revokeObjectURL: function () {} };
+var molsSp = { project: 'nho/p' };
+var replies = [
+    new Response('1\\n', { status: 200, headers: { 'Content-Disposition': 'attachment; filename="mol3_S0_conf1_opt.xyz"' } }),
+    new Response(JSON.stringify({ detail: 'The out file is no longer on disk.' }), { status: 404 }),
+];
+async function loadingFetch(label, url) { urls.push(url); return replies.shift(); }
+(async function () {
+    await downloadTaskFile('9', 'xyz');
+    var after = status.textContent;
+    await downloadTaskFile('9', 'out');
+    process.stdout.write(JSON.stringify({ saved: saved, urls: urls, after: after, error: status.innerHTML }));
+})();
+""")
+    out = json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
+    assert out["saved"] == ["mol3_S0_conf1_opt.xyz"]
+    assert out["urls"] == ["/api/projects/nho%3Ap/tasks/9/files/xyz", "/api/projects/nho%3Ap/tasks/9/files/out"]
+    assert out["after"] == "" and out["error"] == "Download failed: The out file is no longer on disk."

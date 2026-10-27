@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 from pathlib import Path
 from typing import Any, Optional
 
@@ -796,8 +797,11 @@ def api_project_molecules_detail(
                     ]),
                     # Only optimisations judged since the bond check existed carry one.
                     **({"connectivity": checks[opt.id]} if opt.id in checks else {}),
-                    # Singlepoint task ids, for the lazily fetched energies and densities.
-                    "tasks": {t.value: d.id for t, d in deps.items() if t in densities.SP_TYPES},
+                    # Task ids, for the downloads and the lazily fetched energies and densities.
+                    "tasks": {
+                        TaskType.optimization.value: opt.id,
+                        **{t.value: d.id for t, d in deps.items() if t in densities.SP_TYPES},
+                    },
                 })
             # Confsearch status for the state — useful when no opt tasks exist yet.
             cs = next((t for t in tasks_by_state.get(st.id, [])
@@ -981,6 +985,60 @@ def api_project_density_cube(
     if path.resolve().parent != job_dir.resolve():
         return JSONResponse(status_code=404, content={"detail": "The cube is not inside the job folder."})
     return FileResponse(path, media_type="text/plain", filename=f"{task_id}_{kind}.cube")
+
+
+# What a task offers for download: its output, and an optimisation also its final geometry.
+_TASK_FILES = {"out": "output.out", "xyz": "input.xyz"}
+
+
+@router.get("/api/projects/{name}/tasks/{task_id}/files/{kind}")
+def api_project_task_file(
+    name: str, task_id: int, kind: str, identity: Identity = Depends(current_identity),
+):
+    """The .out of a successful optimisation or singlepoint, or the optimised .xyz, from its latest successful job.
+
+    Named ``mol<id>_<state>_conf<k>_<stem>``, as in the export tree.
+    """
+    bad = _reject_bad_project(name)
+    if bad is not None:
+        return bad
+    from fastapi.responses import FileResponse
+
+    from autodft.analysis import densities
+    from autodft.extraction import results as stored
+    from autodft.extraction.extractor import _TREE_STEMS
+
+    if kind not in _TASK_FILES:
+        return JSONResponse(status_code=400, content={"detail": f"kind must be one of {', '.join(_TASK_FILES)}."})
+    with get_session() as session:
+        name = resolve_project(session, identity, name)
+        task = next(iter(_project_tasks(
+            session, name, densities.SP_TYPES | {TaskType.optimization}, ComputationTask.id == task_id,
+        )), None)
+        if task is None:
+            return JSONResponse(
+                status_code=404, content={"detail": f"No successful optimisation or singlepoint {task_id} in {name}."},
+            )
+        if kind == "xyz" and task.task_type != TaskType.optimization:
+            return JSONResponse(status_code=404, content={"detail": "Only an optimisation has an output geometry."})
+        state = session.get(MoleculeState, task.state_id)
+        # Conformers are numbered as on the molecules page: the state's optimisations by id.
+        opt_ids = list(session.exec(
+            select(ComputationTask.id).where(
+                ComputationTask.state_id == task.state_id, ComputationTask.task_type == TaskType.optimization,
+            ).order_by(col(ComputationTask.id).asc())
+        ).all())
+        job = stored.latest_successful_job(session, task.id)
+
+    opt_id = task.id if task.task_type == TaskType.optimization else task.depends_on_task_id
+    conf = opt_ids.index(opt_id) + 1 if opt_id in opt_ids else 0
+    label = re.sub(r"[^A-Za-z0-9._-]+", "_", state.description or "state")
+    filename = f"mol{state.molecule_id}_{label}_conf{conf}_{_TREE_STEMS[task.task_type.value]}.{kind}"
+    job_dir = Path(job.job_path) if job is not None and job.job_path else None
+    path = job_dir / _TASK_FILES[kind] if job_dir is not None else None
+    if path is None or not path.is_file() or path.resolve().parent != job_dir.resolve():
+        return JSONResponse(status_code=404, content={"detail": f"The {kind} file is no longer on disk."})
+    return FileResponse(path, media_type="text/plain", filename=filename)
 
 
 @router.get("/api/projects/{name}/state-analysis")
