@@ -611,6 +611,21 @@ def test_dashboard_export_section():
     assert "raw/" not in dialog
 
 
+@pytest.mark.parametrize("command", ["export", "export-files"])
+def test_the_cli_exports_read_the_database_named_by_config(db, monkeypatch, command):
+    import autodft.config
+    from typer.testing import CliRunner
+
+    from autodft.cli import admin
+
+    _standard(db)
+    reset_engine()  # a fresh CLI process: no engine yet
+    monkeypatch.setattr(autodft.config, "load_settings",
+                        lambda config=None: db if config == "site.toml" else Settings())
+    result = CliRunner().invoke(admin.app, [command, "--project", PROJECT, "--config", "site.toml"])
+    assert result.exit_code == 0, result.output
+
+
 def test_cli_export_files_writes_the_tree(db, monkeypatch):
     import autodft.config
     from autodft.cli import admin

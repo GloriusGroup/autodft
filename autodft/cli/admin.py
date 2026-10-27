@@ -11,7 +11,7 @@ import typer
 from rich.console import Console
 from sqlmodel import col, select
 
-from autodft.db import get_session, init_db
+from autodft.db import get_engine, get_session, init_db
 from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.models.enums import TaskStatus
 from autodft.models.job import ComputationJob
@@ -242,6 +242,7 @@ def export(
 
     settings = load_settings(config)
     settings.ensure_directories()
+    get_engine(settings)  # bind the session to --config before the first query
 
     if output is None:
         # The project directory, then the *bare* name as the filename.
@@ -285,6 +286,7 @@ def export_files(
 
     settings = load_settings(config)
     settings.ensure_directories()
+    get_engine(settings)  # bind the session to --config before the first query
 
     try:
         summary = PipelineExtractor(project).export_tree(
