@@ -2827,7 +2827,38 @@
             var label = ui ? 'Loading admin page…' : null;
             refreshRemovalBanner();
 
-            // The admin-only panels are removed from the DOM for a user, so
+            // --- project list -------------------------------------------
+            var list = document.getElementById('adminProjectList');
+            list.innerHTML = '<div class="empty-state">Loading...</div>';
+            var res = await adminJSON('GET', '/api/projects', undefined, label);
+            if (!res.ok) {
+                list.innerHTML = '<div class="empty-state">Could not load projects.</div>';
+            } else if (!res.data.length) {
+                list.innerHTML = '<div class="empty-state">No projects yet.</div>';
+            } else {
+                list.innerHTML = '';
+                res.data.forEach(function (p) {
+                    var row = document.createElement('div');
+                    row.className = 'admin-row';
+                    var protectedNote = p.protected
+                        ? '<span class="admin-meta">protected &mdash; cannot be wiped</span>'
+                        : '<span class="admin-meta">' + p.molecules + ' molecules, '
+                          + p.tasks_total + ' tasks</span>';
+                    row.innerHTML =
+                        '<span class="admin-name">' + adminEscape(p.name) + '</span>' + protectedNote;
+                    if (!p.protected) {
+                        var btn = document.createElement('button');
+                        btn.type = 'button';
+                        btn.className = 'btn btn-danger';
+                        btn.textContent = 'Wipe';
+                        btn.addEventListener('click', function () { adminPrepareProjectWipe(p.name, row); });
+                        row.appendChild(btn);
+                    }
+                    list.appendChild(row);
+                });
+            }
+
+            // The other admin-only panels are removed from the DOM for a user, so
             // do not fetch what they cannot see: the server answers 403 and
             // the console fills with errors that look like a broken page.
             if (!ME.is_admin) { return; }
@@ -2878,37 +2909,6 @@
                 document.getElementById('adminHoldReason').style.display = h.data.held ? 'none' : '';
                 document.getElementById('adminHoldSection').style.borderLeft =
                     h.data.held ? '3px solid var(--red)' : '';
-            }
-
-            // --- project list -------------------------------------------
-            var list = document.getElementById('adminProjectList');
-            list.innerHTML = '<div class="empty-state">Loading...</div>';
-            var res = await adminJSON('GET', '/api/projects', undefined, label);
-            if (!res.ok) {
-                list.innerHTML = '<div class="empty-state">Could not load projects.</div>';
-            } else if (!res.data.length) {
-                list.innerHTML = '<div class="empty-state">No projects yet.</div>';
-            } else {
-                list.innerHTML = '';
-                res.data.forEach(function (p) {
-                    var row = document.createElement('div');
-                    row.className = 'admin-row';
-                    var protectedNote = p.protected
-                        ? '<span class="admin-meta">protected &mdash; cannot be wiped</span>'
-                        : '<span class="admin-meta">' + p.molecules + ' molecules, '
-                          + p.tasks_total + ' tasks</span>';
-                    row.innerHTML =
-                        '<span class="admin-name">' + adminEscape(p.name) + '</span>' + protectedNote;
-                    if (!p.protected) {
-                        var btn = document.createElement('button');
-                        btn.type = 'button';
-                        btn.className = 'btn btn-danger';
-                        btn.textContent = 'Wipe';
-                        btn.addEventListener('click', function () { adminPrepareProjectWipe(p.name, row); });
-                        row.appendChild(btn);
-                    }
-                    list.appendChild(row);
-                });
             }
 
             // --- reset summary ------------------------------------------
@@ -6066,7 +6066,7 @@
             // on everyone's data are removed -- the server refuses them
             // regardless, this stops the page offering them.
             if (!ME.is_admin) {
-                ['adminUsersSection', 'adminResetSection', 'adminBreakerSection', 'newHeaderBtn', 'headerEditor', 'priorityGroup']
+                ['adminUsersSection', 'adminResetSection', 'adminBreakerSection', 'adminHoldSection', 'newHeaderBtn', 'headerEditor', 'priorityGroup']
                     .forEach(function (id) {
                         var el = document.getElementById(id);
                         if (el) { el.remove(); }

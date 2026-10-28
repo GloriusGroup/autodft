@@ -1258,6 +1258,46 @@ def test_a_user_gets_no_new_header_button_or_editor():
     assert 'id="newHeaderBtn"' in html and 'id="headerEditor"' in html
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+@pytest.mark.parametrize("is_admin", [False, True])
+def test_the_admin_page_lists_a_users_projects_and_fetches_no_admin_data(is_admin):
+    script = ("var els = {}, urls = [];\n"
+              "var document = {getElementById: function (id) {\n"
+              "    return els[id] || (els[id] = {id: id, style: {}, dataset: {}, innerHTML: '', textContent: '',\n"
+              "        appendChild: function (c) { this.innerHTML += c.innerHTML; },\n"
+              "        addEventListener: function () {}, querySelectorAll: function () { return []; }});\n"
+              "}, createElement: function () { return {style: {}, innerHTML: '', appendChild: function () {},\n"
+              "    addEventListener: function () {}}; }};\n"
+              f"var ME = {{is_admin: {json.dumps(is_admin)}}};\n"
+              "function refreshRemovalBanner() {}\n"
+              "function loadUsers() {}\n"
+              "function breakerRows() { return ''; }\n"
+              "function adminEscape(s) { return String(s); }\n"
+              "function adminRowsLine() { return ''; }\n"
+              "function adminRenderUsage() {}\n"
+              "async function adminJSON(method, url) {\n"
+              "    urls.push(url);\n"
+              "    var data = url === '/api/projects' ? [{name: 'u/p', molecules: 2, tasks_total: 5}]\n"
+              "        : {owners: [], threshold: 0.5, window: 20, held: false, state: {}, projects: [], rows: {}};\n"
+              "    return {ok: true, status: 200, data: data};\n"
+              "}\n"
+              + _functions("loadAdminPage")
+              + "\nloadAdminPage().then(function () { process.stdout.write(JSON.stringify({\n"
+              "    urls: urls, list: document.getElementById('adminProjectList').innerHTML})); });\n")
+    out = json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
+    assert "/api/projects" in out["urls"]
+    assert "Loading" not in out["list"]
+    assert ("/api/admin/submission-hold" in out["urls"]) is is_admin
+    if not is_admin:
+        assert out["urls"] == ["/api/projects"]
+
+
+def test_a_user_gets_no_hold_section():
+    identity = _functions("loadIdentity")
+    user_branch = identity[identity.index("if (!ME.is_admin) {"):]
+    assert "'adminHoldSection'" in user_branch
+
+
 # ── RDKit.js ────────────────────────────────────────────────────────────
 
 def _external_urls(html: str) -> list[str]:
