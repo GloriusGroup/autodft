@@ -971,7 +971,10 @@ it flags the molecule `archived = true` and then deletes its
 leaves the project partly archived, and re-running it is safe. It keeps
 the export folders (and frozen photophysics payloads) of the molecules
 already archived, deletes any raw folder they have left, and exports and
-deletes only the rest. The controller also deletes, when it next starts,
+deletes only the rest. A molecule not flagged whose raw data is gone (none
+of its job folders exists; an archive cut short under older code) keeps its
+export folder as it is and is flagged; a plain export also keeps it, and
+the log names it. The controller also deletes, when it next starts,
 any raw folder an archived molecule has left, which covers an archive killed
 on its last molecule (the project is then archived and cannot be re-run).
 It does so only when the project's export folder exists and one of the

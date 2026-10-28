@@ -421,10 +421,13 @@ waited for too, and so is a cube build or `.out`/`.xyz` download of the
 project already under way. An archive cut short (a restart, an NFS error)
 can be re-run: it keeps the export folders of the molecules already
 archived, deletes the raw folders they have left, and exports and deletes
-the rest; the controller deletes an archived molecule's raw folder left
+the rest. A molecule whose raw data is gone but which is not flagged (an
+archive cut short under older code) keeps its export folder and is flagged.
+The controller deletes an archived molecule's raw folder left
 behind at its next start, if the project's export folder exists and the
 molecule's job paths lie in that raw folder. A plain Export Project of
-such a project keeps those folders too. While it runs, a molecule wipe,
+such a project keeps those folders too, and so leaves a molecule whose raw
+data is gone as it is. While it runs, a molecule wipe,
 Delete Project, density cube builds, `.out`/`.xyz` downloads and another
 export or archive of the project answer 409 ("Export and Delete is running
 for this project."); they work again once it ends, failed or not.

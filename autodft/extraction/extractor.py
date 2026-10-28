@@ -414,7 +414,7 @@ class PipelineExtractor:
     ) -> dict[str, Any]:
         """Write the summary files and ``molecules/`` tree into ``<export_root>/<project>/``.
 
-        Replaces a previous export there; archived molecules keep their folders.
+        Replaces a previous export there; archived molecules, and those whose raw data is gone, keep their folders.
         Raises ValueError, touching nothing, when every molecule is archived.
         Returns ``{molecules, files_copied, root}``.
         """
@@ -422,8 +422,8 @@ class PipelineExtractor:
 
     def _export_tree(
         self, export_root: str | Path, all_conformers: bool, keep_gbw: bool,
-    ) -> tuple[dict[str, Any], list[int], list[int]]:
-        """:meth:`export_tree`, plus the ids of the molecules it exported and of those already archived."""
+    ) -> tuple[dict[str, Any], list[int], list[int], list[int]]:
+        """:meth:`export_tree`, plus the ids of the molecules exported, already archived, and kept (raw data gone)."""
         from autodft.paths import project_file_stem, safe_subdirectory
 
         root = safe_subdirectory(Path(export_root), self.project_name)
@@ -442,9 +442,19 @@ class PipelineExtractor:
                      for m in molecules if not m.archived]
             archived = [m.id for m in molecules if m.archived]
         root.mkdir(parents=True, exist_ok=True)
+        planned = [(plan, _molecule_folder(root, plan[0])) for plan in plans]
+        # Raw data gone, export folder there (an archive cut short before it flagged): the only copy.
+        gone = [i for i, ((_, jobs), folder) in enumerate(planned)
+                if jobs and folder.is_dir() and not any(job.job_path.is_dir() for job in jobs)]
+        kept = [plans[i][0]["molecule_id"] for i in gone]
+        if kept:
+            logger.warning("Kept the export folders of molecules %s: their raw data is gone",
+                           ", ".join(map(str, kept)))
+            planned = [p for i, p in enumerate(planned) if i not in gone]
+            plans = [plan for plan, _ in planned]
         exported = [manifest["molecule_id"] for manifest, _ in plans]
 
-        folders = _clear_export(root, stem, [manifest for manifest, _ in plans])
+        folders = _clear_export(root, stem, [folder for _, folder in planned])
         self.export_summary_csv(root / f"{stem}.csv")
         self.export_summary_csv(root / f"{stem}_all_conformers.csv", all_conformers=True)
         from autodft.analysis.state_analysis import analyze_project, build_xlsx_bytes
@@ -472,7 +482,7 @@ class PipelineExtractor:
             copied += len(files)
 
         logger.info("Exported %d files of %d molecules to %s", copied, len(plans), root)
-        return {"molecules": len(plans), "files_copied": copied, "root": str(root)}, exported, archived
+        return {"molecules": len(plans), "files_copied": copied, "root": str(root)}, exported, archived, kept
 
     def _plan_molecule(
         self, session: Session, mol: Molecule, all_conformers: bool, keep_gbw: bool,
@@ -575,7 +585,9 @@ class PipelineExtractor:
         The caller is responsible for the user confirmation.
         """
         # The export first: if it fails, nothing is deleted. Then exactly what it exported.
-        summary, exported, archived = self._export_tree(export_root, all_conformers, keep_gbw)
+        summary, exported, archived, kept = self._export_tree(export_root, all_conformers, keep_gbw)
+        # Kept: its export folder is already the only copy.
+        exported += kept
         # A molecule already archived may have a folder left by a run killed mid-delete.
         for mol_id in sorted([*archived, *exported]):
             if mol_id in exported:
@@ -711,12 +723,11 @@ OPTIONAL_WRITERS: list[tuple[tuple[str, ...], Callable[[str, Path, str, bool], l
 _SUMMARY_SUFFIXES = (".csv", "_all_conformers.csv", "_state_analysis.xlsx")
 
 
-def _clear_export(root: Path, stem: str, manifests: list[dict]) -> list[Path]:
-    """Remove a previous export's summary files and the folders of *manifests*' molecules; returns those folders.
+def _clear_export(root: Path, stem: str, folders: list[Path]) -> list[Path]:
+    """Remove a previous export's summary files and *folders*; returns *folders*.
 
     Other folders stay: archived or wiped molecules' only copy.
     """
-    folders = [_molecule_folder(root, m) for m in manifests]
     for suffix in (*_SUMMARY_SUFFIXES, *(s for suffixes, _ in OPTIONAL_WRITERS for s in suffixes)):
         (root / f"{stem}{suffix}").unlink(missing_ok=True)
     for folder in folders:

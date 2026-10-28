@@ -524,6 +524,37 @@ def test_a_plain_export_keeps_a_partly_archived_projects_folders(db, monkeypatch
     assert (_root(db) / "molecules" / str(ids[2]) / "S0" / "conf1" / "opt.out").read_text() == "newer"
 
 
+def _raw_gone_unflagged(settings) -> tuple[list[int], dict]:
+    """Two exported molecules, the first's raw folder deleted unflagged (an archive cut short before resume)."""
+    ids = [_standard(settings)[0] for _ in range(2)]
+    _export(settings)
+    shutil.rmtree(settings.comp_data_path / f"mol_{ids[0]}")
+    return ids, _snapshot(settings, ids[0])
+
+
+def test_an_export_keeps_the_folder_of_a_molecule_whose_raw_data_is_gone(db, caplog):
+    ids, kept = _raw_gone_unflagged(db)
+    with caplog.at_level("WARNING", logger="autodft.extraction.extractor"):
+        summary = _export(db)
+    assert summary["molecules"] == 1
+    assert _snapshot(db, ids[0]) == kept
+    assert len([r for r in caplog.records if "raw data" in r.getMessage()]) == 1
+    with get_session() as session:
+        assert session.get(Molecule, ids[0]).archived is False
+
+
+def test_a_rerun_archive_keeps_and_flags_a_molecule_whose_raw_data_is_gone(db):
+    ids, kept = _raw_gone_unflagged(db)
+    summary = _archive(db)
+    assert (summary["molecules"], summary["archived"]) == (1, 2)
+    assert _snapshot(db, ids[0]) == kept
+    assert not (db.comp_data_path / f"mol_{ids[1]}").exists()
+    with get_session() as session:
+        assert all(session.get(Molecule, i).archived for i in ids)
+    with (_root(db) / "p_all_conformers.csv").open() as f:
+        assert sorted({int(r["molecule_id"]) for r in csv.DictReader(f)}) == ids
+
+
 def test_archived_state_analysis_reads_every_conformer(db):
     from autodft.analysis.state_analysis import analyze_project
 
