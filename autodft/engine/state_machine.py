@@ -16,7 +16,7 @@ from time import monotonic
 from pathlib import Path
 from typing import Collection, NamedTuple, Optional
 
-from sqlalchemy import and_, case, or_, update
+from sqlalchemy import ColumnElement, and_, case, exists, or_, update
 from sqlmodel import Session, col, select
 
 from autodft import categories
@@ -747,6 +747,9 @@ def create_retry_jobs(
             continue
 
         next_attempt = (task.retry_base or 0) + failed_count + 1
+        # The paused list above was read at the step's start; an archive may have begun since.
+        if not _claim_task(session, task, TaskStatus.pending):
+            continue
         # Per task: retry-strategy application reads files from previous job
         # directories, which archive/cleanup may have removed. One raising
         # task must not discard every other task's retry job for the tick.
@@ -796,6 +799,8 @@ def start_new_tasks(
 
     for processed, task in enumerate(tasks):
         _commit_batch(session, processed)
+        if not _claim_task(session, task, TaskStatus.created):
+            continue  # an archive began since the paused list was read
         # Ensure task directory exists
         if not task.task_path:
             state = session.get(MoleculeState, task.state_id)
@@ -1077,7 +1082,7 @@ def submit_pending_jobs(
 
 
 def _claim(session: Session, job_id: int) -> bool:
-    """Mark an unsent job SUBMITTING and commit; False when it is gone or no longer unsent."""
+    """Mark an unsent job SUBMITTING and commit; False when it is gone, no longer unsent or paused."""
     claimed = session.exec(
         update(ComputationJob)
         .where(
@@ -1085,12 +1090,35 @@ def _claim(session: Session, job_id: int) -> bool:
             col(ComputationJob.slurm_jobid).is_(None),
             col(ComputationJob.slurm_status).is_(None),
             col(ComputationJob.success).is_(None),
+            _unpaused(ComputationJob.task_id),
         )
         .values(slurm_status=SlurmStatus.SUBMITTING.value)
         .execution_options(synchronize_session=False)
     ).rowcount
     session.commit()
     return bool(claimed)
+
+
+def _unpaused(task_id) -> ColumnElement[bool]:
+    """SQL: task *task_id*'s project has no archive/export job running."""
+    return ~exists().where(
+        col(ComputationTask.id) == task_id,
+        col(MoleculeState.id) == col(ComputationTask.state_id),
+        col(Molecule.id) == col(MoleculeState.molecule_id),
+        col(ProjectJob.qualified_name) == col(Molecule.project_name),
+        ProjectJob.status == ProjectJobStatus.running,
+    )
+
+
+def _claim_task(session: Session, task: ComputationTask, status: TaskStatus) -> bool:
+    """Take the write lock for building *task*'s job; False when it left *status* or its project is paused."""
+    return bool(session.exec(
+        update(ComputationTask)
+        .where(col(ComputationTask.id) == task.id, ComputationTask.status == status,
+               _unpaused(task.id))
+        .values(updated_at=datetime.now(timezone.utc))
+        .execution_options(synchronize_session=False)
+    ).rowcount)
 
 
 def _release_claims(session: Session) -> None:

@@ -260,6 +260,74 @@ class TestTickPause:
             ).all()
             assert jobs == []
 
+    def test_an_archive_started_mid_step_gets_no_new_job(self, env, monkeypatch):
+        settings = env["settings"]
+        with get_session() as session:
+            created = _make_task(session)
+            retry = _make_task(session, status=TaskStatus.pending)
+            retry.task_path = str(env["tmp_path"] / f"task_{retry.id}")
+            session.add(ComputationJob(task_id=retry.id, attempt=1, slurm_jobid=7,
+                                       slurm_status="FAILED", success=False, fail_reason="['SCF']"))
+            session.add(ProjectJob(qualified_name=PROJECT, owner_id=env["owner_id"],
+                                   kind=ProjectJobKind.archive, status=ProjectJobStatus.running))
+            session.commit()
+            ids = [created.id, retry.id]
+        # The step read its paused list before the archive started.
+        monkeypatch.setattr(state_machine, "paused_project_names", lambda session: set())
+
+        with get_session() as session:
+            state_machine.create_retry_jobs(session, settings, qm_engine=None)
+            state_machine.start_new_tasks(session, settings, qm_engine=None)
+            session.commit()
+            assert [len(_jobs_of(session, t)) for t in ids] == [0, 1]
+            assert session.get(ComputationTask, created.id).status == TaskStatus.created
+
+    def test_an_archive_started_mid_loop_gets_no_sbatch(self, env):
+        from pathlib import Path
+
+        from autodft.engine.scheduler import SubmitResult
+
+        settings = env["settings"]
+        with get_session() as session:
+            tasks = [_make_task(session, status=TaskStatus.pending),
+                     _make_task(session, status=TaskStatus.pending),
+                     _make_task(session, project="owner/other", status=TaskStatus.pending)]
+            jobs = []
+            for task in tasks:
+                path = env["tmp_path"] / f"job_{task.id}"
+                path.mkdir()
+                (path / "submit.cmd").write_text("#!/bin/bash\n")
+                job = ComputationJob(task_id=task.id, attempt=1, job_path=str(path))
+                session.add(job)
+                session.commit()
+                jobs.append(job.id)
+            names = [f"job_{task.id}" for task in tasks]
+        owner_id = env["owner_id"]
+
+        class _Scheduler:
+            calls: list[str] = []
+
+            def get_queue_length(self):
+                return 0
+
+            def submit(self, script, nice=0):
+                self.calls.append(Path(script).parent.name)
+                if len(self.calls) == 1:  # the archive starts while this sbatch runs
+                    with get_session() as api:
+                        api.add(ProjectJob(qualified_name=PROJECT, owner_id=owner_id,
+                                           kind=ProjectJobKind.archive,
+                                           status=ProjectJobStatus.running))
+                        api.commit()
+                return SubmitResult(success=True, job_id=str(4000 + len(self.calls)))
+
+        scheduler = _Scheduler()
+        with get_session() as session:
+            state_machine.submit_pending_jobs(session, scheduler, settings)
+            session.commit()
+            sent = [session.get(ComputationJob, j) for j in jobs]
+            assert scheduler.calls == [names[0], names[2]]
+            assert (sent[1].slurm_jobid, sent[1].slurm_status) == (None, None)
+
     def test_an_unpaused_project_is_advanced(self, env):
         with get_session() as session:
             task = _make_task(session)
@@ -291,16 +359,83 @@ class TestQuiescence:
         with pytest.raises(RuntimeError, match="still"):
             project_jobs._wait_for_quiescence(PROJECT, timeout=0.2, poll=0.02)
 
-    def test_it_returns_once_the_jobs_are_terminal(self, env):
+    def test_it_returns_once_the_jobs_are_judged(self, env):
         with get_session() as session:
-            task = _make_task(session)
-            job = ComputationJob(
-                task_id=task.id, attempt=1, slurm_jobid=42, slurm_status="COMPLETED",
-            )
-            session.add(job)
+            task = _make_task(session, status=TaskStatus.pending)
+            session.add(ComputationJob(
+                task_id=task.id, attempt=1, slurm_jobid=42, slurm_status="COMPLETED", success=False,
+            ))
+            session.add(ComputationJob(task_id=task.id, attempt=2))  # unsent: the archive fails it
             session.commit()
-        # No transient jobs -> returns immediately without raising.
         project_jobs._wait_for_quiescence(PROJECT, timeout=0.2, poll=0.02)
+
+    def test_it_waits_for_a_terminal_job_to_be_judged(self, env):
+        with get_session() as session:
+            task = _make_task(session, status=TaskStatus.pending)
+            session.add(ComputationJob(
+                task_id=task.id, attempt=1, slurm_jobid=42, slurm_status="COMPLETED",
+            ))
+            session.commit()
+        with pytest.raises(RuntimeError, match="still"):
+            project_jobs._wait_for_quiescence(PROJECT, timeout=0.2, poll=0.02)
+
+    def test_it_waits_for_a_successful_job_to_mark_its_task(self, env):
+        with get_session() as session:
+            task = _make_task(session, status=TaskStatus.pending)
+            session.add(ComputationJob(
+                task_id=task.id, attempt=1, slurm_jobid=42, slurm_status="COMPLETED", success=True,
+            ))
+            session.commit()
+            with pytest.raises(RuntimeError, match="still"):
+                project_jobs._wait_for_quiescence(PROJECT, timeout=0.2, poll=0.02)
+            state_machine.update_task_statuses(session)
+            session.commit()
+        project_jobs._wait_for_quiescence(PROJECT, timeout=0.2, poll=0.02)
+
+    def test_a_job_that_finishes_during_the_wait_is_judged_and_exported(self, env, monkeypatch):
+        import time
+
+        from sqlmodel import select
+
+        monkeypatch.setattr(project_jobs, "sleep", lambda _: time.sleep(0.01))
+        _seed_result(env["tmp_path"])
+        with get_session() as session:
+            sp = session.exec(select(ComputationTask).where(
+                ComputationTask.task_type == TaskType.singlepoint)).one()
+            sp.status = TaskStatus.pending
+            job = _jobs_of(session, sp.id)[0]
+            job.slurm_jobid, job.slurm_status, job.success = 42, "RUNNING", None
+            session.add_all([sp, job])
+            session.commit()
+            job_id = job.id
+
+        archive = project_jobs.start_job(owner_id=env["owner_id"], qualified_name=PROJECT,
+                                         kind=ProjectJobKind.archive, params={},
+                                         settings=env["settings"])
+
+        def step(change):
+            with get_session() as session:
+                change(session)
+                session.commit()
+            time.sleep(0.2)
+            with get_session() as session:
+                return project_jobs.get_job(session, archive["id"]).status
+
+        def finished(session):
+            session.get(ComputationJob, job_id).slurm_status = "COMPLETED"
+
+        def judged(session):
+            session.get(ComputationJob, job_id).success = True
+
+        assert step(finished) == ProjectJobStatus.running
+        assert step(judged) == ProjectJobStatus.running
+        step(state_machine.update_task_statuses)
+        project_jobs.join_all(timeout=10)
+
+        with get_session() as session:
+            assert project_jobs.get_job(session, archive["id"]).status == ProjectJobStatus.successful
+        csv = env["tmp_path"] / "export_data" / "owner" / "screening" / "screening.csv"
+        assert "-1.0" in csv.read_text()
 
 
 # ----------------------------------------------------------------------

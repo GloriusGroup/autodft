@@ -1001,11 +1001,15 @@ that is already archived, and for one with a flagged NMR molecule whose
 reference compound is still `pending` — a frozen molecule is never
 re-analysed, so the shift would stay `null` forever (a `failed`
 reference does not block it: the frozen detail keeps the shieldings, the
-shift stays `null`); `404` when the project holds no molecules. The
-archive job waits up to 300 s for the project's in-flight SLURM jobs to
-finish and aborts, deleting nothing, if any are still running. It then
-fails the project's `created` and `pending` tasks with the reason
-`project archived`; they do not count towards the circuit breaker.
+shift stays `null`); `404` when the project holds no molecules. From
+the moment the job starts, the controller creates and submits no job for
+the project, not even later in a tick already under way. The archive job
+then waits up to 300 s until every job the project sent to SLURM has
+finished and been judged and its task marked, so a job that finishes
+during the wait is exported. If any are still running or unjudged after
+that, it aborts and deletes nothing. It then fails the project's `created`
+and `pending` tasks with the reason `project archived`; they do not count
+towards the circuit breaker.
 
 ---
 

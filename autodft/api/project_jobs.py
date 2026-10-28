@@ -16,8 +16,9 @@ Three things this module guarantees:
   archive/export, a wipe, or a new submission on the same project, and the
   controller tick skips advancing that project's tasks (it reads
   :func:`active_job_project_names`). The destructive archive additionally
-  waits for the project's in-flight SLURM jobs to finish before it deletes
-  anything, so ``rmtree`` never races a job still writing files.
+  waits until every job the project sent to SLURM is finished and judged and
+  its task marked, so ``rmtree`` never races a job still writing files and
+  every result is exported first.
 * **No half-done ghost after a restart.** The thread lives in the controller
   process; a restart orphans it. :func:`reconcile_orphaned_jobs`, called once
   at startup, flips any still-``running`` row to ``failed`` rather than
@@ -39,14 +40,13 @@ from datetime import datetime, timezone
 from time import monotonic, sleep
 from typing import Optional
 
-from sqlalchemy import func
+from sqlalchemy import exists, func
 from sqlmodel import Session, col, select
 
 from autodft import accounts
 from autodft.config import Settings
 from autodft.db import get_session
 from autodft.models.enums import (
-    TRANSIENT_SLURM_STATES,
     ProjectJobKind,
     ProjectJobStatus,
     TaskStatus,
@@ -73,8 +73,8 @@ _ARCHIVE_RERUN = ("Re-running it is safe: it resumes, keeping the molecules alre
                   "archived and exporting and deleting only the rest.")
 
 
-# How long the destructive archive waits for the project's in-flight SLURM
-# jobs to finish before giving up. The pause stops *new* jobs, so the set only
+# How long the destructive archive waits for the project's sent jobs to finish
+# and be judged before giving up. The pause stops *new* jobs, so the set only
 # shrinks; if it is still non-empty after this, real long-running calculations
 # are in flight and the archive aborts cleanly rather than deleting under them.
 ARCHIVE_QUIESCENCE_TIMEOUT = 300.0
@@ -353,8 +353,8 @@ def _execute(
         return {"format": "reactivity", "path": str(target), "json_path": str(data), "downloadable": True}
 
     if kind == ProjectJobKind.archive:
-        # Do not rmtree under a job still writing files. The pause has already
-        # stopped new jobs for this project; wait for what is left to finish.
+        # Do not rmtree under a job still writing files, nor before its result is
+        # judged and exportable. The pause has already stopped new jobs for this project.
         _wait_for_quiescence(qualified_name)
         fail_open_tasks(qualified_name)
 
@@ -377,22 +377,35 @@ def _execute(
     raise ValueError(f"Unknown project-job kind {kind!r}")
 
 
-def _in_flight_job_count(qualified_name: str) -> int:
-    """Jobs for *qualified_name* that SLURM has not finished with."""
+def _unsettled_count(qualified_name: str) -> int:
+    """Sent jobs of *qualified_name* not yet judged, plus pending tasks a judged success has not marked."""
+    in_project = (
+        select(ComputationTask.id)
+        .join(MoleculeState, col(MoleculeState.id) == col(ComputationTask.state_id))
+        .join(Molecule, col(Molecule.id) == col(MoleculeState.molecule_id))
+        .where(Molecule.project_name == qualified_name)
+    )
     with get_session() as session:
-        return int(
-            session.exec(
-                select(func.count())
-                .select_from(ComputationJob)
-                .join(ComputationTask, col(ComputationTask.id) == col(ComputationJob.task_id))
-                .join(MoleculeState, col(MoleculeState.id) == col(ComputationTask.state_id))
-                .join(Molecule, col(Molecule.id) == col(MoleculeState.molecule_id))
-                .where(
-                    Molecule.project_name == qualified_name,
-                    col(ComputationJob.slurm_status).in_(sorted(TRANSIENT_SLURM_STATES)),
-                )
-            ).one()
-        )
+        unjudged = session.exec(
+            select(func.count()).select_from(ComputationJob).where(
+                col(ComputationJob.task_id).in_(in_project),
+                col(ComputationJob.slurm_status).is_not(None),
+                col(ComputationJob.success).is_(None),
+            )
+        ).one()
+        # update_task_statuses has yet to mark these successful; the export plans only those.
+        unmarked = session.exec(
+            select(func.count()).select_from(ComputationTask).where(
+                col(ComputationTask.id).in_(in_project),
+                ComputationTask.status == TaskStatus.pending,
+                exists().where(
+                    col(ComputationJob.task_id) == col(ComputationTask.id),
+                    col(ComputationJob.success).is_(True),
+                    col(ComputationJob.attempt) > func.coalesce(ComputationTask.retry_base, 0),
+                ),
+            )
+        ).one()
+        return int(unjudged) + int(unmarked)
 
 
 def fail_open_tasks(qualified_name: str) -> int:
@@ -441,22 +454,23 @@ def _wait_for_quiescence(
     timeout: float = ARCHIVE_QUIESCENCE_TIMEOUT,
     poll: float = _QUIESCENCE_POLL_SECONDS,
 ) -> None:
-    """Block until the project has no in-flight SLURM jobs, or raise.
+    """Block until every sent job of the project is judged and its task marked, or raise.
 
     Raises:
-        RuntimeError: if jobs are still running after *timeout*.
+        RuntimeError: if some are still unsettled after *timeout*.
     """
     deadline = monotonic() + timeout
     while True:
-        remaining = _in_flight_job_count(qualified_name)
+        remaining = _unsettled_count(qualified_name)
         if remaining == 0:
             return
         if monotonic() >= deadline:
             raise RuntimeError(
                 f"{remaining} computation job(s) for {qualified_name!r} are still "
-                f"running after {timeout:.0f}s; the archive was aborted so it would "
-                f"not delete files a job is still writing. Retry once the project's "
-                f"calculations have finished."
+                f"running or awaiting their results after {timeout:.0f}s; the archive "
+                f"was aborted so it would not delete files a job is still writing or "
+                f"results not yet exported. Retry once the project's calculations "
+                f"have finished."
             )
         sleep(poll)
 
