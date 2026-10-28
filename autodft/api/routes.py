@@ -2421,8 +2421,8 @@ def _resolved_headers(session, body: SubmitRequest) -> tuple[Optional[str], Opti
     )
 
 
-def _new_header_error(session, identity: Identity, body: SubmitRequest) -> Optional[JSONResponse]:
-    """A 403 when a non-admin's *body* brings header text that is neither stored nor a default, else None."""
+def _header_access_error(session, identity: Identity, body: SubmitRequest) -> Optional[JSONResponse]:
+    """For a non-admin *body*: 400 for a deleted header (by id or text), 403 for header text not stored, else None."""
     from autodft.qm.orca.defaults import (
         DEFAULT_HEADER_CONFSEARCH,
         DEFAULT_HEADER_OPTIMIZATION,
@@ -2431,19 +2431,28 @@ def _new_header_error(session, identity: Identity, body: SubmitRequest) -> Optio
 
     if identity.is_admin:
         return None
-    known = {DEFAULT_HEADER_CONFSEARCH, DEFAULT_HEADER_OPTIMIZATION, DEFAULT_HEADER_SINGLEPOINT}
+    defaults = {DEFAULT_HEADER_CONFSEARCH, DEFAULT_HEADER_OPTIMIZATION, DEFAULT_HEADER_SINGLEPOINT}
     for slot in ("confsearch", "optimization", "singlepoint"):
         text = getattr(body, f"header_{slot}")
         header_id = getattr(body, f"header_{slot}_id")
-        if not text or (header_id is not None and session.get(ComputationHeader, header_id) is not None):
+        row = session.get(ComputationHeader, header_id) if header_id is not None else None
+        if row is not None:
+            if row.deleted:
+                return JSONResponse(status_code=400, content={
+                    "detail": f"header_{slot}_id: header #{row.id} was deleted; pick another."})
             continue
-        if text not in known and session.exec(
-            select(ComputationHeader.id).where(ComputationHeader.header_text == text).limit(1)
-        ).first() is None:
-            return JSONResponse(status_code=403, content={"detail": (
-                f"header_{slot}: only the admin account adds header text; "
-                f"pick a saved header (header_{slot}_id)."
-            )})
+        if not text:
+            continue
+        rows = session.exec(select(ComputationHeader).where(ComputationHeader.header_text == text)).all()
+        if any(not r.deleted for r in rows) or text in defaults:
+            continue
+        if rows:
+            return JSONResponse(status_code=400, content={
+                "detail": f"header_{slot}: header #{rows[0].id} with this text was deleted; pick another."})
+        return JSONResponse(status_code=403, content={"detail": (
+            f"header_{slot}: only the admin account adds header text; "
+            f"pick a saved header (header_{slot}_id)."
+        )})
     return None
 
 
@@ -2547,7 +2556,7 @@ def api_submit(
     if bad is not None:
         return bad
     with get_session() as session:
-        forbidden = _new_header_error(session, identity, body)
+        forbidden = _header_access_error(session, identity, body)
         if forbidden is not None:
             return forbidden
         headers = _resolved_headers(session, body)
@@ -2790,7 +2799,7 @@ def api_submit_batch(
     from autodft.api import project_jobs
 
     with get_session() as session:
-        forbidden = _new_header_error(session, identity, body)
+        forbidden = _header_access_error(session, identity, body)
         if forbidden is not None:
             return forbidden
         headers = _resolved_headers(session, body)

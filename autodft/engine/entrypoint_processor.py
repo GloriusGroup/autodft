@@ -155,6 +155,13 @@ def _process_entrypoint_body(
             raise ValueError(f"{reason} Nothing was submitted for this molecule.")
         metadata["advanced"] = resolved
 
+    # A header admin deleted is revoked for users; Extend keeps the project's own.
+    for_user = not metadata.get("extend") and _submitted_by_user(session, metadata)
+    if for_user:
+        reason = _deleted_header_error(session, headers)
+        if reason:
+            raise ValueError(f"{reason} Nothing was submitted for this molecule.")
+
     # Opt-in categories. Validated here as well as at the API, because the
     # CLI and direct inserts skip the API.
     reason = categories.rejection(
@@ -204,9 +211,9 @@ def _process_entrypoint_body(
     )
 
     # 3. Create / find header entries
-    cs_header = _get_or_create_header(session, entrypoint.header_confsearch)
-    opt_header = _get_or_create_header(session, entrypoint.header_optimization)
-    sp_header = _get_or_create_header(session, entrypoint.header_singlepoint)
+    cs_header = _get_or_create_header(session, entrypoint.header_confsearch, live_first=for_user)
+    opt_header = _get_or_create_header(session, entrypoint.header_optimization, live_first=for_user)
+    sp_header = _get_or_create_header(session, entrypoint.header_singlepoint, live_first=for_user)
 
     header_ids = {
         "confsearch": cs_header.id if cs_header else None,
@@ -740,19 +747,43 @@ def legacy_submission(session: Session, project: str, headers: tuple) -> bool:
     return any("advanced" not in json.loads(m or "{}") for m in rows)
 
 
+def _submitted_by_user(session: Session, metadata: dict) -> bool:
+    """Whether the entrypoint's author is an account other than admin."""
+    from autodft import accounts
+
+    user = accounts.get_user_by_username(session, metadata.get("project_author") or "")
+    return user is not None and not user.is_admin
+
+
+def _deleted_header_error(session: Session, headers) -> Optional[str]:
+    """Why a header text in *headers* is refused: only deleted rows carry it (package defaults excepted)."""
+    from autodft.qm.orca.defaults import (
+        DEFAULT_HEADER_CONFSEARCH,
+        DEFAULT_HEADER_OPTIMIZATION,
+        DEFAULT_HEADER_SINGLEPOINT,
+    )
+
+    for text in headers:
+        if not text or text in (DEFAULT_HEADER_CONFSEARCH, DEFAULT_HEADER_OPTIMIZATION, DEFAULT_HEADER_SINGLEPOINT):
+            continue
+        rows = session.exec(select(ComputationHeader).where(ComputationHeader.header_text == text)).all()
+        if rows and all(row.deleted for row in rows):
+            return f"Header #{rows[0].id} was deleted; pick another header."
+    return None
+
+
 def _get_or_create_header(
-    session: Session, header_text: Optional[str],
+    session: Session, header_text: Optional[str], *, live_first: bool = False,
 ) -> Optional[ComputationHeader]:
     """Find or create a ``ComputationHeader``.  Returns ``None`` if
-    *header_text* is ``None`` or empty."""
+    *header_text* is ``None`` or empty. *live_first* prefers a row not deleted."""
     if not header_text:
         return None
 
-    existing = session.exec(
-        select(ComputationHeader).where(
-            ComputationHeader.header_text == header_text,
-        )
-    ).first()
+    stmt = select(ComputationHeader).where(ComputationHeader.header_text == header_text)
+    if live_first:
+        stmt = stmt.order_by(ComputationHeader.deleted, ComputationHeader.id)
+    existing = session.exec(stmt).first()
     if existing is not None:
         return existing
 

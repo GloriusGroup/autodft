@@ -592,9 +592,12 @@ class TestHeaderAdminOnly:
         ("/api/submit", {"smiles": "CCO"}), ("/api/submit-batch", {"smiles_list": ["CCO"]}),
     ])
     @pytest.mark.parametrize("slot", ["header_confsearch", "header_optimization", "header_singlepoint"])
-    def test_a_user_cannot_submit_new_header_text(self, app_env, path, body, slot):
+    @pytest.mark.parametrize("missing_id", [False, True])
+    def test_a_user_cannot_submit_new_header_text(self, app_env, path, body, slot, missing_id):
+        # An id that matches no row falls back to the text.
         response = app_env["client"].post(path, headers=app_env["owner"], json={
             **body, "project": "screening", slot: '!B3LYP def2-SVP\n%compound "x" end\n',
+            **({f"{slot}_id": 9999} if missing_id else {}),
         })
         assert response.status_code == 403
         assert "admin" in response.json()["detail"]
@@ -603,6 +606,84 @@ class TestHeaderAdminOnly:
         from autodft.models import CalculationEntrypoint
         with get_session() as session:
             assert session.exec(select(CalculationEntrypoint)).all() == []
+
+    @staticmethod
+    def _delete(header_id: int) -> None:
+        from autodft.models import ComputationHeader
+
+        with get_session() as session:
+            session.get(ComputationHeader, header_id).deleted = True
+            session.commit()
+
+    @pytest.mark.parametrize("path,body", [
+        ("/api/submit", {"smiles": "CCO"}), ("/api/submit-batch", {"smiles_list": ["CCO"]}),
+    ])
+    @pytest.mark.parametrize("by", ["id", "text"])
+    def test_a_deleted_header_is_refused_to_a_user_but_not_admin(self, app_env, path, body, by):
+        header_id = self._earlier("owner")
+        self._delete(header_id)
+        ref = ({"header_optimization_id": header_id} if by == "id"
+               else {"header_optimization": "!PBE0 def2-SVP\n"})
+        user = app_env["client"].post(path, headers=app_env["owner"], json={**body, "project": "screening", **ref})
+        assert user.status_code == 400
+        assert f"#{header_id}" in user.json()["detail"] and "deleted" in user.json()["detail"]
+        admin = app_env["client"].post(path, headers=app_env["admin"], json={**body, "project": "screening", **ref})
+        assert admin.status_code == 200, admin.text
+
+    @staticmethod
+    def _entry(author: str, text: str) -> int:
+        import json as _json
+
+        from autodft.models import CalculationEntrypoint
+        with get_session() as session:
+            entry = CalculationEntrypoint(smiles="CCO", header_optimization=text, request_metadata=_json.dumps({
+                "project_name": f"{author}/screening", "project_author": author, "request_confsearch": False,
+                "advanced": {},
+            }))
+            session.add(entry)
+            session.commit()
+            return entry.id
+
+    @pytest.mark.parametrize("author", ["owner", "admin"])
+    def test_the_processor_does_not_revive_a_deleted_header_for_a_user(self, app_env, tmp_path, monkeypatch, author):
+        from sqlmodel import select
+
+        from autodft.engine import entrypoint_processor as ep
+        from autodft.models import CalculationEntrypoint, MoleculeState
+        monkeypatch.setattr(ep, "_generate_initial_xyz", lambda s: "C 0 0 0\nH 1 0 0\n")
+        header_id = self._earlier("owner")
+        self._delete(header_id)
+        entry_id = self._entry(author, "!PBE0 def2-SVP\n")
+        settings = Settings()
+        settings.storage.data_path = str(tmp_path)
+        with get_session() as session:
+            ep.process_next_entrypoint(session, settings)
+            session.commit()
+        with get_session() as session:
+            error = session.get(CalculationEntrypoint, entry_id).processing_error
+            states = session.exec(select(MoleculeState)).all()
+        if author == "owner":
+            assert f"Header #{header_id} was deleted" in error and states == []
+        else:
+            assert error is None and [s.optimization_header_id for s in states] == [header_id]
+
+    def test_the_processor_binds_a_user_to_the_live_copy_of_a_text(self, app_env, tmp_path, monkeypatch):
+        from sqlmodel import select
+
+        from autodft.engine import entrypoint_processor as ep
+        from autodft.models import MoleculeState
+        monkeypatch.setattr(ep, "_generate_initial_xyz", lambda s: "C 0 0 0\nH 1 0 0\n")
+        deleted = self._earlier("owner")
+        self._delete(deleted)
+        live = self._earlier("owner")
+        self._entry("owner", "!PBE0 def2-SVP\n")
+        settings = Settings()
+        settings.storage.data_path = str(tmp_path)
+        with get_session() as session:
+            ep.process_next_entrypoint(session, settings)
+            session.commit()
+        with get_session() as session:
+            assert [s.optimization_header_id for s in session.exec(select(MoleculeState)).all()] == [live]
 
     def test_a_user_may_send_the_text_of_a_stored_or_default_header(self, app_env):
         from autodft.qm.orca.defaults import DEFAULT_HEADER_SINGLEPOINT

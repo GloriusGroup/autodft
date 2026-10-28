@@ -359,7 +359,9 @@ sees the whole database:
   by `created` or `pending` tasks can't be deleted; finished
   (successful / failed) references don't block the delete. Anyone
   may use a header; creating, editing or deleting one answers 403 to
-  anyone but admin, and headers users made earlier stay usable.
+  anyone but admin, and headers users made earlier stay usable. A
+  deleted header is revoked for users: a new submission naming it (by
+  ID or text) answers 400; what already runs on it keeps running.
   Editing the text or kind of a header any state or task uses saves a
   new header ("In use; saved as new header #N") and leaves the old one
   as it ran; a description edit stays in place.
@@ -493,7 +495,8 @@ Every submission path (CLI, REST, Python) ends up writing the same
   [`docs/API.md`](docs/API.md#post-apisubmit).
 * `header_confsearch_id / _optimization_id / _singlepoint_id` — pick a
   stored header by ID. Or pass raw `header_*` text; from anyone but
-  admin it must be a stored header's or a default's text (403 otherwise).
+  admin it must be a stored header's or a default's text (403 otherwise),
+  and a deleted header answers 400 by ID or text.
   The method-only defaults from `autodft/qm/orca/defaults.py` apply when
   neither is set.
 
@@ -661,9 +664,9 @@ is either scoped to the caller's own projects or deliberately shared
 | GET    | `/api/queue`                        | unstarted entrypoints                                         |
 | GET    | `/api/entrypoints/failed`           | entrypoints whose processing raised before any task was made  |
 | GET    | `/api/headers`                      | seeded defaults + custom headers (`?kind=…&include_deleted=`) |
-| POST   | `/api/headers`                      | create a custom header, owned by you                          |
-| PUT    | `/api/headers/{id}`                 | update text / description / kind / validated (owner or admin) |
-| DELETE | `/api/headers/{id}`                 | soft-delete (owner or admin; blocked by in-flight tasks)      |
+| POST   | `/api/headers`                      | create a custom header (admin; 403 otherwise)                 |
+| PUT    | `/api/headers/{id}`                 | update text / description / kind / validated (admin)         |
+| DELETE | `/api/headers/{id}`                 | soft-delete (admin; blocked by in-flight tasks)               |
 | POST   | `/api/validate-smiles`              | validate a SMILES string (used by the live form)              |
 | POST   | `/api/submit`                       | submit a new SMILES                                           |
 | POST   | `/api/submit-batch`                 | submit many SMILES in one request (see below)                 |
