@@ -375,6 +375,18 @@ def _raise_to_tight(block: str) -> str:
     return _CONV_LINE.sub(_fix, block)
 
 
+_STRONG_SCF = re.compile(r"\b(?:Tight|VeryTight|Extreme)SCF\b", re.IGNORECASE)
+
+
+def _add_keyword(text: str, keyword: str) -> str:
+    """Append a keyword to the first ``!`` line, ahead of any ``#`` comment."""
+    return re.sub(
+        r"(?m)^(!.*?)(\s*#.*)?$",
+        lambda m: f"{m.group(1)} {keyword}" + (f" {m.group(2).lstrip()}" if m.group(2) else ""),
+        text, count=1,
+    )
+
+
 class TightenConvergence(RetryStrategy):
     """Add ``TightSCF`` to the header and ``Convergence tight`` to ``%geom``.
 
@@ -403,14 +415,8 @@ class TightenConvergence(RetryStrategy):
             input_content = _SCF_BLOCK.sub(
                 lambda m: _raise_to_tight(m.group(0)), input_content,
             )
-        elif not re.search(r"\bTightSCF\b", input_content, re.IGNORECASE):
-            input_content = re.sub(
-                r"^!(.*)",
-                r"!\1 TightSCF",
-                input_content,
-                count=1,
-                flags=re.MULTILINE,
-            )
+        elif not _STRONG_SCF.search(input_content):
+            input_content = _add_keyword(input_content, "TightSCF")
 
         # A %geom Convergence would override (loosen) a VeryTightOpt keyword.
         if _VERYTIGHT_OPT.search(input_content):
@@ -638,9 +644,7 @@ class RecoverSinglepointSCF(RetryStrategy):
                 input_content,
             )
             if not re.search(r"\bSlowConv\b", input_content, re.IGNORECASE):
-                input_content = re.sub(
-                    r"(?m)^(!.*)$", r"\1 SlowConv", input_content, count=1,
-                )
+                input_content = _add_keyword(input_content, "SlowConv")
 
         return input_content, submit_content
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+import pytest
+
 from autodft.config import Settings
 from autodft.qm.orca import advanced
 from autodft.qm.orca.retry import (
@@ -272,3 +274,26 @@ def test_replayed_oom_failures_compound_on_the_rendered_mem(session, sample_task
     out, sub = (tmp_path / "input.inp").read_text(), (tmp_path / "submit.cmd").read_text()
     n, m, _, mem = _resources(out, sub)
     assert mem >= 1.5625 * n * (m + 50) and mem >= 1.5625 * 24 * 2550
+
+
+def test_tighten_inserts_before_a_comment():
+    out = _tighten("! B3LYP def2-SVP # my comment\n" + XYZ)
+    assert out.startswith("! B3LYP def2-SVP TightSCF # my comment\n")
+
+
+@pytest.mark.parametrize("kw", ["VeryTightSCF", "ExtremeSCF"])
+def test_tighten_keeps_a_stronger_scf_keyword(kw):
+    out = _tighten(f"! B3LYP def2-SVP {kw}\n" + XYZ)
+    assert out.startswith(f"! B3LYP def2-SVP {kw}\n")
+    assert not re.search(r"(?<!Very)\bTightSCF\b", out)
+
+
+def test_tighten_plain_line_unchanged_behaviour():
+    out = _tighten("!B3LYP def2-SVP\n" + XYZ)
+    assert out.startswith("!B3LYP def2-SVP TightSCF\n")
+
+
+def test_slowconv_inserts_before_a_comment():
+    inp = "!M062X def2-TZVPD TightSCF # note\n" + XYZ
+    out = RecoverSinglepointSCF().modify(inp, "", _scf(3))[0]
+    assert out.startswith("!M062X def2-TZVPD NormalSCF SlowConv # note\n")
