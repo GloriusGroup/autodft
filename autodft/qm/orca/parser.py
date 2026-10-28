@@ -442,7 +442,8 @@ class OrcaParser(QMEngine):
         mode_vectors: dict[int, list[float]] = {}
         current_modes: list[int] = []
 
-        for line in _after_last(content.splitlines(), "NORMAL MODES"):
+        # The last frequency block's modes; none when it was cut short.
+        for line in _after_last(_after_last(content.splitlines(), "VIBRATIONAL FREQUENCIES"), "NORMAL MODES"):
             parts = line.strip().split()
 
             # Header line with mode column indices (e.g. "6 7 8 9 10 11")

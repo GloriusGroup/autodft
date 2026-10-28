@@ -956,6 +956,7 @@ retry keeps the previous job's margin over that (its `--mem` ÷ its cores ×
 `OUT_OF_MEMORY` retry multiplies the margin by 1.25 first (1.25×, 1.5625×, …).
 NMR MP2-memory retries keep it too. `--mem` stays within the same ceiling
 (400 GB for an MP2-memory retry).
+
 An optimisation with an imaginary mode is retried with TightSCF and
 `%geom Convergence Tight` from the seed geometry; from the third attempt on,
 the last attempt's final geometry is displaced

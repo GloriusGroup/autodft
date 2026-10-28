@@ -91,8 +91,6 @@ def freq_block(freq: float, mode: list[float]) -> str:
 
 ZERO = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 MODE = [0.0, 0.0, 0.5, 0.0, 0.0, -0.5]
-
-
 STRETCH = [0.5, 0.0, 0.0, -0.5, 0.0, 0.0]
 
 
@@ -110,6 +108,18 @@ def test_two_frequency_blocks_perturb_without_error(tmp_path):
     failure = FailureInfo(fail_reason="['Imaginary Frequencies']", previous_job_path=str(tmp_path), attempt=3)
     text, _ = PerturbImaginaryMode().modify("!B3LYP\n*xyzfile 0 1 input.xyz\n", "", failure)
     assert text == "!B3LYP\n*xyz 0 1\nC  0.000000  0.000000  0.050000\nH  1.100000  0.000000  -0.050000\n*\n"
+
+
+def test_a_cut_short_last_block_gives_no_modes(tmp_path):
+    cut = freq_block(-150.0, MODE).split("\n------------\nNORMAL MODES")[0]
+    content = freq_block(-80.0, STRETCH) + cut
+    assert OrcaParser.extract_imaginary_frequencies(content) == [-150.0]
+    assert OrcaParser.extract_imaginary_modes(content) == []
+    (tmp_path / "output.out").write_text(content)
+    (tmp_path / "input.xyz").write_text("2\n\nC 0.0 0.0 0.0\nH 1.1 0.0 0.0\n")
+    failure = FailureInfo(fail_reason="['Imaginary Frequencies']", previous_job_path=str(tmp_path), attempt=3)
+    assert PerturbImaginaryMode().modify("!B3LYP\n*xyzfile 0 1 input.xyz\n", "", failure)[0] == (
+        "!B3LYP\n*xyzfile 0 1 input.xyz\n")
 
 
 # -- imaginary_cutoff / exclusion -------------------------------------------
