@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Collection
 
 from autodft.config import Settings
 from autodft.db import get_session
@@ -119,6 +120,14 @@ class PipelineWorker:
             self._run_step(session, "4b: advance photophysics",
                            lambda: advance_photophysics(session, self.settings))
 
+            # An owner whose campaign is failing systematically gets no new
+            # jobs. Their submitted work keeps running; other owners carry on.
+            blocked = set(circuit_breaker.check(session, self.settings))
+            for owner in sorted(blocked):
+                logger.critical(
+                    "Circuit breaker active for %s -- not creating or submitting their jobs", owner,
+                )
+
             # Step 5: expand queued entrypoints. Each entrypoint commits
             # separately -- process_next_entrypoint() rolls the session back
             # when a SMILES can't be expanded, and without a commit per item
@@ -137,7 +146,7 @@ class PipelineWorker:
             for _ in range(self.settings.pipeline.max_simultaneous_entrypoints):
                 # Re-counted per entrypoint: one expansion adds a task per
                 # requested state, so a single tick can cross the ceiling.
-                backlog = self._unsubmitted_job_count(session)
+                backlog = self._unsubmitted_job_count(session, blocked)
                 if max_backlog and backlog >= max_backlog:
                     logger.debug(
                         "%d job(s) awaiting submission (max %d); pausing entrypoint expansion",
@@ -152,24 +161,13 @@ class PipelineWorker:
                 if not processed or not self._last_entrypoint_processed:
                     break
 
-            # Stop here when the campaign is failing systematically. Work
-            # already submitted keeps running; only new jobs are blocked.
-            breaker = circuit_breaker.check(session, self.settings)
-            if breaker is not None:
-                logger.critical(
-                    "Circuit breaker active -- not creating or submitting jobs. %s",
-                    breaker.get("detail", ""),
-                )
-                logger.debug("--- Pipeline tick complete (breaker) ---")
-                return
-
             self._run_step(session, "6a: create retry jobs",
-                           lambda: create_retry_jobs(session, self.settings, self.qm_engine))
+                           lambda: create_retry_jobs(session, self.settings, self.qm_engine, blocked))
             self._run_step(session, "6b: start new tasks",
-                           lambda: start_new_tasks(session, self.settings, self.qm_engine))
+                           lambda: start_new_tasks(session, self.settings, self.qm_engine, blocked))
 
             self._run_step(session, "7: submit pending jobs",
-                           lambda: submit_pending_jobs(session, self.scheduler, self.settings))
+                           lambda: submit_pending_jobs(session, self.scheduler, self.settings, blocked))
 
         logger.debug("--- Pipeline tick complete ---")
 
@@ -178,12 +176,14 @@ class PipelineWorker:
         self._last_entrypoint_processed = process_next_entrypoint(session, self.settings)
 
     @staticmethod
-    def _unsubmitted_job_count(session) -> int:
+    def _unsubmitted_job_count(session, blocked_owners: Collection[str] = ()) -> int:
         """Work that exists in the database but has not reached SLURM.
 
         Counts jobs created but not yet submitted, plus tasks that have not
         been turned into a job yet -- both become queue pressure within a
-        tick or two, so both have to hold expansion back.
+        tick or two, so both have to hold expansion back. An owner whose
+        breaker tripped is left out, so their stalled backlog cannot hold
+        back everyone else's expansion.
         """
         from sqlalchemy import func
         from sqlmodel import col, select
@@ -194,6 +194,7 @@ class PipelineWorker:
         from autodft.models.state import MoleculeState
         from autodft.models.task import ComputationTask
 
+        unblocked = [circuit_breaker.not_owned_by(blocked_owners)] if blocked_owners else []
         # Archived molecules' leftovers never run, so they hold nothing back.
         jobs = session.exec(
             select(func.count()).select_from(ComputationJob)
@@ -205,6 +206,7 @@ class PipelineWorker:
                 col(ComputationJob.slurm_status).is_(None),
                 col(ComputationJob.success).is_(None),
                 col(Molecule.archived).is_(False),
+                *unblocked,
             )
         ).one()
         tasks = session.exec(
@@ -214,6 +216,7 @@ class PipelineWorker:
             .where(
                 ComputationTask.status == TaskStatus.created,
                 col(Molecule.archived).is_(False),
+                *unblocked,
             )
         ).one()
         return int(jobs) + int(tasks)

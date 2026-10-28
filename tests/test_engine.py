@@ -1425,7 +1425,7 @@ class TestCircuitBreaker:
         ))
         session.commit()
 
-        ratio, failed, judged = recent_failure_ratio(session, window=100)
+        ratio, failed, judged = recent_failure_ratio(session, window=100, owner="admin")
         assert (failed, judged) == (3, 10)
         assert ratio == pytest.approx(0.3)
 
@@ -1435,7 +1435,7 @@ class TestCircuitBreaker:
         settings = _settings(tmp_path)
         # 89 of 100 failed -- just under the 90% trip threshold.
         self._judged(session, sample_state, sample_header, failed=89, successful=11)
-        assert check(session, settings) is None
+        assert check(session, settings) == {}
 
     def test_above_threshold_trips_and_latches(self, session, sample_state, sample_header, tmp_path):
         from autodft.engine.circuit_breaker import check, read_state, reset
@@ -1446,14 +1446,14 @@ class TestCircuitBreaker:
         self._judged(session, sample_state, sample_header, failed=90, successful=10)
 
         tripped = check(session, settings)
-        assert tripped is not None
-        assert tripped["failed"] == 90
+        assert set(tripped) == {"admin"}   # sample_molecule's legacy project is admin's
+        assert tripped["admin"]["failed"] == 90
 
         # Latches: once submission stops nothing new is judged, so the ratio
         # cannot recover on its own and must be cleared deliberately.
-        assert check(session, settings) is not None
-        assert reset(settings.data_path) is True
-        assert read_state(settings.data_path) is None
+        assert set(check(session, settings)) == {"admin"}
+        assert reset(settings.data_path, "admin") == ["admin"]
+        assert read_state(settings.data_path, "admin") is None
 
     def test_too_few_samples_never_trips(self, session, sample_state, sample_header, tmp_path):
         """Otherwise the first couple of failures in a fresh project would
@@ -1463,7 +1463,7 @@ class TestCircuitBreaker:
         settings = _settings(tmp_path)
         self._judged(session, sample_state, sample_header, failed=5, successful=0)  # 100%
         assert settings.pipeline.failure_breaker_min_samples > 5
-        assert check(session, settings) is None
+        assert check(session, settings) == {}
 
     def test_disabled_by_config(self, session, sample_state, sample_header, tmp_path):
         from autodft.engine.circuit_breaker import check
@@ -1471,7 +1471,7 @@ class TestCircuitBreaker:
         settings = _settings(tmp_path)
         settings.pipeline.failure_breaker_enabled = False
         self._judged(session, sample_state, sample_header, failed=40, successful=0)
-        assert check(session, settings) is None
+        assert check(session, settings) == {}
 
 
 # ======================================================================

@@ -205,7 +205,7 @@ def test_category_tasks_do_not_count_toward_the_circuit_breaker(session, sample_
         session.add(ComputationTask(task_type=TaskType.optimization, state_id=sample_state.id,
                                     header_id=sample_header.id, status=TaskStatus.successful))
     session.commit()
-    assert recent_failure_ratio(session, window=100) == (0.0, 0, 10)
+    assert recent_failure_ratio(session, window=100, owner="admin") == (0.0, 0, 10)
 
 
 def test_check_type(session):

@@ -120,8 +120,9 @@ The six seeded methods belong to `admin`, as does anything created
 before accounts existed.
 
 `GET /api/cluster` is readable by everyone and reports only
-`breaker_tripped` and `queued_entrypoints`, so a user can tell "my jobs
-are stuck" from "the pipeline is halted" without asking an administrator.
+`breaker_tripped` (the caller's own breaker) and `queued_entrypoints`, so
+a user can tell "my jobs are stuck" from "the pipeline is halted" without
+asking an administrator.
 
 ---
 
@@ -1125,30 +1126,44 @@ no one's data:
 { "breaker_tripped": false, "queued_entrypoints": 143 }
 ```
 
-That is enough to tell "my jobs are stuck" from "the pipeline is halted"
-without asking an administrator.
+`breaker_tripped` is the caller's own breaker (see below). That is enough
+to tell "my jobs are stuck" from "the pipeline is halted" without asking an
+administrator.
 
 ### `GET /api/admin/circuit-breaker`
 
-Admin only. The same flag with the numbers behind it:
+Admin only. The breaker is kept per project owner (the namespace before
+`/` in the project name; names without one are `admin`'s). This lists every
+owner that is tripped or has failures among their recent judged tasks:
 
 ```json
-{ "tripped": false, "state": null,
-  "recent_failure_ratio": 0.08, "recent_failed": 8, "recent_judged": 100,
-  "threshold": 0.25, "window": 100 }
+{ "tripped": true,
+  "owners": [
+    { "owner": "alice", "tripped": true,
+      "state": { "owner": "alice", "tripped_at": "2026-10-28T10:00:00+00:00",
+                 "ratio": 0.93, "failed": 93, "judged": 100, "detail": "…" },
+      "recent_failure_ratio": 0.93, "recent_failed": 93, "recent_judged": 100 },
+    { "owner": "bob", "tripped": false, "state": null,
+      "recent_failure_ratio": 0.08, "recent_failed": 8, "recent_judged": 100 } ],
+  "threshold": 0.9, "window": 100 }
 ```
 
-`threshold` and `window` echo `pipeline.failure_breaker_ratio` and
-`pipeline.failure_breaker_window`. Job creation and submission stop
-automatically once more than `threshold` of the last `window` judged
-tasks failed, so one systematic error cannot burn the whole campaign's
-retry budget.
+`tripped` is true when any owner is. `threshold` and `window` echo
+`pipeline.failure_breaker_ratio` and `pipeline.failure_breaker_window`. An
+owner's job creation and submission stop automatically once more than
+`threshold` of their last `window` judged tasks failed (with at least
+`pipeline.failure_breaker_min_samples` judged), so one systematic error
+cannot burn their whole campaign's retry budget. Other owners carry on, and
+work already submitted keeps running.
 
 ### `POST /api/admin/circuit-breaker/reset`
 
-Admin only. Clears the breaker and lets the pipeline resume. Deliberately
-manual: once submission stops, no new tasks are judged, so the failure
-ratio cannot recover on its own. Fix the cause first.
+Admin only. Body `{"owner": "alice"}` clears that owner's breaker; no body
+(or `owner: null`) clears every owner's. Answers
+`{"reset": ["alice"], "tripped": ["bob"]}`: the owners cleared and those
+still tripped; `400` for an invalid owner name. Deliberately manual: once
+submission stops, no new tasks are judged, so the failure ratio cannot
+recover on its own. Fix the cause first.
 
 ### `GET /api/admin/submission-hold`
 

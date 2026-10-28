@@ -306,7 +306,7 @@ geometry — ORCA's `input.xyz`, copied back after a crash or stall and
 synced every `sync_output_minutes` — except after an `Excited Root`,
 `SCF Convergence` or `Imaginary Frequencies` failure, which restart from the
 seed (the third attempt's perturbation still starts from the saddle point). Category jobs (UV/Vis, NMR, SOC, the six rate jobs) do not
-count toward the global failure circuit breaker; ESD S1/T1 optimisations
+count toward the failure circuit breaker; ESD S1/T1 optimisations
 do, like every optimisation. An S1 optimisation whose root collapsed
 (`Excited Root`) is not retried — re-running the same input from the same
 seed geometry collapses again. Nor is one whose S1 dissociates (`S1 Stays Bound`: the

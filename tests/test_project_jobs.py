@@ -420,7 +420,7 @@ class TestArchiveClosesOpenTasks:
                 _make_task(session)
         assert project_jobs.fail_open_tasks(PROJECT) == 3
         with get_session() as session:
-            assert circuit_breaker.recent_failure_ratio(session, 100) == (0.0, 0, 0)
+            assert circuit_breaker.recent_failure_ratio(session, 100, "owner") == (0.0, 0, 0)
 
 
 class TestArchivedLeftovers:

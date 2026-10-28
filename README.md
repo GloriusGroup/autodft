@@ -361,7 +361,8 @@ sees the whole database:
 * **Admin** — wipe one of your projects or a single molecule (each
   shows a preview and wants the exact name typed back), and, for admin
   only, the **Users** section (create an account, rotate a key,
-  deactivate), the submission hold, the failure circuit breaker and the
+  deactivate), the submission hold, the per-owner failure circuit breaker
+  (each tripped owner listed with its own reset button) and the
   database reset.
 
 **Export Project / Export and Delete / Delete Project** — the project page's
@@ -644,7 +645,7 @@ is either scoped to the caller's own projects or deliberately shared
 | GET/POST | `/login`                          | sign-in form and its submission — no credential needed        |
 | GET    | `/logout`                           | clear the session cookie — no credential needed               |
 | GET    | `/api/whoami`                       | the signed-in account and the projects it owns                |
-| GET    | `/api/cluster`                      | read-only queue depth + breaker state, for every account      |
+| GET    | `/api/cluster`                      | read-only queue depth + the caller's breaker state, for every account |
 | GET    | `/api/overview`                     | counts of molecules / tasks / jobs / queue                    |
 | GET    | `/api/molecules`                    | list molecules (`?project=&limit=&offset=`)                   |
 | GET    | `/api/molecules/{id}`               | full molecule with states / tasks / jobs                      |
@@ -682,8 +683,8 @@ is either scoped to the caller's own projects or deliberately shared
 | GET    | `/api/molecules/{id}/wipe-preview`  | what a molecule wipe would delete — counts only               |
 | POST   | `/api/molecules/{id}/wipe`          | **destructive**: one molecule's rows and files                 |
 | GET    | `/api/wipe-status`                  | progress of a deletion still running in the background        |
-| GET    | `/api/admin/circuit-breaker`        | breaker state with the failure ratio behind it (admin)        |
-| POST   | `/api/admin/circuit-breaker/reset`  | clear the breaker and resume submissions (admin)              |
+| GET    | `/api/admin/circuit-breaker`        | per-owner breaker states with the failure ratios behind them (admin) |
+| POST   | `/api/admin/circuit-breaker/reset`  | clear one owner's breaker (body `{"owner": …}`) or all, and resume their submissions (admin) |
 | GET    | `/api/admin/submission-hold`        | whether submission is paused by hand (admin)                  |
 | POST   | `/api/admin/submission-hold`        | pause `sbatch` submission (`{"reason": …}`); results keep being processed (admin) |
 | POST   | `/api/admin/submission-hold/release`| resume submission on the next tick (admin)                    |

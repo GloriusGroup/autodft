@@ -1,4 +1,4 @@
-"""Global failure circuit breaker.
+"""Failure circuit breaker, kept per project owner.
 
 `max_attempts` bounds retries per task, but nothing bounded the campaign as a
 whole. A systematic error -- a header with a basis set that doesn't cover one
@@ -8,14 +8,14 @@ resources, and the pipeline would keep submitting until the queue was empty.
 At the scale of a few thousand molecules that is millions of core-hours spent
 producing nothing.
 
-So: watch the recent judged tasks, and when the failure ratio crosses a
-threshold, stop creating and submitting jobs. Work already in flight is left
-alone -- this only stops *new* submissions.
+So: watch each owner's recent judged tasks, and when their failure ratio
+crosses a threshold, stop creating and submitting that owner's jobs. Other
+owners carry on, and work already in flight is left alone.
 
-The tripped state is a marker file under the data path rather than in-memory
-state, so it survives a controller restart (a breaker you can reset by
-restarting is not a breaker) and can be cleared from the dashboard without a
-schema change.
+The tripped state is a marker file per owner under the data path rather than
+in-memory state, so it survives a controller restart (a breaker you can reset
+by restarting is not a breaker) and can be cleared from the dashboard without
+a schema change.
 """
 
 from __future__ import annotations
@@ -24,17 +24,22 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Collection, Optional
 
+from sqlalchemy import or_
 from sqlmodel import Session, col, select
 
+from autodft.accounts import ADMIN_USERNAME
 from autodft.models.enums import TaskStatus, TaskType
 from autodft.models.job import ARCHIVED_FAIL_REASON, ComputationJob
+from autodft.models.molecule import Molecule
+from autodft.models.state import MoleculeState
 from autodft.models.task import ComputationTask
+from autodft.models.user import normalise_username, split_qualified
 
 logger = logging.getLogger(__name__)
 
-MARKER_FILENAME = "circuit_breaker.json"
+MARKER_DIRNAME = "circuit_breaker"
 
 # Category task types (UV/Vis, NMR, SOC, ESD rate jobs): their failures are
 # bounded per task already, and a category misconfiguration must not halt
@@ -47,12 +52,33 @@ _CATEGORY_TASK_TYPES = tuple(
 )
 
 
-def marker_path(data_path: Path) -> Path:
-    return Path(data_path) / MARKER_FILENAME
+def project_owner(project_name: Optional[str]) -> str:
+    """The owner of *project_name*; names without one are admin's."""
+    try:
+        return split_qualified(project_name)[0]
+    except ValueError:
+        return ADMIN_USERNAME
 
 
-def recent_failure_ratio(session: Session, window: int) -> tuple[float, int, int]:
-    """Return ``(ratio, failed, judged)`` over the most recently judged tasks.
+def owner_filter(owner: str):
+    """SQL condition on ``Molecule.project_name`` matching *owner*'s projects."""
+    mine = col(Molecule.project_name).startswith(f"{owner}/", autoescape=True)
+    if owner == ADMIN_USERNAME:
+        return or_(mine, col(Molecule.project_name).notlike("%/%"))
+    return mine
+
+
+def not_owned_by(owners: Collection[str]):
+    """SQL condition excluding every project of *owners*."""
+    return ~or_(*map(owner_filter, sorted(owners)))
+
+
+def marker_path(data_path: Path, owner: str) -> Path:
+    return Path(data_path) / MARKER_DIRNAME / f"{normalise_username(owner)}.json"
+
+
+def recent_failure_ratio(session: Session, window: int, owner: str) -> tuple[float, int, int]:
+    """Return ``(ratio, failed, judged)`` over *owner*'s most recently judged tasks.
 
     Only ``successful`` / ``failed`` tasks count as judged -- tasks still
     running say nothing about whether the campaign is healthy. Category
@@ -64,10 +90,13 @@ def recent_failure_ratio(session: Session, window: int) -> tuple[float, int, int
     )
     tasks = session.exec(
         select(ComputationTask.status)
+        .join(MoleculeState, col(MoleculeState.id) == col(ComputationTask.state_id))
+        .join(Molecule, col(Molecule.id) == col(MoleculeState.molecule_id))
         .where(
             col(ComputationTask.status).in_([TaskStatus.successful, TaskStatus.failed]),
             col(ComputationTask.task_type).notin_(_CATEGORY_TASK_TYPES),
             col(ComputationTask.id).notin_(archived),
+            owner_filter(owner),
         )
         .order_by(col(ComputationTask.updated_at).desc())
         .limit(window)
@@ -80,31 +109,49 @@ def recent_failure_ratio(session: Session, window: int) -> tuple[float, int, int
     return failed / judged, failed, judged
 
 
-def read_state(data_path: Path) -> Optional[dict]:
-    """Return the tripped-state payload, or None if the breaker is clear."""
-    path = marker_path(data_path)
-    if not path.exists():
-        return None
+def owners(session: Session) -> set[str]:
+    """Every owner with a molecule."""
+    return {project_owner(n) for n in session.exec(select(Molecule.project_name).distinct()).all()}
+
+
+def _load(path: Path, owner: str) -> dict:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (ValueError, OSError):
         # A corrupt marker still means tripped -- fail closed.
-        return {"tripped_at": None, "detail": "unreadable marker file"}
+        return {"owner": owner, "tripped_at": None, "detail": "unreadable marker file"}
 
 
-def trip(data_path: Path, ratio: float, failed: int, judged: int) -> dict:
-    """Write the marker file and return its payload."""
+def read_state(data_path: Path, owner: str) -> Optional[dict]:
+    """Return *owner*'s tripped-state payload, or None if their breaker is clear."""
+    path = marker_path(data_path, owner)
+    return _load(path, owner) if path.exists() else None
+
+
+def _markers(data_path: Path) -> list[Path]:
+    folder = Path(data_path) / MARKER_DIRNAME
+    return sorted(folder.glob("*.json")) if folder.is_dir() else []
+
+
+def tripped_owners(data_path: Path) -> dict[str, dict]:
+    """``{owner: payload}`` for every tripped owner."""
+    return {path.stem: _load(path, path.stem) for path in _markers(data_path)}
+
+
+def trip(data_path: Path, owner: str, ratio: float, failed: int, judged: int) -> dict:
+    """Write *owner*'s marker file and return its payload."""
     payload = {
+        "owner": owner,
         "tripped_at": datetime.now(timezone.utc).isoformat(),
         "ratio": round(ratio, 4),
         "failed": failed,
         "judged": judged,
         "detail": (
-            f"{failed} of the last {judged} judged tasks failed "
-            f"({ratio:.0%}). New job creation and submission are halted."
+            f"{failed} of {owner}'s last {judged} judged tasks failed "
+            f"({ratio:.0%}). Their new job creation and submission are halted."
         ),
     }
-    path = marker_path(data_path)
+    path = marker_path(data_path, owner)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     logger.critical(
@@ -114,31 +161,31 @@ def trip(data_path: Path, ratio: float, failed: int, judged: int) -> dict:
     return payload
 
 
-def reset(data_path: Path) -> bool:
-    """Clear the tripped state. Returns True if it was tripped."""
-    path = marker_path(data_path)
-    if not path.exists():
-        return False
-    path.unlink()
-    logger.warning("Circuit breaker reset; job submission resumes")
-    return True
+def reset(data_path: Path, owner: Optional[str] = None) -> list[str]:
+    """Clear *owner*'s breaker, or every owner's; return the owners cleared."""
+    paths = _markers(data_path) if owner is None else [marker_path(data_path, owner)]
+    cleared = []
+    for path in paths:
+        if path.exists():
+            path.unlink()
+            cleared.append(path.stem)
+            logger.warning("Circuit breaker reset for %s; their job submission resumes", path.stem)
+    return cleared
 
 
-def check(session: Session, settings) -> Optional[dict]:
-    """Return the tripped payload if new submissions should be blocked.
+def check(session: Session, settings) -> dict[str, dict]:
+    """Return ``{owner: payload}`` for the owners whose new submissions are blocked.
 
     Already-tripped stays tripped until explicitly reset: once submission
     stops, no new tasks are judged, so the ratio cannot recover on its own.
     """
     cfg = settings.pipeline
     if not cfg.failure_breaker_enabled:
-        return None
+        return {}
 
-    existing = read_state(settings.data_path)
-    if existing is not None:
-        return existing
-
-    ratio, failed, judged = recent_failure_ratio(session, cfg.failure_breaker_window)
-    if judged >= cfg.failure_breaker_min_samples and ratio >= cfg.failure_breaker_ratio:
-        return trip(settings.data_path, ratio, failed, judged)
-    return None
+    tripped = tripped_owners(settings.data_path)
+    for owner in sorted(owners(session) - set(tripped)):
+        ratio, failed, judged = recent_failure_ratio(session, cfg.failure_breaker_window, owner)
+        if judged >= cfg.failure_breaker_min_samples and ratio >= cfg.failure_breaker_ratio:
+            tripped[owner] = trip(settings.data_path, owner, ratio, failed, judged)
+    return tripped

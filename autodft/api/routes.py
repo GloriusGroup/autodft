@@ -1928,17 +1928,17 @@ def api_whoami(identity: Identity = Depends(current_identity)):
 
 
 @router.get("/api/cluster")
-def api_cluster_status():
+def api_cluster_status(identity: Identity = Depends(current_identity)):
     """Read-only pipeline health, for everyone who is signed in.
 
     Without this a user cannot tell "my jobs are stuck" from "the pipeline
     is halted" without asking an administrator. It exposes no one else's
-    data: a queue depth and a breaker flag.
+    data: a queue depth and the caller's own breaker flag.
     """
     from autodft.engine import circuit_breaker, submission_hold
 
     settings = get_active_settings()
-    state = circuit_breaker.read_state(settings.data_path)
+    state = circuit_breaker.read_state(settings.data_path, identity.username)
     held = submission_hold.read_state(settings.data_path)
     with get_session() as session:
         waiting = session.exec(
@@ -2138,29 +2138,43 @@ def api_reassign_project(
 
 @router.get("/api/admin/circuit-breaker")
 def api_circuit_breaker_status():
-    """Whether the global failure breaker has halted new submissions."""
+    """Each owner's failure breaker: the tripped ones and those with recent failures."""
     from autodft.engine import circuit_breaker
 
     settings = get_active_settings()
-    state = circuit_breaker.read_state(settings.data_path)
+    window = settings.pipeline.failure_breaker_window
+    tripped = circuit_breaker.tripped_owners(settings.data_path)
+    owners = []
     with get_session() as session:
-        ratio, failed, judged = circuit_breaker.recent_failure_ratio(
-            session, settings.pipeline.failure_breaker_window,
-        )
+        for owner in sorted(circuit_breaker.owners(session) | set(tripped)):
+            ratio, failed, judged = circuit_breaker.recent_failure_ratio(session, window, owner)
+            if failed or owner in tripped:
+                owners.append({
+                    "owner": owner,
+                    "tripped": owner in tripped,
+                    "state": tripped.get(owner),
+                    "recent_failure_ratio": round(ratio, 4),
+                    "recent_failed": failed,
+                    "recent_judged": judged,
+                })
     return {
-        "tripped": state is not None,
-        "state": state,
-        "recent_failure_ratio": round(ratio, 4),
-        "recent_failed": failed,
-        "recent_judged": judged,
+        "tripped": bool(tripped),
+        "owners": owners,
         "threshold": settings.pipeline.failure_breaker_ratio,
-        "window": settings.pipeline.failure_breaker_window,
+        "window": window,
     }
 
 
+class CircuitBreakerResetRequest(BaseModel):
+    owner: Optional[str] = None
+
+
 @router.post("/api/admin/circuit-breaker/reset")
-def api_circuit_breaker_reset(identity: Identity = Depends(current_identity)):
-    """Clear the breaker so the pipeline resumes creating and submitting jobs.
+def api_circuit_breaker_reset(
+    body: Optional[CircuitBreakerResetRequest] = None,
+    identity: Identity = Depends(current_identity),
+):
+    """Clear one owner's breaker, or every owner's, so their jobs are created and submitted again.
 
     Deliberately manual: once submission stops no new tasks are judged, so
     the failure ratio cannot recover on its own. Fix the cause first.
@@ -2169,8 +2183,11 @@ def api_circuit_breaker_reset(identity: Identity = Depends(current_identity)):
     from autodft.engine import circuit_breaker
 
     settings = get_active_settings()
-    was_tripped = circuit_breaker.reset(settings.data_path)
-    return {"reset": was_tripped, "tripped": False}
+    try:
+        cleared = circuit_breaker.reset(settings.data_path, body.owner if body else None)
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"detail": str(exc)})
+    return {"reset": cleared, "tripped": sorted(circuit_breaker.tripped_owners(settings.data_path))}
 
 
 class SubmissionHoldRequest(BaseModel):

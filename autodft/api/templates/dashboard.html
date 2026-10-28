@@ -1624,16 +1624,13 @@
         <div class="submit-section" id="adminBreakerSection">
             <h2 style="margin-bottom:12px;">Failure circuit breaker</h2>
             <div class="subtitle" style="margin-bottom:14px;">
-                Job creation and submission stop automatically when too large a
-                share of recently finished tasks failed, so a systematic error
-                cannot consume the whole queue. Fix the cause before resetting.
+                Job creation and submission stop automatically for an owner when
+                too large a share of their recently finished tasks failed, so a
+                systematic error cannot consume the whole queue. Other owners
+                carry on. Fix the cause before resetting.
             </div>
             <div id="adminBreakerStatus" class="admin-summary">Loading...</div>
-            <div class="form-row" id="adminBreakerActions" style="display:none;">
-                <button type="button" class="btn btn-danger" id="adminBreakerReset">
-                    Reset breaker and resume submissions
-                </button>
-            </div>
+            <div class="admin-list" id="adminBreakerOwners" style="margin-top:14px;"></div>
             <div id="adminBreakerFeedback" class="submit-feedback"></div>
         </div>
 
@@ -2777,22 +2774,24 @@
 
             // --- circuit breaker ----------------------------------------
             var breakerBox = document.getElementById('adminBreakerStatus');
-            var breakerActions = document.getElementById('adminBreakerActions');
+            var breakerOwners = document.getElementById('adminBreakerOwners');
             var b = await adminJSON('GET', '/api/admin/circuit-breaker', undefined, label);
             if (!b.ok) {
                 breakerBox.textContent = 'Could not read breaker status.';
             } else {
                 var d = b.data;
-                var pct = (d.recent_failure_ratio * 100).toFixed(0);
-                var thr = (d.threshold * 100).toFixed(0);
+                var halted = d.owners.filter(function (o) { return o.tripped; }).length;
                 breakerBox.textContent =
-                    (d.tripped ? 'TRIPPED — submissions halted\n' : 'OK — submissions running\n')
-                    + 'recent  : ' + d.recent_failed + ' of ' + d.recent_judged
-                    + ' judged tasks failed (' + pct + '%)\n'
-                    + 'threshold: ' + thr + '% of the last ' + d.window
-                    + (d.tripped && d.state && d.state.tripped_at
-                       ? '\ntripped  : ' + d.state.tripped_at : '');
-                breakerActions.style.display = d.tripped ? '' : 'none';
+                    (d.tripped ? 'TRIPPED for ' + halted + ' owner(s) — their submissions halted\n'
+                               : 'OK — submissions running\n')
+                    + 'threshold: ' + (d.threshold * 100).toFixed(0) + '% of an owner\'s last ' + d.window
+                    + (d.owners.length ? '' : '\nno owner has recent failures');
+                breakerOwners.innerHTML = breakerRows(d);
+                breakerOwners.querySelectorAll('.adm-breaker-reset').forEach(function (btn) {
+                    btn.addEventListener('click', function () {
+                        resetBreaker(btn.closest('.admin-row').getAttribute('data-owner'), btn);
+                    });
+                });
                 document.getElementById('adminBreakerSection').style.borderLeft =
                     d.tripped ? '3px solid var(--red)' : '';
             }
@@ -2998,20 +2997,38 @@
 
         document.getElementById('adminUsageBtn').addEventListener('click', adminStartUsage);
 
-        document.getElementById('adminBreakerReset').addEventListener('click', async function () {
+        // One row per owner with recent failures; a tripped one gets a reset button.
+        function breakerRows(d) {
+            return d.owners.map(function (o) {
+                return '<div class="admin-row" data-owner="' + adminEscape(o.owner) + '">'
+                    + '<div class="admin-name">' + adminEscape(o.owner)
+                    + (o.tripped ? ' <span style="color:var(--red);">tripped</span>' : '') + '</div>'
+                    + '<div class="admin-meta">' + o.recent_failed + ' of ' + o.recent_judged
+                    + ' judged tasks failed (' + (o.recent_failure_ratio * 100).toFixed(0) + '%)'
+                    + (o.tripped && o.state && o.state.tripped_at
+                       ? ' &middot; tripped ' + adminEscape(o.state.tripped_at) : '')
+                    + '</div>'
+                    + (o.tripped ? '<div><button type="button" class="btn btn-danger adm-breaker-reset">'
+                       + 'Reset and resume their submissions</button></div>' : '')
+                    + '</div>';
+            }).join('');
+        }
+
+        async function resetBreaker(owner, btn) {
             var feedback = document.getElementById('adminBreakerFeedback');
-            this.disabled = true;
-            var out = await adminJSON('POST', '/api/admin/circuit-breaker/reset', undefined, 'Resetting the breaker…');
-            this.disabled = false;
+            btn.disabled = true;
+            var out = await adminJSON('POST', '/api/admin/circuit-breaker/reset', { owner: owner },
+                                      'Resetting the breaker…');
+            btn.disabled = false;
             if (!out.ok) {
                 feedback.textContent = out.data.detail || ('HTTP ' + out.status);
                 feedback.className = 'submit-feedback error';
                 return;
             }
-            feedback.textContent = 'Breaker reset. Submissions resume on the next tick.';
+            feedback.textContent = 'Breaker reset for ' + owner + '. Their submissions resume on the next tick.';
             feedback.className = 'submit-feedback success';
             reloadAdminPage();
-        });
+        }
 
         document.getElementById('adminHoldToggle').addEventListener('click', async function () {
             var feedback = document.getElementById('adminHoldFeedback');

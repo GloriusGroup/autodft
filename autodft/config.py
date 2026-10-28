@@ -103,12 +103,13 @@ class PipelineConfig:
     max_unsubmitted_jobs: int = 500
     loop_interval_seconds: int = 30
     max_attempts: int = 3
-    # Global failure circuit breaker. max_attempts bounds retries per task,
-    # but nothing bounded the campaign: a systematic error would fail every
-    # molecule in turn, each burning its full escalated retry budget. When
-    # more than `failure_breaker_ratio` of the last `failure_breaker_window`
-    # judged tasks failed, new job creation and submission stop until an
-    # operator resets it from the dashboard.
+    # Failure circuit breaker, per project owner. max_attempts bounds retries
+    # per task, but nothing bounded the campaign: a systematic error would fail
+    # every molecule in turn, each burning its full escalated retry budget.
+    # When more than `failure_breaker_ratio` of an owner's last
+    # `failure_breaker_window` judged tasks failed, that owner's new job
+    # creation and submission stop until an operator resets it from the
+    # dashboard; other owners carry on.
     failure_breaker_enabled: bool = True
     failure_breaker_ratio: float = 0.9
     failure_breaker_window: int = 100

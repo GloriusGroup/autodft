@@ -13,13 +13,14 @@ import shutil
 from datetime import datetime, timezone
 from time import monotonic
 from pathlib import Path
-from typing import NamedTuple, Optional
+from typing import Collection, NamedTuple, Optional
 
 from sqlalchemy import and_, case, or_
 from sqlmodel import Session, col, select
 
 from autodft import categories
 from autodft.config import Settings
+from autodft.engine import circuit_breaker
 from autodft.engine.scheduler import NOT_IN_SLURM, Scheduler, SubmitResult
 from autodft.extraction import results
 from autodft.models.enums import (
@@ -671,6 +672,7 @@ def _create_singlepoint_task(
 
 def create_retry_jobs(
     session: Session, settings: Settings, qm_engine: QMEngine,
+    blocked_owners: Collection[str] = (),
 ) -> None:
     """For pending tasks with fewer than ``max_attempts`` failed jobs and
     no successful or in-flight jobs: create a new job attempt with
@@ -691,6 +693,8 @@ def create_retry_jobs(
     paused = paused_project_names(session)
     if paused:
         pending_tasks = [t for t in pending_tasks if _task_project(session, t) not in paused]
+    # Nor for an owner whose circuit breaker has tripped.
+    pending_tasks = _unblocked(session, pending_tasks, blocked_owners)
 
     for processed, task in enumerate(pending_tasks):
         _commit_batch(session, processed)
@@ -750,6 +754,7 @@ def start_new_tasks(
     session: Session,
     settings: Settings,
     qm_engine: QMEngine,
+    blocked_owners: Collection[str] = (),
 ) -> None:
     """For tasks in ``created`` status: create the initial job, generate
     input files, and transition to ``pending``."""
@@ -772,6 +777,8 @@ def start_new_tasks(
     paused = paused_project_names(session)
     if paused:
         tasks = [t for t in tasks if _task_project(session, t) not in paused]
+    # Nor for an owner whose circuit breaker has tripped.
+    tasks = _unblocked(session, tasks, blocked_owners)
 
     base_path = settings.comp_data_path
 
@@ -835,7 +842,10 @@ def _find_submitted(scheduler: Scheduler, submit_script: Path) -> Optional[str]:
     return finder(submit_script) if finder is not None else None
 
 
-def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settings) -> None:
+def submit_pending_jobs(
+    session: Session, scheduler: Scheduler, settings: Settings,
+    blocked_owners: Collection[str] = (),
+) -> None:
     """Find jobs that have been created (no slurm_jobid, no slurm_status)
     and submit them to the scheduler.
 
@@ -906,6 +916,9 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
     paused = paused_project_names(session)
     if paused:
         statement = statement.where(col(Molecule.project_name).notin_(sorted(paused)))
+    # Nor those of an owner whose circuit breaker has tripped.
+    if blocked_owners:
+        statement = statement.where(circuit_breaker.not_owned_by(blocked_owners))
     # Backstop only, disabled by default: the priority cap above is the
     # real throttle. A count limit here used to bind first and cap the fill
     # rate at one limit-full per tick.
@@ -1067,6 +1080,16 @@ def paused_project_names(session: Session) -> set[str]:
             )
         ).all()
     )
+
+
+def _unblocked(
+    session: Session, tasks: list[ComputationTask], blocked_owners: Collection[str],
+) -> list[ComputationTask]:
+    """*tasks* without those of an owner whose circuit breaker has tripped."""
+    if not blocked_owners:
+        return tasks
+    return [t for t in tasks
+            if circuit_breaker.project_owner(_task_project(session, t)) not in blocked_owners]
 
 
 def _task_project(session: Session, task: ComputationTask) -> Optional[str]:

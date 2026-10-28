@@ -155,8 +155,9 @@ def snapshot_via_api(project: str | None = None, user: str = USER) -> dict:
     """The same picture over HTTP, already scoped to the key's account.
 
     ``/api/cluster`` is the one honest global reading a non-admin gets:
-    queue depth plus whether the failure circuit breaker has tripped, so
-    "my jobs are stuck" can be told apart from "the pipeline is halted".
+    queue depth plus whether the caller's failure circuit breaker has
+    tripped, so "my jobs are stuck" can be told apart from "the pipeline is
+    halted".
     """
     snap: dict = {
         "whoami": _http_get("/api/whoami"),
