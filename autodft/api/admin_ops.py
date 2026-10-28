@@ -299,7 +299,7 @@ def _remove_tree(path: Path) -> tuple[bool, int]:
     twice, which on the network mount is most of the wall-clock cost of a
     wipe -- and a project wipe already walks it once for the preview.
     """
-    if not path.exists():
+    if not path.exists() and not path.is_symlink():
         return False, 0
 
     if not path.is_dir() or path.is_symlink():
@@ -635,14 +635,22 @@ def _clean_up(settings: Settings) -> None:
                 )
                 continue
             with project_jobs.wiping(project):
-                _, freed = _remove_tree(mol_dir)
-            logger.warning(
-                "Start-up cleanup: removed archived molecule %d's %s (%s)",
-                mol_id, mol_dir, human_bytes(freed),
-            )
+                # A wipe may have handed the id to another molecule since the scan.
+                with get_session(settings) as session:
+                    mol = session.get(Molecule, mol_id)
+                    still = mol is not None and mol.archived and mol.project_name == project
+                if not still:
+                    logger.warning("Start-up cleanup: kept %s, molecule %d is no longer archived", mol_dir, mol_id)
+                    continue
+                removed, freed = _remove_tree(mol_dir)
+            if removed:
+                logger.warning(
+                    "Start-up cleanup: removed archived molecule %d's %s (%s)",
+                    mol_id, mol_dir, human_bytes(freed),
+                )
         except project_jobs.JobInProgress:
             logger.info("Start-up cleanup: %r has a job running; left %s", project, mol_dir)
-        except (OSError, ValueError):
+        except (OSError, ValueError, RuntimeError):  # RuntimeError: a symlink loop
             logger.exception("Start-up cleanup: could not check or remove %s", mol_dir)
 
 

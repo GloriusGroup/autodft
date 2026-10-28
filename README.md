@@ -424,8 +424,8 @@ archived, deletes the raw folders they have left, and exports and deletes
 the rest. A molecule whose raw data is gone but which is not flagged (an
 archive cut short under older code) keeps its export folder and is flagged.
 The controller deletes an archived molecule's raw folder left
-behind at its next start, if the project's export folder exists and the
-molecule's job paths lie in that raw folder. A plain Export Project of
+behind at its next start, if the project's export folder exists and one
+of the molecule's job paths lies in that raw folder. A plain Export Project of
 such a project keeps those folders too, and so leaves a molecule whose raw
 data is gone as it is. While it runs, a molecule wipe,
 Delete Project, density cube builds, `.out`/`.xyz` downloads and another

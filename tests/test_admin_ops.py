@@ -1085,6 +1085,61 @@ class TestStartupCleanup:
         assert not mol_dir.is_symlink()
         assert (target / "tasks" / "o.out").read_text() == "x"
 
+    def test_a_symlink_loop_does_not_stop_the_rest(self, live, caplog):
+        import shutil
+
+        looping = self._archived(live)
+        shutil.rmtree(looping)
+        looping.symlink_to(looping.name)
+        gone = self._archived(live)
+
+        with caplog.at_level("INFO", logger="autodft.api.admin_ops"):
+            admin_ops.clean_up_at_start(live).join(10)
+
+        assert not gone.exists()
+        assert looping.is_symlink()
+        assert not any("Start-up cleanup failed" in r.getMessage() for r in caplog.records)
+
+    def test_a_dangling_symlinked_archived_folder_is_unlinked(self, live, tmp_path, caplog):
+        import shutil
+
+        mol_dir = self._archived(live)
+        shutil.rmtree(mol_dir)
+        mol_dir.symlink_to(tmp_path / "vanished")
+
+        with caplog.at_level("INFO", logger="autodft.api.admin_ops"):
+            admin_ops.clean_up_at_start(live).join(10)
+
+        assert not mol_dir.is_symlink()
+        assert any("removed archived molecule" in r.getMessage() and mol_dir.name in r.getMessage()
+                   for r in caplog.records)
+
+    def test_a_molecule_unflagged_before_the_delete_keeps_its_folder(self, live, monkeypatch):
+        """A wipe and a reused id between the scan and the delete."""
+        import contextlib
+
+        from autodft.api import project_jobs
+        from autodft.db import get_session
+
+        mol_dir = self._archived(live)
+        mol_id = int(mol_dir.name.split("_")[1])
+        real = project_jobs.wiping
+
+        @contextlib.contextmanager
+        def reused(name):
+            with get_session(live) as session:
+                mol = session.get(Molecule, mol_id)
+                mol.archived = False
+                session.add(mol)
+                session.commit()
+            with real(name):
+                yield
+        monkeypatch.setattr(project_jobs, "wiping", reused)
+
+        admin_ops.clean_up_at_start(live).join(10)
+
+        assert (mol_dir / "tasks" / "o.out").exists()
+
     def test_a_project_with_a_running_job_is_left_alone(self, live):
         from autodft.db import get_session
         from autodft.models import ProjectJob, ProjectJobKind, ProjectJobStatus
