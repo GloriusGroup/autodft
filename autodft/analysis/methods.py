@@ -42,7 +42,8 @@ _RETRY_EFFECTS = {
     "IncreaseMaxIter": lambda s: f"optimisation not converged: %geom MaxIter {s.max_iter}",
     "TightenConvergence": lambda s: "imaginary frequencies: TightSCF and %geom Convergence Tight, never loosened",
     "PerturbImaginaryMode": lambda s: (
-        f"imaginary frequencies on attempt 3: geometry displaced {s.displacement} A along the lowest mode"),
+        f"imaginary frequencies from attempt 3 on: the last attempt's final geometry displaced "
+        f"{s.displacement} A along its lowest mode"),
     "RecoverSinglepointSCF": lambda s: (
         "singlepoint SCF failure: MaxIter 500 and a level shift; from attempt 3 also Normal SCF and SlowConv"),
     "IncreaseMP2ResponseMemory": lambda s: (

@@ -71,6 +71,12 @@ def _before_diagnostics(content: str, main_jobs: Optional[int]) -> Optional[str]
     return content[:start.start()] if start else None
 
 
+def _after_last(lines: list[str], title: str) -> list[str]:
+    """The lines after the last one containing *title*; empty when none does."""
+    starts = [i for i, line in enumerate(lines) if title in line]
+    return lines[starts[-1] + 1:] if starts else []
+
+
 def mp2_response_memory_short(job_path: Path) -> Optional[float]:
     """MB per rank an MP2 response in *job_path* said it lacked, or None."""
     found = [float(m) for log in Path(job_path).glob("*.mp2resp_*")
@@ -360,28 +366,23 @@ class OrcaParser(QMEngine):
 
     @staticmethod
     def _extract_frequencies(content: str) -> list[float]:
-        """Parse the VIBRATIONAL FREQUENCIES block.
+        """Parse the last VIBRATIONAL FREQUENCIES block, like ``parse_ir``.
 
         Returns:
             List of frequencies in cm^-1 (may be empty).
         """
         frequencies: list[float] = []
-        in_freq_block = False
-        for line in content.splitlines():
-            if "VIBRATIONAL FREQUENCIES" in line:
-                in_freq_block = True
+        for line in _after_last(content.splitlines(), "VIBRATIONAL FREQUENCIES"):
+            # Skip decorative separator lines
+            if re.match(r"-+", line):
                 continue
-            if in_freq_block:
-                # Skip decorative separator lines
-                if re.match(r"-+", line):
-                    continue
-                # Match frequency lines like "  6:     123.45"
-                match = re.match(r"\s*\d+:\s*([-]?\d+\.\d+)", line)
-                if match:
-                    frequencies.append(float(match.group(1)))
-                # Stop at the next section
-                elif "NORMAL MODES" in line:
-                    break
+            # Match frequency lines like "  6:     123.45"
+            match = re.match(r"\s*\d+:\s*([-]?\d+\.\d+)", line)
+            if match:
+                frequencies.append(float(match.group(1)))
+            # Stop at the next section
+            elif "NORMAL MODES" in line:
+                break
         return frequencies
 
     @classmethod
@@ -429,7 +430,7 @@ class OrcaParser(QMEngine):
     def _extract_modes(
         content: str, mode_indices: list[int]
     ) -> list[np.ndarray]:
-        """Parse the NORMAL MODES section for specified mode indices.
+        """Parse the last NORMAL MODES section for specified mode indices.
 
         Args:
             content: Full text of ``output.out``.
@@ -438,18 +439,10 @@ class OrcaParser(QMEngine):
         Returns:
             List of numpy arrays with shape ``(n_atoms, 3)``.
         """
-        lines = content.splitlines()
-        reading = False
         mode_vectors: dict[int, list[float]] = {}
         current_modes: list[int] = []
 
-        for line in lines:
-            if "NORMAL MODES" in line:
-                reading = True
-                continue
-            if not reading:
-                continue
-
+        for line in _after_last(content.splitlines(), "NORMAL MODES"):
             parts = line.strip().split()
 
             # Header line with mode column indices (e.g. "6 7 8 9 10 11")

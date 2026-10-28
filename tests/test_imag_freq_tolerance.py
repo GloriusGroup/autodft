@@ -65,12 +65,51 @@ def test_a_tolerance_is_still_an_optimisation(tmp_path):
     assert OrcaParser().check_output(tmp_path, "optimization", -10.0).checks["Optimization Convergence"] is False
 
 
-def test_retry_perturbs_on_attempt_3(tmp_path):
+@pytest.mark.parametrize("attempt, perturbs", [(2, False), (3, True), (4, True), (5, True)])
+def test_retry_perturbs_from_attempt_3_on(tmp_path, attempt, perturbs):
     job = _output(tmp_path, -12.0)
     reason = str([k for k, ok in OrcaParser().check_output(job, "optimization", -10.0).checks.items() if not ok])
-    failure = FailureInfo(fail_reason=reason, previous_job_path=str(job), attempt=3)
+    failure = FailureInfo(fail_reason=reason, previous_job_path=str(job), attempt=attempt)
     chosen = [s for s in build_strategies() if s.applies(failure, "optimization")]
-    assert any(isinstance(s, PerturbImaginaryMode) for s in chosen)
+    assert any(isinstance(s, PerturbImaginaryMode) for s in chosen) is perturbs
+
+
+def freq_block(freq: float, mode: list[float]) -> str:
+    """ORCA's frequency, normal-mode and IR sections for a diatomic; mode 5 has *freq*."""
+    freqs = "".join(f"   {i}:         0.00 cm**-1\n" for i in range(5)) + f"   5:     {freq:8.2f} cm**-1\n"
+    rows = "".join(
+        f"      {i}  " + "".join("    0.000000" for _ in range(5)) + f"  {mode[i]:10.6f}\n" for i in range(6)
+    )
+    return (
+        "-----------------------\nVIBRATIONAL FREQUENCIES\n-----------------------\n\n" + freqs
+        + "\n------------\nNORMAL MODES\n------------\n\n"
+        + "                  0          1          2          3          4          5    \n" + rows
+        + "\n\n-----------\nIR SPECTRUM\n-----------\n\n"
+        + f"  5:    {abs(freq):.2f}   0.000100    0.50  0.000100  ( 0.000000  0.000000  0.010000)\n\n"
+    )
+
+
+ZERO = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+MODE = [0.0, 0.0, 0.5, 0.0, 0.0, -0.5]
+
+
+STRETCH = [0.5, 0.0, 0.0, -0.5, 0.0, 0.0]
+
+
+def test_two_frequency_blocks_read_the_last():
+    content = freq_block(-80.0, STRETCH) + freq_block(-150.0, MODE)
+    assert OrcaParser.extract_imaginary_frequencies(content) == [-150.0]
+    [mode] = OrcaParser.extract_imaginary_modes(content)
+    assert mode.tolist() == [[0.0, 0.0, 0.5], [0.0, 0.0, -0.5]]
+    assert OrcaParser.extract_imaginary_frequencies(freq_block(-150.0, MODE) + freq_block(412.0, ZERO)) == []
+
+
+def test_two_frequency_blocks_perturb_without_error(tmp_path):
+    (tmp_path / "output.out").write_text(freq_block(-80.0, STRETCH) + freq_block(-150.0, MODE))
+    (tmp_path / "input.xyz").write_text("2\n\nC 0.0 0.0 0.0\nH 1.1 0.0 0.0\n")
+    failure = FailureInfo(fail_reason="['Imaginary Frequencies']", previous_job_path=str(tmp_path), attempt=3)
+    text, _ = PerturbImaginaryMode().modify("!B3LYP\n*xyzfile 0 1 input.xyz\n", "", failure)
+    assert text == "!B3LYP\n*xyz 0 1\nC  0.000000  0.000000  0.050000\nH  1.100000  0.000000  -0.050000\n*\n"
 
 
 # -- imaginary_cutoff / exclusion -------------------------------------------

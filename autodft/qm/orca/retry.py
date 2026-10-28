@@ -451,8 +451,9 @@ class TightenConvergence(RetryStrategy):
 class PerturbImaginaryMode(RetryStrategy):
     """Perturb the geometry along the most negative imaginary mode.
 
-    Only activated on the **third** attempt.  The displacement magnitude
-    is controlled by :data:`DEFAULT_DISPLACEMENT` (0.1 Angstrom).
+    Activated from the **third** attempt on, starting from the failed job's
+    final geometry.  The displacement magnitude is controlled by
+    :data:`DEFAULT_DISPLACEMENT` (0.1 Angstrom).
 
     The ``*xyzfile`` reference in the ORCA input is replaced with an
     embedded ``*xyz`` block containing the perturbed coordinates.
@@ -463,7 +464,7 @@ class PerturbImaginaryMode(RetryStrategy):
 
     def applies(self, failure: FailureInfo, task_type: str) -> bool:
         return (
-            failure.attempt == 3
+            failure.attempt >= 3
             and (
                 "Imaginary Frequencies" in failure.fail_reason
                 or "Imaginary mode" in failure.fail_reason
