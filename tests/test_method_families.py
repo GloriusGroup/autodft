@@ -108,6 +108,21 @@ def test_the_json_summary_names_each_rows_state(db, tmp_path):
         ("S0", ids["a"], 1), ("S0", ids["b"], 3), ("ox", ids["ox"], 1)]
 
 
+def test_a_state_unknown_to_the_summary_leaves_its_headers_empty(db, tmp_path, monkeypatch):
+    """A state that arrives while the summary is written has no headers there, and no KeyError."""
+    ids = _two_families(db)
+    original = PipelineExtractor.extract_results
+
+    def late(self, all_conformers=False):
+        rows = original(self, all_conformers)
+        rows[-1].state_id = 9999
+        return rows
+    monkeypatch.setattr(PipelineExtractor, "extract_results", late)
+    PipelineExtractor(PROJECT).export_summary_json(tmp_path / "s.json")
+    rows = json.loads((tmp_path / "s.json").read_text())
+    assert [(r["state_id"], r["optimization_header_id"]) for r in rows] == [(ids["a"], 1), (ids["b"], 3), (9999, None)]
+
+
 @pytest.mark.parametrize("same_headers", [False, True])
 def test_states_sharing_a_description_get_their_own_folders(db, same_headers):
     ids = _two_families(db, same_headers)

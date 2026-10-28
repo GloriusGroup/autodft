@@ -1002,7 +1002,7 @@ def api_project_task_file(
 ):
     """The .out of a successful optimisation or singlepoint, or the optimised .xyz, from its latest successful job.
 
-    Named ``mol<id>_<state>_conf<k>_<stem>``, as in the export tree.
+    Named ``mol<id>_<state>_conf<k>_<stem>``, as in the export tree (``<state>__state<id>`` when shared).
     """
     bad = _reject_bad_project(name)
     if bad is not None:
@@ -1027,6 +1027,9 @@ def api_project_task_file(
         if kind == "xyz" and task.task_type != TaskType.optimization:
             return JSONResponse(status_code=404, content={"detail": "Only an optimisation has an output geometry."})
         state = session.get(MoleculeState, task.state_id)
+        shared = stored.shared_descriptions(session.exec(
+            select(MoleculeState).where(MoleculeState.molecule_id == state.molecule_id)
+        ).all())
         numbers = stored.conformer_numbers(session.exec(
             select(ComputationTask).where(
                 ComputationTask.state_id == task.state_id, ComputationTask.task_type == TaskType.optimization,
@@ -1037,6 +1040,8 @@ def api_project_task_file(
     opt_id = task.id if task.task_type == TaskType.optimization else task.depends_on_task_id
     conf = numbers.get(opt_id, 0)
     label = re.sub(r"[^A-Za-z0-9._-]+", "_", state.description or "state")
+    if (state.molecule_id, state.description) in shared:
+        label = f"{label}__state{state.id}"
     filename = f"mol{state.molecule_id}_{label}_conf{conf}_{_TREE_STEMS[task.task_type.value]}.{kind}"
     job_dir = Path(job.job_path) if job is not None and job.job_path else None
     path = job_dir / _TASK_FILES[kind] if job_dir is not None else None

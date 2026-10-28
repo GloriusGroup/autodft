@@ -337,6 +337,16 @@ class TestTaskFiles:
             response = _get(env, f"/api/projects/owner:p/tasks/{task.id}/files/out")
             assert response.headers["content-disposition"].endswith(f'_S0_{name}"')
 
+    def test_two_states_of_one_name_are_told_apart_as_in_the_export_tree(self, world):
+        env, session, w, state = world
+        other = w.state(session.get(Molecule, state.molecule_id))
+        ox = w.state(session.get(Molecule, state.molecule_id), "ox", 2, 1)
+        for st in (state, other, ox):
+            opt = w.task(st, TaskType.optimization, output=_output(-1.0, 0.1))
+            response = _get(env, f"/api/projects/owner:p/tasks/{opt.id}/files/out")
+            label = "ox" if st is ox else f"S0__state{st.id}"
+            assert response.headers["content-disposition"].endswith(f'_{label}_conf1_opt.out"')
+
     def test_unknown_kind(self, env):
         assert _file(env, "opt", "gbw").status_code == 400
 

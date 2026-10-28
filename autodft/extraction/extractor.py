@@ -366,12 +366,12 @@ class PipelineExtractor:
 
     def _summary_rows(self, all_conformers: bool) -> tuple[list[str], list[dict]]:
         """The summary's columns and rows; with each row's state and headers when a molecule repeats a state."""
-        results = self.extract_results(all_conformers=all_conformers)
         with get_session() as session:
             states = {s.id: s for s in session.exec(
                 select(MoleculeState).join(Molecule, Molecule.id == MoleculeState.molecule_id)
                 .where(Molecule.project_name == self.project_name)
             ).all()}
+        results = self.extract_results(all_conformers=all_conformers)
         family = bool(stored.shared_descriptions(states.values()))
         rows = []
         for r in results:
@@ -391,7 +391,9 @@ class PipelineExtractor:
             }
             if family:
                 row["state_id"] = r.state_id
-                row.update(zip(_HEADER_FIELDS, stored.method_family(states[r.state_id])))
+                # A state that arrived since the states were read has no headers here.
+                state = states.get(r.state_id)
+                row.update(zip(_HEADER_FIELDS, stored.method_family(state) if state else (None, None, None)))
             rows.append(row)
         fields = _SUMMARY_FIELDS + (["state_id", *_HEADER_FIELDS] if family else [])
         return fields, rows

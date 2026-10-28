@@ -519,7 +519,8 @@ closed-shell job is asked for SpinDens, or the job folder is gone.
 `kind` is `out` (the `output.out` of a successful optimisation or
 singlepoint) or `xyz` (the final geometry of a successful optimisation),
 from the task's latest successful job. Named
-`mol<id>_<state>_conf<k>_<stem>.<kind>`, as in the export tree. `400` for
+`mol<id>_<state>_conf<k>_<stem>.<kind>`, as in the export tree (so
+`<state>__state<state_id>` for one of two states of one name). `400` for
 another kind, `404` for a task that is not a successful opt/SP of the
 project, for `xyz` on a singlepoint, and when the file is no longer on disk.
 
