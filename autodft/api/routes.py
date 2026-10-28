@@ -458,6 +458,10 @@ def api_tasks(
     identity: Identity = Depends(current_identity),
 ):
     """List tasks with optional status and type filters."""
+    for name, value, enum in (("status", status, TaskStatus), ("type", type, TaskType)):
+        if value and value not in {e.value for e in enum}:
+            return JSONResponse(status_code=400, content={
+                "detail": f"{name} must be one of: {', '.join(e.value for e in enum)}."})
     with get_session() as session:
         stmt = select(ComputationTask).order_by(
             col(ComputationTask.updated_at).desc()
@@ -2541,6 +2545,16 @@ def _tolerance_error(body: SubmitRequest) -> Optional[JSONResponse]:
     )})
 
 
+def _conformers_error(body: SubmitRequest) -> Optional[JSONResponse]:
+    """A 400 for a negative conformer limit (0 asks for none), else None."""
+    for name in ("max_conformers_S0", "max_conformers_T1", "max_conformers_ox", "max_conformers_red",
+                 "max_conformers"):
+        value = getattr(body, name)
+        if value is not None and value < 0:
+            return JSONResponse(status_code=400, content={"detail": f"{name} must be 0 or more (got {value})."})
+    return None
+
+
 def _submission_advanced(session, body: SubmitRequest, project: str, headers) -> tuple[Optional[dict], Optional[str]]:
     """*body*'s resolved ``advanced`` (None in legacy mode), or ``(None, error)``.
 
@@ -2560,7 +2574,17 @@ def _target_project(session, identity: Identity, body: SubmitRequest) -> str:
     from autodft import accounts
 
     user = accounts.get_user_by_username(session, identity.username)
-    return accounts.qualify(user.username, body.project) if user is not None else body.project
+    return accounts.qualify(user.username, _bare_project(body)) if user is not None else body.project
+
+
+def _bare_project(body: SubmitRequest) -> str:
+    """*body*'s project name, or a 400 when it is not bare (an account qualifies it with its own name)."""
+    from autodft import accounts
+
+    try:
+        return accounts.validate_project_name(body.project)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 def _reject_reason(body: SubmitRequest, smiles: str, headers,
@@ -2620,7 +2644,7 @@ def api_submit(
     from autodft import categories
     from autodft.api import project_jobs
 
-    bad = _priority_error(identity, body) or _tolerance_error(body)
+    bad = _priority_error(identity, body) or _tolerance_error(body) or _conformers_error(body)
     if bad is not None:
         return bad
     with get_session() as session:
@@ -2786,7 +2810,8 @@ def api_extend(name: str, body: SubmitBatchRequest, identity: Identity = Depends
     from autodft.api import project_jobs
     from autodft.engine.entrypoint_processor import EXTEND_DELETED_HEADER
 
-    bad = _reject_bad_project(name) or _priority_error(identity, body) or _tolerance_error(body)
+    bad = (_reject_bad_project(name) or _priority_error(identity, body) or _tolerance_error(body)
+           or _conformers_error(body))
     if bad is not None:
         return bad
     if body.advanced is not None:
@@ -2813,6 +2838,10 @@ def api_extend(name: str, body: SubmitBatchRequest, identity: Identity = Depends
         known = set(scope["smiles"])
         accepted, rejected, skipped = [], [], []
         for smiles in body.smiles_list or scope["smiles"]:
+            if len(smiles) > 512:
+                # As in submit-batch: RDKit overflows the C stack on very long input.
+                rejected.append({"smiles": smiles[:120], "detail": "SMILES too long (>512)."})
+                continue
             detail, check = _reject_reason(body, smiles, headers, advanced)
             if detail is None and check["canonical"] not in known:
                 detail = f"{smiles} is not an unarchived molecule of {name}."
@@ -2866,7 +2895,7 @@ def api_submit_batch(
             status_code=400,
             content={"detail": "smiles_list is empty; nothing to queue."},
         )
-    bad = _priority_error(identity, body) or _tolerance_error(body)
+    bad = _priority_error(identity, body) or _tolerance_error(body) or _conformers_error(body)
     if bad is not None:
         return bad
 
@@ -2962,7 +2991,7 @@ def _submission_owner(session, identity: Identity, body: SubmitRequest) -> tuple
                                 detail=nmr_references.reserved_name_error(nmr_references.REFERENCE_PROJECT))
         return body.project, identity.username
 
-    project = accounts.get_or_create_project(session, user, body.project)
+    project = accounts.get_or_create_project(session, user, _bare_project(body))
     return project.qualified_name, user.username
 
 

@@ -180,3 +180,23 @@ def test_the_extend_loop_does_not_hold_the_write_lock(api, tmp_path, monkeypatch
     with get_session() as session:
         rows = session.exec(select(CalculationEntrypoint).order_by(CalculationEntrypoint.id)).all()
     assert [(e.id, e.smiles) for e in rows] == [(q["id"], q["smiles"]) for q in r.json()["queued"]]
+
+
+def test_extend_rejects_an_overlong_smiles_without_parsing_it(api, monkeypatch):
+    from autodft.engine import entrypoint_processor
+
+    real = entrypoint_processor.validate_smiles
+    parsed = []
+    monkeypatch.setattr(entrypoint_processor, "validate_smiles", lambda s: parsed.append(s) or real(s))
+    client, key = api
+    r = client.post("/api/projects/p/extend", headers=key, json={
+        "smiles_list": ["C" * 600, "CC=O"], "request_t1": True, "request_ox": True})
+    assert r.status_code == 200, r.text
+    assert r.json()["rejected"] == [{"smiles": "C" * 120, "detail": "SMILES too long (>512)."}]
+    assert parsed == ["CC=O"]
+
+
+def test_extend_refuses_a_negative_conformer_limit(api):
+    client, key = api
+    r = client.post("/api/projects/p/extend", headers=key, json={"request_ox": True, "max_conformers_ox": -2})
+    assert r.status_code == 400 and r.json()["detail"] == "max_conformers_ox must be 0 or more (got -2)."

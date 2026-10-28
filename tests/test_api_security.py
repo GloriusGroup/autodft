@@ -500,3 +500,58 @@ class TestAuthUnderWriteLock:
             assert "try again" in response.json()["detail"]
         else:
             assert "text/html" in response.headers["content-type"]
+
+
+class TestInputValidation:
+    """API-13: bad query values and submit fields were 500s or accepted."""
+
+    @pytest.fixture()
+    def app_env(self, tmp_path):
+        from fastapi.testclient import TestClient
+
+        from autodft import accounts
+        from autodft.api.app import create_app
+        from autodft.db import get_session, init_db, reset_engine
+
+        settings = Settings()
+        settings.storage.data_path = str(tmp_path)
+        reset_engine()
+        init_db(settings)
+        with get_session(settings) as session:
+            _, key = accounts.create_user(session, "mhoffmann")
+        with TestClient(create_app(settings), raise_server_exceptions=False) as client:
+            yield client, {"X-AutoDFT-API-Key": key}
+        reset_engine()
+
+    @pytest.mark.parametrize("query, choice", [("status=bogus", "pending"), ("type=bogus", "confsearch")])
+    def test_an_unknown_task_status_or_type_is_a_400_naming_the_choices(self, app_env, query, choice):
+        client, key = app_env
+        response = client.get(f"/api/tasks?{query}", headers=key)
+        assert response.status_code == 400
+        assert choice in response.json()["detail"]
+        assert client.get("/api/tasks?status=pending&type=confsearch", headers=key).status_code == 200
+
+    @pytest.mark.parametrize("path, body", [("/api/submit", {"smiles": "CCO"}),
+                                            ("/api/submit-batch", {"smiles_list": ["CCO"]})])
+    @pytest.mark.parametrize("project", ["alice/x", "alice:x"])
+    def test_a_qualified_project_name_in_a_submit_body_is_a_400(self, app_env, path, body, project):
+        client, key = app_env
+        response = client.post(path, headers=key, json={**body, "project": project})
+        assert response.status_code == 400
+        assert "'/' is not allowed" in response.json()["detail"]
+
+    @pytest.mark.parametrize("path, body", [("/api/submit", {"smiles": "CCO"}),
+                                            ("/api/submit-batch", {"smiles_list": ["CCO"]})])
+    @pytest.mark.parametrize("field", ["max_conformers_S0", "max_conformers_T1", "max_conformers_ox",
+                                       "max_conformers_red", "max_conformers"])
+    def test_a_negative_conformer_limit_is_a_400(self, app_env, path, body, field):
+        client, key = app_env
+        response = client.post(path, headers=key, json={**body, "project": "p", field: -1})
+        assert response.status_code == 400
+        assert response.json()["detail"] == f"{field} must be 0 or more (got -1)."
+
+    def test_zero_conformers_is_still_accepted(self, app_env):
+        client, key = app_env
+        response = client.post("/api/submit", headers=key, json={"smiles": "CCO", "project": "p",
+                                                                 "max_conformers_S0": 0})
+        assert response.status_code == 200, response.text
