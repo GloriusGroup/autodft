@@ -234,3 +234,29 @@ def test_read_only_commands_proceed_when_the_controller_runs_on_this_host(site):
     result = runner.invoke(app, ["status", "molecules", "--config", str(config)])
     assert result.exit_code == 0, result.output
     assert SMILES in result.output
+
+
+def test_export_files_registers_its_settings_for_frozen_payloads(site, tmp_path):
+    """CLI-2: a partly archived project's frozen photophysics payload is found under --config's export root."""
+    import autodft.api.routes as routes
+
+    config, ids, _ = site
+    with Session(get_engine(load_settings(config))) as session:
+        mol = session.get(Molecule, ids["molecule"])
+        mol.archived = True
+        session.add(mol)
+        session.add(Molecule(smiles=QUEUED, project_name=PROJECT))
+        session.commit()
+    reset_engine()
+    frozen = tmp_path / "site" / "export_data" / "cfg" / "only" / "photophysics"
+    frozen.mkdir(parents=True)
+    entry = {"smiles": SMILES, "state": "S0", "frozen_marker": "only-in-the-frozen-payload"}
+    (frozen / f"mol_{ids['molecule']}.json").write_text(json.dumps({"summary": [entry], "detail": [entry]}))
+    routes.set_active_settings(load_settings(autodft.config.REPO_CONFIG))  # another site's, as a stale process
+
+    result = runner.invoke(app, ["admin", "export-files", "--project", PROJECT, "--config", str(config)])
+
+    assert result.exit_code == 0, result.output
+    written = (tmp_path / "site" / "export_data" / "cfg" / "only" / "only_photophysics.json").read_text()
+    assert "only-in-the-frozen-payload" in written
+    reset_engine()

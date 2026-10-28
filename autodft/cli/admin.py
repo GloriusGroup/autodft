@@ -326,12 +326,14 @@ def export(
     all_conformers: bool = typer.Option(False, "--all-conformers", help="Include all conformers (not just primary)"),
 ) -> None:
     """Export energy summary for a project (reads ORCA output files)."""
+    from autodft.api.routes import set_active_settings
     from autodft.config import load_settings
     from autodft.extraction.extractor import PipelineExtractor
 
     settings = load_settings(config)
     settings.ensure_directories()
     get_engine(settings)  # bind the session to --config before the first query
+    set_active_settings(settings)  # frozen payloads are looked up under its export root
 
     if output is None:
         # The project directory, then the *bare* name as the filename.
@@ -383,12 +385,14 @@ def export_files(
     keep_gbw: bool = typer.Option(False, "--keep-gbw", help="Copy singlepoint .gbw files"),
 ) -> None:
     """Write the export tree ("Export Project"): summary files and molecules/<id>/, replacing a previous one."""
+    from autodft.api.routes import set_active_settings
     from autodft.config import load_settings
     from autodft.extraction.extractor import PipelineExtractor
 
     settings = load_settings(config)
     settings.ensure_directories()
     get_engine(settings)  # bind the session to --config before the first query
+    set_active_settings(settings)  # frozen payloads are looked up under its export root
     _refuse_while_a_job_runs(project)
 
     try:
