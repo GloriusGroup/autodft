@@ -5054,21 +5054,20 @@
             });
         }
 
-        // Fetched under the overlay, so a missing file says so instead of downloading an error.
+        // One byte probed under the overlay, so a missing file says so; then the browser streams it to disk.
         async function downloadTaskFile(tid, kind) {
             var status = document.getElementById('spExtrasStatus');
+            var url = '/api/projects/' + projectPath(molsSp.project) + '/tasks/' + encodeURIComponent(tid) + '/files/' + kind;
             try {
-                var resp = await loadingFetch('Downloading .' + kind + '…', '/api/projects/' + projectPath(molsSp.project)
-                    + '/tasks/' + encodeURIComponent(tid) + '/files/' + kind);
-                if (!resp.ok) throw await apiError(resp);
-                var m = /filename="?([^";]+)"?/.exec(resp.headers.get('Content-Disposition') || '');
+                var resp = await loadingFetch('Downloading .' + kind + '…', url, { headers: { Range: 'bytes=0-0' } });
+                // 416: an empty file.
+                if (!resp.ok && resp.status !== 416) throw await apiError(resp);
                 var a = document.createElement('a');
-                a.href = URL.createObjectURL(await resp.blob());
-                a.download = m ? m[1] : 'task' + tid + '.' + kind;
+                a.href = url;
+                a.download = '';  // the server's filename
                 document.body.appendChild(a);
                 a.click();
                 a.remove();
-                setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
                 status.textContent = '';
             } catch (e) {
                 status.innerHTML = errHtml('Download failed: ', e);
@@ -5099,6 +5098,8 @@
         }
 
         var DENSITY_ISO = { eldens: 0.02, spindens: 0.004 };
+        // 3Dmol parses a cube twice; above this the viewer asks first.
+        var DENSITY_ASK_BYTES = 100 * 1024 * 1024;
         var densityView = { token: 0, viewer: null, volume: null, kind: null, ctl: null };
 
         function closeDensityModal() {
@@ -5139,8 +5140,14 @@
                     err.busy = resp.status === 503;
                     throw err;
                 }
-                var cube = await resp.text();
                 if (avail.build) avail.build[kind] = false;
+                var size = parseInt(resp.headers.get('Content-Length'), 10) || 0;
+                if (size > DENSITY_ASK_BYTES && !confirm('This cube is ' + Math.round(size / (1024 * 1024))
+                        + ' MB. Loading it into the viewer takes a lot of memory. Load it?')) {
+                    closeDensityModal();
+                    return;
+                }
+                var cube = await resp.text();
                 var $3D = await lib;
                 if (token !== densityView.token) return;
                 densityView.ctl = null;

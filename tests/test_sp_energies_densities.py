@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import threading
@@ -777,33 +778,92 @@ class TestPerKindFlags:
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_a_download_click_saves_under_the_server_name_or_says_what_is_missing():
+def test_a_download_click_probes_one_byte_then_navigates_or_says_what_is_missing():
     from tests.test_dashboard import _functions
 
     script = (_functions("projectPath", "escHtml", "isAbort", "errHtml", "apiError", "downloadTaskFile") + """
 var CANCELLED_HTML = 'cancelled';
 var status = { textContent: 'old', innerHTML: '' };
-var saved = [], urls = [];
+var clicked = [], probes = [], blobs = 0;
 var document = {
     getElementById: function () { return status; },
-    createElement: function () { return { click: function () { saved.push(this.download); }, remove: function () {} }; },
+    createElement: function () {
+        return { click: function () { clicked.push({ href: this.href, download: this.download }); }, remove: function () {} };
+    },
     body: { appendChild: function () {} },
 };
-var URL = { createObjectURL: function () { return 'blob:1'; }, revokeObjectURL: function () {} };
+var URL = { createObjectURL: function () { blobs++; return 'blob:1'; }, revokeObjectURL: function () {} };
 var molsSp = { project: 'nho/p' };
 var replies = [
-    new Response('1\\n', { status: 200, headers: { 'Content-Disposition': 'attachment; filename="mol3_S0_conf1_opt.xyz"' } }),
+    new Response('1', { status: 206 }),
+    new Response(null, { status: 416 }),
     new Response(JSON.stringify({ detail: 'The out file is no longer on disk.' }), { status: 404 }),
 ];
-async function loadingFetch(label, url) { urls.push(url); return replies.shift(); }
+async function loadingFetch(label, url, opts) { probes.push([url, opts.headers.Range]); return replies.shift(); }
 (async function () {
     await downloadTaskFile('9', 'xyz');
     var after = status.textContent;
+    await downloadTaskFile('8', 'out');
     await downloadTaskFile('9', 'out');
-    process.stdout.write(JSON.stringify({ saved: saved, urls: urls, after: after, error: status.innerHTML }));
+    process.stdout.write(JSON.stringify({ clicked: clicked, probes: probes, blobs: blobs, after: after,
+                                          error: status.innerHTML }));
 })();
 """)
     out = json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
-    assert out["saved"] == ["mol3_S0_conf1_opt.xyz"]
-    assert out["urls"] == ["/api/projects/nho%3Ap/tasks/9/files/xyz", "/api/projects/nho%3Ap/tasks/9/files/out"]
+    xyz, out8, out9 = ("/api/projects/nho%3Ap/tasks/9/files/xyz", "/api/projects/nho%3Ap/tasks/8/files/out",
+                       "/api/projects/nho%3Ap/tasks/9/files/out")
+    assert out["probes"] == [[xyz, "bytes=0-0"], [out8, "bytes=0-0"], [out9, "bytes=0-0"]]
+    # The server names the file; an empty one (416) still downloads; nothing is buffered.
+    assert out["clicked"] == [{"href": xyz, "download": ""}, {"href": out8, "download": ""}]
+    assert out["blobs"] == 0
     assert out["after"] == "" and out["error"] == "Download failed: The out file is no longer on disk."
+
+
+def test_the_download_probe_reads_one_byte_and_ends_its_read(env):
+    from autodft.api import project_jobs
+
+    response = env["client"].get(f"/api/projects/owner:p/tasks/{env['ids']['opt']}/files/out",
+                                 headers=dict(env["owner"], Range="bytes=0-0"))
+    assert response.status_code == 206 and len(response.content) == 1
+    assert response.headers["content-disposition"].endswith('_S0_conf1_opt.out"')
+    assert project_jobs.reads_in_flight("owner/p") == 0
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+@pytest.mark.parametrize("size, answer, asked, shown", [
+    (5 * 2**20, False, False, True),
+    (150 * 2**20, True, True, True),
+    (150 * 2**20, False, True, False),
+])
+def test_a_large_cube_asks_before_loading(size, answer, asked, shown):
+    from tests.test_dashboard import TEMPLATE, _functions
+
+    html = (TEMPLATE / "dashboard.html").read_text()
+    limit = re.search(r"\n *var DENSITY_ASK_BYTES = .*\n", html).group(0)
+    script = (limit + _functions("projectPath", "apiError", "openDensityModal", "closeDensityModal") + """
+var els = {};
+var document = { getElementById: function (id) { return els[id] || (els[id] = { style: {}, textContent: '', innerHTML: '' }); } };
+var densityView = { token: 0, viewer: null, volume: null, kind: null, ctl: null };
+var molsSp = { project: 'nho/p', densities: { 7: { build: { eldens: true } } } };
+var asked = [], read = 0, shown = 0, signal = null;
+function confirm(msg) { asked.push(msg); return ANSWER; }
+function load3Dmol() { return Promise.resolve({}); }
+function renderDensity() { shown++; }
+async function uiFetch(label, url, opts) {
+    signal = opts.signal;
+    return { ok: true, status: 200, headers: { get: function (k) { return k === 'Content-Length' ? 'SIZE' : null; } },
+             text: async function () { read++; return 'cube'; } };
+}
+openDensityModal('7', 'eldens').then(function () {
+    process.stdout.write(JSON.stringify({ asked: asked, read: read, shown: shown, aborted: signal.aborted,
+        open: els.densityModal.style.display, built: molsSp.densities[7].build.eldens }));
+});
+""".replace("ANSWER", json.dumps(answer)).replace("SIZE", str(size)))
+    out = json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
+    assert bool(out["asked"]) is asked
+    if asked:
+        assert out["asked"] == ["This cube is 150 MB. Loading it into the viewer takes a lot of memory. Load it?"]
+    assert (out["read"], out["shown"]) == ((1, 1) if shown else (0, 0))
+    assert out["aborted"] is not shown
+    assert out["open"] == ("flex" if shown else "none")
+    assert out["built"] is False
