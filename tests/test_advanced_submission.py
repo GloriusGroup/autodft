@@ -283,8 +283,8 @@ def _entry():
         return json.loads(entry.request_metadata), entry
 
 
-def test_cli_flags_build_advanced(cli_db):
-    result = CliRunner().invoke(cli.app, ["submit", "--smiles", "CCO", "--project", "p",
+def test_cli_flags_build_advanced(cli_db, empty_config):
+    result = CliRunner().invoke(cli.app, ["submit", "--config", str(empty_config), "--smiles", "CCO", "--project", "p",
                                           "--sp-grid", "DEFGRID2", "--opt-nprocs", "16"])
     assert result.exit_code == 0, result.output
     meta, entry = _entry()
@@ -293,10 +293,10 @@ def test_cli_flags_build_advanced(cli_db):
     assert entry.header_optimization == "!wB97X-D3 def2-SVP\n"
 
 
-def test_cli_batch_flags_build_advanced(cli_db, tmp_path):
+def test_cli_batch_flags_build_advanced(cli_db, tmp_path, empty_config):
     csv = tmp_path / "m.csv"
     csv.write_text("CCO\nCC=O\n")
-    result = CliRunner().invoke(cli.app, ["submit-batch", "--file", str(csv), "--project", "p",
+    result = CliRunner().invoke(cli.app, ["submit-batch", "--config", str(empty_config), "--file", str(csv), "--project", "p",
                                           "--opt-solvation", "SMD", "--opt-solvent", "water", "--cs-maxcore", "1000"])
     assert result.exit_code == 0, result.output
     with get_session() as session:
@@ -312,21 +312,21 @@ def test_cli_batch_flags_build_advanced(cli_db, tmp_path):
     (["--sp-grid", "DEFGRID9"], "DEFGRID9"),
     (["--opt-nprocs", "64", "--opt-maxcore", "16000"], "nprocs x maxcore"),
 ])
-def test_cli_refuses_bad_advanced(cli_db, args, needle):
-    result = CliRunner().invoke(cli.app, ["submit", "--smiles", "CCO", "--project", "p", *args])
+def test_cli_refuses_bad_advanced(cli_db, args, needle, empty_config):
+    result = CliRunner().invoke(cli.app, ["submit", "--config", str(empty_config), "--smiles", "CCO", "--project", "p", *args])
     assert result.exit_code == 1
     assert needle in result.output
 
 
-def test_cli_refuses_a_legacy_header_in_a_new_project(cli_db, tmp_path):
+def test_cli_refuses_a_legacy_header_in_a_new_project(cli_db, tmp_path, empty_config):
     header = tmp_path / "opt.inp"
     header.write_text(LEGACY_HEADERS["optimization"])
-    result = CliRunner().invoke(cli.app, ["submit", "--smiles", "CCO", "--project", "p", "--header-opt", str(header)])
+    result = CliRunner().invoke(cli.app, ["submit", "--config", str(empty_config), "--smiles", "CCO", "--project", "p", "--header-opt", str(header)])
     assert result.exit_code == 1
     assert "Advanced" in result.output
 
 
-def test_cli_legacy_project_with_its_headers_stays_legacy(cli_db, tmp_path, monkeypatch):
+def test_cli_legacy_project_with_its_headers_stays_legacy(cli_db, tmp_path, monkeypatch, empty_config):
     monkeypatch.setattr(ep, "_generate_initial_xyz", lambda s: "C 0 0 0\nH 1 0 0\n")
     _legacy_project(cli_db, project="admin/p")
     files = []
@@ -334,7 +334,7 @@ def test_cli_legacy_project_with_its_headers_stays_legacy(cli_db, tmp_path, monk
                        ("sp", LEGACY_HEADERS["singlepoint"])):
         files.append(tmp_path / f"{name}.inp")
         files[-1].write_text(text)
-    result = CliRunner().invoke(cli.app, ["submit", "--smiles", "c1ccccc1", "--project", "p",
+    result = CliRunner().invoke(cli.app, ["submit", "--config", str(empty_config), "--smiles", "c1ccccc1", "--project", "p",
                                           "--header-confsearch", str(files[0]), "--header-opt", str(files[1]),
                                           "--header-sp", str(files[2])])
     assert result.exit_code == 0, result.output

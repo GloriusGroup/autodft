@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.table import Table
 from sqlmodel import col, func, select
 
-from autodft.cli.options import config_option
+from autodft.cli.options import config_option, read_only_settings
 from autodft.db import get_session
 from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.models.job import ComputationJob
@@ -27,9 +27,7 @@ app = typer.Typer(name="status", help="Query pipeline status.")
 
 def _session(config: Optional[str]):
     """A session on the database of *config* (None: the repo's config)."""
-    from autodft.config import load_cli_settings
-
-    return get_session(load_cli_settings(config))
+    return get_session(read_only_settings(config))
 
 
 @app.command()

@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Optional
 
 import typer
 from rich.console import Console
 
-from autodft.cli.options import config_option
+from autodft.cli.options import required_config_option
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -32,14 +31,28 @@ def _log_to_file(settings) -> None:
 
 @app.callback(invoke_without_command=True)
 def run(
-    config: Optional[str] = config_option(),
+    config: str = required_config_option(),
     scheduler: str = typer.Option("slurm", "--scheduler", help="Scheduler backend: slurm or local"),
     once: bool = typer.Option(False, "--once", help="Run a single pipeline tick then exit"),
 ) -> None:
-    """Start the pipeline worker loop."""
-    from autodft.config import load_cli_settings
+    """Start the pipeline worker loop. Refused while <data_path>/controller.lock names a live controller."""
+    from autodft import controller_lock
+    from autodft.config import load_settings
 
-    settings = load_cli_settings(config)
+    settings = load_settings(config)
+    try:
+        lock = controller_lock.acquire(settings)
+    except controller_lock.LockHeld as exc:
+        console.print(f"[red]Not starting:[/red] {exc}")
+        raise typer.Exit(code=1)
+    try:
+        _run(settings, scheduler, once)
+    finally:
+        controller_lock.release(lock)
+
+
+def _run(settings, scheduler: str, once: bool) -> None:  # noqa: ANN001
+    """The worker loop, under the controller lock."""
     _log_to_file(settings)
 
     # Select scheduler backend

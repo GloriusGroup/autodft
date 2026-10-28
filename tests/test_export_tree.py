@@ -577,7 +577,7 @@ def test_an_archived_project_is_not_re_exported(db):
     assert {p.name: p.read_bytes() for p in root.iterdir() if p.is_file()} == before
 
 
-def test_export_files_cli_reports_an_archived_project(db, monkeypatch):
+def test_export_files_cli_reports_an_archived_project(db, monkeypatch, empty_config):
     from typer.testing import CliRunner
 
     from autodft.cli import admin
@@ -585,7 +585,7 @@ def test_export_files_cli_reports_an_archived_project(db, monkeypatch):
     _standard(db)
     PipelineExtractor(PROJECT).archive_project(db.export_data_path, db.comp_data_path, False, False)
     monkeypatch.setattr("autodft.config.load_settings", lambda config=None: db)
-    result = CliRunner().invoke(admin.app, ["export-files", "--project", PROJECT])
+    result = CliRunner().invoke(admin.app, ["export-files", "--config", str(empty_config), "--project", PROJECT])
     assert result.exit_code == 1
     assert "archived" in result.output
 

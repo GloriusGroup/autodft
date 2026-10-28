@@ -57,7 +57,7 @@ curl -i -c cookies.txt -X POST http://localhost:8085/login \
 curl -s -b cookies.txt http://localhost:8085/api/overview
 ```
 
-Lost a key, admin's included? `autodft admin rotate-key <user>` issues a
+Lost a key, admin's included? `autodft admin rotate-key <user> --config <config>` issues a
 new one and prints it once. It is deliberately local — a shell on the
 controller and write access to the database — rather than a second,
 weaker credential reachable over the network.

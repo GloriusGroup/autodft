@@ -20,18 +20,18 @@ from autodft.models import (
 
 
 @pytest.fixture(scope="session")
-def _empty_config(tmp_path_factory):
+def empty_config(tmp_path_factory):
     path = tmp_path_factory.mktemp("config") / "empty.toml"
     path.write_text("")
     return path
 
 
 @pytest.fixture(autouse=True)
-def _no_repo_config(_empty_config, monkeypatch):
+def _no_repo_config(empty_config, monkeypatch):
     """A CLI call without --config must not read the checkout's real config (and its database)."""
     import autodft.config
 
-    monkeypatch.setattr(autodft.config, "REPO_CONFIG", _empty_config)
+    monkeypatch.setattr(autodft.config, "REPO_CONFIG", empty_config)
 
 
 @pytest.fixture()

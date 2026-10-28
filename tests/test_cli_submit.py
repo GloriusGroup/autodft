@@ -30,8 +30,8 @@ def db(tmp_path, monkeypatch):
     reset_engine()
 
 
-def test_submit_uses_the_package_default_headers(db):
-    result = runner.invoke(app, ["submit", "--smiles", "CCO", "--project", "p"])
+def test_submit_uses_the_package_default_headers(db, empty_config):
+    result = runner.invoke(app, ["submit", "--config", str(empty_config), "--smiles", "CCO", "--project", "p"])
     assert result.exit_code == 0, result.output
     with get_session() as session:
         entry = session.exec(select(CalculationEntrypoint)).one()
@@ -39,9 +39,9 @@ def test_submit_uses_the_package_default_headers(db):
         assert entry.header_singlepoint == DEFAULT_HEADER_SINGLEPOINT
 
 
-def test_densities_flags_reach_the_entrypoint(db):
+def test_densities_flags_reach_the_entrypoint(db, empty_config):
     result = runner.invoke(app, [
-        "submit", "--smiles", "CCO", "--project", "p",
+        "submit", "--config", str(empty_config), "--smiles", "CCO", "--project", "p",
         "--densities", "--no-spindens", "--density-grid", "50", "--eldens-file", "e.cube",
     ])
     assert result.exit_code == 0, result.output
@@ -53,8 +53,8 @@ def test_densities_flags_reach_the_entrypoint(db):
     assert meta["density_eldens_file"] == "e.cube"
 
 
-def test_nbo_flag_needs_a_configured_executable(db):
-    result = runner.invoke(app, ["submit", "--smiles", "CCO", "--project", "p", "--nbo"])
+def test_nbo_flag_needs_a_configured_executable(db, empty_config):
+    result = runner.invoke(app, ["submit", "--config", str(empty_config), "--smiles", "CCO", "--project", "p", "--nbo"])
     assert result.exit_code == 1
     assert "nbo_exe" in result.output
 
@@ -110,19 +110,19 @@ def test_submit_batch_densities_and_nbo_flags(db, tmp_path):
 
 
 @pytest.mark.parametrize("fmt", ["csv", "json"])
-def test_export_of_an_empty_project_says_nothing_to_export(db, tmp_path, fmt):
+def test_export_of_an_empty_project_says_nothing_to_export(db, tmp_path, fmt, empty_config):
     from autodft.cli.admin import app as admin_app
 
     out = tmp_path / f"old.{fmt}"
     out.write_text("old\n", encoding="utf-8")
-    result = runner.invoke(admin_app, ["export", "--project", "nho/none", "--format", fmt, "-o", str(out)])
+    result = runner.invoke(admin_app, ["export", "--config", str(empty_config), "--project", "nho/none", "--format", fmt, "-o", str(out)])
     assert result.exit_code == 0, result.output
     assert "Nothing to export" in result.output and "Exported to" not in result.output
     assert not out.exists()
 
 
 @pytest.mark.parametrize("fmt", ["csv", "json"])
-def test_export_of_an_archived_project_keeps_its_file(db, tmp_path, fmt):
+def test_export_of_an_archived_project_keeps_its_file(db, tmp_path, fmt, empty_config):
     from autodft.cli.admin import app as admin_app
     from autodft.models.molecule import Molecule
 
@@ -131,14 +131,14 @@ def test_export_of_an_archived_project_keeps_its_file(db, tmp_path, fmt):
         session.commit()
     out = tmp_path / f"kept.{fmt}"
     out.write_text("kept\n", encoding="utf-8")
-    result = runner.invoke(admin_app, ["export", "--project", "nho/arch", "--format", fmt, "-o", str(out)])
+    result = runner.invoke(admin_app, ["export", "--config", str(empty_config), "--project", "nho/arch", "--format", fmt, "-o", str(out)])
     assert result.exit_code == 1
     assert "archived" in result.output
     assert out.read_text(encoding="utf-8") == "kept\n"
 
 
 @pytest.mark.parametrize("kind", ["archive", "export_files"])
-def test_exports_wait_for_a_running_project_job(db, tmp_path, kind):
+def test_exports_wait_for_a_running_project_job(db, tmp_path, kind, empty_config):
     from autodft.cli.admin import app as admin_app
     from autodft.models import Molecule, ProjectJob, ProjectJobKind, ProjectJobStatus
 
@@ -150,8 +150,9 @@ def test_exports_wait_for_a_running_project_job(db, tmp_path, kind):
         job_id = job.id
     out = tmp_path / "kept.csv"
     out.write_text("kept\n", encoding="utf-8")
-    commands = [["export", "--project", "nho/busy", "-o", str(out)],
-                ["export-files", "--project", "nho/busy", "-o", str(tmp_path / "tree")]]
+    config = ["--config", str(empty_config)]
+    commands = [["export", *config, "--project", "nho/busy", "-o", str(out)],
+                ["export-files", *config, "--project", "nho/busy", "-o", str(tmp_path / "tree")]]
     for args in commands:
         result = runner.invoke(admin_app, args)
         assert result.exit_code == 1, result.output

@@ -11,7 +11,7 @@ import typer
 from rich.console import Console
 from sqlmodel import col, select
 
-from autodft.cli.options import config_option
+from autodft.cli.options import config_option, read_only_settings, required_config_option
 from autodft.db import get_engine, get_session, init_db
 from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.models.enums import TaskStatus
@@ -28,12 +28,12 @@ app = typer.Typer(name="admin", help="Admin operations for the pipeline.")
 
 @app.command("init-db")
 def init_database(
-    config: Optional[str] = config_option(),
+    config: str = required_config_option(),
 ) -> None:
     """Initialize database tables."""
-    from autodft.config import load_cli_settings
+    from autodft.config import load_settings
 
-    settings = load_cli_settings(config)
+    settings = load_settings(config)
     init_db(settings)
     console.print(f"[green]Database initialized.[/green] ({settings.database_url})")
     console.print(f"  data_path   = {settings.data_path}")
@@ -44,13 +44,13 @@ def init_database(
 
 @app.command("list-users")
 def list_users(
-    config: Optional[str] = config_option(),
+    config: str = required_config_option(),
 ) -> None:
     """List the accounts, their role, and the prefix of their API key."""
-    from autodft.config import load_cli_settings
+    from autodft.config import load_settings
     from autodft.models.user import User
 
-    init_db(load_cli_settings(config))
+    init_db(load_settings(config))
     with get_session() as session:
         users = session.exec(select(User).order_by(col(User.username))).all()
         if not users:
@@ -70,7 +70,7 @@ def list_users(
 @app.command("rotate-key")
 def rotate_key(
     username: str = typer.Argument(..., help="Account whose key to replace"),
-    config: Optional[str] = config_option(),
+    config: str = required_config_option(),
 ) -> None:
     """Issue a new API key for an account, printing it once.
 
@@ -83,9 +83,9 @@ def rotate_key(
     working immediately.
     """
     from autodft import accounts
-    from autodft.config import load_cli_settings
+    from autodft.config import load_settings
 
-    init_db(load_cli_settings(config))
+    init_db(load_settings(config))
     with get_session() as session:
         user = accounts.get_user_by_username(session, username)
         if user is None:
@@ -123,14 +123,14 @@ def reset_task(
         False, "--force",
         help="Any status: delete the task's jobs and every task built on its results, then re-run it",
     ),
-    config: Optional[str] = config_option(),
+    config: str = required_config_option(),
 ) -> None:
     """Reset a failed task to 'created'. Refused while one of its jobs is in SLURM, or
     its project is archived or has an archive/export job running."""
     from autodft.api import admin_ops
-    from autodft.config import load_cli_settings
+    from autodft.config import load_settings
 
-    settings = load_cli_settings(config)
+    settings = load_settings(config)
     with get_session(settings) as session:
         admin_ops.begin_write(session)
         task = session.get(ComputationTask, task_id)
@@ -186,14 +186,14 @@ def reset_task(
 @app.command("requeue-failed")
 def requeue_failed(
     project: Optional[str] = typer.Option(None, "--project", help="Filter by project name"),
-    config: Optional[str] = config_option(),
+    config: str = required_config_option(),
 ) -> None:
     """Requeue all failed tasks back to 'created' status, except those with a job in SLURM
     or not yet judged, or of an archived project or one with an archive/export job running."""
     from autodft.api.admin_ops import begin_write, rerun_blocker, unsettled_jobs
-    from autodft.config import load_cli_settings
+    from autodft.config import load_settings
 
-    with get_session(load_cli_settings(config)) as session:
+    with get_session(load_settings(config)) as session:
         begin_write(session)
         stmt = select(ComputationTask).where(ComputationTask.status == TaskStatus.failed)
 
@@ -242,7 +242,7 @@ def requeue_failed(
 @app.command("backfill-results")
 def backfill_results(
     project: Optional[str] = typer.Option(None, "--project", help="Filter by project name"),
-    config: Optional[str] = config_option(),
+    config: str = required_config_option(),
 ) -> None:
     """Store parsed results for successful jobs that have none, or an older parser's.
 
@@ -251,10 +251,10 @@ def backfill_results(
     going. The database is SQLite on NFS, so only processes on the controller
     host may open it. Safe to repeat.
     """
-    from autodft.config import load_cli_settings
+    from autodft.config import load_settings
     from autodft.extraction import results
 
-    init_db(load_cli_settings(config))
+    init_db(load_settings(config))
 
     def _report(counts: dict) -> None:
         console.print(
@@ -275,14 +275,14 @@ def backfill_results(
 @app.command()
 def cleanup(
     days: int = typer.Option(30, "--days", help="Remove completed entries older than N days"),
-    config: Optional[str] = config_option(),
+    config: str = required_config_option(),
 ) -> None:
     """Clean up old completed entrypoints from the queue."""
-    from autodft.config import load_cli_settings
+    from autodft.config import load_settings
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
-    with get_session(load_cli_settings(config)) as session:
+    with get_session(load_settings(config)) as session:
         stmt = select(CalculationEntrypoint).where(
             col(CalculationEntrypoint.time_started).is_not(None),
             CalculationEntrypoint.time_created < cutoff,
@@ -322,14 +322,14 @@ def export(
         None, "--output", "-o",
         help="Output file path (default: <export_data>/<owner>/<project>/<project>.<format>)",
     ),
-    config: Optional[str] = config_option(),
+    config: str = required_config_option(),
     all_conformers: bool = typer.Option(False, "--all-conformers", help="Include all conformers (not just primary)"),
 ) -> None:
     """Export energy summary for a project (reads ORCA output files)."""
-    from autodft.config import load_cli_settings
+    from autodft.config import load_settings
     from autodft.extraction.extractor import PipelineExtractor
 
-    settings = load_cli_settings(config)
+    settings = load_settings(config)
     settings.ensure_directories()
     get_engine(settings)  # bind the session to --config before the first query
 
@@ -376,17 +376,17 @@ def export_files(
         None, "--output-dir", "-o",
         help="Export root; the tree goes into <root>/<owner>/<project>/ (default: <export_data>)",
     ),
-    config: Optional[str] = config_option(),
+    config: str = required_config_option(),
     all_conformers: bool = typer.Option(
         False, "--all-conformers", help="Every conformer, not only the reported one per state",
     ),
     keep_gbw: bool = typer.Option(False, "--keep-gbw", help="Copy singlepoint .gbw files"),
 ) -> None:
     """Write the export tree ("Export Project"): summary files and molecules/<id>/, replacing a previous one."""
-    from autodft.config import load_cli_settings
+    from autodft.config import load_settings
     from autodft.extraction.extractor import PipelineExtractor
 
-    settings = load_cli_settings(config)
+    settings = load_settings(config)
     settings.ensure_directories()
     get_engine(settings)  # bind the session to --config before the first query
     _refuse_while_a_job_runs(project)
@@ -410,11 +410,10 @@ def progress(
     config: Optional[str] = config_option(),
 ) -> None:
     """Show submission progress and success rate for a project."""
-    from autodft.config import load_cli_settings
     from autodft.extraction.extractor import PipelineExtractor
     from rich.table import Table
 
-    get_engine(load_cli_settings(config))  # bind the session to --config before the first query
+    get_engine(read_only_settings(config))  # bind the session to --config before the first query
     extractor = PipelineExtractor(project)
 
     prog = extractor.get_submission_progress()

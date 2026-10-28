@@ -357,26 +357,26 @@ def _entry_tolerances():
 
 
 @pytest.mark.parametrize("args, stored", [([], 0.0), (["--imag-freq-tolerance", "-10"], -10.0)])
-def test_cli_submit_flag(cli_db, args, stored):
-    result = CliRunner().invoke(cli_app, ["submit", "--smiles", "CCO", "--project", "p", *args])
+def test_cli_submit_flag(cli_db, args, stored, empty_config):
+    result = CliRunner().invoke(cli_app, ["submit", "--config", str(empty_config), "--smiles", "CCO", "--project", "p", *args])
     assert result.exit_code == 0, result.output
     assert _entry_tolerances() == [stored]
 
 
-def test_cli_submit_batch_flag(cli_db):
+def test_cli_submit_batch_flag(cli_db, empty_config):
     csv_file = cli_db / "mols.csv"
     csv_file.write_text("CCO\nCCN\n")
     result = CliRunner().invoke(cli_app, [
-        "submit-batch", "--file", str(csv_file), "--project", "p", "--imag-freq-tolerance", "-10",
+        "submit-batch", "--config", str(empty_config), "--file", str(csv_file), "--project", "p", "--imag-freq-tolerance", "-10",
     ])
     assert result.exit_code == 0, result.output
     assert _entry_tolerances() == [-10.0, -10.0]
 
 
 @pytest.mark.parametrize("value", ["5", "-301"])
-def test_cli_refuses_a_tolerance_out_of_range(cli_db, value):
+def test_cli_refuses_a_tolerance_out_of_range(cli_db, value, empty_config):
     result = CliRunner().invoke(cli_app, [
-        "submit", "--smiles", "CCO", "--project", "p", "--imag-freq-tolerance", value,
+        "submit", "--config", str(empty_config), "--smiles", "CCO", "--project", "p", "--imag-freq-tolerance", value,
     ])
     assert result.exit_code != 0
     assert _entry_tolerances() == []

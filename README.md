@@ -104,9 +104,12 @@ pip install -e .             # uses pyproject.toml
 The loader merges three layers, highest-priority last:
 
 1. `config/default.toml` — framework defaults (shipped, don't edit)
-2. the file you pass via `--config`; every CLI command takes it, and without
-   it reads `config/reaction.toml` of the checkout it runs from (beside the
-   `autodft` package), whatever the current directory
+2. the file you pass via `--config`. Every command that writes or serves the
+   database requires it: `run`, `submit submit`/`submit-batch` and every
+   `admin` command but `progress`. Without it they exit before loading
+   anything. The read-only `status *` and `admin progress` default to
+   `config/reaction.toml` of the checkout they run from (beside the `autodft`
+   package), whatever the current directory
 3. environment variables (`AUTODFT_*`)
 
 For production, the entire config is anchored on `data_path` and the
@@ -261,15 +264,25 @@ and, if `api.enabled = true`, boots the FastAPI dashboard at
 `http://<host>:<port>/`. Press Ctrl-C to stop. The standard way to leave
 it running on this cluster is inside a `screen` session. The log also
 goes to `<data_path>/logs/controller.log` (rotated at 10 MB, five kept).
+Production always starts it as
+`.venv/bin/python -m autodft run --config config/reaction.toml` from the repo root.
+
+Before any scheduler or database work, `run` takes `<data_path>/controller.lock`,
+which records the host, pid and start time. A second `run` exits 1 and names
+the holder while the lock names a live pid on this host or names another host.
+A lock left on this host by a dead pid (a killed controller) is taken over. The
+lock is removed on exit. To move the controller to another host, stop it
+there first, or delete a lock whose controller is gone for certain.
 
 For local testing without SLURM:
 
 ```bash
-autodft run --scheduler local --once   # single tick, then exit
+autodft run --config test.toml --scheduler local --once   # single tick, then exit
 ```
 
 Never run `--once` against the live controller's database: two submitters
-defeat the `SUBMITTING` claim.
+defeat the `SUBMITTING` claim. The controller lock refuses it while the
+controller runs.
 
 ---
 
@@ -289,7 +302,7 @@ exactly one, and it names a person:
   before this binding are refused too, so everyone signs in once again
   after the upgrade.
 
-Lost a key — the admin key included? `autodft admin rotate-key <user>`
+Lost a key — the admin key included? `autodft admin rotate-key <user> --config config/reaction.toml`
 issues a new one. It needs a shell on the controller, which is the point:
 recovery is local rather than a second, weaker credential.
 
@@ -596,13 +609,13 @@ lands in, and defaults to `admin`.
 
 ```bash
 # minimal — defaults all the way (project becomes admin/alcohols)
-autodft submit submit --smiles CCO --project alcohols
+autodft submit submit --config config/reaction.toml --smiles CCO --project alcohols
 
 # submit on someone's behalf — project becomes alice/phenols
-autodft submit submit --smiles CCO --project phenols --user alice
+autodft submit submit --config config/reaction.toml --smiles CCO --project phenols --user alice
 
 # full coverage of all options
-autodft submit submit \
+autodft submit submit --config config/reaction.toml \
     --smiles "c1ccc(O)cc1" \
     --project phenols \
     --priority 20 \
@@ -618,10 +631,10 @@ autodft submit submit \
     --sp-grid DEFGRID2 --opt-nprocs 16 --sp-solvation SMD --sp-solvent water
 
 # batch from CSV — same flags accepted, same defaults
-autodft submit submit-batch --file batch.csv --project phenols --priority 20
+autodft submit submit-batch --config config/reaction.toml --file batch.csv --project phenols --priority 20
 
 # skip-confsearch path (RDKit geometry → optimization directly)
-autodft submit submit --smiles CC --project quick --skip-confsearch
+autodft submit submit --config config/reaction.toml --smiles CC --project quick --skip-confsearch
 ```
 
 ### REST API
@@ -845,7 +858,10 @@ The CLI talks to the database directly, with no account behind it, so
 `--project` wants the **qualified** name (`admin/phenols`, not
 `phenols`) — that is the string stored on every molecule. Each command
 reads the database of `--config`, by default the checkout's
-`config/reaction.toml`:
+`config/reaction.toml`. They exit 1, naming the host, when
+`<data_path>/controller.lock` says the controller runs on another host: the
+SQLite database on NFS may be opened from one host only. Without a lock file
+they proceed:
 
 ```bash
 autodft status overview                          # totals
@@ -876,7 +892,7 @@ autodft admin export --project admin/phenols --config config/reaction.toml
 # JSON, all conformers, custom path
 autodft admin export \
     --project admin/phenols --format json --all-conformers \
-    --output /tmp/phenols.json
+    --output /tmp/phenols.json --config config/reaction.toml
 ```
 
 A CSV or JSON export with no results to write prints "Nothing to export" and
@@ -977,6 +993,7 @@ An output with several frequency blocks is judged on the last.
 Recovering:
 
 ```bash
+# each with --config config/reaction.toml
 autodft admin reset-task 17                          # failed task to 'created'
 autodft admin reset-task 17 --force                  # re-run in any status
 autodft admin requeue-failed --project admin/phenols # bulk requeue

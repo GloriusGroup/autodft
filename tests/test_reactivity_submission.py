@@ -137,7 +137,7 @@ def test_cli_reactivity_needs_an_nbo_executable():
     cli._check_categories(*args, settings)
 
 
-def test_cli_option_reaches_the_entrypoint(tmp_path, monkeypatch):
+def test_cli_option_reaches_the_entrypoint(tmp_path, monkeypatch, empty_config):
     from typer.testing import CliRunner
 
     monkeypatch.setenv("AUTODFT_DATA_PATH", str(tmp_path))
@@ -146,7 +146,7 @@ def test_cli_option_reaches_the_entrypoint(tmp_path, monkeypatch):
     settings.storage.data_path = str(tmp_path)
     reset_engine()
     init_db(settings)
-    result = CliRunner().invoke(cli.app, ["submit", "--smiles", "c1ccccc1", "--project", "p", "--reactivity"])
+    result = CliRunner().invoke(cli.app, ["submit", "--config", str(empty_config), "--smiles", "c1ccccc1", "--project", "p", "--reactivity"])
     assert result.exit_code == 0, result.output
     with get_session() as session:
         meta = json.loads(session.exec(select(CalculationEntrypoint)).one().request_metadata)

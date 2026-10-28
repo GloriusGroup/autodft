@@ -77,7 +77,7 @@ def call(method: str, path: str, body: dict | None = None,
     if not API_KEY:
         raise RuntimeError(
             "Set AUTODFT_API_KEY to your API key. Ask an administrator for "
-            "one, or run: autodft admin rotate-key <you>."
+            "one, or run: autodft admin rotate-key <you> --config <config>."
         )
     url = BASE_URL + path
     if params:

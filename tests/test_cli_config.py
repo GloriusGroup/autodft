@@ -1,9 +1,11 @@
-"""Every DB-touching CLI command takes --config, defaulting to the repo's config/reaction.toml."""
+"""--config: required where a command writes or serves the database, else the repo's config/reaction.toml."""
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import socket
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -49,6 +51,9 @@ ARGS = {
     ("submit", "submit"): ["--smiles", "CCO", "--project", PROJECT],
     ("submit", "submit-batch"): ["--file", "smiles.csv", "--project", PROJECT],
 }
+# Read-only: these alone fall back to REPO_CONFIG.
+DEFAULTED = {command for command in ARGS if command[0] == "status"} | {("admin", "progress")}
+REQUIRED = set(ARGS) - DEFAULTED
 
 
 def _leaves(command, path=()):
@@ -120,17 +125,33 @@ def test_every_command_is_covered():
     assert sorted(_leaves(typer.main.get_command(app))) == sorted(ARGS)
 
 
-@pytest.mark.parametrize("command", sorted(ARGS), ids=" ".join)
-def test_without_config_every_command_loads_the_repo_config_from_any_cwd(command, tmp_path, monkeypatch):
+def _recorder(monkeypatch):
     seen = []
 
     def _record(config=None):
         seen.append(config)
         raise RuntimeError("stop before the database")
 
+    monkeypatch.setattr(autodft.config, "load_settings", _record)
+    return seen
+
+
+@pytest.mark.parametrize("command", sorted(REQUIRED), ids=" ".join)
+def test_without_config_a_writing_command_refuses_before_loading_settings(command, tmp_path, monkeypatch):
+    seen = _recorder(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, [*command, *ARGS[command]])
+    assert result.exit_code != 0
+    assert "Missing option '--config'" in result.output
+    assert seen == []
+
+
+@pytest.mark.parametrize("command", sorted(DEFAULTED), ids=" ".join)
+def test_without_config_a_read_only_command_loads_the_repo_config_from_any_cwd(command, tmp_path, monkeypatch):
+    seen = _recorder(monkeypatch)
     repo_config = tmp_path / "repo" / "config" / "reaction.toml"
     monkeypatch.setattr(autodft.config, "REPO_CONFIG", repo_config)
-    monkeypatch.setattr(autodft.config, "load_settings", _record)
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(app, [*command, *ARGS[command]])
@@ -191,3 +212,25 @@ def test_cleanup_deletes_from_the_database_named_by_config(site):
     result = runner.invoke(app, ["admin", "cleanup", "--days", "30", "--config", str(config)])
     assert result.exit_code == 0, result.output
     assert _read(db_file, select(CalculationEntrypoint.smiles)) == [QUEUED]
+
+
+def _lock(config: Path, host: str) -> None:
+    data = load_settings(config).data_path
+    (data / "controller.lock").write_text(json.dumps({"host": host, "pid": 1, "started": "then"}))
+
+
+@pytest.mark.parametrize("command", [["status", "overview"], ["admin", "progress", "--project", PROJECT]])
+def test_read_only_commands_refuse_when_the_controller_runs_on_another_host(site, command):
+    config, _, _ = site
+    _lock(config, "controller.elsewhere")
+    result = runner.invoke(app, [*command, "--config", str(config)])
+    assert result.exit_code == 1
+    assert "controller.elsewhere" in result.output
+
+
+def test_read_only_commands_proceed_when_the_controller_runs_on_this_host(site):
+    config, _, _ = site
+    _lock(config, socket.gethostname())
+    result = runner.invoke(app, ["status", "molecules", "--config", str(config)])
+    assert result.exit_code == 0, result.output
+    assert SMILES in result.output

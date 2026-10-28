@@ -55,7 +55,7 @@ def call(method: str, path: str, body: dict | None = None) -> object:
     if not API_KEY:
         raise RuntimeError(
             "Set AUTODFT_API_KEY to your API key. Ask an administrator for "
-            "one, or run: autodft admin rotate-key <you>."
+            "one, or run: autodft admin rotate-key <you> --config <config>."
         )
     data = json.dumps(body).encode() if body is not None else None
     headers = {"Accept": "application/json", "X-AutoDFT-API-Key": API_KEY}
