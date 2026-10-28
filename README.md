@@ -876,9 +876,8 @@ The pipeline is built to **fail loudly**, not silently:
     can never run (`PartitionConfig`, `PartitionTimeLimit`,
     `MaxMemPerLimit`, `BadConstraints`, `DependencyNeverSatisfied`). The
     job is scancelled and fails as `unsatisfiable: <Reason>`. If more than
-    ten pending jobs, or over half of them, show the same Reason in one
-    tick, it is taken as a cluster-side change: nothing is cancelled and a
-    critical is logged;
+    ten pending jobs show the same Reason in one tick, it is taken as a
+    cluster-side change: nothing is cancelled and a critical is logged;
   * the same failure would repeat on every retry (`Excited Root`,
     `LibXC Needed`, `S1 Stays Bound`);
   * building its job raised 10 consecutive times
