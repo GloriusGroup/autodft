@@ -10,7 +10,7 @@ Two credentials resolve to an identity, and both name a person:
     A user's key. Looked up by SHA-256 hash, so it is an index hit.
 ``autodft_auth`` cookie
     Set by the login form once a key has been presented there; carries
-    the username it was issued for.
+    the username it was issued for and a fingerprint of that key.
 
 The pre-accounts ``X-AutoDFT-Password`` header is gone. A shared secret
 authenticates a crowd, not a caller, and it resolved to admin — so it
@@ -24,6 +24,7 @@ there is one definition of visibility rather than one per endpoint.
 
 from __future__ import annotations
 
+import hmac
 import logging
 from dataclasses import dataclass
 from typing import Optional
@@ -82,13 +83,17 @@ def resolve_identity(
 
     cookie = request.cookies.get(COOKIE_NAME)
     if cookie:
-        username = verify_token(cookie, settings.session_secret())
-        if username:
+        verified = verify_token(cookie, settings.session_secret())
+        if verified:
+            username, fingerprint = verified
             user = accounts.get_user_by_username(session, username)
-            if user is not None and user.active:
+            if (
+                user is not None and user.active
+                and hmac.compare_digest(fingerprint, accounts.key_fingerprint(user))
+            ):
                 return _from_user(user)
-            # A cookie for an account that has since been deleted or
-            # deactivated must stop working immediately, not at expiry.
+            # A cookie for an account that has since been deleted,
+            # deactivated or re-keyed must stop working now, not at expiry.
             return None
 
     return None

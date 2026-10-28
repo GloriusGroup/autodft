@@ -278,7 +278,10 @@ exactly one, and it names a person:
   authenticates a crowd rather than a caller.
 * **Session cookie** — `autodft_auth`, set by `/login`, where a browser
   exchanges **username + API key** for it once. 7-day default lifetime;
-  `/logout` clears it.
+  `/logout` clears it. The cookie is bound to the key it was issued
+  under: rotating that key signs the user out everywhere. Cookies from
+  before this binding are refused too, so everyone signs in once again
+  after the upgrade.
 
 Lost a key — the admin key included? `autodft admin rotate-key <user>`
 issues a new one. It needs a shell on the controller, which is the point:
@@ -711,7 +714,7 @@ is either scoped to the caller's own projects or deliberately shared
 | GET    | `/api/admin/users`                  | list accounts                                                 |
 | POST   | `/api/admin/users`                  | create an account; the response carries its API key, once     |
 | POST   | `/api/admin/users/{name}`           | deactivate / reactivate (`?active=false`)                     |
-| POST   | `/api/admin/users/{name}/rotate-key`| new key; the old one stops working immediately                |
+| POST   | `/api/admin/users/{name}/rotate-key`| new key; the old one and its sessions stop working immediately |
 | POST   | `/api/admin/projects/{name}/reassign`| move a project to another owner                              |
 
 ### Accounts

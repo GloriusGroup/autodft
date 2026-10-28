@@ -511,6 +511,70 @@ class TestLogin:
         assert "Incorrect username or key" in response.text
 
 
+class TestKeyRotationEndsSessions:
+    """A session cookie is bound to the key it was issued under (API-9)."""
+
+    @staticmethod
+    def _login(app_env, who, key=None):
+        client = app_env["client"]
+        response = client.post(
+            "/login",
+            data={"username": who, "password": key or app_env[who]["X-AutoDFT-API-Key"]},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        client.cookies.clear()
+        return {"Cookie": f"autodft_auth={response.cookies['autodft_auth']}"}
+
+    @staticmethod
+    def _rotate(app_env, who):
+        response = app_env["client"].post(
+            f"/api/admin/users/{who}/rotate-key", headers=app_env["admin"],
+        )
+        assert response.status_code == 200
+        return response.json()["api_key"]
+
+    def test_the_old_cookie_is_refused_after_rotation(self, app_env):
+        client = app_env["client"]
+        cookie = self._login(app_env, "owner")
+        assert client.get("/api/whoami", headers=cookie).status_code == 200
+
+        self._rotate(app_env, "owner")
+
+        assert client.get("/api/whoami", headers=cookie).status_code == 401
+        page = client.get("/", headers=cookie, follow_redirects=False)
+        assert page.status_code == 303
+        assert "/login" in page.headers["location"]
+
+    def test_a_new_login_with_the_new_key_works(self, app_env):
+        self._login(app_env, "owner")
+        new_key = self._rotate(app_env, "owner")
+
+        cookie = self._login(app_env, "owner", new_key)
+        response = app_env["client"].get("/api/whoami", headers=cookie)
+        assert response.status_code == 200
+        assert response.json()["username"] == "owner"
+
+    def test_other_sessions_survive_someone_elses_rotation(self, app_env):
+        client = app_env["client"]
+        stranger = self._login(app_env, "stranger")
+        admin = self._login(app_env, "admin")
+
+        self._rotate(app_env, "owner")
+
+        assert client.get("/api/whoami", headers=stranger).status_code == 200
+        assert client.get("/api/whoami", headers=admin).status_code == 200
+
+    def test_deactivation_still_ends_the_session(self, app_env):
+        client = app_env["client"]
+        cookie = self._login(app_env, "owner")
+        response = client.post(
+            "/api/admin/users/owner", params={"active": "false"}, headers=app_env["admin"],
+        )
+        assert response.status_code == 200
+        assert client.get("/api/whoami", headers=cookie).status_code == 401
+
+
 class TestHeaderAdminOnly:
     """Header text goes into input.inp verbatim, so only admin writes it;
     everyone reads and uses every saved header."""

@@ -78,8 +78,8 @@ def rotate_key(
     access to the database, rather than a shared secret that would be a
     second, weaker way into every account.
 
-    The old key stops working immediately. Browser sessions already open
-    are unaffected; they expire on their own.
+    The old key, and every browser session signed in with it, stops
+    working immediately.
     """
     from autodft import accounts
     from autodft.config import load_settings

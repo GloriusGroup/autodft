@@ -53,6 +53,18 @@ class TestApiKeys:
         assert accounts.resolve_api_key(session, old) is None
         assert accounts.resolve_api_key(session, new).id == user.id
 
+    def test_rotation_changes_the_key_fingerprint(self, session):
+        user, key = accounts.create_user(session, "mhoffmann")
+        before = accounts.key_fingerprint(user)
+        accounts.rotate_api_key(session, user)
+        assert accounts.key_fingerprint(user) != before
+
+    def test_the_fingerprint_reveals_neither_the_key_nor_its_hash(self, session):
+        user, key = accounts.create_user(session, "mhoffmann")
+        fingerprint = accounts.key_fingerprint(user)
+        assert len(fingerprint) == 16
+        assert fingerprint not in key and fingerprint not in user.api_key_hash
+
     def test_a_deactivated_user_cannot_authenticate(self, session):
         user, key = accounts.create_user(session, "mhoffmann")
         user.active = False

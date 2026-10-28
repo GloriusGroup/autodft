@@ -141,14 +141,24 @@ class TestAuthDoesNotCrashOnHostileInput:
         assert verify_token("9999999999.ü.deadbeef", "s3cret") is None
 
     def test_a_valid_token_round_trips(self):
-        token = issue_token("s3cret", 60, "alice")
-        assert verify_token(token, "s3cret") == "alice"
+        token = issue_token("s3cret", 60, "alice", "0123456789abcdef")
+        assert verify_token(token, "s3cret") == ("alice", "0123456789abcdef")
 
     def test_a_token_signed_with_another_secret_is_rejected(self):
-        assert verify_token(issue_token("s3cret", 60, "alice"), "other") is None
+        assert verify_token(issue_token("s3cret", 60, "alice", "0123456789abcdef"), "other") is None
 
     def test_an_expired_token_is_rejected(self):
-        assert verify_token(issue_token("s3cret", -1, "alice"), "s3cret") is None
+        assert verify_token(issue_token("s3cret", -1, "alice", "0123456789abcdef"), "s3cret") is None
+
+    def test_the_key_fingerprint_is_signed(self):
+        """Swapping in another fingerprint must break the signature."""
+        expires, user, _, sig = issue_token("s3cret", 60, "alice", "0123456789abcdef").split(".")
+        assert verify_token(f"{expires}.{user}.fedcba9876543210.{sig}", "s3cret") is None
+
+    def test_a_token_without_a_key_fingerprint_is_rejected(self):
+        """Cookies issued before key binding: one fresh login after the deploy."""
+        expires, user, _, sig = issue_token("s3cret", 60, "alice", "0123456789abcdef").split(".")
+        assert verify_token(f"{expires}.{user}.{sig}", "s3cret") is None
 
     def test_the_legacy_two_part_token_is_rejected(self):
         """Pre-accounts cookies were {expires}.{sig} and resolved to admin.

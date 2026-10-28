@@ -7,10 +7,12 @@ module mints and checks. There is no shared password: a secret that every
 user knows identifies nobody, and it was admin.
 
 The cookie is stateless. It encodes the expiry, the username it was
-issued for, and an HMAC-SHA256 signature keyed by
-``Settings.session_secret()`` — a random value persisted under the data
-path, not something anyone types. Restarting the controller does not
-invalidate sessions; deleting ``.session_secret`` invalidates all of them.
+issued for, a fingerprint of that user's key at the time, and an
+HMAC-SHA256 signature keyed by ``Settings.session_secret()`` — a random
+value persisted under the data path, not something anyone types.
+Restarting the controller does not invalidate sessions; rotating a user's
+key invalidates theirs, and deleting ``.session_secret`` invalidates all
+of them.
 """
 
 from __future__ import annotations
@@ -23,26 +25,29 @@ from typing import Optional
 COOKIE_NAME = "autodft_auth"
 
 
-def issue_token(secret: str, lifetime_seconds: int, username: str) -> str:
+def issue_token(
+    secret: str, lifetime_seconds: int, username: str, key_fingerprint: str,
+) -> str:
     """Mint a session token for *username*, valid for *lifetime_seconds*.
 
     The token carries the username, so the cookie says *who* is signed in
-    and not merely *that* someone is. It stays stateless: the username is
+    and not merely *that* someone is, and the fingerprint of the key it
+    was issued under, so rotating that key ends the session. Both are
     inside the signed payload and cannot be edited without the secret.
     """
     expires_at = int(time.time()) + int(lifetime_seconds)
-    payload = f"{expires_at}.{username}"
+    payload = f"{expires_at}.{username}.{key_fingerprint}"
     return f"{payload}.{_sign(secret, payload)}"
 
 
-def verify_token(token: str, secret: str) -> Optional[str]:
-    """The username *token* was issued for, or None if it does not verify."""
+def verify_token(token: str, secret: str) -> Optional[tuple[str, str]]:
+    """``(username, key_fingerprint)`` of *token*, or None if it does not verify."""
     if not token:
         return None
     parts = token.split(".")
-    if len(parts) != 3:
+    if len(parts) != 4:
         return None
-    expires_str, username, sig = parts
+    expires_str, username, fingerprint, sig = parts
 
     try:
         expires_at = int(expires_str)
@@ -57,10 +62,10 @@ def verify_token(token: str, secret: str) -> Optional[str]:
     # turned every request into a logged 500.
     if not hmac.compare_digest(
         sig.encode("utf-8", "replace"),
-        _sign(secret, f"{expires_str}.{username}").encode("utf-8"),
+        _sign(secret, f"{expires_str}.{username}.{fingerprint}").encode("utf-8"),
     ):
         return None
-    return username
+    return username, fingerprint
 
 
 def _sign(secret: str, payload) -> str:

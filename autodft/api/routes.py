@@ -85,11 +85,13 @@ def login_submit(request: Request,
     username = (username or "").strip().lower()
 
     resolved: Optional[str] = None
+    fingerprint = ""
     if username:
         with get_session() as session:
             user = accounts.resolve_api_key(session, password)
             if user is not None and user.username == username:
                 resolved = user.username
+                fingerprint = accounts.key_fingerprint(user)
 
     if resolved is None:
         # One message for every failure: distinguishing "no such user"
@@ -105,6 +107,7 @@ def login_submit(request: Request,
         settings.session_secret(),
         settings.security.session_lifetime_seconds,
         resolved,
+        fingerprint,
     )
     # Sanitise the redirect target — only allow same-origin paths so a
     # malicious ?next= can't bounce users off-site.

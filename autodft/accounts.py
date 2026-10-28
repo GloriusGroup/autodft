@@ -8,6 +8,7 @@ bring a pre-accounts database forward.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from datetime import datetime, timezone
@@ -87,6 +88,11 @@ def rotate_api_key(session: Session, user: User) -> str:
     session.refresh(user)
     logger.warning("Rotated the API key for %r", user.username)
     return key
+
+
+def key_fingerprint(user: User) -> str:
+    """Names *user*'s current key in a session cookie; rotation changes it."""
+    return hashlib.sha256(user.api_key_hash.encode("utf-8")).hexdigest()[:16]
 
 
 def get_user_by_username(session: Session, username: str) -> Optional[User]:

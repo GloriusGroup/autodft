@@ -27,7 +27,13 @@ exporting, submitting — and cannot reach `/api/admin/*` at all.
 A key is `adft_` plus 32 random characters. It is shown **once**, when the
 account is created or the key is rotated, and stored only as
 `sha256(key)` — it can never be read back, only replaced. Rotating takes
-effect immediately.
+effect immediately, and ends every session cookie issued under the old
+key: the cookie carries a fingerprint of the key (a hash of its stored
+hash, never the key), and a stale one gets **401** (API) or a **303** to
+`/login` (browser). Rotating one user's key leaves everyone else's
+sessions alone. Cookies issued before this check existed carry no
+fingerprint and are refused, so every user signs in once after the
+upgrade.
 
 The `admin` account is created on the controller's first boot and its key
 is logged once, in a banner. Every other key comes from
@@ -99,7 +105,7 @@ confirm the project exists.
 |---|---|
 | `GET /api/admin/users` | every account, with projects and molecule counts |
 | `POST /api/admin/users` | create one; the response carries the key, once |
-| `POST /api/admin/users/{username}/rotate-key` | new key, old one dead immediately |
+| `POST /api/admin/users/{username}/rotate-key` | new key, old one and its sessions dead immediately |
 | `POST /api/admin/users/{username}?active=false` | deactivate |
 | `POST /api/admin/projects/{name}/reassign` | move a project to another owner |
 
