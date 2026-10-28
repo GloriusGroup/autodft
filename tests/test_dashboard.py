@@ -1604,6 +1604,43 @@ def test_a_project_wipe_reloads_the_project_list_and_summary():
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_after_a_wipe_the_summary_says_which_project_it_shows_or_shows_nothing_of_it():
+    out = _run_overlay("""
+        var $ = function (id) { return document.getElementById(id); };
+        // A browser selects the first option when the list is replaced.
+        Object.defineProperty($('projectSelect'), 'innerHTML', {
+            set: function (h) { this._h = h; var m = /value="([^"]*)"/.exec(h); this.value = m ? m[1] : ''; },
+            get: function () { return this._h; } });
+        function shown() {
+            return [$('projectStatusBanner').style.display, $('projectExtendSection').style.display,
+                    $('projectSwitchNote').style.display, $('projectSwitchNote').textContent, currentProject];
+        }
+        var P = {name: 'nho/p', molecules: 1, tasks_successful: 0, tasks_total: 1};
+        var Q = {name: 'nho/q', molecules: 1, tasks_successful: 0, tasks_total: 1};
+        replies['/api/projects'] = {status: 200, body: [P, Q]};
+        activateRoute('projects.summary');
+        await idle();
+        out.before = shown();
+        replies['/api/projects'] = {status: 200, body: [Q]};
+        await fetchProjects(true);
+        await idle();
+        out.switched = shown().concat([$('projectSelect').value, count('GET /api/projects/nho%3Aq')]);
+        await fetchProjects(true);
+        await idle();
+        out.again = shown();
+        replies['/api/projects'] = {status: 200, body: []};
+        await fetchProjects(true);
+        await idle();
+        out.empty = shown();
+    """, _projects_code())
+    assert out["before"] == ["flex", "block", "none", "", "nho/p"]
+    assert out["switched"] == ["flex", "block", "block", "nho/p no longer exists; showing nho/q.", "nho/q",
+                               "nho/q", 1]
+    assert out["again"][2] == "none"
+    assert out["empty"] == ["none", "none", "none", "", None]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_cached_project_list_and_summary_expire_after_30_s():
     out = _run_overlay("""
         var now = 1000000, realNow = Date.now;

@@ -1857,6 +1857,8 @@
             </div>
         </div>
 
+        <div class="submit-feedback" id="projectSwitchNote" style="display: none;"></div>
+
         <div id="projectStatusBanner" class="project-status-banner" style="display: none;">
             <span class="status-pulse" id="psbDot"></span>
             <span id="psbText">Loading status…</span>
@@ -4373,16 +4375,21 @@
                                 || (selSA && selSA.value) || (selPP && selPP.value)
                                 || (selMT && selMT.value) || '';
 
+                var note = document.getElementById('projectSwitchNote');
+                note.style.display = 'none';
+                note.textContent = '';
                 if (!projectCache || projectCache.length === 0) {
+                    currentProject = null;
                     var empty = '<option value="">(no projects yet)</option>';
                     sel.innerHTML = empty;
                     if (selMols) selMols.innerHTML = empty;
                     if (selSA)   selSA.innerHTML   = empty;
                     if (selPP)   selPP.innerHTML   = empty;
                     if (selMT)   selMT.innerHTML   = empty;
-                    document.getElementById('projectCards').style.display = 'none';
-                    document.getElementById('projectExportSection').style.display = 'none';
-                    document.getElementById('projectMoleculesSection').style.display = 'none';
+                    ['projectCards', 'projectExportSection', 'projectMoleculesSection', 'projectStatusBanner',
+                     'projectExtendSection'].forEach(function (id) {
+                        document.getElementById(id).style.display = 'none';
+                    });
                     document.getElementById('projectEmptyState').style.display = 'block';
                     if (document.getElementById('moleculesEmptyState')) {
                         document.getElementById('moleculesEmptyState').style.display = 'block';
@@ -4423,6 +4430,10 @@
                     if (selSA)   selSA.value   = prev;
                     if (selPP)   selPP.value   = prev;
                     if (selMT)   selMT.value   = prev;
+                } else if (prev) {
+                    // Wiped (or moved) meanwhile: the select fell back to the first project.
+                    note.textContent = prev + ' no longer exists; showing ' + sel.value + '.';
+                    note.style.display = 'block';
                 }
                 loadProjectDetail(sel.value, ui);
             } catch (err) {
@@ -4713,6 +4724,7 @@
                 });
             }
             document.getElementById('projectSelect').addEventListener('change', function () {
+                document.getElementById('projectSwitchNote').style.display = 'none';
                 loadProjectDetail(this.value, true);
                 syncSelects(this.value);
             });
