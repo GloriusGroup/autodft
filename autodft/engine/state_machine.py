@@ -303,10 +303,11 @@ def _judge(
 
 
 def _claim_finished(session: Session, job_id: int) -> bool:
-    """Take the write lock for judging *job_id*; False when it is gone or already judged."""
+    """Take the write lock for judging *job_id*; False when it is gone, judged or no longer finished."""
     return bool(session.exec(
         update(ComputationJob)
-        .where(col(ComputationJob.id) == job_id, col(ComputationJob.success).is_(None))
+        .where(col(ComputationJob.id) == job_id, col(ComputationJob.success).is_(None),
+               col(ComputationJob.slurm_status).in_(sorted(TERMINAL_SLURM_STATES)))
         .values(success=None)
         .execution_options(synchronize_session=False)
     ).rowcount)
@@ -735,7 +736,7 @@ def create_retry_jobs(
 ) -> None:
     """For pending tasks with fewer than ``max_attempts`` failed jobs and
     no successful or in-flight jobs: create a new job attempt with
-    failure-specific retry strategies applied. Each task commits on its own."""
+    failure-specific retry strategies applied. Each task that wrote commits on its own."""
 
     pending_tasks = session.exec(
         select(ComputationTask).where(
@@ -755,13 +756,12 @@ def create_retry_jobs(
 
     for task_id in [t.id for t in pending_tasks]:
         task = session.get(ComputationTask, task_id)
-        if task is not None and task.status == TaskStatus.pending:
-            _retry_task(session, task, settings, qm_engine)
-        session.commit()
+        if task is not None and task.status == TaskStatus.pending and _retry_task(session, task, settings, qm_engine):
+            session.commit()
 
 
-def _retry_task(session: Session, task: ComputationTask, settings: Settings, qm_engine: QMEngine) -> None:
-    """Create *task*'s next attempt if its current run calls for one."""
+def _retry_task(session: Session, task: ComputationTask, settings: Settings, qm_engine: QMEngine) -> bool:
+    """Create *task*'s next attempt if its current run calls for one; True when it wrote (or claimed)."""
     max_attempts = settings.pipeline.max_attempts
     jobs = session.exec(
         select(ComputationJob).where(ComputationJob.task_id == task.id)
@@ -769,7 +769,7 @@ def _retry_task(session: Session, task: ComputationTask, settings: Settings, qm_
 
     # Skip if there are still in-flight jobs (success is None)
     if any(j.success is None for j in jobs):
-        return
+        return False
 
     current_run = _current_run(task, jobs)
     failed_count = sum(1 for j in current_run if j.success is False)
@@ -777,7 +777,7 @@ def _retry_task(session: Session, task: ComputationTask, settings: Settings, qm_
 
     # Skip if already succeeded or exhausted
     if success_count > 0 or failed_count >= max_attempts:
-        return
+        return False
 
     # Find the most recent failed job (this run) to get failure info
     last_failed = max(
@@ -797,21 +797,22 @@ def _retry_task(session: Session, task: ComputationTask, settings: Settings, qm_
         task.updated_at = datetime.now(timezone.utc)
         session.add(task)
         logger.info("Task %d failed deterministically (%s); not retried", task.id, reason)
-        return
+        return True
 
     next_attempt = (task.retry_base or 0) + failed_count + 1
     # The paused list was read at the step's start; an archive may have begun since.
     if not _claim_task(session, task, TaskStatus.pending):
-        return
+        return True  # its UPDATE still opened a write
     # Per task: retry-strategy application reads files from previous job
     # directories, which archive/cleanup may have removed. One raising
     # task must not discard every other task's retry job for the tick.
     if not _build_job(session, task, next_attempt, settings, qm_engine, last_failed):
-        return
+        return True
     logger.info(
         "Created retry job (attempt %d) for task %d",
         next_attempt, task.id,
     )
+    return True
 
 
 # ======================================================================
@@ -825,7 +826,7 @@ def start_new_tasks(
     blocked_owners: Collection[str] = (),
 ) -> None:
     """For tasks in ``created`` status: create the initial job, generate
-    input files, and transition to ``pending``. Each task commits on its own."""
+    input files, and transition to ``pending``. Each task that wrote commits on its own."""
 
     tasks = session.exec(
         select(ComputationTask).where(
@@ -850,20 +851,19 @@ def start_new_tasks(
 
     for task_id in [t.id for t in tasks]:
         task = session.get(ComputationTask, task_id)
-        if task is not None:
-            _start_task(session, task, settings, qm_engine)
-        session.commit()
+        if task is not None and _start_task(session, task, settings, qm_engine):
+            session.commit()
 
 
-def _start_task(session: Session, task: ComputationTask, settings: Settings, qm_engine: QMEngine) -> None:
-    """Build *task*'s first job and mark it ``pending``."""
+def _start_task(session: Session, task: ComputationTask, settings: Settings, qm_engine: QMEngine) -> bool:
+    """Build *task*'s first job and mark it ``pending``; True when it wrote (or claimed)."""
     if not _claim_task(session, task, TaskStatus.created):
-        return  # an archive began since the paused list was read
+        return True  # an archive began since the paused list was read; its UPDATE still opened a write
     # Ensure task directory exists
     if not task.task_path:
         state = session.get(MoleculeState, task.state_id)
         if state is None:
-            return
+            return True
         # Created with the job folder, inside its rollback.
         task_dir = (
             settings.comp_data_path
@@ -877,12 +877,13 @@ def _start_task(session: Session, task: ComputationTask, settings: Settings, qm_
     # Per task, for the same reason as create_retry_jobs: one task that
     # raises here used to discard the whole step for every molecule.
     if not _build_job(session, task, (task.retry_base or 0) + 1, settings, qm_engine):
-        return
+        return True
 
     task.status = TaskStatus.pending
     task.updated_at = datetime.now(timezone.utc)
     session.add(task)
     logger.info("Task %d started (type=%s)", task.id, task.task_type.value)
+    return True
 
 
 # ======================================================================

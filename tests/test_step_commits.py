@@ -150,6 +150,7 @@ class TestProcessFinishedJobs:
     @pytest.mark.parametrize("change", [
         "UPDATE computation_jobs SET success = 0, fail_reason = 'judged elsewhere' WHERE id = :i",
         "DELETE FROM computation_jobs WHERE id = :i",
+        "UPDATE computation_jobs SET slurm_status = 'PENDING' WHERE id = :i",  # requeued
     ])
     def test_a_job_changed_since_the_step_began_is_left_alone(self, settings, tmp_path, change):
         with get_session() as session:
@@ -167,7 +168,7 @@ class TestProcessFinishedJobs:
         with get_session() as session:
             jobs = {j.id: j for j in session.exec(select(ComputationJob)).all()}
             assert jobs[ids[0]].success is True and jobs[ids[2]].success is True
-            assert ids[1] not in jobs or jobs[ids[1]].fail_reason == "judged elsewhere"
+            assert ids[1] not in jobs or jobs[ids[1]].success is not True
             assert sorted(r.job_id for r in session.exec(select(JobResult)).all()) == [ids[0], ids[2]]
 
 
@@ -247,3 +248,39 @@ class TestJobBuilds:
             retries = session.exec(select(ComputationJob).where(ComputationJob.attempt == 2)).all()
             assert len(retries) == 3
             assert all((Path(j.job_path) / "submit.cmd").is_file() for j in retries)
+
+    def test_skipped_pending_tasks_issue_no_commit(self, settings, monkeypatch):
+        with get_session() as session:
+            for task in _tasks(session, 4, status=TaskStatus.pending):
+                session.add(ComputationJob(task_id=task.id, attempt=1, slurm_status="RUNNING"))
+            session.commit()
+
+        with get_session() as session:
+            commits = []
+            real_commit = session.commit
+            monkeypatch.setattr(session, "commit", lambda: (commits.append(1), real_commit()))
+            create_retry_jobs(session, settings, OrcaParser())
+
+        assert commits == []
+
+    def test_a_failed_claim_ends_its_write_before_the_next_task(self, settings, monkeypatch):
+        with get_session() as session:
+            for task in _tasks(session, 3, status=TaskStatus.pending):
+                task.task_path = str(Path(settings.comp_data_path) / f"task_{task.id}")
+                session.add(task)
+                session.add(ComputationJob(task_id=task.id, attempt=1, success=False,
+                                           fail_reason="['Termination']"))
+            session.commit()
+        seen = []
+        real_claim = state_machine._claim_task
+
+        def claim(session, task, status):
+            seen.append(_probe(settings))
+            return real_claim(session, task, TaskStatus.created)  # matches no row
+
+        monkeypatch.setattr(state_machine, "_claim_task", claim)
+        with get_session() as session:
+            create_retry_jobs(session, settings, OrcaParser())
+            assert _probe(settings) == "free"
+
+        assert seen == ["free"] * 3
