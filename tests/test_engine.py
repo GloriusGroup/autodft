@@ -946,10 +946,9 @@ class TestRetryStrategies:
         assert "nprocs 32" in new_input.lower()
         assert "2500" in new_input  # raised to the ceiling, not left at 1500
 
-    def test_maxcore_is_capped_at_the_ceiling(self):
-        """A header asking for more than MAX_MAXCORE_MB is clamped down to it --
-        the hard cap that stops retries ballooning to 129 GB jobs."""
-        from autodft.qm.orca.retry import FailureInfo, IncreaseResources, MAX_MAXCORE_MB
+    def test_oom_above_the_ceiling_raises_the_headers_maxcore(self):
+        """A header above MAX_MAXCORE_MB is never clamped down to it; an OOM gets 1.5x."""
+        from autodft.qm.orca.retry import FailureInfo, IncreaseResources
 
         strategy = IncreaseResources(nprocs=32)
         inp = "!M062X\n%maxcore 8000\n%pal nprocs 8 end\n"
@@ -959,9 +958,8 @@ class TestRetryStrategies:
             attempt=2, charge=0, multiplicity=1,
         )
         new_input, new_submit = strategy.modify(inp, submit, failure)
-        assert f"%maxcore {MAX_MAXCORE_MB}" in new_input
-        assert "8000" not in new_input
-        assert f"--mem={32 * (MAX_MAXCORE_MB + 50)}" in new_submit
+        assert "%maxcore 12000" in new_input
+        assert f"--mem={32 * (12000 + 50)}" in new_submit
 
     def test_non_memory_failure_keeps_maxcore(self):
         """A timeout / SCF failure gets more cores and time, NOT more memory --
@@ -1032,7 +1030,7 @@ class TestRetryStrategies:
         )
         new_input, _ = strategy.modify(inp, "", failure)
         assert "nprocs 12" in new_input
-        assert "%maxcore 2500" in new_input   # clamped down from 16000
+        assert "%maxcore 16000" in new_input   # never lowered, also not by the ceiling
 
     def test_tighten_convergence_is_not_a_noop_on_tightscf_headers(self):
         """Every shipped header contains TightSCF, and the old guard made the

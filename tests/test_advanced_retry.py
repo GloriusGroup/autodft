@@ -111,3 +111,66 @@ def test_increase_resources_on_rendered_input():
     out, sub = IncreaseResources().modify(inp, submit, failure)
     assert "%pal nprocs 24 end" in out
     assert "--ntasks-per-node=24" in sub
+
+
+TIMEOUT = FailureInfo(fail_reason="['Termination']", previous_job_path="", attempt=2)
+OOM = FailureInfo(fail_reason="['Termination', 'OUT_OF_MEMORY']", previous_job_path="", attempt=2)
+
+
+def _resources(out: str, sub: str) -> tuple[int, int, int, int]:
+    """(%pal nprocs, %maxcore, --ntasks-per-node, --mem) of a retried job."""
+    return (int(re.search(r"%pal nprocs (\d+) end", out).group(1)),
+            int(re.search(r"%maxcore (\d+)", out).group(1)),
+            int(re.search(r"--ntasks-per-node=(\d+)", sub).group(1)),
+            int(re.search(r"--mem=(\d+)", sub).group(1)))
+
+
+def _submit(nprocs: int, maxcore: int) -> str:
+    return (f"#SBATCH --ntasks-per-node={nprocs}\n#SBATCH --mem={nprocs * (maxcore + 50)}\n"
+            "#SBATCH --time=1-00:00:00\n")
+
+
+def test_a_timeout_retry_never_cuts_the_users_cores_or_memory():
+    out, sub = IncreaseResources().modify(_sp(nprocs=32, maxcore=6000), _submit(32, 6000), TIMEOUT)
+    nprocs, maxcore, ntasks, mem = _resources(out, sub)
+    assert (nprocs, maxcore, ntasks) == (32, 6000, 32)
+    assert mem >= nprocs * (maxcore + 50)
+
+
+def test_a_confsearch_on_more_cores_than_the_escalation_keeps_them():
+    stage = {**ADV["confsearch"], "nprocs": 32}
+    inp = advanced.render_settings("!GOAT XTB2\n", stage, "confsearch") + XYZ
+    out, sub = IncreaseResources().modify(inp, _submit(32, stage["maxcore"]), TIMEOUT)
+    assert "%pal nprocs 32 end" in out and "--ntasks-per-node=32" in sub
+
+
+def test_an_oom_retry_raises_memory_above_the_jobs():
+    out, sub = IncreaseResources().modify(_sp(nprocs=32, maxcore=6000), _submit(32, 6000), OOM)
+    nprocs, maxcore, ntasks, mem = _resources(out, sub)
+    assert maxcore > 6000 and nprocs == ntasks == 32
+    assert mem >= nprocs * (maxcore + 50)
+    again = IncreaseResources().modify(out, sub, OOM)
+    assert _resources(*again)[1] > maxcore
+
+
+def test_an_oom_retry_stays_within_max_mem_per_job():
+    strategy = IncreaseResources(max_mem_per_job_mb=250000)
+    out, sub = strategy.modify(_sp(nprocs=32, maxcore=6000), _submit(32, 6000), OOM)
+    nprocs, maxcore, _, mem = _resources(out, sub)
+    assert maxcore > 6000 and nprocs == 32
+    assert nprocs * (maxcore + 50) <= mem <= 250000
+
+
+def test_max_mem_per_job_never_cuts_below_the_jobs_own_memory():
+    strategy = IncreaseResources(max_mem_per_job_mb=100000)
+    out, sub = strategy.modify(_sp(nprocs=32, maxcore=6000), _submit(32, 6000), OOM)
+    nprocs, maxcore, _, mem = _resources(out, sub)
+    assert (nprocs, maxcore) == (32, 6000) and mem >= 32 * 6050
+
+
+def test_default_escalation_is_unchanged():
+    inp = "!M062X\n%maxcore 1000\n%pal nprocs 12 end\n" + XYZ
+    out, sub = IncreaseResources().modify(inp, _submit(12, 1000), TIMEOUT)
+    assert _resources(out, sub) == (24, 1000, 24, 24 * 1050)
+    out, sub = IncreaseResources().modify(inp, _submit(12, 1000), OOM)
+    assert _resources(out, sub) == (24, 2500, 24, 24 * 2550)

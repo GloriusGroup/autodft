@@ -941,6 +941,15 @@ The pipeline is built to **fail loudly**, not silently:
   * its project is archived: the project's created and pending tasks fail
     as `project archived`, which the circuit breaker does not count.
 
+A retry after an abnormal termination, timeout or SLURM kill runs on
+`pipeline.retry.increased_nprocs` cores or the job's own, whichever is more,
+and `increased_time_limit` unless the stage's is longer. It keeps the job's
+`%maxcore`, except after a memory failure (`OUT_OF_MEMORY` or an ORCA
+out-of-memory message): then `increased_mem_per_core` (at most 2500 MB), or
+1.5× the job's own when that is already as high. `max_mem_per_job_mb`, when
+set, bounds that rise and then the extra cores, never below the job's own.
+No retry lowers a job's cores or `%maxcore`.
+
 Recovering:
 
 ```bash

@@ -58,7 +58,7 @@ class StageConfig:
     # Per-core memory (%maxcore, MB) for a job whose header does not specify
     # one. 1 GB/core is the house default; headers that need more (large
     # basis singlepoints) set their own %maxcore. Memory is only raised above
-    # this on an *explicit* memory failure, and never past MAX_MAXCORE_MB.
+    # this on an *explicit* memory failure.
     default_mem_per_core: int = 1000
     max_iter: int = 1000
     displacement: float = 0.1
@@ -70,18 +70,18 @@ class RetryConfig:
     increased_nprocs: int = 24
     # Per-core memory (%maxcore, MB) an escalated retry targets -- but ONLY
     # for an explicit memory failure (SLURM OUT_OF_MEMORY or an ORCA
-    # out-of-memory message), and clamped to MAX_MAXCORE_MB. A retry for any
-    # other failure (timeout, SCF, convergence) gets more cores and time but
-    # keeps the header's own %maxcore. Capped at 2500 so a whole campaign of
-    # retries can never blow up to the old 32 x 4050 = 126 GB per job.
+    # out-of-memory message), and clamped to MAX_MAXCORE_MB (2500). A job
+    # already at or above it gets 1.5x its own instead. A retry for any other
+    # failure (timeout, SCF, convergence) gets more cores and time but keeps
+    # the job's own %maxcore. No retry lowers cores or %maxcore.
     increased_mem_per_core: int = 2500
     # Ceiling on the SLURM --mem of an escalated job, in MB. 0 disables it.
     #
     # SET THIS to the memory of the largest node in your partition. If a job's
-    # allocation exceeds it the *rank count* is reduced to fit, never the
-    # per-rank %maxcore (lowering that would starve a job that died needing
-    # more memory per rank). Note %maxcore is separately hard-capped at
-    # MAX_MAXCORE_MB (2500), so per-rank memory is bounded regardless of this.
+    # allocation exceeds it the *rank count* is reduced to fit (never below the
+    # job's own), never the per-rank %maxcore (lowering that would starve a job
+    # that died needing more memory per rank). It also bounds an OOM retry's %maxcore rise on
+    # the job's own rank count, never below the job's own %maxcore.
     # Defaults to 0 so that enabling it is a deliberate choice made against
     # real hardware.
     max_mem_per_job_mb: int = 0

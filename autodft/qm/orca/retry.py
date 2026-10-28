@@ -18,7 +18,6 @@ from typing import Optional
 
 import numpy as np
 
-from autodft.qm.orca.blocks import is_nmr_dh
 from autodft.qm.orca.parser import MP2_RESPONSE_MEMORY, OrcaParser, mp2_response_memory_short
 
 __all__ = [
@@ -41,11 +40,8 @@ DEFAULT_MAX_ITER: int = 1000
 DEFAULT_DISPLACEMENT: float = 0.1
 INCREASED_TIME: str = "4-00:00:00"
 
-# Hard ceiling on per-rank memory (%maxcore, MB). A job is never generated
-# asking for more than this per process, no matter what a header requests or
-# how many times it is escalated: unbounded per-rank memory is how a single
-# campaign ended up with 32-rank, 129 GB jobs. A molecule that genuinely
-# needs more than this per rank will fail rather than escalate without limit.
+# Ceiling on the %maxcore (MB) an OOM retry escalates to from mem_per_core;
+# a job's own higher value is kept, and raised x1.5 on an OOM instead.
 MAX_MAXCORE_MB: int = 2500
 # An NMR MP2 response retry: ORCA leaves the response ~83 % of %maxcore, so a
 # shortfall of N MB needs N / 0.8 more; capped per rank and per job (smallest CPU node ~470 GB).
@@ -141,13 +137,12 @@ class IncreaseResources(RetryStrategy):
     failure -- per-rank memory.
 
     Triggered when the previous job terminated abnormally. Cores and time are
-    raised for any such failure; ``%maxcore`` is raised *only* when the
-    failure is an out-of-memory one, and never above :data:`MAX_MAXCORE_MB`.
-    Every other failure keeps the header's own ``%maxcore`` -- more cores, not
-    more memory.
+    raised for any such failure, never below the job's own; ``%maxcore`` is
+    raised *only* on an out-of-memory failure and never lowered.
 
-    Default target: 24 cores, extended time limit, and up to
-    ``mem_per_core`` (clamped to the ceiling) per rank on a memory failure.
+    Default target: at least 24 cores, extended time limit, and on a memory
+    failure ``mem_per_core`` (at most :data:`MAX_MAXCORE_MB`) per rank, or
+    1.5x the job's own if that is already as high.
     """
 
     def __init__(
@@ -213,31 +208,29 @@ class IncreaseResources(RetryStrategy):
         # allocation, so ORCA re-ran byte-identical on the original core
         # count with the extra cores sitting idle.
         #
-        # Per-rank memory is raised ONLY for an explicit memory failure, and
-        # never above MAX_MAXCORE_MB. For every other failure the header's own
-        # %maxcore is kept -- throwing memory at a timeout or an SCF problem
-        # just produced 129 GB jobs that failed the same way. The ceiling is a
-        # hard cap: even a header that asks for more is clamped down to it.
+        # Never below the job's own cores or %maxcore. Only a memory failure raises
+        # %maxcore: to mem_per_core (bounded by MAX_MAXCORE_MB) if that is more,
+        # else x1.5; max_mem_per_job_mb bounds the rise on the job's own ranks.
         current_match = re.search(r"%maxcore\s+(\d+)", input_content, re.IGNORECASE)
         base_maxcore = int(current_match.group(1)) if current_match else 1000
-        # A dh NMR job's MP2 response needs its own %maxcore, so it is never clamped down.
-        ceiling = max(MAX_MAXCORE_MB, base_maxcore) if is_nmr_dh(input_content) else MAX_MAXCORE_MB
-        if memory_failure:
-            target_maxcore = min(max(self.mem_per_core, base_maxcore), ceiling)
-        else:
-            target_maxcore = min(base_maxcore, ceiling)
-
-        # The escalated allocation must fit on a real node. If a max_mem ceiling
-        # is configured, reduce the *core count* to fit rather than the per-rank
-        # memory: clamping --mem alone would leave ORCA free to allocate more
-        # per rank than SLURM granted, which is an OOM by construction. Never
-        # drop below the header's original core count -- that would make the
-        # escalation a downgrade.
         current_nprocs = re.search(
             r"%pal\s+nprocs\s+(\d+)\s+end", input_content, re.IGNORECASE,
         )
         original_nprocs = int(current_nprocs.group(1)) if current_nprocs else 1
-        target_nprocs = self.nprocs
+        target_maxcore = base_maxcore
+        if memory_failure:
+            escalated = min(self.mem_per_core, MAX_MAXCORE_MB)
+            if escalated <= base_maxcore:
+                escalated = math.ceil(base_maxcore * 1.5 / 500) * 500
+            if self.max_mem_per_job_mb:
+                escalated = min(escalated, self.max_mem_per_job_mb // original_nprocs - 50)
+            target_maxcore = max(base_maxcore, escalated)
+
+        # If a max_mem ceiling is configured, reduce the *core count* to fit
+        # rather than the per-rank memory: clamping --mem alone would leave ORCA
+        # free to allocate more per rank than SLURM granted. Never below the
+        # job's own core count.
+        target_nprocs = max(self.nprocs, original_nprocs)
         if self.max_mem_per_job_mb:
             affordable = max(1, self.max_mem_per_job_mb // (target_maxcore + 50))
             if affordable < target_nprocs:
@@ -248,8 +241,7 @@ class IncreaseResources(RetryStrategy):
                     self.nprocs, target_maxcore, self.max_mem_per_job_mb, target_nprocs,
                 )
 
-        # Rewrite %maxcore only when a token exists and the value actually
-        # changes (a memory escalation, or a header clamped down to the ceiling).
+        # Rewrite %maxcore only when a token exists and a memory escalation raised it.
         if current_match is not None and target_maxcore != base_maxcore:
             input_content = re.sub(
                 r"%maxcore\s+\d+",

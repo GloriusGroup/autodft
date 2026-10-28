@@ -75,9 +75,9 @@ def test_a_dh_nmr_retry_after_an_scf_recovery_keeps_its_memory():
     assert "%maxcore 6000" in inp
 
 
-def test_other_jobs_stay_clamped_to_the_ceiling():
+def test_other_jobs_keep_their_memory():
     inp, _ = ESCALATE.modify("!PBE0 def2-TZVP NMR\n%maxcore 4000\n%pal nprocs 8 end\n", "#SBATCH --mem=32400\n", TERMINATION)
-    assert "%maxcore 2500" in inp
+    assert "%maxcore 4000" in inp
 
 
 def test_nmr_jobs_copy_their_mp2_response_logs_back(tmp_path):
