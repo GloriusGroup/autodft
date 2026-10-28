@@ -125,6 +125,35 @@ class TestBatch:
         assert body["rejected"][0]["smiles"] == "CCO"
         assert "already exists" in body["rejected"][0]["detail"]
 
+    def test_the_loop_does_not_hold_the_write_lock(self, api, tmp_path, monkeypatch):
+        import sqlite3
+
+        client, key = api
+        original, seen = categories.existing_conflict, []
+
+        def probe(*args, **kwargs):
+            result = original(*args, **kwargs)
+            other = sqlite3.connect(tmp_path / "autodft.db", timeout=0, isolation_level=None)
+            try:
+                other.execute("BEGIN IMMEDIATE")
+                other.execute("ROLLBACK")
+                seen.append("free")
+            except sqlite3.OperationalError as exc:
+                seen.append(str(exc))
+            finally:
+                other.close()
+            return result
+
+        monkeypatch.setattr(categories, "existing_conflict", probe)
+        smiles = ["C" * n for n in range(1, 51)]
+        r = client.post("/api/submit-batch", headers=key, json={"smiles_list": smiles, "project": "p"})
+        assert r.status_code == 200, r.text
+        assert seen == ["free"] * 50
+        assert [q["smiles"] for q in r.json()["queued"]] == smiles
+        with get_session() as session:
+            rows = session.exec(select(CalculationEntrypoint).order_by(CalculationEntrypoint.id)).all()
+        assert [(e.id, e.smiles) for e in rows] == [(q["id"], q["smiles"]) for q in r.json()["queued"]]
+
 
 class TestUvvisOptions:
     def test_options_are_recorded_with_the_category(self, api):

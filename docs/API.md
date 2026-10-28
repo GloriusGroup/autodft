@@ -313,7 +313,8 @@ Queue many molecules under one set of options. Takes every field
 `POST /api/submit` takes, except that `smiles` is replaced by
 `smiles_list` (max 10 000 entries). Use this for anything library-sized: it
 is a single transaction, where N single submissions are N commits and N
-rounds of lock contention with the controller.
+rounds of lock contention with the controller. Every SMILES is validated
+first, and the database write lock is taken only for the final insert.
 
 Invalid SMILES do **not** fail the request. Each one is reported
 individually — including any entry over the 512-character bound — so the

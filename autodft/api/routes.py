@@ -2813,8 +2813,9 @@ def api_extend(name: str, body: SubmitBatchRequest, identity: Identity = Depends
                 continue
             entry = _new_entrypoint(session, body, check["canonical"], name, identity.username, headers, advanced)
             entry.request_metadata = json.dumps({**json.loads(entry.request_metadata), "extend": True})
-            session.add(entry)
             accepted.append((smiles, entry))
+        # Added only now: an add inside the loop autoflushes on the next query and holds the write lock.
+        session.add_all(entry for _, entry in accepted)
         session.commit()
         return {
             "project": name,
@@ -2897,9 +2898,10 @@ def api_submit_batch(
                 rejected.append({"smiles": smiles, "detail": detail})
                 continue
             entry = _new_entrypoint(session, body, smiles, project_name, author, headers, advanced)
-            session.add(entry)
             accepted.append((smiles, entry))
 
+        # Added only now: an add inside the loop autoflushes on the next query and holds the write lock.
+        session.add_all(entry for _, entry in accepted)
         session.commit()
 
         return {

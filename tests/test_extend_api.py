@@ -132,3 +132,33 @@ def test_a_user_cannot_extend_a_project_whose_header_admin_deleted(api, who):
     else:
         assert r.status_code == 200, r.text
         assert len(r.json()["queued"]) == 2 and len(entries) == 2
+
+
+def test_the_extend_loop_does_not_hold_the_write_lock(api, tmp_path, monkeypatch):
+    import sqlite3
+
+    client, key = api
+    original, seen = categories.extension, []
+
+    def probe(*args, **kwargs):
+        result = original(*args, **kwargs)
+        other = sqlite3.connect(tmp_path / "autodft.db", timeout=0, isolation_level=None)
+        try:
+            other.execute("BEGIN IMMEDIATE")
+            other.execute("ROLLBACK")
+            seen.append("free")
+        except sqlite3.OperationalError as exc:
+            seen.append(str(exc))
+        finally:
+            other.close()
+        return result
+
+    monkeypatch.setattr(categories, "extension", probe)
+    smiles = ["CCO", "CC=O"] * 25
+    r = client.post("/api/projects/p/extend", headers=key, json={"smiles_list": smiles, "request_ox": True})
+    assert r.status_code == 200, r.text
+    assert seen == ["free"] * 50
+    assert [q["smiles"] for q in r.json()["queued"]] == smiles
+    with get_session() as session:
+        rows = session.exec(select(CalculationEntrypoint).order_by(CalculationEntrypoint.id)).all()
+    assert [(e.id, e.smiles) for e in rows] == [(q["id"], q["smiles"]) for q in r.json()["queued"]]
