@@ -364,3 +364,140 @@ def test_requeue_failed_skips_a_task_in_flight_and_judges_a_stale_job(
     assert (busy.status, busy_job.success) == (TaskStatus.failed, None)
     assert (stale.status, stale.retry_base) == (TaskStatus.created, 1)
     assert (stale_job.success, stale_job.fail_reason) == (False, cli_admin.RESET_FAIL_REASON)
+
+
+@pytest.mark.parametrize("fields", [
+    {"slurm_status": "SUBMITTING"},
+    {"fail_reason": "sbatch failed (retrying): Socket timed out"},
+    {"fail_reason": "sbatch failed (rejected 1/3, retrying): Invalid partition"},
+])
+def test_force_refuses_a_job_claimed_or_maybe_accepted_by_sbatch(session, opt, fields):
+    session.add(ComputationJob(task_id=opt["sps"][1].id, attempt=1, **fields))
+    session.commit()
+    with pytest.raises(typer.Exit):
+        _reset(opt["opt"].id, force=True)
+    session.refresh(opt["opt"])
+    assert opt["opt"].status == TaskStatus.successful
+
+
+def test_a_finished_unjudged_job_blocks_a_plain_reset_and_requeue(session, settings, sample_task):
+    task = sample_task
+    task.status = TaskStatus.failed
+    session.add(task)
+    done = ComputationJob(task_id=task.id, attempt=1, slurm_jobid=5, slurm_status="COMPLETED")
+    session.add(done)
+    session.commit()
+    with pytest.raises(typer.Exit):
+        _reset(task.id)
+    cli_admin.requeue_failed(project=None)
+    session.refresh(task)
+    session.refresh(done)
+    assert (task.status, done.success, done.fail_reason) == (TaskStatus.failed, None, None)
+
+
+def test_a_reset_during_a_submission_tick_neither_orphans_nor_doubles(tmp_path, monkeypatch):
+    """The tick loaded a dependent's job that a concurrent --force deletes; a later
+    job's real submission must keep its slurm_jobid."""
+    from sqlmodel import Session, SQLModel, create_engine
+
+    from autodft.api import admin_ops
+    from autodft.engine.scheduler import SubmitResult
+    from autodft.engine.state_machine import submit_pending_jobs
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'race.db'}", connect_args={"timeout": 5})
+    SQLModel.metadata.create_all(engine)
+    settings = Settings()
+    settings.storage.data_path = str(tmp_path / "data")
+    settings.storage.comp_data_path = str(tmp_path / "comp")
+
+    with Session(engine) as setup:
+        header = ComputationHeader(header_text="!B3LYP\n")
+        mol = Molecule(smiles="C", project_name="nho/p")
+        setup.add_all([header, mol])
+        setup.commit()
+        state = MoleculeState(molecule_id=mol.id, description="S0", multiplicity=1, charge=0,
+                              optimization_header_id=header.id, singlepoint_header_id=header.id)
+        setup.add(state)
+        setup.commit()
+        reset = _task(setup, settings, state, TaskType.optimization, TaskStatus.successful,
+                      has_followups=False)
+        first = _task(setup, settings, state, TaskType.optimization, TaskStatus.pending)
+        stale = _task(setup, settings, state, TaskType.singlepoint, TaskStatus.pending,
+                      depends_on_task_id=reset.id, has_followups=False)
+        other = _task(setup, settings, state, TaskType.singlepoint, TaskStatus.pending,
+                      has_followups=False)
+        jobs = {}
+        for name, task in (("first", first), ("stale", stale), ("other", other)):
+            job = ComputationJob(task_id=task.id, attempt=1)
+            setup.add(job)
+            setup.commit()
+            path = Path(task.task_path) / f"job_{job.id}"
+            path.mkdir(parents=True)
+            (path / "submit.cmd").write_text("#!/bin/bash\n")
+            job.job_path = str(path)
+            setup.add(job)
+            setup.commit()
+            jobs[name] = job.id
+        reset_id = reset.id
+
+    class _Scheduler:
+        calls: list[str] = []
+
+        def get_queue_length(self):
+            return 0
+
+        def submit(self, script, nice=0):
+            self.calls.append(Path(script).parent.name)
+            if len(self.calls) == 1:  # the CLI's --force runs while this sbatch hangs
+                with Session(engine) as cli:
+                    admin_ops.rerun_task(cli, cli.get(ComputationTask, reset_id), settings.comp_data_path)
+                return SubmitResult(success=False, error="Socket timed out")
+            return SubmitResult(success=True, job_id="4242")
+
+    scheduler = _Scheduler()
+    with Session(engine) as controller:
+        submit_pending_jobs(controller, scheduler, settings)
+        controller.commit()
+
+    with Session(engine) as check:
+        assert check.get(ComputationJob, jobs["stale"]) is None
+        assert check.get(ComputationJob, jobs["other"]).slurm_jobid == 4242
+        assert scheduler.calls == [f"job_{jobs['first']}", f"job_{jobs['other']}"]
+    engine.dispose()
+
+
+def test_begin_write_holds_off_a_claim_until_the_commit(tmp_path):
+    from sqlalchemy.exc import OperationalError
+    from sqlmodel import Session, SQLModel, create_engine
+
+    from autodft.api import admin_ops
+    from autodft.engine.state_machine import _claim
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'lock.db'}", connect_args={"timeout": 0.2})
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as setup:
+        header = ComputationHeader(header_text="!B3LYP\n")
+        mol = Molecule(smiles="C", project_name="nho/p")
+        setup.add_all([header, mol])
+        setup.commit()
+        state = MoleculeState(molecule_id=mol.id, description="S0", multiplicity=1, charge=0)
+        setup.add(state)
+        setup.commit()
+        task = ComputationTask(task_type=TaskType.singlepoint, state_id=state.id, header_id=header.id)
+        setup.add(task)
+        setup.commit()
+        job = ComputationJob(task_id=task.id)
+        setup.add(job)
+        setup.commit()
+        job_id, task_id = job.id, task.id
+
+    with Session(engine) as cli, Session(engine) as controller:
+        admin_ops.begin_write(cli)
+        assert admin_ops.in_flight_jobs(cli, [task_id]) == []
+        with pytest.raises(OperationalError, match="locked"):
+            _claim(controller, job_id)
+        controller.rollback()
+        cli.commit()
+        assert _claim(controller, job_id)
+        assert [j.id for j in admin_ops.in_flight_jobs(cli, [task_id])] == [job_id]
+    engine.dispose()

@@ -16,7 +16,7 @@ from time import monotonic
 from pathlib import Path
 from typing import Collection, NamedTuple, Optional
 
-from sqlalchemy import and_, case, or_
+from sqlalchemy import and_, case, or_, update
 from sqlmodel import Session, col, select
 
 from autodft import categories
@@ -70,8 +70,9 @@ MAX_UNSATISFIABLE_PER_TICK = 10
 
 # Consecutive sbatch rejections of a job after which it fails as an attempt.
 MAX_SBATCH_REJECTIONS = 3
-_SBATCH_FAILED = "sbatch failed"
-_SBATCH_RETRYING = f"{_SBATCH_FAILED} (retrying)"
+# fail_reason prefix of an unjudged job whose sbatch failed; SLURM may have accepted it.
+SBATCH_FAILED = "sbatch failed"
+_SBATCH_RETRYING = f"{SBATCH_FAILED} (retrying)"
 _SBATCH_REJECTED = re.compile(r"^sbatch failed \(rejected (\d+)/")
 
 
@@ -874,6 +875,7 @@ def submit_pending_jobs(
 
     from autodft.engine import submission_hold
 
+    _release_claims(session)
     held = submission_hold.read_state(settings.data_path)
     if held is not None:
         logger.info("Submission hold active (%s) -- not submitting jobs",
@@ -940,12 +942,15 @@ def submit_pending_jobs(
     # skipped. Skipping left `success` NULL forever, so the retry path ignored
     # it, the task stayed `pending`, and the same warning was logged every
     # tick in perpetuity. Recording the failure lets max_attempts do its job.
+    # Committed alone: a later commit must not carry it with a real submission.
     def _fail(job: ComputationJob, reason: str) -> None:
         logger.error("Job %d: %s", job.id, reason)
         job.success = False
+        job.slurm_status = None
         job.fail_reason = reason[:500]
         job.time_end = datetime.now(timezone.utc)
         session.add(job)
+        session.commit()
 
     # Between polls the count is incremented optimistically, which assumes
     # every submitted job sits in the queue. On an idle partition none of
@@ -956,8 +961,10 @@ def submit_pending_jobs(
     since_poll = 0
     sbatch_calls = sbatch_failures = 0
     rejected: list[tuple[ComputationJob, str]] = []
+    # Ids now: a commit below expires the rows, and a reset-task may delete one.
+    job_ids = [job.id for job, _ in rows]
 
-    for index, (job, priority) in enumerate(rows):
+    for index, ((job, priority), job_id) in enumerate(zip(rows, job_ids)):
         if monotonic() >= deadline:
             logger.info(
                 "Submission budget for this tick spent after %d job(s); "
@@ -981,6 +988,9 @@ def submit_pending_jobs(
             )
             break
 
+        if not _claim(session, job_id):
+            continue  # deleted or judged since the tick began (admin reset-task)
+
         if job.job_path is None:
             _fail(job, "No job_path recorded; input files were never generated")
             continue
@@ -992,12 +1002,14 @@ def submit_pending_jobs(
 
         adopted = None
         # Any failed sbatch may still have been accepted.
-        if (job.fail_reason or "").startswith(_SBATCH_FAILED):
+        if (job.fail_reason or "").startswith(SBATCH_FAILED):
             try:
                 adopted = scheduler.find_submitted(submit_script)
             except Exception:  # noqa: BLE001 - resubmitting blind could run the job twice
                 logger.exception("Job %d: SLURM lookup of an earlier sbatch failed; "
                                  "deferring to the next tick", job.id)
+                job.slurm_status = None
+                session.add(job)
                 continue
 
         if adopted is not None:
@@ -1033,6 +1045,7 @@ def submit_pending_jobs(
             # reason for visibility but leave success NULL so the next tick
             # retries; the per-tick submission cap bounds the retry rate.
             logger.error("Job %d: sbatch failed (will retry): %s", job.id, result.error)
+            job.slurm_status = None
             job.fail_reason = f"{_SBATCH_RETRYING}: {result.error}"[:500]
             session.add(job)
 
@@ -1042,6 +1055,7 @@ def submit_pending_jobs(
         logger.warning("All %d sbatch calls failed this tick (every sbatch); "
                        "taken as a SLURM outage, no rejection is counted", sbatch_calls)
     for job, error in rejected:
+        job.slurm_status = None
         # A rejection repeats on the same script, so a few cost an attempt.
         previous = _SBATCH_REJECTED.match(job.fail_reason or "")
         rejections = (int(previous.group(1)) if previous else 0) + (not outage)
@@ -1052,13 +1066,47 @@ def submit_pending_jobs(
             logger.error("Job %d: sbatch rejected (%d/%d, will retry): %s",
                          job.id, rejections, MAX_SBATCH_REJECTIONS, error)
             job.fail_reason = (
-                f"{_SBATCH_FAILED} (rejected {rejections}/{MAX_SBATCH_REJECTIONS}, "
+                f"{SBATCH_FAILED} (rejected {rejections}/{MAX_SBATCH_REJECTIONS}, "
                 f"retrying): {error}"
             )[:500]
         else:
             job.fail_reason = f"{_SBATCH_RETRYING}: {error}"[:500]
         session.add(job)
 
+    session.flush()
+
+
+def _claim(session: Session, job_id: int) -> bool:
+    """Mark an unsent job SUBMITTING and commit; False when it is gone or no longer unsent."""
+    claimed = session.exec(
+        update(ComputationJob)
+        .where(
+            col(ComputationJob.id) == job_id,
+            col(ComputationJob.slurm_jobid).is_(None),
+            col(ComputationJob.slurm_status).is_(None),
+            col(ComputationJob.success).is_(None),
+        )
+        .values(slurm_status=SlurmStatus.SUBMITTING.value)
+        .execution_options(synchronize_session=False)
+    ).rowcount
+    session.commit()
+    return bool(claimed)
+
+
+def _release_claims(session: Session) -> None:
+    """Claims a crash or a failed step left: the next submission looks them up in SLURM first."""
+    for job in session.exec(
+        select(ComputationJob).where(
+            ComputationJob.slurm_status == SlurmStatus.SUBMITTING.value,
+            col(ComputationJob.slurm_jobid).is_(None),
+            col(ComputationJob.success).is_(None),
+        )
+    ).all():
+        logger.warning("Job %d: claimed for sbatch by an interrupted tick; looking it up first", job.id)
+        job.slurm_status = None
+        if not (job.fail_reason or "").startswith(SBATCH_FAILED):
+            job.fail_reason = f"{_SBATCH_RETRYING}: interrupted during submission"
+        session.add(job)
     session.flush()
 
 

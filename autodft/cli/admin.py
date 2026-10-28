@@ -101,7 +101,10 @@ RESET_FAIL_REASON = "superseded by a reset"
 
 
 def _set_retry_base(session, task: ComputationTask) -> None:
-    """Give a requeued task a fresh attempt budget from its jobs so far."""
+    """Give a requeued task a fresh attempt budget from its jobs so far.
+
+    Callers skip a task with a job in SLURM or awaiting judging, so an unjudged job here was never sent.
+    """
     jobs = session.exec(select(ComputationJob).where(ComputationJob.task_id == task.id)).all()
     now = datetime.now(timezone.utc)
     for job in jobs:
@@ -127,6 +130,7 @@ def reset_task(
 
     settings = load_settings(config)
     with get_session(settings) as session:
+        admin_ops.begin_write(session)
         task = session.get(ComputationTask, task_id)
         if task is None:
             console.print(f"[red]Task #{task_id} not found.[/red]")
@@ -153,10 +157,12 @@ def reset_task(
             for folder in summary["orphaned_dirs"]:
                 console.print(f"  [yellow]could not delete {folder}[/yellow]")
         else:
-            live = admin_ops.in_flight_jobs(session, [task_id])
-            if live:
-                ids = ", ".join(str(j.slurm_jobid) for j in live)
-                console.print(f"[red]Task #{task_id} not reset:[/red] job(s) still in SLURM ({ids}).")
+            unsettled = admin_ops.unsettled_jobs(session, [task_id])
+            if unsettled:
+                console.print(
+                    f"[red]Task #{task_id} not reset:[/red] {admin_ops.describe_jobs(unsettled)} "
+                    "in SLURM or not yet judged; try again after the controller's next tick."
+                )
                 raise typer.Exit(code=1)
             _set_retry_base(session, task)
             task.status = TaskStatus.created
@@ -175,10 +181,12 @@ def reset_task(
 def requeue_failed(
     project: Optional[str] = typer.Option(None, "--project", help="Filter by project name"),
 ) -> None:
-    """Requeue all failed tasks back to 'created' status, except those with a job in SLURM."""
-    from autodft.api.admin_ops import in_flight_jobs
+    """Requeue all failed tasks back to 'created' status, except those with a job in SLURM
+    or not yet judged."""
+    from autodft.api.admin_ops import begin_write, unsettled_jobs
 
     with get_session() as session:
+        begin_write(session)
         stmt = select(ComputationTask).where(ComputationTask.status == TaskStatus.failed)
 
         if project:
@@ -195,7 +203,7 @@ def requeue_failed(
             console.print("[yellow]No failed tasks found.[/yellow]")
             return
 
-        busy = {j.task_id for j in in_flight_jobs(session, [t.id for t in failed_tasks])}
+        busy = {j.task_id for j in unsettled_jobs(session, [t.id for t in failed_tasks])}
         count = 0
         now = datetime.now(timezone.utc)
         for task in failed_tasks:
@@ -212,7 +220,7 @@ def requeue_failed(
     project_msg = f" (project={project})" if project else ""
     console.print(f"[green]Requeued {count} failed task(s){project_msg}.[/green]")
     if busy:
-        console.print(f"[yellow]Skipped {len(busy)} with a job still in SLURM.[/yellow]")
+        console.print(f"[yellow]Skipped {len(busy)} with a job in SLURM or not yet judged.[/yellow]")
     logger.info("Requeued %d failed tasks%s", count, project_msg)
 
 

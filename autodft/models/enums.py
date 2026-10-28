@@ -65,6 +65,8 @@ class SlurmStatus(str, Enum):
     TIMEOUT = "TIMEOUT"
     CANCELLED = "CANCELLED"
     UNKNOWN = "UNKNOWN"
+    # Ours, not SLURM's: claimed by the submit loop, sbatch under way (slurm_jobid still NULL).
+    SUBMITTING = "SUBMITTING"
 
 
 # `slurm_status` holds the raw sacct string, so these sets -- not the enum --
@@ -76,7 +78,7 @@ class SlurmStatus(str, Enum):
 TRANSIENT_SLURM_STATES = frozenset({
     "PENDING", "RUNNING", "COMPLETING", "CONFIGURING", "SUSPENDED",
     "REQUEUED", "REQUEUE_HOLD", "REQUEUE_FED", "RESIZING", "SIGNALING",
-    "STAGE_OUT", "STOPPED", "UNKNOWN",
+    "STAGE_OUT", "STOPPED", "UNKNOWN", SlurmStatus.SUBMITTING.value,
 })
 
 # Terminal: the job is over, one way or another, and its output can be read.

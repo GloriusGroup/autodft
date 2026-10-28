@@ -306,3 +306,44 @@ class TestOutageGuard:
         session.refresh(accepted)
         assert accepted.slurm_jobid == 790
         assert rejected.fail_reason.startswith("sbatch failed (rejected 1/3")
+
+
+class TestClaims:
+    """A job is claimed (SUBMITTING) before sbatch; a claim never outlives its tick."""
+
+    def _claimed(self, session, job):
+        job.slurm_status = SlurmStatus.SUBMITTING
+        session.add(job)
+        session.commit()
+
+    def test_a_claim_a_crash_left_after_sbatch_is_adopted(self, session, ready_job, slurm):
+        fake = slurm([])
+        fake.jobs["779"] = (f"autodft_{ready_job.id}_optimization", ready_job.job_path, True)
+        self._claimed(session, ready_job)
+        _tick(session, ready_job)
+        assert fake.sbatch_calls() == []
+        assert (ready_job.slurm_jobid, ready_job.slurm_status) == (779, SlurmStatus.PENDING)
+
+    def test_a_claim_a_crash_left_before_sbatch_submits_once(self, session, ready_job, slurm):
+        fake = slurm([("ok", "780")])
+        self._claimed(session, ready_job)
+        _tick(session, ready_job)
+        assert len(fake.sbatch_calls()) == 1
+        assert ready_job.slurm_jobid == 780
+
+    def test_a_failed_sbatch_releases_the_claim(self, session, ready_job, slurm):
+        slurm([("timeout", None)])
+        _tick(session, ready_job)
+        assert (ready_job.slurm_status, ready_job.success) == (None, None)
+
+    def test_a_rejection_releases_the_claim(self, session, ready_job, slurm):
+        slurm([("reject", None)])
+        _tick(session, ready_job)
+        assert ready_job.slurm_status is None
+        assert ready_job.fail_reason.startswith("sbatch failed (rejected 1/3")
+
+    def test_an_unsubmittable_job_fails_without_a_claim(self, session, ready_job, slurm):
+        slurm([])
+        (Path(ready_job.job_path) / "submit.cmd").unlink()
+        _tick(session, ready_job)
+        assert (ready_job.success, ready_job.slurm_status) == (False, None)

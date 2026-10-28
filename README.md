@@ -894,7 +894,9 @@ The pipeline is built to **fail loudly**, not silently:
     transient list) fail it as `sbatch rejected 3 times`. Transient errors
     (timeouts, slurmctld unreachable, munge/authentication, submit limits)
     are retried for free, and a tick in which every sbatch failed is taken
-    as an outage and counts no rejection;
+    as an outage and counts no rejection. A job is marked `SUBMITTING`
+    before its sbatch; one a crash leaves so is looked up in SLURM on the
+    next tick and adopted, or submitted if SLURM never got it;
   * it is in a SLURM state the pipeline does not know:
     `Unrecognised SLURM state <state>`;
   * neither sacct nor squeue knows its job id on two polls running:
@@ -925,17 +927,25 @@ autodft admin cleanup --days 30                      # purge old completed entry
 A requeued task gets a fresh set of `pipeline.max_attempts` attempts; its
 earlier attempts stay in the job history but no longer count towards failing
 it again, and a success among them no longer counts either. A job of the old
-run that never finished is marked `superseded by a reset`.
+run that was built but never sent is marked `superseded by a reset`.
 
 `reset-task` refuses a task that is not `failed`. With `--force` it takes any
 status, e.g. an optimisation to redo with an imaginary mode, and deletes the
 task's jobs and every task built on its results: its singlepoints, category
 singlepoints and ESD rate tasks, recursively, with their jobs, results,
 geometries and folders under `comp_data`. A reset ESD seed (S0*) also
-deletes the S1/T1 work and seeds ESD again. Once the new job succeeds, the
-follow-ups are created again from its geometry. `reset-task` refuses, and
-`requeue-failed` skips, a task that still has a job in SLURM (pending or
-running); with `--force`, so does a job of any task it would delete.
+deletes the S1/T1 work and seeds ESD again. Resetting any other S0
+conformer's optimisation does not pick S0* again, even if the new energy
+would make that conformer the lowest. Once the new job succeeds, the
+follow-ups are created again from its geometry.
+
+`reset-task` refuses, and `requeue-failed` skips, a task with a job that
+SLURM may be running: pending or running, claimed for sbatch (`SUBMITTING`),
+or left by an sbatch that reported failure but may have been accepted. Both
+also wait for a job that finished in SLURM but has not been judged yet
+(next tick). `--force` deletes such a finished job, but refuses when SLURM
+may be running a job of any task it would delete. The check and the changes run under one database write
+lock, so the controller cannot submit a job in between.
 
 For an entrypoint that failed before being expanded (e.g. bad SMILES),
 fix the SMILES and resubmit; the original `processing_error` row stays

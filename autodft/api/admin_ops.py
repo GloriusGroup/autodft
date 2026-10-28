@@ -46,6 +46,7 @@ from typing import Optional
 from sqlmodel import Session, col, delete, func, select, update
 
 from autodft.models.enums import TERMINAL_SLURM_STATES, TRANSIENT_SLURM_STATES, TaskStatus, TaskType
+from autodft.engine.state_machine import SBATCH_FAILED
 from autodft.paths import safe_subdirectory
 from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.models.geometry import MoleculeGeometry
@@ -1003,8 +1004,26 @@ def wipe_molecule(
 _SEED_LABEL = "seed_from_task_"
 
 
-def in_flight_jobs(session: Session, task_ids: list[int]) -> list[ComputationJob]:
-    """Jobs of *task_ids* that SLURM has and has not finished."""
+def begin_write(session: Session) -> None:
+    """Take SQLite's write lock now, so what is checked cannot change before the writes.
+
+    The submit loop claims a job (``SUBMITTING``) with a write, so a claim either
+    precedes the check or waits for the commit.
+    """
+    if session.get_bind().dialect.name != "sqlite":
+        return
+    connection = session.connection()
+    if not connection.connection.dbapi_connection.in_transaction:  # a write already holds it
+        connection.exec_driver_sql("BEGIN IMMEDIATE")
+
+
+def _never_sent(job: ComputationJob) -> bool:
+    return (job.slurm_jobid is None and job.slurm_status is None
+            and not (job.fail_reason or "").startswith(SBATCH_FAILED))
+
+
+def unsettled_jobs(session: Session, task_ids: list[int]) -> list[ComputationJob]:
+    """Unjudged jobs of *task_ids* that went, or may have gone, to SLURM."""
     if not task_ids:
         return []
     return [
@@ -1012,11 +1031,26 @@ def in_flight_jobs(session: Session, task_ids: list[int]) -> list[ComputationJob
             select(ComputationJob).where(
                 col(ComputationJob.task_id).in_(task_ids),
                 col(ComputationJob.success).is_(None),
-                col(ComputationJob.slurm_jobid).is_not(None),
             )
         ).all()
-        if job.slurm_status not in TERMINAL_SLURM_STATES
+        if not _never_sent(job)
     ]
+
+
+def in_flight_jobs(session: Session, task_ids: list[int]) -> list[ComputationJob]:
+    """Jobs of *task_ids* SLURM may be running: claimed for sbatch, possibly accepted by
+    an sbatch that reported failure, or submitted and not finished."""
+    return [
+        job for job in unsettled_jobs(session, task_ids)
+        if job.slurm_jobid is None or job.slurm_status not in TERMINAL_SLURM_STATES
+    ]
+
+
+def describe_jobs(jobs: list[ComputationJob]) -> str:
+    """Job ids with their SLURM id or state, for a refusal message."""
+    return ", ".join(
+        f"job {j.id} ({j.slurm_jobid or j.slurm_status or 'sbatch outcome unknown'})" for j in jobs
+    )
 
 
 def _input_task_ids(task: ComputationTask) -> set[int]:
@@ -1095,15 +1129,19 @@ def rerun_task(session: Session, task: ComputationTask, comp_root: Path) -> dict
     """Return *task* to ``created`` with a fresh run: its jobs, every task built on
     its results and their jobs, results, geometries and folders are deleted.
 
+    Checks and writes run under one write lock (:func:`begin_write`).
+
     Raises:
-        ValueError: if any of these jobs is still in SLURM.
+        ValueError: if SLURM may be running any of these jobs.
     """
+    begin_write(session)
+    session.refresh(task)
     dependents, geometry_ids = task_dependents(session, task)
     task_ids = [task.id, *(t.id for t in dependents)]
     live = in_flight_jobs(session, task_ids)
     if live:
-        ids = ", ".join(str(j.slurm_jobid) for j in live)
-        raise ValueError(f"{len(live)} job(s) still in SLURM ({ids}); wait for them or scancel them first.")
+        raise ValueError(f"{len(live)} job(s) may be in SLURM: {describe_jobs(live)}; "
+                         "wait for them or scancel them first.")
 
     jobs = session.exec(select(ComputationJob).where(col(ComputationJob.task_id).in_(task_ids))).all()
     folders = [Path(t.task_path) for t in dependents if t.task_path]
