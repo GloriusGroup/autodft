@@ -149,22 +149,32 @@ class SlurmScheduler(Scheduler):
 
     # -- status ------------------------------------------------------------
 
+    # Parsable (no column width, so no truncated states) and allocations only
+    # (ORCA's mpirun adds one step per module call).
+    _SACCT_ARGS = ["-X", "-P", "--format=JobID,State", "--noheader"]
+
     @staticmethod
     def _normalize_state(raw: str) -> str:
         """Reduce a raw ``sacct`` State field to a bare SLURM state name.
 
-        ``sacct`` reports a job cancelled by a user as ``"CANCELLED by 12345"``,
-        and when the State column is width-truncated that arrives as the single
-        token ``"CANCELLED+"`` (the ``+`` marks truncation). Neither form equals
-        the bare ``"CANCELLED"`` the state sets are keyed on, so an un-normalized
-        value lands in *neither* TRANSIENT_SLURM_STATES nor TERMINAL_SLURM_STATES:
-        the job is then never re-polled *and* never judged, wedging its task in
-        ``pending`` forever. Take the first word and drop a trailing ``+`` so
-        every cancelled-job spelling collapses to ``"CANCELLED"``.
+        ``sacct`` reports a job cancelled by a user as ``"CANCELLED by 12345"``;
+        the state sets are keyed on the bare ``"CANCELLED"``, so keep the first word.
         """
         if not raw:
             return raw
-        return raw.split()[0].rstrip("+")
+        return raw.split()[0]
+
+    @classmethod
+    def _parse_sacct(cls, stdout: str) -> dict[str, str]:
+        """``{job_id: state}`` from ``sacct -P`` output; the first line per job wins."""
+        out: dict[str, str] = {}
+        for line in stdout.splitlines():
+            job_id, sep, state = line.strip().partition("|")
+            if not sep or not state.strip():
+                continue
+            # Steps appear as "12345.batch" / "12345.0"; keep the parent.
+            out.setdefault(job_id.split(".")[0], cls._normalize_state(state))
+        return out
 
     def get_status(self, job_id: str) -> str:
         """Query ``sacct`` for the state of *job_id*.
@@ -174,18 +184,16 @@ class SlurmScheduler(Scheduler):
         ``CANCELLED``) or ``"UNKNOWN"`` on error.
         """
         env = os.environ.copy()
-        cmd = ["sacct", "-j", str(job_id), "--format=JobID,State", "--noheader"]
+        cmd = ["sacct", "-j", str(job_id), *self._SACCT_ARGS]
 
         try:
             result = subprocess.run(
                 cmd, capture_output=True, text=True, check=True, env=env,
             )
-            for line in result.stdout.strip().splitlines():
-                parts = line.split()
-                if len(parts) >= 2 and parts[0] == str(job_id):
-                    state = self._normalize_state(parts[1])
-                    logger.debug("SLURM job %s status: %s", job_id, state)
-                    return state
+            state = self._parse_sacct(result.stdout).get(str(job_id))
+            if state is not None:
+                logger.debug("SLURM job %s status: %s", job_id, state)
+                return state
             logger.warning("Job ID %s not found in sacct output", job_id)
             return "UNKNOWN"
         except subprocess.CalledProcessError as exc:
@@ -212,9 +220,7 @@ class SlurmScheduler(Scheduler):
         env = os.environ.copy()
         for start in range(0, len(job_ids), self._SACCT_CHUNK):
             chunk = [str(j) for j in job_ids[start:start + self._SACCT_CHUNK]]
-            cmd = self._command([
-                "sacct", "-j", ",".join(chunk), "--format=JobID,State", "--noheader",
-            ])
+            cmd = self._command(["sacct", "-j", ",".join(chunk), *self._SACCT_ARGS])
             try:
                 result = subprocess.run(
                     cmd, capture_output=True, text=True, check=True, env=env,
@@ -223,14 +229,10 @@ class SlurmScheduler(Scheduler):
                 logger.error("Batched sacct query failed: %s", exc.stderr)
                 continue
 
-            for line in result.stdout.splitlines():
-                parts = line.split()
-                if len(parts) < 2:
-                    continue
-                # Steps appear as "12345.batch" / "12345.0"; keep the parent.
-                job_id = parts[0].split(".")[0]
-                if job_id in chunk and job_id not in out:
-                    out[job_id] = self._normalize_state(parts[1])
+            wanted = set(chunk)
+            for job_id, state in self._parse_sacct(result.stdout).items():
+                if job_id in wanted:
+                    out.setdefault(job_id, state)
 
         missing = [j for j in job_ids if str(j) not in out]
         if missing:

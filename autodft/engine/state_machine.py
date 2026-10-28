@@ -13,7 +13,7 @@ from time import monotonic
 from pathlib import Path
 from typing import NamedTuple, Optional
 
-from sqlalchemy import case
+from sqlalchemy import and_, case, or_
 from sqlmodel import Session, col, select
 
 from autodft import categories
@@ -67,27 +67,30 @@ def _commit_batch(session: Session, index: int) -> None:
 # ======================================================================
 
 def update_running_jobs(session: Session, scheduler: Scheduler) -> None:
-    """Query jobs with RUNNING/PENDING/UNKNOWN slurm_status and refresh
-    their state from the scheduler."""
+    """Refresh every submitted, unfinished job from the scheduler."""
 
-    # Poll everything that is not finished. Listing only RUNNING/PENDING/
-    # UNKNOWN meant a job that passed through COMPLETING was never re-polled
-    # and kept that status permanently.
+    # Not a transient whitelist: a state in neither set (a new SLURM state,
+    # or a width-truncated one from an older parser) would never be polled
+    # again nor judged. Unrecognised states are polled until judged below.
     statement = select(ComputationJob).where(
-        col(ComputationJob.slurm_status).in_(sorted(TRANSIENT_SLURM_STATES))
+        col(ComputationJob.slurm_jobid).is_not(None),
+        or_(
+            col(ComputationJob.slurm_status).is_(None),
+            col(ComputationJob.slurm_status).in_(sorted(TRANSIENT_SLURM_STATES)),
+            and_(
+                col(ComputationJob.slurm_status).not_in(sorted(TERMINAL_SLURM_STATES)),
+                col(ComputationJob.success).is_(None),
+            ),
+        ),
     )
     jobs = session.exec(statement).all()
 
     # One batched query instead of one subprocess per job. See
     # SlurmScheduler.get_statuses -- the per-job loop cost minutes per tick
     # once a few thousand jobs were in flight.
-    statuses = scheduler.get_statuses(
-        [str(j.slurm_jobid) for j in jobs if j.slurm_jobid is not None]
-    )
+    statuses = scheduler.get_statuses([str(j.slurm_jobid) for j in jobs])
 
     for job in jobs:
-        if job.slurm_jobid is None:
-            continue
         new_status = statuses.get(str(job.slurm_jobid), SlurmStatus.UNKNOWN)
         logger.debug(
             "Job %d (slurm %s): %s -> %s",
@@ -95,6 +98,14 @@ def update_running_jobs(session: Session, scheduler: Scheduler) -> None:
         )
         job.slurm_status = new_status
         if new_status in TERMINAL_SLURM_STATES:
+            job.time_end = datetime.now(timezone.utc)
+        elif new_status not in TRANSIENT_SLURM_STATES and job.success is None:
+            logger.warning(
+                "Job %d (slurm %s): unrecognised SLURM state %r; failing the job",
+                job.id, job.slurm_jobid, new_status,
+            )
+            job.success = False
+            job.fail_reason = f"Unrecognised SLURM state {new_status}"[:500]
             job.time_end = datetime.now(timezone.utc)
         session.add(job)
 
