@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.table import Table
 from sqlmodel import col, func, select
 
+from autodft.cli.options import config_option
 from autodft.db import get_session
 from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.models.job import ComputationJob
@@ -24,10 +25,19 @@ console = Console()
 app = typer.Typer(name="status", help="Query pipeline status.")
 
 
+def _session(config: Optional[str]):
+    """A session on the database of *config* (None: the repo's config)."""
+    from autodft.config import load_cli_settings
+
+    return get_session(load_cli_settings(config))
+
+
 @app.command()
-def overview() -> None:
+def overview(
+    config: Optional[str] = config_option(),
+) -> None:
     """Show an overall summary of the pipeline."""
-    with get_session() as session:
+    with _session(config) as session:
         n_molecules = session.exec(select(func.count(Molecule.id))).one()
         n_active_tasks = session.exec(
             select(func.count(ComputationTask.id)).where(
@@ -73,9 +83,10 @@ def overview() -> None:
 def molecules(
     project: Optional[str] = typer.Option(None, "--project", help="Filter by project name"),
     limit: int = typer.Option(20, "--limit", help="Maximum number of rows to show"),
+    config: Optional[str] = config_option(),
 ) -> None:
     """List molecules in the database."""
-    with get_session() as session:
+    with _session(config) as session:
         stmt = select(Molecule).order_by(col(Molecule.created_at).desc()).limit(limit)
         if project:
             stmt = stmt.where(Molecule.project_name == project)
@@ -107,9 +118,10 @@ def tasks(
     status: Optional[str] = typer.Option(None, "--status", help="Filter by task status"),
     task_type: Optional[str] = typer.Option(None, "--type", help="Filter by task type"),
     limit: int = typer.Option(20, "--limit", help="Maximum number of rows to show"),
+    config: Optional[str] = config_option(),
 ) -> None:
     """List computation tasks."""
-    with get_session() as session:
+    with _session(config) as session:
         stmt = select(ComputationTask).order_by(col(ComputationTask.updated_at).desc()).limit(limit)
 
         if status:
@@ -171,9 +183,10 @@ def jobs(
     status: Optional[str] = typer.Option(None, "--status", help="Filter by SLURM status"),
     task_id: Optional[int] = typer.Option(None, "--task-id", help="Filter by task ID"),
     limit: int = typer.Option(20, "--limit", help="Maximum number of rows to show"),
+    config: Optional[str] = config_option(),
 ) -> None:
     """List SLURM jobs."""
-    with get_session() as session:
+    with _session(config) as session:
         stmt = select(ComputationJob).order_by(col(ComputationJob.id).desc()).limit(limit)
         if status:
             stmt = stmt.where(ComputationJob.slurm_status == status.upper())
@@ -227,9 +240,10 @@ def jobs(
 @app.command()
 def molecule(
     molecule_id: int = typer.Argument(..., help="Molecule ID to inspect"),
+    config: Optional[str] = config_option(),
 ) -> None:
     """Show details for a specific molecule."""
-    with get_session() as session:
+    with _session(config) as session:
         mol = session.get(Molecule, molecule_id)
         if mol is None:
             console.print(f"[red]Molecule #{molecule_id} not found.[/red]")
@@ -292,9 +306,10 @@ def molecule(
 @app.command()
 def queue(
     limit: int = typer.Option(20, "--limit", help="Maximum number of rows to show"),
+    config: Optional[str] = config_option(),
 ) -> None:
     """Show the entrypoint queue."""
-    with get_session() as session:
+    with _session(config) as session:
         stmt = (
             select(CalculationEntrypoint)
             .order_by(col(CalculationEntrypoint.priority), col(CalculationEntrypoint.time_created))

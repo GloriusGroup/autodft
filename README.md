@@ -104,7 +104,9 @@ pip install -e .             # uses pyproject.toml
 The loader merges three layers, highest-priority last:
 
 1. `config/default.toml` — framework defaults (shipped, don't edit)
-2. the file you pass via `--config`
+2. the file you pass via `--config`; every CLI command takes it, and without
+   it reads `config/reaction.toml` of the checkout it runs from (beside the
+   `autodft` package), whatever the current directory
 3. environment variables (`AUTODFT_*`)
 
 For production, the entire config is anchored on `data_path` and the
@@ -841,7 +843,9 @@ so the controller refuses one whose optimization header is method only;
 
 The CLI talks to the database directly, with no account behind it, so
 `--project` wants the **qualified** name (`admin/phenols`, not
-`phenols`) — that is the string stored on every molecule:
+`phenols`) — that is the string stored on every molecule. Each command
+reads the database of `--config`, by default the checkout's
+`config/reaction.toml`:
 
 ```bash
 autodft status overview                          # totals

@@ -9,6 +9,8 @@ from typing import Optional
 import typer
 from rich.console import Console
 
+from autodft.cli.options import config_option
+
 logger = logging.getLogger(__name__)
 console = Console()
 
@@ -30,14 +32,14 @@ def _log_to_file(settings) -> None:
 
 @app.callback(invoke_without_command=True)
 def run(
-    config: Optional[str] = typer.Option(None, "--config", help="Path to config TOML file"),
+    config: Optional[str] = config_option(),
     scheduler: str = typer.Option("slurm", "--scheduler", help="Scheduler backend: slurm or local"),
     once: bool = typer.Option(False, "--once", help="Run a single pipeline tick then exit"),
 ) -> None:
     """Start the pipeline worker loop."""
-    from autodft.config import load_settings
+    from autodft.config import load_cli_settings
 
-    settings = load_settings(config)
+    settings = load_cli_settings(config)
     _log_to_file(settings)
 
     # Select scheduler backend

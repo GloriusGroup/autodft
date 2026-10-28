@@ -358,7 +358,7 @@ def test_requeue_failed_skips_a_task_in_flight_and_judges_a_stale_job(
         session.commit()
         tasks.append((task, job))
 
-    cli_admin.requeue_failed(project=None)
+    cli_admin.requeue_failed(project=None, config=None)
 
     (busy, busy_job), (stale, stale_job) = tasks
     for row in (busy, busy_job, stale, stale_job):
@@ -391,7 +391,7 @@ def test_a_finished_unjudged_job_blocks_a_plain_reset_and_requeue(session, setti
     session.commit()
     with pytest.raises(typer.Exit):
         _reset(task.id)
-    cli_admin.requeue_failed(project=None)
+    cli_admin.requeue_failed(project=None, config=None)
     session.refresh(task)
     session.refresh(done)
     assert (task.status, done.success, done.fail_reason) == (TaskStatus.failed, None, None)
@@ -576,7 +576,7 @@ def test_requeue_failed_skips_and_counts_tasks_of_archived_or_exporting_projects
         if name == "exporting":
             _start_export(session, molecule)
 
-    cli_admin.requeue_failed(project=None)
+    cli_admin.requeue_failed(project=None, config=None)
 
     for task in tasks.values():
         session.refresh(task)

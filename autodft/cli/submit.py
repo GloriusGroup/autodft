@@ -11,6 +11,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 
+from autodft.cli.options import config_option
 from autodft.db import get_session, init_db
 from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.qm.orca.defaults import (
@@ -358,13 +359,13 @@ def submit(
     cs_maxcore: Optional[int] = typer.Option(None, "--cs-maxcore", help="Conformer search MB per core (250-16000) (default: config [advanced])"),
     opt_maxcore: Optional[int] = typer.Option(None, "--opt-maxcore", help="Optimisation MB per core (250-16000) (default: config [advanced])"),
     sp_maxcore: Optional[int] = typer.Option(None, "--sp-maxcore", help="Singlepoint MB per core (250-16000) (default: config [advanced])"),
-    config: Optional[str] = typer.Option(None, "--config", help="Path to config TOML file"),
+    config: Optional[str] = config_option(),
 ) -> None:
     """Submit a single molecule by SMILES string."""
     options = dict(locals())  # the parameters, for _advanced_from_options
-    from autodft.config import load_settings
+    from autodft.config import load_cli_settings
 
-    settings = load_settings(config)
+    settings = load_cli_settings(config)
     init_db(settings)
 
     _check_reference_state(smiles, request_t1, request_ox, request_red)
@@ -520,13 +521,13 @@ def submit_batch(
     cs_maxcore: Optional[int] = typer.Option(None, "--cs-maxcore", help="Conformer search MB per core (250-16000) (default: config [advanced])"),
     opt_maxcore: Optional[int] = typer.Option(None, "--opt-maxcore", help="Optimisation MB per core (250-16000) (default: config [advanced])"),
     sp_maxcore: Optional[int] = typer.Option(None, "--sp-maxcore", help="Singlepoint MB per core (250-16000) (default: config [advanced])"),
-    config: Optional[str] = typer.Option(None, "--config", help="Path to config TOML file"),
+    config: Optional[str] = config_option(),
 ) -> None:
     """Submit molecules from a CSV file."""
     options = dict(locals())  # the parameters, for _advanced_from_options
-    from autodft.config import load_settings
+    from autodft.config import load_cli_settings
 
-    settings = load_settings(config)
+    settings = load_cli_settings(config)
     init_db(settings)
 
     if not file.exists():

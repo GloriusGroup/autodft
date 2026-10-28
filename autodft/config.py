@@ -31,6 +31,8 @@ else:
         import tomli as tomllib  # type: ignore[no-redef]
 
 _DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "config" / "default.toml"
+# The CLI's --config when none is given: the checkout's own, whatever the cwd.
+REPO_CONFIG = Path(__file__).resolve().parent.parent / "config" / "reaction.toml"
 
 # ---------------------------------------------------------------------------
 # Nested config dataclasses
@@ -453,3 +455,8 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
     settings = _dict_to_dataclass(Settings, data)
     check_defaults(settings)
     return settings
+
+
+def load_cli_settings(config_path: str | Path | None) -> Settings:
+    """load_settings for a CLI command's --config; None means REPO_CONFIG."""
+    return load_settings(REPO_CONFIG if config_path is None else config_path)
