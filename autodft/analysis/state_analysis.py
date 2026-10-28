@@ -8,7 +8,7 @@ per conformer-selection mode:
                                requires e_vert_spin_change on BOTH sides
   - Redox free energies        ΔG_ox = G(ox) − G(S0), ΔG_red = G(S0) − G(red)
   - E vs SCE in MeCN           ΔG/F − E_ref_SCE  (only when both states'
-                               singlepoints ran in MeCN)
+                               optimisations and singlepoints ran in MeCN)
   - Redox reorganisation       4-point Marcus on each S0↔ox / S0↔red surface,
                                requires the appropriate vertical SP on
                                both ends
@@ -175,15 +175,20 @@ class ModeAnalysis:
     red_note: Optional[str] = None
 
 
-def _sce_note(pair: tuple[StatePick, StatePick]) -> Optional[str]:
-    """Why ΔG over *pair* has no E vs SCE; None for an all-gas pair."""
-    gas = [p.state for p in pair if not p.sp_mecn]
-    if not any(p.opt_mecn or p.sp_mecn for p in pair):
-        return None
-    return f"E vs SCE needs MeCN singlepoints; {' and '.join(gas)} {'is' if len(gas) == 1 else 'are'} not in MeCN"
+def _sce(pair: tuple[StatePick, StatePick], project_mecn: bool) -> tuple[bool, Optional[str]]:
+    """Whether ΔG over *pair* gets E vs SCE, else why not; no note for an all-gas pair in an all-gas project."""
+    missing = [f"{p.state} {stage}" for p in pair
+               for stage, mecn in (("opt", p.opt_mecn), ("singlepoint", p.sp_mecn)) if not mecn]
+    if not missing:
+        return True, None
+    why = "E vs SCE needs opt and singlepoint in MeCN; "
+    if len(missing) == 4:
+        return False, f"{why}neither {pair[0].state} nor {pair[1].state} ran in MeCN" if project_mecn else None
+    listed = missing[0] if len(missing) == 1 else ", ".join(missing[:-1]) + " and " + missing[-1]
+    return False, f"{why}{listed} {'is' if len(missing) == 1 else 'are'} not in MeCN"
 
 
-def _compute_derived(picks: dict[str, StatePick]) -> ModeAnalysis:
+def _compute_derived(picks: dict[str, StatePick], project_mecn: bool) -> ModeAnalysis:
     """Compute every derived quantity in Hartree (energies) and V
     (redox potentials).
 
@@ -213,11 +218,9 @@ def _compute_derived(picks: dict[str, StatePick]) -> ModeAnalysis:
     # ── Oxidation ─────────────────────────────────────────────────────
     if s0 and ox and s0.e_combined is not None and ox.e_combined is not None:
         ana.ox_dG_h = ox.e_combined - s0.e_combined
-        # ΔG takes its electronic energies from the singlepoints.
-        if s0.sp_mecn and ox.sp_mecn:
+        mecn, ana.ox_note = _sce((s0, ox), project_mecn)
+        if mecn:
             ana.ox_E_vs_sce_v = ana.ox_dG_h * HARTREE_TO_EV - SCE_ABS_MECN
-        else:
-            ana.ox_note = _sce_note((s0, ox))
 
     # λ_ox_fwd: on ox surface = E_vert_ox(S0) − E_sp(ox)
     if s0 and ox and s0.e_vert_ox is not None and ox.e_sp is not None:
@@ -232,10 +235,9 @@ def _compute_derived(picks: dict[str, StatePick]) -> ModeAnalysis:
     # (E°_red,SCE = ΔG/F − E_ref).
     if s0 and red and s0.e_combined is not None and red.e_combined is not None:
         ana.red_dG_h = s0.e_combined - red.e_combined
-        if s0.sp_mecn and red.sp_mecn:
+        mecn, ana.red_note = _sce((s0, red), project_mecn)
+        if mecn:
             ana.red_E_vs_sce_v = ana.red_dG_h * HARTREE_TO_EV - SCE_ABS_MECN
-        else:
-            ana.red_note = _sce_note((s0, red))
 
     # λ_red_fwd: on red surface = E_vert_red(S0) − E_sp(red)
     if s0 and red and s0.e_vert_red is not None and red.e_sp is not None:
@@ -450,7 +452,7 @@ def _analyze_project_uncached(project_name: str) -> dict:
                                    (st.singlepoint_header_id, "singlepoint"))
             )
             mecn_of[st.id] = (opt_mecn, sp_mecn)
-        solvation_mecn = any(sp for _, sp in mecn_of.values())
+        solvation_mecn = any(opt and sp for opt, sp in mecn_of.values())
 
         opt_task_ids = [r.opt_task_id for r in all_results]
         opt_tasks = (
@@ -573,7 +575,7 @@ def _analyze_project_uncached(project_name: str) -> dict:
             if cand is None:
                 continue
             picks_low[st] = _pick_from(st, cand, s0_ref_coords)
-        ana_low = _compute_derived(picks_low)
+        ana_low = _compute_derived(picks_low, solvation_mecn)
         ana_low.mode = "lowest_energy"
 
         # Mode 2 — RMSD-matched conformer per state (S0 keeps its lowest)
@@ -599,7 +601,7 @@ def _analyze_project_uncached(project_name: str) -> dict:
                 # to the lowest-energy pick so derived quantities still
                 # populate. Tagged via rmsd_to_s0 = None.
                 picks_rmsd[st] = picks_low[st]
-        ana_rmsd = _compute_derived(picks_rmsd)
+        ana_rmsd = _compute_derived(picks_rmsd, solvation_mecn)
         ana_rmsd.mode = "rmsd_matched"
 
         out_mols.append({
@@ -647,7 +649,7 @@ def _ana_to_dict(a: ModeAnalysis) -> dict:
             "lambda_bwd_h":  a.red_lambda_bwd_h,
         },
     }
-    # Only a potential withheld for mixed solvation has one.
+    # Only a withheld potential has one.
     for key, note in (("ox", a.ox_note), ("red", a.red_note)):
         if note:
             out[key]["note"] = note
@@ -737,6 +739,7 @@ def _broken_bonds(ana: Optional[dict]) -> Optional[str]:
     )
 
 
+_SCE_NOTE_COLUMNS = ["ox_sce_note", "red_sce_note"]
 _FAMILY_COLUMNS = ["S0_state_id", "confsearch_header_id", "optimization_header_id", "singlepoint_header_id"]
 
 
@@ -802,7 +805,15 @@ def build_xlsx_bytes(payload: dict) -> bytes:
     )
     # A molecule with several method families gets one row each, named by the last columns.
     families = len(set(ids)) < len(ids)
-    tail = (["broken_bonds"] if checked else []) + (_FAMILY_COLUMNS if families else [])
+    # Why a potential was withheld, only when some molecule has a reason.
+    notes = any(
+        "note" in (ana.get(key) or {})
+        for m in payload.get("molecules", [])
+        for ana in (m.get("modes") or {}).values() if ana
+        for key in ("ox", "red")
+    )
+    tail = ((["broken_bonds"] if checked else []) + (_SCE_NOTE_COLUMNS if notes else [])
+            + (_FAMILY_COLUMNS if families else []))
     for mode_key, sheet_title in (
         ("lowest_energy", "Lowest Energy"),
         ("rmsd_matched",  "RMSD Matched"),
@@ -823,7 +834,9 @@ def build_xlsx_bytes(payload: dict) -> bytes:
                 else:
                     val = _lookup(row_src, path) if ana else None
                 ws.cell(row=r_idx, column=c_idx, value=val)
-            values = ([_broken_bonds(ana)] if checked else []) + (_family_cells(m) if families else [])
+            values = ([_broken_bonds(ana)] if checked else []) + (
+                [_lookup(ana, f"{key}.note") for key in ("ox", "red")] if notes else []) + (
+                _family_cells(m) if families else [])
             for c_idx, val in enumerate(values, start=len(columns) + 1):
                 ws.cell(row=r_idx, column=c_idx, value=val)
         for c_idx, label in enumerate(tail, start=len(columns) + 1):

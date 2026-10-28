@@ -351,8 +351,9 @@ sees the whole database:
   ElDens/SpinDens buttons that open a 3Dmol pop-up, **Show downloads** adds
   `.out` buttons to successful opts and singlepoints and `.xyz` to opts),
   **State Analysis** (triplet /
-  redox energies, E vs SCE only when the singlepoints ran in MeCN,
-  downloadable as XLSX), **Photophysics** and **Methods**
+  redox energies, E vs SCE only when the opt and singlepoint of both
+  states ran in MeCN, otherwise ΔG and a note; downloadable as XLSX),
+  **Photophysics** and **Methods**
   (read-only: headers, every setting and its source, cutoffs, the full
   ORCA input of every job type and the pipeline settings). The Export
   panel has three buttons: **Export Project**, **Export and Delete** and

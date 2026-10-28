@@ -528,13 +528,12 @@ project, for `xyz` on a singlepoint, and when the file is no longer on disk.
 
 Triplet energies, redox free energies / E vs SCE in MeCN, and 4-point
 Marcus reorganisation energies, for both the `lowest_energy` and the
-`rmsd_matched` conformer-selection modes. E vs SCE needs both singlepoints
-whose energies enter ΔG (S0 and ox/red) in MeCN, read from each state's
-header as rendered with its Advanced settings; the optimisation's solvation
-does not count. Otherwise ox/red report ΔG only, and when an optimisation
-or singlepoint involved was in MeCN they add a `note` saying which
-singlepoint was not. `solvation_mecn` is true when any singlepoint ran in
-MeCN. A pick
+`rmsd_matched` conformer-selection modes. E vs SCE needs the optimisation
+and the singlepoint of both S0 and ox/red in MeCN, read from each state's
+headers as rendered with its Advanced settings. Otherwise ox/red report ΔG
+only, with a `note` naming each state and stage not in MeCN, whenever one
+of the four ran in MeCN or the project's `solvation_mecn` is true (some
+state's optimisation and singlepoint both ran in MeCN). A pick
 whose optimisation has a broken-bond check adds `connectivity` (same shape
 as in `molecules-detail`). One entry per method family, a molecule's states
 at one header set: a molecule resubmitted at other headers has an entry for
@@ -553,8 +552,10 @@ Energy, RMSD Matched, Conformers). Energies in Hartree, potentials in V
 vs SCE. When any pick has a broken-bond check, the mode sheets add a last
 column `broken_bonds` (`<state>: ok`, `<state>: <detail>` or
 `<state>: unchecked` per pick, joined by ` | `) and
-Conformers a last column `connectivity`. When a molecule has more than one
-method family, both add `S0_state_id`, `confsearch_header_id`,
+Conformers a last column `connectivity`. When any ox/red has a `note`, the
+mode sheets add `ox_sce_note` and `red_sce_note` after those. When a
+molecule has more than one method family, the mode sheets and Conformers
+add `S0_state_id`, `confsearch_header_id`,
 `optimization_header_id` and `singlepoint_header_id` after those, and the
 Summary's Molecules counts each molecule once.
 

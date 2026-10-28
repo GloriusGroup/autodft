@@ -1,14 +1,16 @@
-"""E vs SCE (MeCN) follows the solvation of the singlepoints whose energies enter ΔG."""
+"""E vs SCE (MeCN) only when the opt and singlepoint of both states in ΔG ran in MeCN."""
 
 from __future__ import annotations
 
+import io
 import json
 import shutil
 
 import pytest
+from openpyxl import load_workbook
 from sqlmodel import select
 
-from autodft.analysis.state_analysis import HARTREE_TO_EV, SCE_ABS_MECN, analyze_project
+from autodft.analysis.state_analysis import HARTREE_TO_EV, SCE_ABS_MECN, analyze_project, build_xlsx_bytes
 from autodft.db import get_session
 from autodft.models import ComputationHeader, MoleculeState
 from tests.test_export_tree import PROJECT, _conformer, _molecule, db  # noqa: F401 - db is a fixture
@@ -48,38 +50,58 @@ def _ox_result(mode="lowest_energy") -> dict:
     return row["modes"][mode]["ox"]
 
 
+NOTE = "E vs SCE needs opt and singlepoint in MeCN; "
+
+
 @pytest.mark.parametrize("opt, sp, potential", [
     (MECN, GAS, None),
     (MECN, MECN, pytest.approx(E_OX)),
-    (GAS, MECN, pytest.approx(E_OX)),
+    (GAS, MECN, None),
     (GAS, GAS, None),
 ])
-def test_the_singlepoint_decides(db, opt, sp, potential):
+def test_only_opt_and_singlepoint_both_in_mecn_give_a_potential(db, opt, sp, potential):
     _redox(db, (opt, sp))
     for mode in ("lowest_energy", "rmsd_matched"):
         ox = _ox_result(mode)
         assert ox["dG_h"] == pytest.approx(0.25)
         assert ox["E_vs_sce_v"] == potential
-    assert analyze_project(PROJECT, use_cache=False)["solvation_mecn"] is (sp == MECN)
+    assert analyze_project(PROJECT, use_cache=False)["solvation_mecn"] is (opt == sp == MECN)
 
 
-def test_an_opt_in_mecn_with_a_gas_singlepoint_says_why(db):
-    _redox(db, (MECN, GAS))
-    assert _ox_result()["note"] == "E vs SCE needs MeCN singlepoints; S0 and ox are not in MeCN"
+@pytest.mark.parametrize("opt, sp, note", [
+    (MECN, GAS, "S0 singlepoint and ox singlepoint are not in MeCN"),
+    (GAS, MECN, "S0 opt and ox opt are not in MeCN"),
+])
+def test_mixed_solvation_says_why(db, opt, sp, note):
+    _redox(db, (opt, sp))
+    for mode in ("lowest_energy", "rmsd_matched"):
+        assert _ox_result(mode)["note"] == NOTE + note
 
 
-@pytest.mark.parametrize("opt, sp", [(MECN, MECN), (GAS, MECN), (GAS, GAS)])
+@pytest.mark.parametrize("opt, sp", [(MECN, MECN), (GAS, GAS)])
 def test_no_note_without_mixed_solvation(db, opt, sp):
     _redox(db, (opt, sp))
     assert "note" not in _ox_result()
 
 
-def test_each_pick_s_singlepoint_must_be_in_mecn(db):
-    """S0 SP in MeCN, ox SP in the gas phase (other Advanced settings): no potential."""
-    _redox(db, (MECN, MECN), ox_solvation=(MECN, GAS))
+@pytest.mark.parametrize("ox_solvation, note", [
+    ((MECN, GAS), "ox singlepoint is not in MeCN"),
+    ((GAS, MECN), "ox opt is not in MeCN"),
+])
+def test_both_picks_must_be_in_mecn(db, ox_solvation, note):
+    """S0 fully in MeCN, ox with other Advanced settings: no potential."""
+    _redox(db, (MECN, MECN), ox_solvation=ox_solvation)
     ox = _ox_result()
     assert ox["dG_h"] == pytest.approx(0.25) and ox["E_vs_sce_v"] is None
-    assert ox["note"] == "E vs SCE needs MeCN singlepoints; ox is not in MeCN"
+    assert ox["note"] == NOTE + note
+
+
+def test_a_gas_molecule_in_a_mecn_project_says_why(db):
+    _redox(db, (MECN, MECN))
+    _redox(db, (GAS, GAS))
+    mecn, gas = (m["modes"]["lowest_energy"]["ox"] for m in analyze_project(PROJECT, use_cache=False)["molecules"])
+    assert mecn["E_vs_sce_v"] == pytest.approx(E_OX) and "note" not in mecn
+    assert gas["E_vs_sce_v"] is None and gas["note"] == NOTE + "neither S0 nor ox ran in MeCN"
 
 
 def test_a_legacy_header_is_read_as_written(db):
@@ -91,11 +113,32 @@ def test_a_legacy_header_is_read_as_written(db):
             state.metadata_json = json.dumps({"imag_freq_tolerance": -10.0})
         session.commit()
     ox = _ox_result()
-    assert ox["E_vs_sce_v"] is None and ox["note"].endswith("S0 and ox are not in MeCN")
+    assert ox["E_vs_sce_v"] is None and ox["note"] == NOTE + "S0 singlepoint and ox singlepoint are not in MeCN"
+
+
+def _sheet(title="Lowest Energy") -> list[list]:
+    wb = load_workbook(io.BytesIO(build_xlsx_bytes(analyze_project(PROJECT, use_cache=False))))
+    return [list(r) for r in wb[title].iter_rows(values_only=True)]
+
+
+def test_the_workbook_gives_the_reason(db):
+    _redox(db, (GAS, MECN))
+    for title in ("Lowest Energy", "RMSD Matched"):
+        head, row = _sheet(title)
+        assert head[-2:] == ["ox_sce_note", "red_sce_note"]
+        assert row[-2:] == [NOTE + "S0 opt and ox opt are not in MeCN", None]
+        assert row[head.index("ox_E_vs_SCE_V")] is None
+
+
+def test_a_workbook_without_reasons_keeps_its_columns(db):
+    _redox(db, (MECN, MECN))
+    head, row = _sheet()
+    assert head[-1] == "red_lambda_bwd_Eh" and "ox_sce_note" not in head
+    assert row[head.index("ox_E_vs_SCE_V")] == pytest.approx(E_OX)
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_dashboard_shows_the_note(db):
     _redox(db, (MECN, GAS))
     [card] = _cards(analyze_project(PROJECT, use_cache=False))
-    assert "E vs SCE needs MeCN singlepoints; S0 and ox are not in MeCN" in card
+    assert NOTE + "S0 singlepoint and ox singlepoint are not in MeCN" in card
