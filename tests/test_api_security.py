@@ -481,3 +481,22 @@ class TestAuthUnderWriteLock:
         monkeypatch.setattr(identity_module, "resolve_identity", spy)
         assert client.get("/api/projects", headers=headers).status_code == 200
         assert on_loop == [False]
+
+    @pytest.mark.parametrize("path, json_reply", [("/api/projects", True), ("/", False)])
+    def test_a_failed_identity_lookup_is_503_not_401(self, app_env, monkeypatch, path, json_reply):
+        from sqlalchemy.exc import OperationalError
+
+        from autodft.api import identity as identity_module
+
+        client, headers, _ = app_env
+
+        def locked(*args, **kwargs):
+            raise OperationalError("SELECT", {}, Exception("database is locked"))
+
+        monkeypatch.setattr(identity_module, "resolve_identity", locked)
+        response = client.get(path, headers=headers, follow_redirects=False)
+        assert response.status_code == 503
+        if json_reply:
+            assert "try again" in response.json()["detail"]
+        else:
+            assert "text/html" in response.headers["content-type"]

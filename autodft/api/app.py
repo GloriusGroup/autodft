@@ -7,7 +7,7 @@ from typing import Optional
 from urllib.parse import quote
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
 from autodft import __version__
@@ -15,6 +15,11 @@ from autodft.api.routes import public_router, router, set_active_settings
 from autodft.config import Settings
 
 logger = logging.getLogger(__name__)
+
+_SESSION_CHECK_FAILED_HTML = (
+    "<!DOCTYPE html><title>AutoDFT unavailable</title>"
+    "<p>Could not check your session. Reload the page in a moment.</p>"
+)
 
 
 # Path prefixes that bypass the auth middleware. ``/login`` and
@@ -84,13 +89,17 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
             with get_session() as session:
                 return resolve_identity(request, settings, session)
 
-        identity = None
         try:
             # Off the event loop: a slow or locked database must stall
             # this request only, not the whole dashboard.
             identity = await run_in_threadpool(_resolve)
         except Exception:  # noqa: BLE001 - never let auth 500 the whole app
+            # 401 is for bad credentials only: a lookup error must not sign the user out.
             logger.exception("Could not resolve the caller's identity")
+            if path.startswith("/api/"):
+                return JSONResponse(status_code=503, content={
+                    "detail": "Could not check your session; try again shortly."})
+            return HTMLResponse(status_code=503, content=_SESSION_CHECK_FAILED_HTML)
 
         if identity is not None:
             # Stashed here so handlers reach it through a dependency

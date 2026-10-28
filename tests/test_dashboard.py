@@ -619,13 +619,27 @@ def test_the_polling_paths_call_plain_fetch():
 _REPLIES_STUB = r"""
 var location = { pathname: '/', hash: '#status', assigned: [],
                  assign: function (u) { this.assigned.push(u); } };
-// url -> {status, body}; a string body is sent as is.
-var replies = {}, hits = [];
+var store = {};
+var sessionStorage = { getItem: function (k) { return k in store ? store[k] : null; },
+                       setItem: function (k, v) { store[k] = String(v); }, removeItem: function (k) { delete store[k]; } };
+El.prototype.dispatchEvent = function (e) { (this.fired = this.fired || []).push(e.type); if (this.on[e.type]) this.on[e.type](e); };
+// The submit form's fields, as form.elements.
+function field(id, type, value, more) {
+    var el = document.getElementById(id);
+    el.type = type; el.value = value; el.checked = false; el.disabled = false; el.readOnly = false;
+    return Object.assign(el, more || {});
+}
+document.getElementById('submitForm').elements = [];
+var extendMode = null;
+// url -> {status, body}; a string body is sent as is; hang: never answers until released.
+var replies = {}, hits = [], hung = [];
 globalThis.fetch = function (url, opts) {
     hits.push(url);
     var r = replies[url] || { status: 200, body: [] };
-    return Promise.resolve(new Response(typeof r.body === 'string' ? r.body : JSON.stringify(r.body),
-                                        { status: r.status }));
+    var resp = function () { return new Response(typeof r.body === 'string' ? r.body : JSON.stringify(r.body),
+                                                 { status: r.status }); };
+    if (r.hang) return new Promise(function (resolve) { hung.push(function () { resolve(resp()); }); });
+    return Promise.resolve(resp());
 };
 """
 
@@ -636,7 +650,14 @@ def _polling_code() -> str:
     fetching = html[start:html.index("        // ── Project Overview ──", start)]
     start = html.index("        // ── Refresh orchestration")
     refresh = html[start:html.index("        // Manual refresh", start)]
-    return _REPLIES_STUB + _functions("escHtml", "fmtTime", "setConnected") + fetching + refresh
+    return (_REPLIES_STUB + "var POLL_INTERVAL = 5000;\n"
+            + _functions("escHtml", "fmtTime", "setConnected", "saveSubmitForm", "restoreSubmitForm")
+            + _submit_form_key() + fetching + refresh)
+
+
+def _submit_form_key() -> str:
+    html = (TEMPLATE / "dashboard.html").read_text()
+    return re.search(r"\n *var SUBMIT_FORM_KEY = [^\n]*\n", html).group(0)
 
 
 def _good_poll():
@@ -647,21 +668,71 @@ def _good_poll():
     }
 
 
+_POLLED = ["/api/overview", "/api/queue", "/api/jobs?limit=100", "/api/entrypoints/failed"]
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_a_401_sends_the_page_to_login_once():
+def test_a_polled_401_stays_on_the_page_offers_sign_in_and_stops_polling():
     out = _run_overlay("""
-        ['/api/overview', '/api/queue', '/api/jobs?limit=100', '/api/entrypoints/failed', '/api/x'].forEach(function (u) {
-            replies[u] = { status: 401, body: { detail: 'Authentication required.' } };
-        });
+        var smiles = field('smiles', 'textarea', 'CCO\\nc1ccccc1');
+        %s.forEach(function (u) { replies[u] = { status: 401, body: { detail: 'Authentication required.' } }; });
         await refreshAll();
+        var seen = hits.length;
         await refreshAll();
+        pollTick();
+        await sleep(20);
+        out.more = hits.length - seen;
+        out.assigned = location.assigned;
+        out.smiles = smiles.value;
+        out.status = document.getElementById('statusText').innerHTML;
+        out.dot = document.getElementById('statusDot').className;
+        out.running = String(document.getElementById('cardRunning').textContent);
+    """ % json.dumps(_POLLED), _polling_code())
+    assert out["assigned"] == [] and out["more"] == 0
+    assert out["smiles"] == "CCO\nc1ccccc1"
+    assert "disconnected" in out["dot"]
+    assert 'href="/login?next=%2F%23status"' in out["status"] and "Session expired" in out["status"]
+    assert out["running"] == ""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_user_started_401_saves_the_form_and_restores_it_once():
+    out = _run_overlay("""
+        var form = document.getElementById('submitForm');
+        form.elements = [field('smiles', 'textarea', 'CCO'), field('project', 'text', 'nho/p'),
+                         field('requestT1', 'checkbox', 'on', { checked: true }),
+                         field('adv-optimization-grid', 'select-one', 'DEFGRID3'),
+                         field('priority', 'number', ''), field('author', 'text', 'nho', { readOnly: true })];
+        replies['/api/x'] = { status: 401, body: { detail: 'Authentication required.' } };
+        try { await loadingFetch('Loading…', '/api/x'); } catch (_) {}
         try { await loadingFetch('Loading…', '/api/x'); } catch (_) {}
         await idle();
         out.assigned = location.assigned;
-        out.overview = String(document.getElementById('cardRunning').textContent);
-    """, _polling_code())
+        out.saved = Object.keys(store).length;
+        // The reloaded page: a fresh form.
+        form.elements.forEach(function (el) { el.value = ''; el.checked = false; el.fired = []; });
+        await restoreSubmitForm();
+        out.values = form.elements.map(function (el) { return el.type === 'checkbox' ? el.checked : el.value; });
+        out.fired = document.getElementById('smiles').fired;
+        out.left = Object.keys(store).length;
+        document.getElementById('smiles').value = '';
+        await restoreSubmitForm();
+        out.again = document.getElementById('smiles').value;
+        // Extend mode comes back through enterExtendMode.
+        var extended = [];
+        globalThis.enterExtendMode = async function (p) { extended.push(p); };
+        extendMode = { project: 'nho/q' };
+        saveSubmitForm();
+        extendMode = null;
+        await restoreSubmitForm();
+        out.extended = extended;
+    """, _REPLIES_STUB, _functions("saveSubmitForm", "restoreSubmitForm"), _submit_form_key())
     assert out["assigned"] == ["/login?next=%2F%23status"]
-    assert out["overview"] == ""
+    assert out["saved"] == 1
+    assert out["values"] == ["CCO", "nho/p", True, "DEFGRID3", "", ""]
+    assert "input" in out["fired"]
+    assert out["left"] == 0 and out["again"] == ""
+    assert out["extended"] == ["nho/q"]
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -700,29 +771,61 @@ def test_a_failed_poll_shows_disconnected_and_keeps_the_last_values():
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_a_smiles_check_that_errored_is_retried_and_a_real_answer_is_cached():
+def test_a_hanging_poll_shows_disconnected_after_three_missed_ticks():
+    out = _run_overlay("""
+        var $ = function (id) { return document.getElementById(id); };
+        replies = Object.assign({}, GOOD, { '/api/overview': Object.assign({ hang: true }, GOOD['/api/overview']) });
+        out.dots = [];
+        for (var i = 0; i < 4; i++) {
+            pollTick();
+            await sleep(10);
+            out.dots.push(String($('statusDot').className).indexOf('disconnected') !== -1);
+        }
+        out.requests = hits.length;
+        hung.forEach(function (f) { f(); });
+        await sleep(20);
+        out.after = $('statusText').textContent;
+    """, _polling_code(), "var GOOD = %s;" % json.dumps(_good_poll()))
+    # The first tick starts the poll; the next three miss it.
+    assert out["dots"] == [False, False, False, True]
+    assert out["requests"] == 4
+    assert out["after"] == "Connected"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+@pytest.mark.parametrize("reply", [{"status": 500, "body": {"detail": "database is locked"}},
+                                   {"status": 401, "body": {"detail": "Authentication required."}}])
+def test_a_smiles_check_that_errored_is_neutral_retried_and_a_real_answer_is_cached(reply):
     html = (TEMPLATE / "dashboard.html").read_text()
     start = html.index("        // ── Live SMILES validation")
     block = html[start:html.index("        // ── Headers: fetch", start)]
     out = _run_overlay("""
         var input = document.getElementById('smiles'), hint = document.getElementById('smilesHint');
+        var submit = document.getElementById('submitBtn');
         async function check(value) {
             input.value = value;
             input.on.input();
             await sleep(400);
             return hint.textContent;
         }
-        replies['/api/validate-smiles'] = { status: 500, body: { detail: 'database is locked' } };
+        replies['/api/validate-smiles'] = REPLY;
         out.first = await check('CCO');
+        out.firstState = hint.className;
+        out.firstDisabled = !!submit.disabled;
+        out.gate = window.lastSmilesResults.map(function (x) { return !!(x.result.valid || x.result.unchecked); });
         replies['/api/validate-smiles'] = { status: 200, body: { valid: true, atoms: 9, heavy_atoms: 3,
                                                                   charge: 0, multiplicity: 1, canonical: 'CCO' } };
         out.second = await check('CCO ');
         out.third = await check('CCO');
         out.hits = hits.length;
-    """, _REPLIES_STUB, "var window = globalThis;", block)
-    assert "database is locked" in out["first"]
+        out.assigned = location.assigned;
+    """, _REPLIES_STUB, "var window = globalThis;", "var REPLY = %s;" % json.dumps(reply),
+        _functions("escHtml", "setConnected"), block)
+    assert out["first"].startswith("Could not check") and reply["body"]["detail"] in out["first"]
+    assert "unchecked" in out["firstState"] and "invalid" not in out["firstState"]
+    assert not out["firstDisabled"] and out["gate"] == [True]
     assert out["second"].startswith("OK — 9 atoms") and out["third"] == out["second"]
-    assert out["hits"] == 2
+    assert out["hits"] == 2 and out["assigned"] == []
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")

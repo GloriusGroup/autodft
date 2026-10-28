@@ -435,7 +435,8 @@
         }
         .smiles-hint.valid    { color: var(--green); }
         .smiles-hint.invalid  { color: var(--red); }
-        .smiles-hint.checking { color: var(--text-muted); }
+        .smiles-hint.checking,
+        .smiles-hint.unchecked { color: var(--text-muted); }
         input.invalid {
             border-color: var(--red) !important;
         }
@@ -2477,7 +2478,7 @@
             loading.reqs.push(req);
             var end = loadingBegin(label);
             try {
-                var resp = checkSession(await fetch(url, Object.assign({}, opts, { signal: ctl.signal })));
+                var resp = checkSession(await fetch(url, Object.assign({}, opts, { signal: ctl.signal })), true);
                 if (!resp.body) return resp;
                 // A compressed body streams more bytes than Content-Length says.
                 if (!resp.headers.get('Content-Encoding')) req.total = parseInt(resp.headers.get('Content-Length'), 10) || 0;
@@ -2505,17 +2506,37 @@
 
         // Plain fetch without a label: what polling and timers use.
         function uiFetch(label, url, opts) {
-            return label ? loadingFetch(label, url, opts) : fetch(url, opts).then(checkSession);
+            return label ? loadingFetch(label, url, opts) : fetch(url, opts).then(function (r) { return checkSession(r, false); });
         }
 
-        // A lost session goes to the login page, once: the polls that follow must not redirect again.
-        var signingIn = false;
-        function checkSession(resp) {
-            if (resp.status === 401 && !signingIn) {
-                signingIn = true;
-                location.assign('/login?next=' + encodeURIComponent(location.pathname + location.hash));
+        // A lost session: a load the user started goes to the login page (the form saved first);
+        // polls and timers only offer the link, so nothing unsent is lost behind the user's back.
+        var signingIn = false, sessionExpired = false;
+        function checkSession(resp, userStarted) {
+            if (resp.status !== 401) return resp;
+            if (userStarted) toLogin();
+            else if (!sessionExpired) {
+                sessionExpired = true;
+                setSessionExpired();
             }
             return resp;
+        }
+
+        function loginUrl() {
+            return '/login?next=' + encodeURIComponent(location.pathname + location.hash);
+        }
+
+        function toLogin() {
+            if (signingIn) return;
+            signingIn = true;
+            saveSubmitForm();
+            location.assign(loginUrl());
+        }
+
+        function setSessionExpired() {
+            setConnected(false, 'Your session has expired.');
+            document.getElementById('statusText').innerHTML = 'Disconnected · <a href="' + escHtml(loginUrl())
+                + '" data-signin="1">Session expired — sign in</a>';
         }
 
         // A failed reply as an Error carrying the server's detail.
@@ -2555,6 +2576,11 @@
         }
 
         document.getElementById('loadingCancel').addEventListener('click', loadingCancel);
+        document.addEventListener('click', function (e) {
+            if (!e.target.closest || !e.target.closest('[data-signin]')) return;
+            e.preventDefault();
+            toLogin();
+        });
         document.addEventListener('click', function (e) {
             if (!e.target.closest || !e.target.closest('[data-retry]')) return;
             e.preventDefault();
@@ -3378,7 +3404,8 @@
                     cache[smi] = data;
                     return data;
                 } catch (err) {
-                    return { valid: false, error: 'Could not check: ' + err.message };
+                    // Neither valid nor invalid: the server re-checks on submit.
+                    return { valid: false, unchecked: true, error: 'Could not check: ' + err.message };
                 }
             }
 
@@ -3409,6 +3436,8 @@
                         if (r.diradical) note += ' (diradical — triplet only)';
                         if (r.canonical && r.canonical !== lines[0]) note += ', canonical: ' + r.canonical;
                         setState('valid', note);
+                    } else if (r.unchecked) {
+                        setState('unchecked', r.error);
                     } else {
                         setState('invalid', r.error || 'Invalid SMILES.');
                     }
@@ -3416,8 +3445,12 @@
                 }
 
                 // Multi-line: summary + per-invalid detail
-                var invalid = results.filter(function (x) { return !x.result.valid; });
-                if (invalid.length === 0) {
+                var invalid = results.filter(function (x) { return !x.result.valid && !x.result.unchecked; });
+                var unchecked = results.filter(function (x) { return x.result.unchecked; });
+                if (invalid.length === 0 && unchecked.length) {
+                    setState('unchecked', unchecked.length + '/' + lines.length + ' not checked. '
+                             + unchecked[0].result.error);
+                } else if (invalid.length === 0) {
                     var ok = lines.length + ' SMILES — all valid';
                     if (diradicals.length) ok += ' (' + diradicals.length + ' diradical — triplet only)';
                     setState('valid', ok);
@@ -3443,7 +3476,8 @@
             });
             input.addEventListener('blur', function () {
                 var lines = getLines();
-                if (lines.length && (!hint.textContent || hint.classList.contains('checking'))) {
+                if (lines.length && (!hint.textContent || hint.classList.contains('checking')
+                                     || hint.classList.contains('unchecked'))) {
                     checkAll(lines);
                 }
             });
@@ -3735,6 +3769,40 @@
 
         // ── Submit form ──────────────────────────────────────────────────
 
+        // Kept across a sign-in: the filled fields (locked and read-only ones are the page's own) and the Extend target.
+        var SUBMIT_FORM_KEY = 'autodft_submit_form';
+
+        function saveSubmitForm() {
+            var fields = {};
+            [].forEach.call(document.getElementById('submitForm').elements, function (el) {
+                if (!el.id || el.disabled || el.readOnly) return;
+                if (el.type === 'checkbox') fields[el.id] = el.checked;
+                else if (el.value !== '') fields[el.id] = el.value;
+            });
+            try {
+                sessionStorage.setItem(SUBMIT_FORM_KEY, JSON.stringify({
+                    fields: fields, extend: extendMode ? extendMode.project : null }));
+            } catch (_) {}
+        }
+
+        // Once, after the header and Advanced selects are filled.
+        async function restoreSubmitForm() {
+            var saved = null;
+            try {
+                saved = JSON.parse(sessionStorage.getItem(SUBMIT_FORM_KEY));
+                sessionStorage.removeItem(SUBMIT_FORM_KEY);
+            } catch (_) {}
+            if (!saved || !saved.fields) return;
+            if (saved.extend) await enterExtendMode(saved.extend);
+            Object.keys(saved.fields).forEach(function (id) {
+                var el = document.getElementById(id);
+                if (!el || el.disabled || el.readOnly) return;
+                if (el.type === 'checkbox') el.checked = !!saved.fields[id];
+                else el.value = saved.fields[id];
+                el.dispatchEvent(new Event(el.type === 'checkbox' || el.tagName === 'SELECT' ? 'change' : 'input'));
+            });
+        }
+
         // ── Extend: add calculations to a project's existing molecules ──
         // The form is filled from /extend-info: what every molecule already has
         // is ticked and greyed out, options of present categories are fixed, and
@@ -3952,7 +4020,7 @@
             // a partial-submit race when the user edits during checking.
             var results = window.lastSmilesResults;
             if (!extendMode && (!results || results.length !== lines.length
-                || results.some(function (x) { return !x.result.valid; }))) {
+                || results.some(function (x) { return !x.result.valid && !x.result.unchecked; }))) {
                 feedback.textContent = 'Fix the SMILES first — at least one line failed validation.';
                 feedback.className = 'submit-feedback error';
                 btn.disabled = false;
@@ -5903,23 +5971,32 @@
         var polling = null;
 
         async function pollOnce() {
-            if (signingIn) return;
+            if (signingIn || sessionExpired) return;
             var failed = (await Promise.allSettled([fetchOverview(), fetchQueue(), fetchJobs(), fetchFailed()]))
                 .filter(function (r) { return r.status === 'rejected'; });
+            if (sessionExpired) return;  // the sign-in link stays
             setConnected(!failed.length, failed.length ? failed[0].reason.message : '');
             if (!failed.length) document.getElementById('lastUpdated').textContent = new Date().toLocaleTimeString();
         }
 
         // Explicit refreshes queue behind a running poll; the timer skips its tick.
         function refreshAll() {
-            var run = (polling || Promise.resolve()).then(pollOnce);
+            var run = (polling || Promise.resolve()).then(pollOnce, pollOnce);
             polling = run;
-            run.then(function () { if (polling === run) polling = null; });
+            run.finally(function () { if (polling === run) polling = null; }).catch(function () {});
             return run;
         }
 
+        // A reply that hangs for POLL_MISSED_MAX ticks reads as Disconnected; one slow reply does not.
+        var POLL_MISSED_MAX = 3;
+        var pollMissed = 0;
         function pollTick() {
-            if (!polling) refreshAll();
+            if (!polling) {
+                pollMissed = 0;
+                refreshAll();
+            } else if (++pollMissed === POLL_MISSED_MAX && !sessionExpired) {
+                setConnected(false, 'No reply for ' + POLL_MISSED_MAX * POLL_INTERVAL / 1000 + ' s.');
+            }
         }
 
         // Manual refresh: covers global polling data AND whatever the
@@ -6009,8 +6086,7 @@
         // Initial load
         // Routed once, after whoami (the Admin page depends on it); the overlay covers the wait.
         withLoading('Connecting…', loadIdentity).catch(function () {}).then(function () { activateRoute(currentRoute()); });
-        fetchHeaders();
-        fetchAdvancedDefaults();
+        Promise.all([fetchHeaders(), fetchAdvancedDefaults()]).then(restoreSubmitForm).catch(function () {});
         refreshAll();
 
         // Poll every 5 seconds
