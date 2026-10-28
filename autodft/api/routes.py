@@ -2150,7 +2150,9 @@ def api_circuit_breaker_status():
     owners = []
     with get_session() as session:
         for owner in sorted(circuit_breaker.owners(session) | set(tripped)):
-            ratio, failed, judged = circuit_breaker.recent_failure_ratio(session, window, owner)
+            ratio, failed, judged = circuit_breaker.recent_failure_ratio(
+                session, window, owner, since=circuit_breaker.reset_time(settings.data_path, owner),
+            )
             if failed or owner in tripped:
                 owners.append({
                     "owner": owner,
@@ -2180,14 +2182,16 @@ def api_circuit_breaker_reset(
     """Clear one owner's breaker, or every owner's, so their jobs are created and submitted again.
 
     Deliberately manual: once submission stops no new tasks are judged, so
-    the failure ratio cannot recover on its own. Fix the cause first.
+    the failure ratio cannot recover on its own. Fix the cause first. A reset
+    starts the owner's failure count afresh.
     """
     require_admin(identity)
     from autodft.engine import circuit_breaker
 
     settings = get_active_settings()
     try:
-        cleared = circuit_breaker.reset(settings.data_path, body.owner if body else None)
+        with get_session() as session:
+            cleared = circuit_breaker.reset(session, settings.data_path, body.owner if body else None)
     except ValueError as exc:
         return JSONResponse(status_code=400, content={"detail": str(exc)})
     return {"reset": cleared, "tripped": sorted(circuit_breaker.tripped_owners(settings.data_path))}

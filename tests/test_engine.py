@@ -1451,7 +1451,7 @@ class TestCircuitBreaker:
         # Latches: once submission stops nothing new is judged, so the ratio
         # cannot recover on its own and must be cleared deliberately.
         assert set(check(session, settings)) == {"admin"}
-        assert reset(settings.data_path, "admin") == ["admin"]
+        assert reset(session, settings.data_path, "admin") == ["admin"]
         assert read_state(settings.data_path, "admin") is None
 
     def test_too_few_samples_never_trips(self, session, sample_state, sample_header, tmp_path):

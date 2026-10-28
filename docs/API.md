@@ -1174,8 +1174,8 @@ Admin only. Body `{"owner": "alice"}` clears that owner's breaker; no body
 `{"reset": ["alice"], "tripped": ["bob"]}`: the owners cleared and those
 still tripped; `400` for an invalid owner name. Deliberately manual: once
 submission stops, no new tasks are judged, so the failure ratio cannot
-recover on its own. Fix the cause first. A reset re-trips on the next tick
-unless the failed tasks are requeued or wiped.
+recover on its own. Fix the cause first. A reset starts the owner's failure
+count afresh.
 
 ### `GET /api/admin/submission-hold`
 

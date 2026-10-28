@@ -149,10 +149,10 @@ class TestMalformedNames:
         settings = env["settings"]
         real = circuit_breaker.recent_failure_ratio
 
-        def flaky(session, window, owner):
+        def flaky(session, window, owner, since=None):
             if owner == "alice":
                 raise RuntimeError("boom")
-            return real(session, window, owner)
+            return real(session, window, owner, since=since)
 
         monkeypatch.setattr(circuit_breaker, "recent_failure_ratio", flaky)
         with get_session() as session:
@@ -200,7 +200,7 @@ class TestPerOwnerTrip:
             _judged(session, "alice/p", failed=100)
             _judged(session, "bob/p", failed=100)
             assert set(circuit_breaker.check(session, settings)) == {"alice", "bob"}
-        assert circuit_breaker.reset(settings.data_path, "alice") == ["alice"]
+            assert circuit_breaker.reset(session, settings.data_path, "alice") == ["alice"]
         assert circuit_breaker.read_state(settings.data_path, "alice") is None
         assert circuit_breaker.read_state(settings.data_path, "bob") is not None
 
@@ -210,7 +210,7 @@ class TestPerOwnerTrip:
             _judged(session, "alice/p", failed=100)
             _judged(session, "bob/p", failed=100)
             circuit_breaker.check(session, settings)
-        assert circuit_breaker.reset(settings.data_path) == ["alice", "bob"]
+            assert circuit_breaker.reset(session, settings.data_path) == ["alice", "bob"]
         assert circuit_breaker.tripped_owners(settings.data_path) == {}
 
     def test_a_corrupt_marker_trips_only_its_owner(self, env):
@@ -224,6 +224,54 @@ class TestPerOwnerTrip:
     def test_an_invalid_owner_is_refused(self, env):
         with pytest.raises(ValueError):
             circuit_breaker.marker_path(env["settings"].data_path, "../x")
+
+
+class TestResetStartsAfresh:
+    def test_old_failures_do_not_re_trip_and_new_ones_do(self, env):
+        settings = env["settings"]
+        with get_session() as session:
+            _judged(session, "alice/p", failed=100)
+            assert set(circuit_breaker.check(session, settings)) == {"alice"}
+            assert circuit_breaker.reset(session, settings.data_path, "alice") == ["alice"]
+            assert circuit_breaker.check(session, settings) == {}
+            _judged(session, "alice/p", failed=100)
+            assert circuit_breaker.check(session, settings)["alice"]["judged"] == 100
+
+    def test_another_owners_window_is_unaffected(self, env):
+        settings = env["settings"]
+        with get_session() as session:
+            _judged(session, "alice/p", failed=100)
+            _judged(session, "bob/p", failed=60)
+            assert set(circuit_breaker.check(session, settings)) == {"alice"}
+            circuit_breaker.reset(session, settings.data_path, "alice")
+            assert circuit_breaker.reset_time(settings.data_path, "bob") is None
+            _judged(session, "bob/p", failed=40)
+            assert set(circuit_breaker.check(session, settings)) == {"bob"}
+
+    def test_the_reset_time_survives_a_restart(self, env):
+        settings = env["settings"]
+        with get_session() as session:
+            _judged(session, "alice/p", failed=100)
+            circuit_breaker.reset(session, settings.data_path, "alice")
+        reset_engine()
+        init_db(settings)
+        with get_session() as session:
+            assert circuit_breaker.recent_failure_ratio(
+                session, 100, "alice", since=circuit_breaker.reset_time(settings.data_path, "alice"),
+            ) == (0.0, 0, 0)
+            assert circuit_breaker.check(session, settings) == {}
+
+    def test_reset_all_records_the_time_for_every_owner(self, env):
+        settings = env["settings"]
+        with get_session() as session:
+            _judged(session, "alice/p", failed=100)
+            _judged(session, "admin/q", failed=60)
+            assert set(circuit_breaker.check(session, settings)) == {"alice"}
+            assert circuit_breaker.reset(session, settings.data_path) == ["alice"]
+            for owner in ("admin", "alice"):
+                assert circuit_breaker.reset_time(settings.data_path, owner) is not None
+            _judged(session, "admin/q", failed=40)
+            assert circuit_breaker.check(session, settings) == {}
 
 
 class TestBlockedOwnersAreSkipped:
@@ -363,6 +411,8 @@ class TestRoutes:
                           headers=admin).status_code == 400
             rest = c.post("/api/admin/circuit-breaker/reset", headers=admin)
             assert rest.json() == {"reset": ["bob"], "tripped": []}
+        with get_session() as session:
+            assert circuit_breaker.check(session, env["settings"]) == {}
 
     def test_cluster_status_reports_the_callers_own_breaker(self, env):
         with get_session() as session:

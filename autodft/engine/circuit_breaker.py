@@ -90,18 +90,32 @@ def marker_path(data_path: Path, owner: str) -> Path:
     return Path(data_path) / MARKER_DIRNAME / f"{normalise_username(owner)}.json"
 
 
-def recent_failure_ratio(session: Session, window: int, owner: str) -> tuple[float, int, int]:
+def reset_path(data_path: Path, owner: str) -> Path:
+    return Path(data_path) / MARKER_DIRNAME / f"{normalise_username(owner)}.reset"
+
+
+def reset_time(data_path: Path, owner: str) -> Optional[datetime]:
+    """When *owner*'s breaker was last reset, or None."""
+    try:
+        return datetime.fromisoformat(reset_path(data_path, owner).read_text(encoding="utf-8").strip())
+    except (ValueError, OSError):
+        return None
+
+
+def recent_failure_ratio(
+    session: Session, window: int, owner: str, since: Optional[datetime] = None,
+) -> tuple[float, int, int]:
     """Return ``(ratio, failed, judged)`` over *owner*'s most recently judged tasks.
 
     Only ``successful`` / ``failed`` tasks count as judged -- tasks still
     running say nothing about whether the campaign is healthy. Category
     tasks are excluded; see ``_CATEGORY_TASK_TYPES``. So are tasks an
-    archive closed.
+    archive closed, and with *since*, tasks judged before it.
     """
     archived = select(ComputationJob.task_id).where(
         ComputationJob.fail_reason == ARCHIVED_FAIL_REASON
     )
-    tasks = session.exec(
+    statement = (
         select(ComputationTask.status)
         .join(MoleculeState, col(MoleculeState.id) == col(ComputationTask.state_id))
         .join(Molecule, col(Molecule.id) == col(MoleculeState.molecule_id))
@@ -111,7 +125,11 @@ def recent_failure_ratio(session: Session, window: int, owner: str) -> tuple[flo
             col(ComputationTask.id).notin_(archived),
             owner_filter(session, owner),
         )
-        .order_by(col(ComputationTask.updated_at).desc())
+    )
+    if since is not None:
+        statement = statement.where(col(ComputationTask.updated_at) > since)
+    tasks = session.exec(
+        statement.order_by(col(ComputationTask.updated_at).desc())
         .limit(window)
     ).all()
 
@@ -174,15 +192,23 @@ def trip(data_path: Path, owner: str, ratio: float, failed: int, judged: int) ->
     return payload
 
 
-def reset(data_path: Path, owner: Optional[str] = None) -> list[str]:
-    """Clear *owner*'s breaker, or every owner's; return the owners cleared."""
-    paths = _markers(data_path) if owner is None else [marker_path(data_path, owner)]
+def reset(session: Session, data_path: Path, owner: Optional[str] = None) -> list[str]:
+    """Clear *owner*'s breaker, or every owner's, and start their failure count afresh.
+
+    Return the owners whose breaker was tripped.
+    """
+    names = sorted(owners(session) | set(tripped_owners(data_path))) if owner is None else [owner]
+    now = datetime.now(timezone.utc).isoformat()
     cleared = []
-    for path in paths:
-        if path.exists():
-            path.unlink()
-            cleared.append(path.stem)
-            logger.warning("Circuit breaker reset for %s; their job submission resumes", path.stem)
+    for name in names:
+        path = reset_path(data_path, name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(now, encoding="utf-8")
+        marker = marker_path(data_path, name)
+        if marker.exists():
+            marker.unlink()
+            cleared.append(marker.stem)
+            logger.warning("Circuit breaker reset for %s; their job submission resumes", marker.stem)
     return cleared
 
 
@@ -200,7 +226,9 @@ def check(session: Session, settings) -> dict[str, dict]:
     for owner in sorted(owners(session) - set(tripped)):
         # One owner's error must not stop the others; that owner is held this tick.
         try:
-            ratio, failed, judged = recent_failure_ratio(session, cfg.failure_breaker_window, owner)
+            ratio, failed, judged = recent_failure_ratio(
+                session, cfg.failure_breaker_window, owner, since=reset_time(settings.data_path, owner),
+            )
             if judged >= cfg.failure_breaker_min_samples and ratio >= cfg.failure_breaker_ratio:
                 tripped[owner] = trip(settings.data_path, owner, ratio, failed, judged)
         except Exception as exc:  # noqa: BLE001 - fail closed for this owner only
