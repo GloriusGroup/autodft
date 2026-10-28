@@ -415,11 +415,12 @@ folder is deleted; the project stays browsable in Project Overview but can no
 longer be exported (409). Refused for a protected project and for one that is
 already archived. From its start the project gets no new job or `sbatch`, and
 it waits until every job the project sent to SLURM has finished and been
-judged, so a result that lands during the wait is exported, not deleted. An
-archive cut short (a restart, an NFS error) can be re-run: it keeps the export
-folders of the molecules already archived, deletes the raw folders they have left, and
-exports and deletes the rest. A plain Export Project of such a project keeps
-those folders too.
+judged, so a result that lands during the wait is exported, not deleted; a job
+whose `sbatch` reported failure is first looked up in SLURM and, if found,
+waited for too. An archive cut short (a restart, an NFS error) can be re-run:
+it keeps the export folders of the molecules already archived, deletes the raw
+folders they have left, and exports and deletes the rest. A plain Export
+Project of such a project keeps those folders too.
 **Delete Project** is the project wipe (below) offered to the owner and
 admin: a preview, the project name typed back, refused for a protected
 project and with 409 while another wipe runs; "Also delete exported data"

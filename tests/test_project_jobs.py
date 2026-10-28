@@ -18,6 +18,7 @@ production database is never touched.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -41,6 +42,9 @@ from autodft.models import (
 )
 from autodft.engine import state_machine
 from tests.test_export_paths import _seed_result
+from tests.test_orca_parser import (
+    ENERGY_OUTPUT, NORMAL_TERMINATION, OPTIMIZATION_CONVERGED, VIBRATIONAL_FREQUENCIES_CLEAN,
+)
 
 PROJECT = "owner/screening"
 
@@ -393,11 +397,10 @@ class TestQuiescence:
         project_jobs._wait_for_quiescence(PROJECT, timeout=0.2, poll=0.02)
 
     def test_a_job_that_finishes_during_the_wait_is_judged_and_exported(self, env, monkeypatch):
-        import time
-
         from sqlmodel import select
 
-        monkeypatch.setattr(project_jobs, "sleep", lambda _: time.sleep(0.01))
+        from autodft.models.result import JobResult
+
         _seed_result(env["tmp_path"])
         with get_session() as session:
             sp = session.exec(select(ComputationTask).where(
@@ -405,37 +408,160 @@ class TestQuiescence:
             sp.status = TaskStatus.pending
             job = _jobs_of(session, sp.id)[0]
             job.slurm_jobid, job.slurm_status, job.success = 42, "RUNNING", None
+            session.delete(session.exec(select(JobResult).where(JobResult.job_id == job.id)).one())
+            (Path(job.job_path) / "output.out").write_text(ENERGY_OUTPUT + NORMAL_TERMINATION)
             session.add_all([sp, job])
             session.commit()
             job_id = job.id
 
-        archive = project_jobs.start_job(owner_id=env["owner_id"], qualified_name=PROJECT,
-                                         kind=ProjectJobKind.archive, params={},
-                                         settings=env["settings"])
-
-        def step(change):
-            with get_session() as session:
-                change(session)
-                session.commit()
-            time.sleep(0.2)
-            with get_session() as session:
-                return project_jobs.get_job(session, archive["id"]).status
-
-        def finished(session):
-            session.get(ComputationJob, job_id).slurm_status = "COMPLETED"
-
-        def judged(session):
-            session.get(ComputationJob, job_id).success = True
-
-        assert step(finished) == ProjectJobStatus.running
-        assert step(judged) == ProjectJobStatus.running
-        step(state_machine.update_task_statuses)
+        archive = _start_archive(env, monkeypatch)
+        assert _status_after(archive, _finished(job_id)) == ProjectJobStatus.running
+        assert _status_after(archive, _judge) == ProjectJobStatus.running
+        _status_after(archive, state_machine.update_task_statuses)
         project_jobs.join_all(timeout=10)
 
         with get_session() as session:
-            assert project_jobs.get_job(session, archive["id"]).status == ProjectJobStatus.successful
+            assert project_jobs.get_job(session, archive).status == ProjectJobStatus.successful
         csv = env["tmp_path"] / "export_data" / "owner" / "screening" / "screening.csv"
-        assert "-1.0" in csv.read_text()
+        assert "-230.98765" in csv.read_text()
+
+    def test_an_opt_marked_during_the_wait_gets_no_followup(self, env, monkeypatch):
+        from sqlmodel import select
+
+        with get_session() as session:
+            opt_id, job_id = _running_opt(session, env["tmp_path"])
+
+        archive = _start_archive(env, monkeypatch)
+        _status_after(archive, _finished(job_id))
+        _status_after(archive, _judge)
+        _status_after(archive, state_machine.update_task_statuses)
+        project_jobs.join_all(timeout=10)
+
+        with get_session() as session:
+            assert project_jobs.get_job(session, archive).status == ProjectJobStatus.successful
+            assert session.get(ComputationTask, opt_id).status == TaskStatus.successful
+            state_machine.start_followup_tasks(session, env["settings"])
+            session.commit()
+            assert session.exec(select(ComputationTask).where(
+                ComputationTask.depends_on_task_id == opt_id)).all() == []
+            assert session.get(ComputationTask, opt_id).has_followups is False
+
+
+class TestPossiblySent:
+    """A job whose sbatch reported failure may be in SLURM; the archive waits for the lookup."""
+
+    class _Scheduler:
+        def __init__(self, found):
+            self.found = found
+
+        def get_queue_length(self):
+            return 0
+
+        def find_submitted(self, script):
+            if isinstance(self.found, Exception):
+                raise self.found
+            return self.found
+
+        def submit(self, script, nice=0):
+            raise AssertionError("a paused project's job must not be sbatched")
+
+    def _tick(self, env, found):
+        def run(session):
+            state_machine.submit_pending_jobs(session, self._Scheduler(found), env["settings"])
+        return run
+
+    def test_an_accepted_job_is_adopted_waited_for_and_exported(self, env, monkeypatch):
+        with get_session() as session:
+            opt_id, job_id = _running_opt(session, env["tmp_path"], slurm_jobid=None,
+                                          slurm_status=None,
+                                          fail_reason="sbatch failed (retrying): Socket timed out")
+
+        archive = _start_archive(env, monkeypatch)
+        assert _status_after(archive) == ProjectJobStatus.running
+        assert _status_after(archive, self._tick(env, "777")) == ProjectJobStatus.running
+        with get_session() as session:
+            job = session.get(ComputationJob, job_id)
+            assert (job.slurm_jobid, job.slurm_status, job.fail_reason) == (777, "PENDING", None)
+        _status_after(archive, _finished(job_id))
+        _status_after(archive, _judge)
+        _status_after(archive, state_machine.update_task_statuses)
+        project_jobs.join_all(timeout=10)
+
+        with get_session() as session:
+            assert project_jobs.get_job(session, archive).status == ProjectJobStatus.successful
+            assert session.get(ComputationTask, opt_id).status == TaskStatus.successful
+        manifests = (env["tmp_path"] / "export_data" / "owner" / "screening").rglob("molecule.json")
+        files = [f for m in manifests for f in json.loads(m.read_text())["files"].values()]
+        assert opt_id in {f["task_id"] for f in files}
+
+    def test_a_job_slurm_lacks_is_failed_as_unsent_and_a_failed_lookup_waits(self, env, monkeypatch):
+        with get_session() as session:
+            opt_id, job_id = _running_opt(session, env["tmp_path"], slurm_jobid=None,
+                                          slurm_status=None,
+                                          fail_reason="sbatch failed (retrying): Socket timed out")
+
+        archive = _start_archive(env, monkeypatch)
+        lookup_down = self._tick(env, RuntimeError("squeue: Unable to contact slurm controller"))
+        assert _status_after(archive, lookup_down) == ProjectJobStatus.running
+        _status_after(archive, self._tick(env, None))
+        project_jobs.join_all(timeout=10)
+
+        with get_session() as session:
+            assert project_jobs.get_job(session, archive).status == ProjectJobStatus.successful
+            job = session.get(ComputationJob, job_id)
+            assert (job.slurm_jobid, job.success, job.fail_reason) == (None, False, "project archived")
+            assert session.get(ComputationTask, opt_id).status == TaskStatus.failed
+
+
+def _running_opt(session, tmp_path, **job_fields):
+    """A pending optimisation in PROJECT whose job SLURM runs, with its finished output on disk."""
+    task = _make_task(session, status=TaskStatus.pending)
+    path = tmp_path / "comp_data" / f"job_opt_{task.id}"
+    path.mkdir(parents=True)
+    (path / "submit.cmd").write_text("#!/bin/bash\n")
+    (path / "input.xyz").write_text("3\n\nC 0 0 0\nC 1.5 0 0\nC 3 0 0\n")
+    (path / "output.out").write_text(
+        ENERGY_OUTPUT + VIBRATIONAL_FREQUENCIES_CLEAN + OPTIMIZATION_CONVERGED + NORMAL_TERMINATION)
+    job = ComputationJob(task_id=task.id, attempt=1, job_path=str(path),
+                         **{"slurm_jobid": 42, "slurm_status": "RUNNING", **job_fields})
+    session.add(job)
+    session.commit()
+    return task.id, job.id
+
+
+def _start_archive(env, monkeypatch) -> int:
+    """Start PROJECT's archive with a fast quiescence poll; returns its id."""
+    import time
+
+    monkeypatch.setattr(project_jobs, "sleep", lambda _: time.sleep(0.01))
+    return project_jobs.start_job(owner_id=env["owner_id"], qualified_name=PROJECT,
+                                  kind=ProjectJobKind.archive, params={},
+                                  settings=env["settings"])["id"]
+
+
+def _status_after(archive_id, change=None):
+    """Run the controller *change* and commit, then the archive's status a few polls later."""
+    import time
+
+    if change is not None:
+        with get_session() as session:
+            change(session)
+            session.commit()
+    time.sleep(0.2)
+    with get_session() as session:
+        return project_jobs.get_job(session, archive_id).status
+
+
+def _finished(job_id):
+    def run(session):
+        session.get(ComputationJob, job_id).slurm_status = "COMPLETED"
+    return run
+
+
+def _judge(session):
+    from autodft.qm.orca.parser import OrcaParser
+
+    state_machine.process_finished_jobs(session, OrcaParser())
 
 
 # ----------------------------------------------------------------------

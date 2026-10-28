@@ -1006,8 +1006,11 @@ the moment the job starts, the controller creates and submits no job for
 the project, not even later in a tick already under way. The archive job
 then waits up to 300 s until every job the project sent to SLURM has
 finished and been judged and its task marked, so a job that finishes
-during the wait is exported. If any are still running or unjudged after
-that, it aborts and deletes nothing. It then fails the project's `created`
+during the wait is exported. A job whose `sbatch` reported failure may
+still have been accepted: the controller looks it up in SLURM (it sends
+no new `sbatch`), and the archive waits for it if found, or treats it as
+never sent if not. If any are still running, unjudged or not looked up
+after that, it aborts and deletes nothing. It then fails the project's `created`
 and `pending` tasks with the reason `project archived`; they do not count
 towards the circuit breaker.
 

@@ -40,12 +40,13 @@ from datetime import datetime, timezone
 from time import monotonic, sleep
 from typing import Optional
 
-from sqlalchemy import exists, func
+from sqlalchemy import exists, func, or_
 from sqlmodel import Session, col, select
 
 from autodft import accounts
 from autodft.config import Settings
 from autodft.db import get_session
+from autodft.engine.state_machine import SBATCH_FAILED
 from autodft.models.enums import (
     ProjectJobKind,
     ProjectJobStatus,
@@ -378,7 +379,8 @@ def _execute(
 
 
 def _unsettled_count(qualified_name: str) -> int:
-    """Sent jobs of *qualified_name* not yet judged, plus pending tasks a judged success has not marked."""
+    """Jobs of *qualified_name* sent, or possibly sent, and not yet judged, plus pending tasks
+    a judged success has not marked."""
     in_project = (
         select(ComputationTask.id)
         .join(MoleculeState, col(MoleculeState.id) == col(ComputationTask.state_id))
@@ -389,7 +391,9 @@ def _unsettled_count(qualified_name: str) -> int:
         unjudged = session.exec(
             select(func.count()).select_from(ComputationJob).where(
                 col(ComputationJob.task_id).in_(in_project),
-                col(ComputationJob.slurm_status).is_not(None),
+                # An sbatch that reported failure stays possibly sent until the controller looks it up.
+                or_(col(ComputationJob.slurm_status).is_not(None),
+                    col(ComputationJob.fail_reason).startswith(SBATCH_FAILED)),
                 col(ComputationJob.success).is_(None),
             )
         ).one()

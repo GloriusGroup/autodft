@@ -73,6 +73,8 @@ MAX_SBATCH_REJECTIONS = 3
 # fail_reason prefix of an unjudged job whose sbatch failed; SLURM may have accepted it.
 SBATCH_FAILED = "sbatch failed"
 _SBATCH_RETRYING = f"{SBATCH_FAILED} (retrying)"
+# fail_reason prefix of such a job SLURM was found not to have.
+_NOT_ACCEPTED = "not in SLURM after"
 _SBATCH_REJECTED = re.compile(r"^sbatch failed \(rejected (\d+)/")
 
 
@@ -446,6 +448,11 @@ def start_followup_tasks(session: Session, settings: Settings) -> None:
         tasks = [t for t in tasks if _task_project(session, t) not in paused]
 
     for task in tasks:
+        if _molecule_is_archived(session, task):
+            # Marked successful during its archive's wait; nothing can start a followup now.
+            task.has_followups = False
+            session.add(task)
+            continue
         state = session.get(MoleculeState, task.state_id)
         if state is None:
             logger.error("Task %d references missing state %d", task.id, task.state_id)
@@ -881,6 +888,7 @@ def submit_pending_jobs(
     from autodft.engine import submission_hold
 
     _release_claims(session)
+    _resolve_paused_sbatch_failures(session, scheduler)
     held = submission_hold.read_state(settings.data_path)
     if held is not None:
         logger.info("Submission hold active (%s) -- not submitting jobs",
@@ -1099,7 +1107,49 @@ def _claim(session: Session, job_id: int) -> bool:
     return bool(claimed)
 
 
-def _unpaused(task_id) -> ColumnElement[bool]:
+def _resolve_paused_sbatch_failures(session: Session, scheduler: Scheduler) -> None:
+    """Look up a paused project's jobs an sbatch that reported failure may have got accepted.
+
+    The pause refuses their claim, so the adoption below never runs for them; the archive
+    waits for these. Found: adopted. Not found: no longer possibly sent. Lookup failed: left.
+    """
+    paused = paused_project_names(session)
+    if not paused:
+        return
+    jobs = session.exec(
+        select(ComputationJob)
+        .join(ComputationTask, col(ComputationTask.id) == col(ComputationJob.task_id))
+        .join(MoleculeState, col(MoleculeState.id) == col(ComputationTask.state_id))
+        .join(Molecule, col(Molecule.id) == col(MoleculeState.molecule_id))
+        .where(
+            col(Molecule.project_name).in_(sorted(paused)),
+            col(ComputationJob.slurm_jobid).is_(None),
+            col(ComputationJob.slurm_status).is_(None),
+            col(ComputationJob.success).is_(None),
+            col(ComputationJob.fail_reason).startswith(SBATCH_FAILED),
+        )
+    ).all()
+    for job in jobs:
+        try:
+            adopted = (scheduler.find_submitted(Path(job.job_path) / "submit.cmd")
+                       if job.job_path else None)
+        except Exception:  # noqa: BLE001 - left possibly sent; the archive keeps waiting
+            logger.exception("Job %d: SLURM lookup of an earlier sbatch failed", job.id)
+            continue
+        if adopted is not None:
+            logger.warning("Job %d: adopting SLURM job %s from an sbatch that reported failure",
+                           job.id, adopted)
+            job.slurm_jobid = int(adopted)
+            job.slurm_status = SlurmStatus.PENDING
+            job.time_start = datetime.now(timezone.utc)
+            job.fail_reason = None
+        else:
+            job.fail_reason = f"{_NOT_ACCEPTED} {job.fail_reason}"[:500]
+        session.add(job)
+        session.commit()
+
+
+def _unpaused(task_id: ColumnElement[int] | int) -> ColumnElement[bool]:
     """SQL: task *task_id*'s project has no archive/export job running."""
     return ~exists().where(
         col(ComputationTask.id) == task_id,
