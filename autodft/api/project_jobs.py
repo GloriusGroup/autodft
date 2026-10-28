@@ -42,6 +42,7 @@ from typing import Optional
 from sqlalchemy import func
 from sqlmodel import Session, col, select
 
+from autodft import accounts
 from autodft.config import Settings
 from autodft.db import get_session
 from autodft.models.enums import (
@@ -61,6 +62,10 @@ logger = logging.getLogger(__name__)
 
 class JobInProgress(RuntimeError):
     """Raised when a project already has an active background job."""
+
+
+class ProjectGone(LookupError):
+    """Raised when a job is started for a project that no longer exists (e.g. reassigned meanwhile)."""
 
 
 # How long the destructive archive waits for the project's in-flight SLURM
@@ -192,9 +197,12 @@ def start_job(
 
     Raises:
         JobInProgress: if the project already has a running job.
+        ProjectGone: if *qualified_name* has no project row (legacy bare names excepted).
     """
     with _CREATE_LOCK:
         with get_session(settings) as session:
+            if "/" in qualified_name and accounts.get_project(session, qualified_name) is None:
+                raise ProjectGone(f"No project named {qualified_name!r}.")
             assert_no_active_job(session, qualified_name)
             job = ProjectJob(
                 qualified_name=qualified_name,

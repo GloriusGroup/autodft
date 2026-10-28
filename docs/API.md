@@ -116,7 +116,8 @@ payloads included) to the new name, so an archived project stays browsable
 and exportable for its new owner. It answers **409** while the project has
 an archive or export running, and when the new owner already has a project
 or an export directory of that name. The directory is renamed before the
-database commit and renamed back if the commit fails.
+database commit and renamed back if the commit fails. An archive or export
+requested under the old name while the reassign runs answers **404**.
 
 There is no delete-user. An account whose projects still hold hundreds of
 gigabytes should not disappear in one click: wipe or reassign the

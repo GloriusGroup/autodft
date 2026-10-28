@@ -161,6 +161,17 @@ class TestExclusivity:
                 kind=ProjectJobKind.export_csv, params={}, settings=env["settings"],
             )
 
+    def test_a_project_that_no_longer_exists_gets_no_job(self, env):
+        from sqlmodel import select
+
+        with pytest.raises(project_jobs.ProjectGone):
+            project_jobs.start_job(
+                owner_id=env["owner_id"], qualified_name="owner/gone",
+                kind=ProjectJobKind.export_csv, params={}, settings=env["settings"],
+            )
+        with get_session() as session:
+            assert session.exec(select(ProjectJob)).all() == []
+
     def test_assert_no_active_job_raises_only_while_running(self, env):
         self._park_running_job(env["owner_id"])
         with get_session() as session:
@@ -306,6 +317,19 @@ class TestHttp:
         listing = c.get("/api/projects/owner:screening/jobs", headers=headers)
         assert listing.status_code == 200
         assert listing.json()["jobs"][0]["id"] == job["id"]
+
+    @pytest.mark.parametrize("path,body", [
+        ("export?format=csv", None), ("state-analysis/export", None), ("archive", {}),
+    ])
+    def test_a_project_without_its_row_answers_404(self, client, path, body):
+        c, _, env = client
+        with get_session() as session:
+            admin = accounts.get_user_by_username(session, "admin")
+            key = accounts.rotate_api_key(session, admin)
+            session.add(Molecule(smiles="CCO", project_name="ghost/p"))
+            session.commit()
+        r = c.post(f"/api/projects/ghost:p/{path}", headers={"X-AutoDFT-API-Key": key}, json=body)
+        assert r.status_code == 404, r.text
 
     def test_download_streams_a_successful_csv(self, client):
         c, headers, env = client

@@ -719,7 +719,7 @@ class TestReassign:
 
         self._unmoved(archived)
 
-    def test_a_job_started_mid_reassign_runs_under_the_name_its_row_carries(
+    def test_a_job_started_mid_reassign_is_refused_under_the_old_name(
         self, archived, admin_identity, monkeypatch,
     ):
         from autodft import accounts
@@ -731,26 +731,32 @@ class TestReassign:
         monkeypatch.setattr(project_jobs, "_execute", lambda kind, name, params, settings: ran.append(name) or {})
         rewrite = accounts._rewrite_project_name
         starter: list[threading.Thread] = []
+        raised: list[BaseException] = []
+
+        def start():
+            try:
+                project_jobs.start_job(owner_id=None, qualified_name="nho/p", kind=ProjectJobKind.export_csv,
+                                       params={}, settings=archived["settings"])
+            except BaseException as exc:  # noqa: BLE001
+                raised.append(exc)
 
         def racing_rewrite(session, old, new):
             # After the active-job check, before the job rows are relabelled.
-            thread = threading.Thread(target=project_jobs.start_job, kwargs=dict(
-                owner_id=None, qualified_name="nho/p", kind=ProjectJobKind.export_csv,
-                params={}, settings=archived["settings"],
-            ))
+            thread = threading.Thread(target=start)
             thread.start()
             thread.join(1.0)
             starter.append(thread)
             return rewrite(session, old, new)
 
         monkeypatch.setattr(accounts, "_rewrite_project_name", racing_rewrite)
-        response = self._reassign(admin_identity)
+        assert self._reassign(admin_identity) == {"project": "lab/p", "owner": "lab"}
         starter[0].join(5.0)
         project_jobs.join_all(5.0)
 
+        assert [type(exc) for exc in raised] == [project_jobs.ProjectGone] and ran == []
         with get_session() as session:
-            row = session.exec(select(ProjectJob).where(ProjectJob.kind == ProjectJobKind.export_csv)).one()
-        assert getattr(response, "status_code", 200) == 409 or ran == [row.qualified_name]
+            assert session.exec(select(ProjectJob).where(ProjectJob.kind == ProjectJobKind.export_csv)).all() == []
+        assert not (archived["export_root"] / "nho" / "p").exists()
 
     def test_the_new_owner_downloads_a_moved_export(self, archived, admin_identity):
         from autodft import accounts

@@ -1121,6 +1121,8 @@ def api_project_state_analysis_export(
         return JSONResponse(status_code=202, content={"project": name, "job": job})
     except project_jobs.JobInProgress as exc:
         return JSONResponse(status_code=409, content={"detail": str(exc)})
+    except project_jobs.ProjectGone as exc:
+        return JSONResponse(status_code=404, content={"detail": str(exc)})
     except Exception as exc:
         logging.getLogger(__name__).exception("Could not start XLSX export for project %r", name)
         return JSONResponse(
@@ -1267,6 +1269,8 @@ def api_project_archive(
         return JSONResponse(status_code=202, content={"project": name, "job": job})
     except project_jobs.JobInProgress as exc:
         return JSONResponse(status_code=409, content={"detail": str(exc)})
+    except project_jobs.ProjectGone as exc:
+        return JSONResponse(status_code=404, content={"detail": str(exc)})
     except ValueError as exc:
         return JSONResponse(status_code=400, content={"detail": str(exc)})
     except Exception as exc:
@@ -1354,6 +1358,8 @@ def api_project_export(
         return JSONResponse(status_code=202, content={"project": name, "job": job})
     except project_jobs.JobInProgress as exc:
         return JSONResponse(status_code=409, content={"detail": str(exc)})
+    except project_jobs.ProjectGone as exc:
+        return JSONResponse(status_code=404, content={"detail": str(exc)})
     except Exception as exc:
         logging.getLogger(__name__).exception("Could not start export for project %r (format=%r)", name, format)
         return JSONResponse(
