@@ -1075,6 +1075,12 @@ def _create_job_for_task(
         logger.error("Task %d has no task_path", task.id)
         raise ValueError(f"Task {task.id} has no task_path")
 
+    # pysqlite sends no BEGIN for a SAVEPOINT, whose RELEASE would then commit
+    # the job on its own; this write opens the real transaction first.
+    task.updated_at = datetime.now(timezone.utc)
+    session.add(task)
+    session.flush()
+
     job_dir: Optional[Path] = None
     try:
         with session.begin_nested():

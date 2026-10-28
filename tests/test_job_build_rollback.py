@@ -23,6 +23,16 @@ def settings(tmp_path):
     return s
 
 
+@pytest.fixture(params=["preset", "unset"])
+def task(request, session, sample_task, tmp_path):
+    """The sample task, with task_path set at creation as entrypoint_processor does, or unset."""
+    if request.param == "preset":
+        sample_task.task_path = str(tmp_path / "preset" / f"{sample_task.id}_optimization")
+        session.add(sample_task)
+        session.commit()
+    return sample_task
+
+
 @pytest.fixture()
 def nfs_fault(monkeypatch):
     """Writing submit.cmd fails with EIO, after input.inp has been written."""
@@ -49,55 +59,55 @@ def _tick(session, settings):
 
 
 def test_oserror_at_first_start_leaves_no_orphan_and_keeps_task_created(
-    session, sample_task, settings, nfs_fault,
+    session, task, settings, nfs_fault,
 ):
     _tick(session, settings)
-    session.refresh(sample_task)
-    assert sample_task.status == TaskStatus.created
-    assert _jobs(session, sample_task) == []
-    assert _job_dirs(sample_task) == []
-    assert sample_task.build_failures == 1
+    session.refresh(task)
+    assert task.status == TaskStatus.created
+    assert _jobs(session, task) == []
+    assert _job_dirs(task) == []
+    assert task.build_failures == 1
 
 
 def test_ten_build_failures_fail_the_task_with_the_last_error(
-    session, sample_task, settings, nfs_fault,
+    session, task, settings, nfs_fault,
 ):
     for _ in range(9):
         _tick(session, settings)
-    session.refresh(sample_task)
-    assert sample_task.status == TaskStatus.created
-    assert sample_task.build_failures == 9
-    assert _jobs(session, sample_task) == []
+    session.refresh(task)
+    assert task.status == TaskStatus.created
+    assert task.build_failures == 9
+    assert _jobs(session, task) == []
 
     _tick(session, settings)
-    session.refresh(sample_task)
-    assert sample_task.status == TaskStatus.failed
-    assert sample_task.build_failures == 0
-    [record] = _jobs(session, sample_task)
+    session.refresh(task)
+    assert task.status == TaskStatus.failed
+    assert task.build_failures == 0
+    [record] = _jobs(session, task)
     assert record.success is False and record.job_path is None
     assert "Input/output error" in record.fail_reason
-    assert _job_dirs(sample_task) == []
+    assert _job_dirs(task) == []
 
     # A failed task is not picked up again.
     _tick(session, settings)
-    assert len(_jobs(session, sample_task)) == 1
+    assert len(_jobs(session, task)) == 1
 
 
 def test_nine_failures_then_a_success_resets_the_counter(
-    session, sample_task, settings, nfs_fault,
+    session, task, settings, nfs_fault,
 ):
     for _ in range(9):
         _tick(session, settings)
     nfs_fault.undo()
 
     _tick(session, settings)
-    session.refresh(sample_task)
-    assert sample_task.status == TaskStatus.pending
-    assert sample_task.build_failures == 0
-    [job] = _jobs(session, sample_task)
+    session.refresh(task)
+    assert task.status == TaskStatus.pending
+    assert task.build_failures == 0
+    [job] = _jobs(session, task)
     assert job.attempt == 1 and job.success is None
     assert (Path(job.job_path) / "submit.cmd").read_text()
-    assert _job_dirs(sample_task) == [Path(job.job_path)]
+    assert _job_dirs(task) == [Path(job.job_path)]
 
 
 def test_perturbation_build_failure_creates_no_job(session, sample_task, settings, tmp_path):
@@ -134,3 +144,25 @@ def test_perturbation_shape_mismatch_raises_value_error(tmp_path, monkeypatch):
     failure = FailureInfo(fail_reason="['Imaginary Frequencies']", previous_job_path=str(tmp_path), attempt=3)
     with pytest.raises(ValueError, match="Shape mismatch"):
         PerturbImaginaryMode().modify("*xyzfile 0 1 input.xyz\n", "", failure)
+
+
+def test_a_rolled_back_start_leaves_no_job(session, task, settings):
+    """The job row commits only with the task's move to pending."""
+    start_new_tasks(session, settings, OrcaParser())
+    session.rollback()
+    session.refresh(task)
+    assert task.status == TaskStatus.created
+    assert _jobs(session, task) == []
+
+
+def test_a_rolled_back_retry_leaves_no_job(session, sample_task, settings, tmp_path):
+    sample_task.task_path = str(tmp_path / "task")
+    sample_task.status = TaskStatus.pending
+    session.add(sample_task)
+    session.add(ComputationJob(task_id=sample_task.id, attempt=1, success=False,
+                               fail_reason="['Termination']", job_path=str(tmp_path / "job_old")))
+    session.commit()
+
+    create_retry_jobs(session, settings, OrcaParser())
+    session.rollback()
+    assert [j.attempt for j in _jobs(session, sample_task)] == [1]
