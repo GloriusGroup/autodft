@@ -594,7 +594,7 @@ def test_polling_and_timers_never_show_the_overlay():
         out.nav = seen();
         calls[2].resolve('[]');
         await nav;
-    """, _functions("escHtml", "fmtTime", "fetchFailed", "adminJSON"))
+    """, _functions("escHtml", "fmtTime", "markStale", "pollRead", "fetchFailed", "adminJSON"))
     assert not out["polling"]["blocked"] and not out["polling"]["inert"]
     assert out["signals"] == [False, False]
     assert out["nav"]["visible"] and out["nav"]["label"] == "Loading failed entrypoints…"
@@ -602,16 +602,127 @@ def test_polling_and_timers_never_show_the_overlay():
 
 def test_the_polling_paths_call_plain_fetch():
     html = (TEMPLATE / "dashboard.html").read_text()
-    assert "setInterval(refreshAll, POLL_INTERVAL);" in html
-    assert "await Promise.all([fetchOverview(), fetchQueue(), fetchJobs(), fetchFailed()]);" in html
+    assert "setInterval(pollTick, POLL_INTERVAL);" in html
+    assert "await Promise.allSettled([fetchOverview(), fetchQueue(), fetchJobs(), fetchFailed()])" in html
     for name in ("fetchOverview", "fetchQueue", "fetchJobs", "pollProjectJob", "adminPollUsage",
-                 "refreshRemovalBanner", "refreshAll"):
+                 "refreshRemovalBanner", "pollOnce", "refreshAll", "pollTick"):
         body = _functions(name)
         assert "loadingFetch" not in body and "withLoading" not in body, name
         assert not re.search(r"adminJSON\([^)]*,[^)]*,[^)]*,", body), name
     # The timers that reload after a wipe or an archive pass no ui flag.
     assert "if (onDone) { onDone(); } else { loadAdminPage(); fetchProjects(); }" in html
     assert "setTimeout(function () { closeExportModal(); fetchProjects(); }, 1800);" in html
+
+
+# ── Fetch errors and polling ───────────────────────────────────────────
+
+_REPLIES_STUB = r"""
+var location = { pathname: '/', hash: '#status', assigned: [],
+                 assign: function (u) { this.assigned.push(u); } };
+// url -> {status, body}; a string body is sent as is.
+var replies = {}, hits = [];
+globalThis.fetch = function (url, opts) {
+    hits.push(url);
+    var r = replies[url] || { status: 200, body: [] };
+    return Promise.resolve(new Response(typeof r.body === 'string' ? r.body : JSON.stringify(r.body),
+                                        { status: r.status }));
+};
+"""
+
+
+def _polling_code() -> str:
+    html = (TEMPLATE / "dashboard.html").read_text()
+    start = html.index("        // ── Data fetching")
+    fetching = html[start:html.index("        // ── Project Overview ──", start)]
+    start = html.index("        // ── Refresh orchestration")
+    refresh = html[start:html.index("        // Manual refresh", start)]
+    return _REPLIES_STUB + _functions("escHtml", "fmtTime", "setConnected") + fetching + refresh
+
+
+def _good_poll():
+    return {
+        "/api/overview": {"status": 200, "body": {"molecules": 9, "jobs": {"RUNNING": 3, "PENDING": 2},
+                                                   "tasks": {"failed": 1}, "queue_length": 4}},
+        "/api/queue": {"status": 200, "body": [{"id": 11, "smiles": "CCO", "priority": 1}]},
+    }
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_401_sends_the_page_to_login_once():
+    out = _run_overlay("""
+        ['/api/overview', '/api/queue', '/api/jobs?limit=100', '/api/entrypoints/failed', '/api/x'].forEach(function (u) {
+            replies[u] = { status: 401, body: { detail: 'Authentication required.' } };
+        });
+        await refreshAll();
+        await refreshAll();
+        try { await loadingFetch('Loading…', '/api/x'); } catch (_) {}
+        await idle();
+        out.assigned = location.assigned;
+        out.overview = String(document.getElementById('cardRunning').textContent);
+    """, _polling_code())
+    assert out["assigned"] == ["/login?next=%2F%23status"]
+    assert out["overview"] == ""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_failed_poll_shows_disconnected_and_keeps_the_last_values():
+    out = _run_overlay("""
+        var $ = function (id) { return document.getElementById(id); };
+        function snap() {
+            return { text: $('statusText').textContent, dot: $('statusDot').className,
+                     running: String($('cardRunning').textContent), queue: $('queueBody').innerHTML,
+                     stale: ['cardRunning', 'cardMolecules', 'queueBody'].map(function (id) {
+                         return $(id).classList.contains('stale'); }),
+                     last: $('lastUpdated').textContent };
+        }
+        replies = GOOD;
+        await refreshAll();
+        out.good = snap();
+        $('lastUpdated').textContent = 'good';
+        replies = { '/api/overview': { status: 500, body: { detail: 'database is locked' } },
+                    '/api/queue': { status: 502, body: '<html>Bad gateway</html>' } };
+        await refreshAll();
+        out.bad = snap();
+        out.reason = $('statusText').title;
+        replies = GOOD;
+        await refreshAll();
+        out.back = snap();
+    """, _polling_code(), "var GOOD = %s;" % json.dumps(_good_poll()))
+    good, bad, back = out["good"], out["bad"], out["back"]
+    assert good["text"] == "Connected" and good["running"] == "3" and "CCO" in good["queue"]
+    assert good["stale"] == [False, False, False] and good["last"]
+    assert bad["text"] == "Disconnected" and "disconnected" in bad["dot"]
+    assert bad["running"] == "3" and bad["queue"] == good["queue"]
+    assert bad["stale"] == [True, True, True] and bad["last"] == "good"
+    assert out["reason"] == "database is locked"
+    assert back["text"] == "Connected" and "disconnected" not in back["dot"]
+    assert back["stale"] == [False, False, False] and back["last"] != "good"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_smiles_check_that_errored_is_retried_and_a_real_answer_is_cached():
+    html = (TEMPLATE / "dashboard.html").read_text()
+    start = html.index("        // ── Live SMILES validation")
+    block = html[start:html.index("        // ── Headers: fetch", start)]
+    out = _run_overlay("""
+        var input = document.getElementById('smiles'), hint = document.getElementById('smilesHint');
+        async function check(value) {
+            input.value = value;
+            input.on.input();
+            await sleep(400);
+            return hint.textContent;
+        }
+        replies['/api/validate-smiles'] = { status: 500, body: { detail: 'database is locked' } };
+        out.first = await check('CCO');
+        replies['/api/validate-smiles'] = { status: 200, body: { valid: true, atoms: 9, heavy_atoms: 3,
+                                                                  charge: 0, multiplicity: 1, canonical: 'CCO' } };
+        out.second = await check('CCO ');
+        out.third = await check('CCO');
+        out.hits = hits.length;
+    """, _REPLIES_STUB, "var window = globalThis;", block)
+    assert "database is locked" in out["first"]
+    assert out["second"].startswith("OK — 9 atoms") and out["third"] == out["second"]
+    assert out["hits"] == 2
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -908,7 +1019,8 @@ function flush() { while (timers.length) timers.shift()(); }
 
 def _run_molecules(body: str) -> dict:
     html = (TEMPLATE / "dashboard.html").read_text()
-    code = _functions("escHtml", "isAbort", "errHtml", "fmtFixed", "brokenBadge", "statusCell", "spExtraSlot",
+    code = _functions("escHtml", "isAbort", "errHtml", "checkSession", "uiFetch", "apiError", "apiJSON",
+                      "fmtFixed", "brokenBadge", "statusCell", "spExtraSlot",
                       "spExtraHtml", "fetchSpTasks", "spTasksPromise", "applySpExtras", "loadMoleculesPage",
                       "appendMolChunks")
     consts = "\n".join(re.search(rf"\n *var {n} = [^\n]*\n", html).group(0)
@@ -965,7 +1077,7 @@ def test_navigation_retires_the_old_pages_reads_but_not_actions():
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_start_up_waits_for_whoami_under_the_overlay_and_routes_once():
     html = (TEMPLATE / "dashboard.html").read_text()
-    start = html[html.index("        // Routed once, after whoami"):html.index("setInterval(refreshAll, POLL_INTERVAL);")]
+    start = html[html.index("        // Routed once, after whoami"):html.index("setInterval(pollTick, POLL_INTERVAL);")]
     assert start.count("activateRoute(") == 1
     out = _run_overlay("""
         var routed = [];

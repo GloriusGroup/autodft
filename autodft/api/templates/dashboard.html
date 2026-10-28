@@ -253,6 +253,9 @@
             animation: none;
         }
 
+        /* Last good values of a polled slot whose refresh failed. */
+        .stale { opacity: 0.45; }
+
         @keyframes pulse {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.4; }
@@ -2315,9 +2318,10 @@
             } catch (_) { return iso; }
         }
 
-        function setConnected(connected) {
+        function setConnected(connected, reason) {
             var dot = document.getElementById('statusDot');
             var text = document.getElementById('statusText');
+            text.title = reason || '';
             if (connected) {
                 dot.className = 'status-dot';
                 text.textContent = 'Connected';
@@ -2473,7 +2477,7 @@
             loading.reqs.push(req);
             var end = loadingBegin(label);
             try {
-                var resp = await fetch(url, Object.assign({}, opts, { signal: ctl.signal }));
+                var resp = checkSession(await fetch(url, Object.assign({}, opts, { signal: ctl.signal })));
                 if (!resp.body) return resp;
                 // A compressed body streams more bytes than Content-Length says.
                 if (!resp.headers.get('Content-Encoding')) req.total = parseInt(resp.headers.get('Content-Length'), 10) || 0;
@@ -2501,7 +2505,42 @@
 
         // Plain fetch without a label: what polling and timers use.
         function uiFetch(label, url, opts) {
-            return label ? loadingFetch(label, url, opts) : fetch(url, opts);
+            return label ? loadingFetch(label, url, opts) : fetch(url, opts).then(checkSession);
+        }
+
+        // A lost session goes to the login page, once: the polls that follow must not redirect again.
+        var signingIn = false;
+        function checkSession(resp) {
+            if (resp.status === 401 && !signingIn) {
+                signingIn = true;
+                location.assign('/login?next=' + encodeURIComponent(location.pathname + location.hash));
+            }
+            return resp;
+        }
+
+        // A failed reply as an Error carrying the server's detail.
+        async function apiError(resp) {
+            var detail = null;
+            try { detail = JSON.parse(await resp.text()).detail; } catch (_) {}
+            // FastAPI's 422 detail is a list of {msg}.
+            if (Array.isArray(detail)) detail = detail.map(function (d) { return d.msg || JSON.stringify(d); }).join('; ');
+            else if (detail != null && typeof detail !== 'string') detail = JSON.stringify(detail);
+            var err = new Error(detail || 'HTTP ' + resp.status);
+            err.status = resp.status;
+            return err;
+        }
+
+        // Every API read: a non-OK or non-JSON reply throws with the server's detail.
+        async function apiJSON(label, url, opts) {
+            var resp = await uiFetch(label, url, opts);
+            if (!resp.ok) throw await apiError(resp);
+            var text = await resp.text();
+            try { return JSON.parse(text); }
+            catch (_) {
+                var err = new Error('The server sent no JSON (HTTP ' + resp.status + ').');
+                err.status = resp.status;
+                throw err;
+            }
         }
 
         // Keeps one overlay across a multi-step load; live() turns false after Cancel.
@@ -2575,7 +2614,7 @@
             if (route === 'projects.state-analysis') loadProjectPage('Computing state analysis…', loadStateAnalysisPage);
             if (route === 'projects.photophysics')   loadProjectPage('Reading spectra…', loadPhotophysicsPage);
             if (route === 'projects.methods')        loadProjectPage('Reading methods…', loadMethodsPage);
-            if (route === 'status')                  fetchFailed(true);
+            if (route === 'status')                  fetchFailed(true).catch(function () {});  // the next poll reports it
             if (route === 'admin')                   reloadAdminPage();
         }
 
@@ -3327,19 +3366,19 @@
                 if (lockNote) lockNote.style.display = locked ? '' : 'none';
             }
 
+            // Only real answers are cached; an error reply is asked again next time.
             async function validateOne(smi) {
                 if (cache[smi]) return cache[smi];
                 try {
-                    var resp = await fetch('/api/validate-smiles', {
+                    var data = await apiJSON(null, '/api/validate-smiles', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ smiles: smi }),
                     });
-                    var data = await resp.json();
                     cache[smi] = data;
                     return data;
                 } catch (err) {
-                    return { valid: false, error: 'network error: ' + err.message };
+                    return { valid: false, error: 'Could not check: ' + err.message };
                 }
             }
 
@@ -3504,7 +3543,7 @@
 
         async function fetchAdvancedDefaults() {
             try {
-                var data = await (await fetch('/api/advanced-defaults')).json();
+                var data = await apiJSON(null, '/api/advanced-defaults');
                 document.querySelectorAll('#submitAdvanced [id^="adv-"]').forEach(function (el) {
                     var parts = el.id.split('-');
                     var choices = data.choices[parts[2]];
@@ -3532,8 +3571,7 @@
 
         async function fetchHeaders() {
             try {
-                var resp = await fetch('/api/headers');
-                var data = await resp.json();
+                var data = await apiJSON(null, '/api/headers');
                 headerCache.defaults = data.defaults || [];
                 headerCache.custom = data.custom || [];
 
@@ -3753,16 +3791,15 @@
             var fb = document.getElementById('projectExtendFeedback');
             fb.textContent = '';
             fb.className = 'submit-feedback';
-            var resp;
-            try { resp = await loadingFetch('Checking the project…', '/api/projects/' + projectPath(project) + '/extend-info'); }
+            var info;
+            try { info = await apiJSON('Checking the project…', '/api/projects/' + projectPath(project) + '/extend-info'); }
             catch (err) {
-                fb.textContent = errText('Network error: ', err);
+                fb.textContent = errText('', err);
                 fb.className = 'submit-feedback error';
                 return;
             }
-            var info; try { info = await resp.json(); } catch (_) { info = { detail: 'HTTP ' + resp.status }; }
-            if (!resp.ok || !info.extendable) {
-                fb.textContent = info.reason || info.detail || ('HTTP ' + resp.status);
+            if (!info.extendable) {
+                fb.textContent = info.reason || 'This project cannot be extended.';
                 fb.className = 'submit-feedback error';
                 return;
             }
@@ -4085,101 +4122,102 @@
 
         // ── Data fetching ────────────────────────────────────────────────
 
-        async function fetchOverview() {
-            try {
-                var resp = await fetch('/api/overview');
-                var data = await resp.json();
-                document.getElementById('cardMolecules').textContent = data.molecules != null ? data.molecules : '--';
-                document.getElementById('cardRunning').textContent = (data.jobs && data.jobs['RUNNING']) || 0;
-                document.getElementById('cardPending').textContent = (data.jobs && data.jobs['PENDING']) || 0;
-                document.getElementById('cardFailed').textContent = (data.tasks && data.tasks['failed']) || 0;
-                document.getElementById('cardQueue').textContent = data.queue_length != null ? data.queue_length : '--';
-                setConnected(true);
-            } catch (_) {
-                setConnected(false);
+        // Polled slots keep their last good values, dimmed, while their read fails.
+        function markStale(ids, stale) {
+            ids.forEach(function (id) { document.getElementById(id).classList.toggle('stale', stale); });
+        }
+
+        async function pollRead(ids, label, url) {
+            try { var data = await apiJSON(label, url); }
+            catch (err) {
+                if (!isAbort(err)) markStale(ids, true);
+                throw err;
             }
+            markStale(ids, false);
+            return data;
+        }
+
+        async function fetchOverview() {
+            var data = await pollRead(['cardQueue', 'cardPending', 'cardRunning', 'cardFailed', 'cardMolecules'],
+                                      null, '/api/overview');
+            document.getElementById('cardMolecules').textContent = data.molecules != null ? data.molecules : '--';
+            document.getElementById('cardRunning').textContent = (data.jobs && data.jobs['RUNNING']) || 0;
+            document.getElementById('cardPending').textContent = (data.jobs && data.jobs['PENDING']) || 0;
+            document.getElementById('cardFailed').textContent = (data.tasks && data.tasks['failed']) || 0;
+            document.getElementById('cardQueue').textContent = data.queue_length != null ? data.queue_length : '--';
         }
 
         async function fetchQueue() {
-            try {
-                var resp = await fetch('/api/queue');
-                var items = await resp.json();
-                var tbody = document.getElementById('queueBody');
-                if (!items || items.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="4" class="empty-state">Queue empty</td></tr>';
-                    return;
-                }
-                tbody.innerHTML = items.map(function (q) {
-                    return '<tr>' +
-                        '<td>' + escHtml(q.id) + '</td>' +
-                        '<td class="smiles-cell" title="' + escHtml(q.smiles) + '">' + escHtml(q.smiles || '-') + '</td>' +
-                        '<td>' + escHtml(q.priority) + '</td>' +
-                        '<td>' + fmtTime(q.time_created) + '</td>' +
-                        '</tr>';
-                }).join('');
-            } catch (_) { /* handled by overview connectivity */ }
+            var items = await pollRead(['queueBody'], null, '/api/queue');
+            var tbody = document.getElementById('queueBody');
+            if (!items || items.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" class="empty-state">Queue empty</td></tr>';
+                return;
+            }
+            tbody.innerHTML = items.map(function (q) {
+                return '<tr>' +
+                    '<td>' + escHtml(q.id) + '</td>' +
+                    '<td class="smiles-cell" title="' + escHtml(q.smiles) + '">' + escHtml(q.smiles || '-') + '</td>' +
+                    '<td>' + escHtml(q.priority) + '</td>' +
+                    '<td>' + fmtTime(q.time_created) + '</td>' +
+                    '</tr>';
+            }).join('');
         }
 
         async function fetchJobs() {
-            try {
-                var resp = await fetch('/api/jobs?limit=100');
-                var jobs = await resp.json();
+            var jobs = await pollRead(['pendingJobsBody', 'runningJobsBody'], null, '/api/jobs?limit=100');
 
-                var pending = jobs.filter(function (j) { return j.slurm_status === 'PENDING'; });
-                var running = jobs.filter(function (j) { return j.slurm_status === 'RUNNING'; });
+            var pending = jobs.filter(function (j) { return j.slurm_status === 'PENDING'; });
+            var running = jobs.filter(function (j) { return j.slurm_status === 'RUNNING'; });
 
-                var pBody = document.getElementById('pendingJobsBody');
-                if (pending.length === 0) {
-                    pBody.innerHTML = '<tr><td colspan="5" class="empty-state">No pending jobs</td></tr>';
-                } else {
-                    pBody.innerHTML = pending.map(function (j) {
-                        return '<tr>' +
-                            '<td>' + escHtml(j.id) + '</td>' +
-                            '<td>' + escHtml(j.slurm_jobid || '-') + '</td>' +
-                            '<td>' + escHtml(j.task_id) + '</td>' +
-                            '<td>' + escHtml(j.attempt) + '</td>' +
-                            '<td>' + fmtTime(j.time_start) + '</td>' +
-                            '</tr>';
-                    }).join('');
-                }
+            var pBody = document.getElementById('pendingJobsBody');
+            if (pending.length === 0) {
+                pBody.innerHTML = '<tr><td colspan="5" class="empty-state">No pending jobs</td></tr>';
+            } else {
+                pBody.innerHTML = pending.map(function (j) {
+                    return '<tr>' +
+                        '<td>' + escHtml(j.id) + '</td>' +
+                        '<td>' + escHtml(j.slurm_jobid || '-') + '</td>' +
+                        '<td>' + escHtml(j.task_id) + '</td>' +
+                        '<td>' + escHtml(j.attempt) + '</td>' +
+                        '<td>' + fmtTime(j.time_start) + '</td>' +
+                        '</tr>';
+                }).join('');
+            }
 
-                var rBody = document.getElementById('runningJobsBody');
-                if (running.length === 0) {
-                    rBody.innerHTML = '<tr><td colspan="5" class="empty-state">No running jobs</td></tr>';
-                } else {
-                    rBody.innerHTML = running.map(function (j) {
-                        return '<tr>' +
-                            '<td>' + escHtml(j.id) + '</td>' +
-                            '<td>' + escHtml(j.slurm_jobid || '-') + '</td>' +
-                            '<td>' + escHtml(j.task_id) + '</td>' +
-                            '<td>' + escHtml(j.attempt) + '</td>' +
-                            '<td>' + fmtTime(j.time_start) + '</td>' +
-                            '</tr>';
-                    }).join('');
-                }
-            } catch (_) { /* handled by overview connectivity */ }
+            var rBody = document.getElementById('runningJobsBody');
+            if (running.length === 0) {
+                rBody.innerHTML = '<tr><td colspan="5" class="empty-state">No running jobs</td></tr>';
+            } else {
+                rBody.innerHTML = running.map(function (j) {
+                    return '<tr>' +
+                        '<td>' + escHtml(j.id) + '</td>' +
+                        '<td>' + escHtml(j.slurm_jobid || '-') + '</td>' +
+                        '<td>' + escHtml(j.task_id) + '</td>' +
+                        '<td>' + escHtml(j.attempt) + '</td>' +
+                        '<td>' + fmtTime(j.time_start) + '</td>' +
+                        '</tr>';
+                }).join('');
+            }
         }
 
         // ── Failed entrypoints (surfaced on the Current Status page) ───
 
         async function fetchFailed(ui) {
-            try {
-                var resp = await uiFetch(ui ? 'Loading failed entrypoints…' : null, '/api/entrypoints/failed');
-                var rows = await resp.json();
-                var tbody = document.getElementById('failedBody');
-                if (!rows || rows.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No failed entrypoints. The pipeline is healthy.</td></tr>';
-                    return;
-                }
-                tbody.innerHTML = rows.map(function (e) {
-                    return '<tr>' +
-                        '<td>' + escHtml(e.id) + '</td>' +
-                        '<td class="smiles-cell" title="' + escHtml(e.smiles) + '">' + escHtml(e.smiles) + '</td>' +
-                        '<td><span class="badge badge-failed" title="' + escHtml(e.processing_error || '') + '">' + escHtml((e.processing_error || '').slice(0, 80)) + '</span></td>' +
-                        '<td>' + fmtTime(e.time_started) + '</td>' +
-                        '</tr>';
-                }).join('');
-            } catch (_) { /* connectivity flagged by overview */ }
+            var rows = await pollRead(['failedBody'], ui ? 'Loading failed entrypoints…' : null, '/api/entrypoints/failed');
+            var tbody = document.getElementById('failedBody');
+            if (!rows || rows.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No failed entrypoints. The pipeline is healthy.</td></tr>';
+                return;
+            }
+            tbody.innerHTML = rows.map(function (e) {
+                return '<tr>' +
+                    '<td>' + escHtml(e.id) + '</td>' +
+                    '<td class="smiles-cell" title="' + escHtml(e.smiles) + '">' + escHtml(e.smiles) + '</td>' +
+                    '<td><span class="badge badge-failed" title="' + escHtml(e.processing_error || '') + '">' + escHtml((e.processing_error || '').slice(0, 80)) + '</span></td>' +
+                    '<td>' + fmtTime(e.time_started) + '</td>' +
+                    '</tr>';
+            }).join('');
         }
 
         // ── Project Overview ────────────────────────────────────────────
@@ -4213,9 +4251,8 @@
         async function fetchProjects(ui) {
             var gen = projectsCached.gen;
             try {
-                var resp = await uiFetch(ui ? 'Loading projects…' : null, '/api/projects');
-                projectCache = await resp.json();
-                if (resp.ok && gen === projectsCached.gen) projectsCached.listAt = Date.now();
+                projectCache = await apiJSON(ui ? 'Loading projects…' : null, '/api/projects');
+                if (gen === projectsCached.gen) projectsCached.listAt = Date.now();
                 var sel       = document.getElementById('projectSelect');
                 var selMols   = document.getElementById('projectSelectMols');
                 var selSA     = document.getElementById('projectSelectSA');
@@ -4287,8 +4324,7 @@
             currentProject = name;
             var gen = projectsCached.gen;
             try {
-                var resp = await uiFetch(ui ? 'Loading project…' : null, '/api/projects/' + projectPath(name));
-                var data = await resp.json();
+                var data = await apiJSON(ui ? 'Loading project…' : null, '/api/projects/' + projectPath(name));
 
                 document.getElementById('projectCards').style.display = 'grid';
                 document.getElementById('projectExportSection').style.display = 'block';
@@ -4374,7 +4410,7 @@
                             '</tr>';
                     }).join('');
                 }
-                if (resp.ok && gen === projectsCached.gen) {
+                if (gen === projectsCached.gen) {
                     projectsCached.summary = name;
                     projectsCached.summaryAt = Date.now();
                 }
@@ -4424,14 +4460,9 @@
             // Polls until the job leaves `running`, then calls onSuccess/onError.
             while (true) {
                 await new Promise(function (r) { setTimeout(r, 1500); });
-                var resp;
-                try { resp = await fetch('/api/projects/' + projectPath(name) + '/jobs'); }
-                catch (err) { cbs.onError('Network error while polling: ' + err.message); return; }
-                var data = await safeJson(resp);
-                if (!resp.ok || data._err) {
-                    cbs.onError('Error polling job (HTTP ' + resp.status + ')');
-                    return;
-                }
+                var data;
+                try { data = await apiJSON(null, '/api/projects/' + projectPath(name) + '/jobs'); }
+                catch (err) { cbs.onError('Error polling job: ' + err.message); return; }
                 var job = (data.jobs || []).filter(function (j) { return j.id === jobId; })[0];
                 if (!job) { cbs.onError('Job #' + jobId + ' disappeared.'); return; }
                 if (job.status === 'running') { if (cbs.onRunning) cbs.onRunning(job); continue; }
@@ -4707,8 +4738,7 @@
             molsRender.observer = null;
             molsSp = { project: name, energies: null, densities: null, energiesP: null, densitiesP: null };
             try {
-                var resp = await loadingFetch('Loading molecules…', '/api/projects/' + projectPath(name) + '/molecules-detail');
-                var data = await resp.json();
+                var data = await apiJSON('Loading molecules…', '/api/projects/' + projectPath(name) + '/molecules-detail');
             } catch (err) {
                 if (token === molsRender.token) {
                     tbody.innerHTML = '<tr><td colspan="13" class="empty-state">' + errHtml('Failed: ', err) + '</td></tr>';
@@ -4856,10 +4886,8 @@
         }
 
         async function fetchSpTasks(project, what) {
-            var resp = await loadingFetch(what === 'sp-energies' ? 'Loading energies…' : 'Looking for density files…',
-                                          '/api/projects/' + projectPath(project) + '/' + what);
-            if (!resp.ok) throw new Error(what + ': HTTP ' + resp.status);
-            return (await resp.json()).tasks || {};
+            return (await apiJSON(what === 'sp-energies' ? 'Loading energies…' : 'Looking for density files…',
+                                  '/api/projects/' + projectPath(project) + '/' + what)).tasks || {};
         }
 
         function spTasksPromise(sp, what) {
@@ -4909,11 +4937,7 @@
             try {
                 var resp = await loadingFetch('Downloading .' + kind + '…', '/api/projects/' + projectPath(molsSp.project)
                     + '/tasks/' + encodeURIComponent(tid) + '/files/' + kind);
-                if (!resp.ok) {
-                    var msg = 'HTTP ' + resp.status;
-                    try { msg = (await resp.json()).detail || msg; } catch (_) {}
-                    throw new Error(msg);
-                }
+                if (!resp.ok) throw await apiError(resp);
                 var m = /filename="?([^";]+)"?/.exec(resp.headers.get('Content-Disposition') || '');
                 var a = document.createElement('a');
                 a.href = URL.createObjectURL(await resp.blob());
@@ -4985,12 +5009,10 @@
             document.getElementById('densityModal').style.display = 'flex';
             try {
                 var lib = load3Dmol();
-                var resp = await fetch('/api/projects/' + projectPath(project) + '/densities/'
+                var resp = await uiFetch(null, '/api/projects/' + projectPath(project) + '/densities/'
                     + encodeURIComponent(tid) + '/' + kind, { method: 'POST', signal: ctl.signal });
                 if (!resp.ok) {
-                    var msg = 'HTTP ' + resp.status;
-                    try { msg = (await resp.json()).detail || msg; } catch (_) {}
-                    var err = new Error(msg);
+                    var err = await apiError(resp);
                     err.busy = resp.status === 503;
                     throw err;
                 }
@@ -5241,25 +5263,14 @@
             host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Computing analysis…</div>';
 
             try {
-                var resp = await loadingFetch('Computing state analysis…', '/api/projects/' + projectPath(name) + '/state-analysis');
-                var text = await resp.text();
-                var payload;
-                try { payload = JSON.parse(text); }
-                catch (_) { throw new Error('Server returned non-JSON: ' + text.slice(0, 200)); }
-                if (!resp.ok) {
-                    host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">' +
-                                     'Error: ' + escHtml(payload.detail || ('HTTP ' + resp.status)) +
-                                     '</div>';
-                    renderSaMetaLine(null);
-                    return;
-                }
+                var payload = await apiJSON('Computing state analysis…', '/api/projects/' + projectPath(name) + '/state-analysis');
                 saState.project = name;
                 saState.payload = payload;
                 renderSaMetaLine(payload);
                 renderSaCards(payload, saState.mode, saState.unit);
             } catch (err) {
                 host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">' +
-                                 errHtml('Network error: ', err) + '</div>';
+                                 errHtml('Error: ', err) + '</div>';
                 renderSaMetaLine(null);
             }
         }
@@ -5654,10 +5665,9 @@
                 return;
             }
             try {
-                var resp = await loadingFetch('Loading spectra…', '/api/projects/' + projectPath(ppState.project) +
-                                              '/photophysics?molecule_id=' + molId);
-                var payload = await safeJson(resp);
-                if (!resp.ok || !payload.molecules) throw new Error(payload.detail || payload._err || ('HTTP ' + resp.status));
+                var payload = await apiJSON('Loading spectra…', '/api/projects/' + projectPath(ppState.project) +
+                                            '/photophysics?molecule_id=' + molId);
+                if (!payload.molecules) throw new Error('The reply has no spectra.');
                 payload.molecules.forEach(function (d) {
                     ppState.details[ppKey(d)] = { data: d, html: ppPlots(d, d) };
                 });
@@ -5692,22 +5702,15 @@
             host.style.display = 'block';
             host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Reading spectra…</div>';
             try {
-                var resp = await loadingFetch('Reading spectra…', '/api/projects/' + projectPath(name) + '/photophysics');
-                // safeJson returns the parsed body, or {_err} when it is not JSON.
-                var payload = await safeJson(resp);
-                if (!resp.ok || !payload.molecules) {
-                    host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Error: ' +
-                                     escHtml(payload.detail || payload._err || ('HTTP ' + resp.status)) +
-                                     '</div>';
-                    return;
-                }
+                var payload = await apiJSON('Reading spectra…', '/api/projects/' + projectPath(name) + '/photophysics');
+                if (!payload.molecules) throw new Error('The reply has no spectra.');
                 ppState.details = {};
                 ppState.project = name;
                 ppState.payload = payload;
                 renderPhotophysics(payload);
             } catch (err) {
                 host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">' +
-                                 errHtml('Network error: ', err) + '</div>';
+                                 errHtml('Error: ', err) + '</div>';
             }
         }
 
@@ -5834,18 +5837,12 @@
             host.style.display = 'block';
             host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Reading methods…</div>';
             try {
-                var resp = await loadingFetch('Reading methods…', '/api/projects/' + projectPath(name) + '/methods');
-                var payload = await safeJson(resp);
-                if (!resp.ok || !payload.groups) {
-                    host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Error: ' +
-                                     escHtml(payload.detail || payload._err || ('HTTP ' + resp.status)) +
-                                     '</div>';
-                    return;
-                }
+                var payload = await apiJSON('Reading methods…', '/api/projects/' + projectPath(name) + '/methods');
+                if (!payload.groups) throw new Error('The reply has no methods.');
                 host.innerHTML = methodsCards(payload);
             } catch (err) {
                 host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">' +
-                                 errHtml('Network error: ', err) + '</div>';
+                                 errHtml('Error: ', err) + '</div>';
             }
         }
 
@@ -5902,9 +5899,27 @@
 
         // ── Refresh orchestration ────────────────────────────────────────
 
-        async function refreshAll() {
-            await Promise.all([fetchOverview(), fetchQueue(), fetchJobs(), fetchFailed()]);
-            document.getElementById('lastUpdated').textContent = new Date().toLocaleTimeString();
+        // One poll at a time: a slow reply delays the next tick instead of racing it.
+        var polling = null;
+
+        async function pollOnce() {
+            if (signingIn) return;
+            var failed = (await Promise.allSettled([fetchOverview(), fetchQueue(), fetchJobs(), fetchFailed()]))
+                .filter(function (r) { return r.status === 'rejected'; });
+            setConnected(!failed.length, failed.length ? failed[0].reason.message : '');
+            if (!failed.length) document.getElementById('lastUpdated').textContent = new Date().toLocaleTimeString();
+        }
+
+        // Explicit refreshes queue behind a running poll; the timer skips its tick.
+        function refreshAll() {
+            var run = (polling || Promise.resolve()).then(pollOnce);
+            polling = run;
+            run.then(function () { if (polling === run) polling = null; });
+            return run;
+        }
+
+        function pollTick() {
+            if (!polling) refreshAll();
         }
 
         // Manual refresh: covers global polling data AND whatever the
@@ -5999,7 +6014,7 @@
         refreshAll();
 
         // Poll every 5 seconds
-        setInterval(refreshAll, POLL_INTERVAL);
+        setInterval(pollTick, POLL_INTERVAL);
     </script>
 </body>
 </html>

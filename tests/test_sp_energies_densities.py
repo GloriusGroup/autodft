@@ -780,7 +780,7 @@ class TestPerKindFlags:
 def test_a_download_click_saves_under_the_server_name_or_says_what_is_missing():
     from tests.test_dashboard import _functions
 
-    script = (_functions("projectPath", "escHtml", "isAbort", "errHtml", "downloadTaskFile") + """
+    script = (_functions("projectPath", "escHtml", "isAbort", "errHtml", "apiError", "downloadTaskFile") + """
 var CANCELLED_HTML = 'cancelled';
 var status = { textContent: 'old', innerHTML: '' };
 var saved = [], urls = [];
