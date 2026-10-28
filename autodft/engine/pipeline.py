@@ -121,7 +121,8 @@ class PipelineWorker:
                            lambda: advance_photophysics(session, self.settings))
 
             # An owner whose campaign is failing systematically gets no new
-            # jobs. Their submitted work keeps running; other owners carry on.
+            # jobs and no expansion. Their submitted work keeps running; other
+            # owners carry on.
             blocked = set(circuit_breaker.check(session, self.settings))
             for owner in sorted(blocked):
                 logger.critical(
@@ -156,7 +157,7 @@ class PipelineWorker:
                     break
                 processed = self._run_step(
                     session, "5: process next entrypoint",
-                    lambda: self._entrypoint_step(session),
+                    lambda: self._entrypoint_step(session, blocked),
                 )
                 if not processed or not self._last_entrypoint_processed:
                     break
@@ -171,9 +172,11 @@ class PipelineWorker:
 
         logger.debug("--- Pipeline tick complete ---")
 
-    def _entrypoint_step(self, session) -> None:
+    def _entrypoint_step(self, session, blocked_owners: Collection[str] = ()) -> None:
         """Process one entrypoint, recording whether there was one to process."""
-        self._last_entrypoint_processed = process_next_entrypoint(session, self.settings)
+        self._last_entrypoint_processed = process_next_entrypoint(
+            session, self.settings, blocked_owners,
+        )
 
     @staticmethod
     def _unsubmitted_job_count(session, blocked_owners: Collection[str] = ()) -> int:
@@ -194,7 +197,7 @@ class PipelineWorker:
         from autodft.models.state import MoleculeState
         from autodft.models.task import ComputationTask
 
-        unblocked = [circuit_breaker.not_owned_by(blocked_owners)] if blocked_owners else []
+        unblocked = [circuit_breaker.not_owned_by(session, blocked_owners)] if blocked_owners else []
         # Archived molecules' leftovers never run, so they hold nothing back.
         jobs = session.exec(
             select(func.count()).select_from(ComputationJob)

@@ -1628,6 +1628,7 @@
                 too large a share of their recently finished tasks failed, so a
                 systematic error cannot consume the whole queue. Other owners
                 carry on. Fix the cause before resetting.
+                A reset re-trips on the next tick unless the failed tasks are requeued or wiped.
             </div>
             <div id="adminBreakerStatus" class="admin-summary">Loading...</div>
             <div class="admin-list" id="adminBreakerOwners" style="margin-top:14px;"></div>

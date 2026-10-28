@@ -9,8 +9,8 @@ At the scale of a few thousand molecules that is millions of core-hours spent
 producing nothing.
 
 So: watch each owner's recent judged tasks, and when their failure ratio
-crosses a threshold, stop creating and submitting that owner's jobs. Other
-owners carry on, and work already in flight is left alone.
+crosses a threshold, stop expanding, creating and submitting that owner's
+jobs. Other owners carry on, and work already in flight is left alone.
 
 The tripped state is a marker file per owner under the data path rather than
 in-memory state, so it survives a controller restart (a breaker you can reset
@@ -26,7 +26,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Collection, Optional
 
-from sqlalchemy import or_
 from sqlmodel import Session, col, select
 
 from autodft.accounts import ADMIN_USERNAME
@@ -53,24 +52,38 @@ _CATEGORY_TASK_TYPES = tuple(
 
 
 def project_owner(project_name: Optional[str]) -> str:
-    """The owner of *project_name*; names without one are admin's."""
+    """The owner of *project_name*: its normalised prefix, or admin when it has no valid one.
+
+    The only owner parser; the SQL filters below match the names it maps.
+    """
     try:
-        return split_qualified(project_name)[0]
+        return normalise_username(split_qualified(project_name)[0])
     except ValueError:
         return ADMIN_USERNAME
 
 
-def owner_filter(owner: str):
+def projects_by_owner(session: Session) -> dict[str, list[str]]:
+    """``{owner: [project names]}`` over every molecule's project."""
+    found: dict[str, list[str]] = {}
+    for name in sorted(session.exec(select(Molecule.project_name).distinct()).all()):
+        found.setdefault(project_owner(name), []).append(name)
+    return found
+
+
+def projects_of(session: Session, owners: Collection[str]) -> list[str]:
+    """The project names of *owners*."""
+    mapping = projects_by_owner(session)
+    return sorted(name for owner in owners for name in mapping.get(owner, []))
+
+
+def owner_filter(session: Session, owner: str):
     """SQL condition on ``Molecule.project_name`` matching *owner*'s projects."""
-    mine = col(Molecule.project_name).startswith(f"{owner}/", autoescape=True)
-    if owner == ADMIN_USERNAME:
-        return or_(mine, col(Molecule.project_name).notlike("%/%"))
-    return mine
+    return col(Molecule.project_name).in_(projects_of(session, [owner]))
 
 
-def not_owned_by(owners: Collection[str]):
+def not_owned_by(session: Session, owners: Collection[str]):
     """SQL condition excluding every project of *owners*."""
-    return ~or_(*map(owner_filter, sorted(owners)))
+    return col(Molecule.project_name).notin_(projects_of(session, owners))
 
 
 def marker_path(data_path: Path, owner: str) -> Path:
@@ -96,7 +109,7 @@ def recent_failure_ratio(session: Session, window: int, owner: str) -> tuple[flo
             col(ComputationTask.status).in_([TaskStatus.successful, TaskStatus.failed]),
             col(ComputationTask.task_type).notin_(_CATEGORY_TASK_TYPES),
             col(ComputationTask.id).notin_(archived),
-            owner_filter(owner),
+            owner_filter(session, owner),
         )
         .order_by(col(ComputationTask.updated_at).desc())
         .limit(window)
@@ -111,7 +124,7 @@ def recent_failure_ratio(session: Session, window: int, owner: str) -> tuple[flo
 
 def owners(session: Session) -> set[str]:
     """Every owner with a molecule."""
-    return {project_owner(n) for n in session.exec(select(Molecule.project_name).distinct()).all()}
+    return set(projects_by_owner(session))
 
 
 def _load(path: Path, owner: str) -> dict:
@@ -185,7 +198,13 @@ def check(session: Session, settings) -> dict[str, dict]:
 
     tripped = tripped_owners(settings.data_path)
     for owner in sorted(owners(session) - set(tripped)):
-        ratio, failed, judged = recent_failure_ratio(session, cfg.failure_breaker_window, owner)
-        if judged >= cfg.failure_breaker_min_samples and ratio >= cfg.failure_breaker_ratio:
-            tripped[owner] = trip(settings.data_path, owner, ratio, failed, judged)
+        # One owner's error must not stop the others; that owner is held this tick.
+        try:
+            ratio, failed, judged = recent_failure_ratio(session, cfg.failure_breaker_window, owner)
+            if judged >= cfg.failure_breaker_min_samples and ratio >= cfg.failure_breaker_ratio:
+                tripped[owner] = trip(settings.data_path, owner, ratio, failed, judged)
+        except Exception as exc:  # noqa: BLE001 - fail closed for this owner only
+            logger.exception("Circuit breaker check failed for %s; holding their jobs this tick", owner)
+            tripped[owner] = {"owner": owner, "tripped_at": None,
+                              "detail": f"breaker check failed: {exc}"}
     return tripped

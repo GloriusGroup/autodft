@@ -918,7 +918,7 @@ def submit_pending_jobs(
         statement = statement.where(col(Molecule.project_name).notin_(sorted(paused)))
     # Nor those of an owner whose circuit breaker has tripped.
     if blocked_owners:
-        statement = statement.where(circuit_breaker.not_owned_by(blocked_owners))
+        statement = statement.where(circuit_breaker.not_owned_by(session, blocked_owners))
     # Backstop only, disabled by default: the priority cap above is the
     # real throttle. A count limit here used to bind first and cap the fill
     # rate at one limit-full per tick.

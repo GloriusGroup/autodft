@@ -12,13 +12,14 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Collection, Optional, Tuple
 
+from sqlalchemy import case, func
 from sqlmodel import Session, col, select
 
 from autodft import categories
 from autodft.config import Settings
-from autodft.engine import nmr_references
+from autodft.engine import circuit_breaker, nmr_references
 from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.models.geometry import MoleculeGeometry
 from autodft.models.header import ComputationHeader
@@ -55,7 +56,9 @@ ESD_OWN_T1_METADATA = {
 # Public API
 # ======================================================================
 
-def process_next_entrypoint(session: Session, settings: Settings) -> bool:
+def process_next_entrypoint(
+    session: Session, settings: Settings, blocked_owners: Collection[str] = (),
+) -> bool:
     """Process one entrypoint from the queue.
 
     Returns ``True`` if an entrypoint was either successfully processed
@@ -67,7 +70,7 @@ def process_next_entrypoint(session: Session, settings: Settings) -> bool:
     records the error in ``processing_error`` — the controller does NOT
     silently retry the same broken entry on every tick.
     """
-    entrypoint = _get_next_entrypoint(session)
+    entrypoint = _get_next_entrypoint(session, blocked_owners)
     if entrypoint is None:
         logger.debug("No entrypoints to process")
         return False
@@ -496,18 +499,53 @@ def calculate_altered_multiplicity(
 # Internal helpers
 # ======================================================================
 
-def _get_next_entrypoint(session: Session) -> Optional[CalculationEntrypoint]:
-    """Fetch the highest-priority, oldest unstarted entrypoint."""
+_ENTRYPOINT_PAGE = 100
+
+
+def _get_next_entrypoint(
+    session: Session, blocked_owners: Collection[str] = (),
+) -> Optional[CalculationEntrypoint]:
+    """Fetch the highest-priority, oldest unstarted entrypoint not of a blocked owner."""
     statement = (
         select(CalculationEntrypoint)
         .where(col(CalculationEntrypoint.time_started).is_(None))
         .order_by(
             col(CalculationEntrypoint.priority).desc(),
             col(CalculationEntrypoint.time_created).asc(),
+            col(CalculationEntrypoint.id).asc(),
         )
-        .limit(1)
     )
-    return session.exec(statement).first()
+    if not blocked_owners:
+        return session.exec(statement.limit(1)).first()
+
+    # A tripped owner's entrypoints wait, so their backlog stays bounded. SQL
+    # drops their known projects; project_owner() then decides each candidate.
+    meta = col(CalculationEntrypoint.request_metadata)
+    project = func.coalesce(
+        case((func.json_valid(meta), func.json_extract(meta, "$.project_name"))), "default",
+    )
+    statement = statement.where(
+        project.notin_(circuit_breaker.projects_of(session, blocked_owners))
+    )
+    offset = 0
+    while True:
+        page = session.exec(statement.offset(offset).limit(_ENTRYPOINT_PAGE)).all()
+        for entry in page:
+            if circuit_breaker.project_owner(_entry_project(entry)) not in blocked_owners:
+                return entry
+        if len(page) < _ENTRYPOINT_PAGE:
+            return None
+        offset += _ENTRYPOINT_PAGE
+
+
+def _entry_project(entry: CalculationEntrypoint) -> Optional[str]:
+    """The project an entrypoint expands into, as _get_or_create_molecule reads it."""
+    try:
+        metadata = json.loads(entry.request_metadata) if entry.request_metadata else {}
+    except ValueError:
+        return None
+    name = metadata.get("project_name", "default") if isinstance(metadata, dict) else None
+    return name if isinstance(name, str) else None
 
 
 def _get_or_create_molecule(

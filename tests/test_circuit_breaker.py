@@ -105,9 +105,64 @@ def _jobs(session, task_id: int) -> list[ComputationJob]:
 
 @pytest.mark.parametrize("name,owner", [
     ("alice/p", "alice"), ("legacy_project", "admin"), ("admin/nmr", "admin"),
+    # Malformed prefixes: normalised when valid, otherwise admin's.
+    ("Alice/p", "alice"), ("/x", "admin"), ("x/", "admin"), ("bad name!/p", "admin"),
+    ("a/p", "admin"), (None, "admin"), ("", "admin"),
 ])
 def test_project_owner(name, owner):
     assert circuit_breaker.project_owner(name) == owner
+
+
+MALFORMED = ["Alice/p", "/x", "x/", "bad name!/p", "a/p"]
+
+
+class TestMalformedNames:
+    def test_sql_and_python_agree_on_the_owner(self, env):
+        with get_session() as session:
+            for name in MALFORMED:
+                _judged(session, name, failed=1)
+            assert circuit_breaker.recent_failure_ratio(session, 100, "alice") == (1.0, 1, 1)
+            assert circuit_breaker.recent_failure_ratio(session, 100, "admin") == (1.0, 4, 4)
+            assert circuit_breaker.recent_failure_ratio(session, 100, "x") == (0.0, 0, 0)
+
+    @pytest.mark.parametrize("name", MALFORMED)
+    def test_a_malformed_name_trips_its_parsed_owner_without_raising(self, env, name):
+        settings = env["settings"]
+        with get_session() as session:
+            _judged(session, name, failed=100)
+            assert set(circuit_breaker.check(session, settings)) == {circuit_breaker.project_owner(name)}
+            # Latched under the same name, so it is not tripped afresh every tick.
+            assert set(circuit_breaker.check(session, settings)) == {circuit_breaker.project_owner(name)}
+
+    @pytest.mark.parametrize("name", MALFORMED)
+    def test_a_blocked_owners_malformed_project_is_not_submitted(self, env, name):
+        with get_session() as session:
+            job = _unsubmitted_job(session, name, env["tmp_path"])
+            state_machine.submit_pending_jobs(
+                session, _StubScheduler(), env["settings"],
+                blocked_owners={circuit_breaker.project_owner(name)},
+            )
+            session.commit()
+            assert session.get(ComputationJob, job.id).slurm_jobid is None
+
+    def test_an_error_for_one_owner_holds_only_that_owner(self, env, monkeypatch):
+        settings = env["settings"]
+        real = circuit_breaker.recent_failure_ratio
+
+        def flaky(session, window, owner):
+            if owner == "alice":
+                raise RuntimeError("boom")
+            return real(session, window, owner)
+
+        monkeypatch.setattr(circuit_breaker, "recent_failure_ratio", flaky)
+        with get_session() as session:
+            _judged(session, "alice/p", failed=1)
+            _judged(session, "bob/p", failed=100)
+            tripped = circuit_breaker.check(session, settings)
+        assert set(tripped) == {"alice", "bob"}
+        assert "boom" in tripped["alice"]["detail"]
+        # Held for this tick only; nothing is written for alice.
+        assert circuit_breaker.read_state(settings.data_path, "alice") is None
 
 
 class TestPerOwnerRatio:
@@ -236,6 +291,39 @@ def test_the_tick_submits_the_other_owners_jobs(env):
         assert session.get(ComputationJob, a).slurm_jobid is None
         assert session.get(ComputationJob, b).slurm_jobid == 4242
     assert set(circuit_breaker.tripped_owners(settings.data_path)) == {"alice"}
+
+
+def test_a_blocked_owners_entrypoints_wait_while_others_expand(env, monkeypatch):
+    """Their backlog stays bounded: nothing of theirs expands while tripped."""
+    from autodft.engine import entrypoint_processor as ep
+    from autodft.models.entrypoint import CalculationEntrypoint
+    from autodft.qm.orca.parser import OrcaParser
+    from tests.test_engine import _queue
+
+    settings = env["settings"]
+    settings.pipeline.max_unsubmitted_jobs = 4
+    monkeypatch.setattr(ep, "_generate_initial_xyz", lambda s: "C 0 0 0\nH 1 0 0\n")
+    with get_session() as session:
+        _judged(session, "alice/p", failed=100)
+        # Ahead of bob's: a known project, and more than a page of a new one.
+        _queue(session, "CCO", project_name="alice/p", priority=50, request_confsearch=False)
+        for i in range(150):
+            _queue(session, "C" * (i + 1), project_name="alice/new", priority=50,
+                   request_confsearch=False)
+        _queue(session, "CCN", project_name="bob/p", request_confsearch=False)
+        _queue(session, "CCF", project_name="bob/p", request_confsearch=False)
+
+    PipelineWorker(settings=settings, scheduler=_StubScheduler(),
+                   qm_engine=OrcaParser(orca=settings.orca)).tick()
+
+    with get_session() as session:
+        started = {}
+        for entry in session.exec(select(CalculationEntrypoint)).all():
+            owner = json.loads(entry.request_metadata)["project_name"].split("/")[0]
+            started.setdefault(owner, []).append(entry.time_started is not None)
+        assert not any(started["alice"])
+        assert all(started["bob"])
+        assert session.exec(select(Molecule).where(Molecule.project_name == "alice/new")).all() == []
 
 
 class TestRoutes:

@@ -1153,8 +1153,9 @@ owner that is tripped or has failures among their recent judged tasks:
 owner's job creation and submission stop automatically once more than
 `threshold` of their last `window` judged tasks failed (with at least
 `pipeline.failure_breaker_min_samples` judged), so one systematic error
-cannot burn their whole campaign's retry budget. Other owners carry on, and
-work already submitted keeps running.
+cannot burn their whole campaign's retry budget. Their queued entrypoints
+wait unexpanded. Other owners carry on, and work already submitted keeps
+running.
 
 ### `POST /api/admin/circuit-breaker/reset`
 
@@ -1163,7 +1164,8 @@ Admin only. Body `{"owner": "alice"}` clears that owner's breaker; no body
 `{"reset": ["alice"], "tripped": ["bob"]}`: the owners cleared and those
 still tripped; `400` for an invalid owner name. Deliberately manual: once
 submission stops, no new tasks are judged, so the failure ratio cannot
-recover on its own. Fix the cause first.
+recover on its own. Fix the cause first. A reset re-trips on the next tick
+unless the failed tasks are requeued or wiped.
 
 ### `GET /api/admin/submission-hold`
 
