@@ -5183,6 +5183,12 @@
         // converts via fmtEnergy() below.
         var saState = { project: null, payload: null, mode: 'lowest_energy', unit: 'kcal' };
 
+        // The loaded analysis if it is the selected project's.
+        function saShown() {
+            var sel = document.getElementById('projectSelectSA');
+            return saState.project === (sel ? sel.value : currentProject) ? saState.payload : null;
+        }
+
         // Conversions from Hartree to each supported unit + per-unit
         // precision for the displayed value.
         var SA_UNITS = {
@@ -5346,6 +5352,7 @@
             var name = sel ? sel.value : currentProject;
             var empty = document.getElementById('saEmptyState');
             var host  = document.getElementById('saCards');
+            saState.project = saState.payload = null;
             if (!name) {
                 empty.style.display = 'block';
                 host.style.display = 'none';
@@ -5358,11 +5365,14 @@
 
             try {
                 var payload = await apiJSON('Computing state analysis…', '/api/projects/' + projectPath(name) + '/state-analysis');
+                // Another project was picked meanwhile.
+                if (currentProject !== name) return;
                 saState.project = name;
                 saState.payload = payload;
                 renderSaMetaLine(payload);
                 renderSaCards(payload, saState.mode, saState.unit);
             } catch (err) {
+                if (currentProject !== name) return;
                 host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">' +
                                  errHtml('Error: ', err) + '</div>';
                 renderSaMetaLine(null);
@@ -5376,21 +5386,22 @@
                     buttons.forEach(function (x) { x.classList.remove('active'); });
                     b.classList.add('active');
                     saState.mode = b.dataset.mode;
-                    if (saState.payload) renderSaCards(saState.payload, saState.mode, saState.unit);
+                    if (saShown()) renderSaCards(saState.payload, saState.mode, saState.unit);
                 });
             });
             var unitSel = document.getElementById('saUnit');
             if (unitSel) {
                 unitSel.addEventListener('change', function () {
                     saState.unit = this.value;
-                    if (saState.payload) renderSaCards(saState.payload, saState.mode, saState.unit);
+                    if (saShown()) renderSaCards(saState.payload, saState.mode, saState.unit);
                 });
             }
             var exportBtn = document.getElementById('saExportBtn');
             if (exportBtn) {
                 exportBtn.addEventListener('click', async function () {
-                    var name = saState.project || (document.getElementById('projectSelectSA') || {}).value;
+                    var name = (document.getElementById('projectSelectSA') || {}).value;
                     if (!name) return;
+                    if (!saShown()) { alert('The state analysis of ' + name + ' has not loaded; export once it shows.'); return; }
                     exportBtn.disabled = true;
                     var origLabel = exportBtn.textContent;
                     exportBtn.textContent = 'Preparing…';
@@ -5431,6 +5442,13 @@
         // here so the line widths can change without a round trip.
 
         var ppState = { project: null, payload: null, details: {} };
+
+        // The loaded spectra if they are the selected project's.
+        function ppShown() {
+            var sel = document.getElementById('projectSelectPP');
+            return ppState.project === (sel ? sel.value : currentProject) ? ppState.payload : null;
+        }
+
         var HC_EV_NM = 1239.84193;
 
         function ppUvCurve(ensemble, fwhmEv) {
@@ -5758,14 +5776,18 @@
                 renderPhotophysics(ppState.payload);
                 return;
             }
+            var project = ppState.project;
             try {
-                var payload = await apiJSON('Loading spectra…', '/api/projects/' + projectPath(ppState.project) +
+                var payload = await apiJSON('Loading spectra…', '/api/projects/' + projectPath(project) +
                                             '/photophysics?molecule_id=' + molId);
+                // Another project was loaded meanwhile.
+                if (ppState.project !== project) return;
                 if (!payload.molecules) throw new Error('The reply has no spectra.');
                 payload.molecules.forEach(function (d) {
                     ppState.details[ppKey(d)] = { data: d, html: ppPlots(d, d) };
                 });
             } catch (err) {
+                if (ppState.project !== project) return;
                 mols.forEach(function (m) {
                     ppState.details[ppKey(m)] = { data: null,
                         html: '<div class="pp-waiting">' + errHtml('Could not load spectra: ', err) + '</div>' };
@@ -5779,7 +5801,7 @@
                 var d = ppState.details[key];
                 if (d.data) d.html = ppPlots(d.data, d.data);
             });
-            if (ppState.payload) renderPhotophysics(ppState.payload);
+            if (ppShown()) renderPhotophysics(ppState.payload);
         }
 
         async function loadPhotophysicsPage() {
@@ -5787,6 +5809,8 @@
             var name = sel ? sel.value : currentProject;
             var empty = document.getElementById('ppEmptyState');
             var host  = document.getElementById('ppCards');
+            ppState.project = ppState.payload = null;
+            ppState.details = {};
             if (!name) {
                 empty.style.display = 'block';
                 host.style.display = 'none';
@@ -5797,12 +5821,14 @@
             host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">Reading spectra…</div>';
             try {
                 var payload = await apiJSON('Reading spectra…', '/api/projects/' + projectPath(name) + '/photophysics');
+                // Another project was picked meanwhile.
+                if (currentProject !== name) return;
                 if (!payload.molecules) throw new Error('The reply has no spectra.');
-                ppState.details = {};
                 ppState.project = name;
                 ppState.payload = payload;
                 renderPhotophysics(payload);
             } catch (err) {
+                if (currentProject !== name) return;
                 host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">' +
                                  errHtml('Error: ', err) + '</div>';
             }
@@ -5954,8 +5980,9 @@
             if (exportBtn) {
                 exportBtn.addEventListener('click', async function () {
                     var sel = document.getElementById('projectSelectPP');
-                    var name = ppState.project || (sel ? sel.value : null);
+                    var name = sel ? sel.value : null;
                     if (!name) return;
+                    if (!ppShown()) { alert('The spectra of ' + name + ' have not loaded; export once they show.'); return; }
                     exportBtn.disabled = true;
                     var origLabel = exportBtn.textContent;
                     exportBtn.textContent = 'Preparing…';

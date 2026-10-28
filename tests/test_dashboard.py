@@ -1617,3 +1617,135 @@ def test_a_late_success_for_the_last_project_neither_renders_nor_caches():
     assert out["cards"] == ["none", "--"] and "CCO" not in out["table"]
     assert out["disabled"] == [True] * 3
     assert out["cached"] is None
+
+
+# ── State Analysis and Photophysics: the selected project only ──────────
+
+_ANALYSIS_STUB = r"""
+var $ = function (id) { return document.getElementById(id); };
+El.prototype.querySelectorAll = function () { return []; };
+var modeBtn = new El('modeBtn');
+modeBtn.dataset = { mode: 'rmsd_matched' };
+var docAll = document.querySelectorAll;
+document.querySelectorAll = function (s) { return s === '.sa-toggle-btn' ? [modeBtn] : docAll(s); };
+var currentProject = null, started = [], alerts = [];
+function alert(m) { alerts.push(m); }
+async function startProjectJob(url) { started.push(url); return { ok: false, detail: 'stop' }; }
+// The page's selector and currentProject move together, as the change handlers do.
+function pick(sel, name) { $(sel).value = name; currentProject = name; }
+"""
+
+
+def _analysis_code() -> str:
+    html = (TEMPLATE / "dashboard.html").read_text()
+    start = html.index("        // ── Project Overview > State Analysis subpage")
+    return (_REPLIES_STUB + _ANALYSIS_STUB + _functions("projectPath", "escHtml")
+            + html[start:html.index("        // ── Refresh orchestration", start)])
+
+
+_SA_A = {"status": 200, "body": {"solvation_mecn": False, "sce_ref": 0.24,
+                                  "molecules": [{"id": 7, "smiles": "CCO", "note": "A's card"}]}}
+_PP_A = {"status": 200, "body": {"molecules": [{"id": 7, "smiles": "CCO", "state_id": 1}]}}
+_B_FAILS = {"status": 500, "body": {"detail": "database is locked"}}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_state_analysis_after_a_failed_switch_neither_exports_nor_draws_the_last_project():
+    out = _run_overlay("""
+        replies['/api/projects/nho%%3Aa/state-analysis'] = %s;
+        replies['/api/projects/nho%%3Ab/state-analysis'] = %s;
+        pick('projectSelectSA', 'nho/a');
+        await loadStateAnalysisPage();
+        out.a = $('saCards').innerHTML;
+        pick('projectSelectSA', 'nho/b');
+        await loadStateAnalysisPage();
+        $('saUnit').value = 'eV';
+        $('saUnit').on.change.call($('saUnit'));
+        out.unit = $('saCards').innerHTML;
+        modeBtn.on.click();
+        out.mode = $('saCards').innerHTML;
+        await $('saExportBtn').on.click();
+        out.started = started.slice(); out.alerts = alerts.slice();
+        // Once B loads, Export builds B's workbook.
+        replies['/api/projects/nho%%3Ab/state-analysis'] = %s;
+        await loadStateAnalysisPage();
+        await $('saExportBtn').on.click();
+        out.later = started;
+    """ % (json.dumps(_SA_A), json.dumps(_B_FAILS), json.dumps(_SA_A)), _analysis_code())
+    assert "CCO" in out["a"]
+    for html in (out["unit"], out["mode"]):
+        assert "database is locked" in html and "CCO" not in html
+    assert out["started"] == []
+    assert len(out["alerts"]) == 1 and "nho/b" in out["alerts"][0]
+    assert out["later"] == ["/api/projects/nho%3Ab/state-analysis/export"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_late_state_analysis_reply_for_the_last_project_is_dropped():
+    out = _run_overlay("""
+        replies['/api/projects/nho%%3Aa/state-analysis'] = Object.assign({hang: true}, %s);
+        replies['/api/projects/nho%%3Ab/state-analysis'] = %s;
+        pick('projectSelectSA', 'nho/a');
+        var a = loadStateAnalysisPage();
+        pick('projectSelectSA', 'nho/b');
+        await loadStateAnalysisPage();
+        hung[0]();
+        await a;
+        out.html = $('saCards').innerHTML;
+        await $('saExportBtn').on.click();
+        out.started = started;
+    """ % (json.dumps(_SA_A), json.dumps(_B_FAILS)), _analysis_code())
+    assert "database is locked" in out["html"] and "CCO" not in out["html"]
+    assert out["started"] == []
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_photophysics_after_a_failed_switch_neither_exports_nor_draws_the_last_project():
+    out = _run_overlay("""
+        replies['/api/projects/nho%%3Aa/photophysics'] = %s;
+        replies['/api/projects/nho%%3Ab/photophysics'] = %s;
+        pick('projectSelectPP', 'nho/a');
+        await loadPhotophysicsPage();
+        out.a = $('ppCards').innerHTML;
+        pick('projectSelectPP', 'nho/b');
+        await loadPhotophysicsPage();
+        $('ppUvFwhm').value = '0.5';
+        $('ppUvFwhm').on.input();
+        out.fwhm = $('ppCards').innerHTML;
+        await $('ppExportBtn').on.click();
+        out.started = started.slice(); out.alerts = alerts.slice();
+        replies['/api/projects/nho%%3Ab/photophysics'] = %s;
+        await loadPhotophysicsPage();
+        await $('ppExportBtn').on.click();
+        out.later = started;
+    """ % (json.dumps(_PP_A), json.dumps(_B_FAILS), json.dumps(_PP_A)), _analysis_code())
+    assert "CCO" in out["a"]
+    assert "database is locked" in out["fwhm"] and "CCO" not in out["fwhm"]
+    assert out["started"] == []
+    assert len(out["alerts"]) == 1 and "nho/b" in out["alerts"][0]
+    assert out["later"] == ["/api/projects/nho%3Ab/export?format=photophysics"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_late_photophysics_replies_for_the_last_project_are_dropped():
+    out = _run_overlay("""
+        replies['/api/projects/nho%%3Aa/photophysics'] = %s;
+        replies['/api/projects/nho%%3Ab/photophysics'] = %s;
+        replies['/api/projects/nho%%3Aa/photophysics?molecule_id=7'] = {hang: true, status: 200,
+            body: {molecules: [{id: 7, state_id: 1}]}};
+        pick('projectSelectPP', 'nho/a');
+        await loadPhotophysicsPage();
+        // A's spectra and a reload of A are both in flight when B is picked.
+        var spectra = ppToggle(7);
+        replies['/api/projects/nho%%3Aa/photophysics'] = Object.assign({hang: true}, %s);
+        var reload = loadPhotophysicsPage();
+        pick('projectSelectPP', 'nho/b');
+        await loadPhotophysicsPage();
+        hung.forEach(function (r) { r(); });
+        await spectra; await reload;
+        out.html = $('ppCards').innerHTML;
+        await $('ppExportBtn').on.click();
+        out.started = started;
+    """ % (json.dumps(_PP_A), json.dumps(_B_FAILS), json.dumps(_PP_A)), _analysis_code())
+    assert "database is locked" in out["html"] and "CCO" not in out["html"]
+    assert out["started"] == []
