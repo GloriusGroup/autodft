@@ -2415,9 +2415,9 @@ class ValidateSmilesBatchRequest(BaseModel):
 @router.post("/api/validate-smiles-batch")
 def api_validate_smiles_batch(body: ValidateSmilesBatchRequest):
     """``/api/validate-smiles`` for up to 100 SMILES, answered in order; a line over 512 characters is invalid."""
-    from autodft.engine.entrypoint_processor import validate_smiles
+    from autodft.engine.entrypoint_processor import invalid_smiles, validate_smiles
 
-    return [validate_smiles(s) if len(s) <= 512 else {**validate_smiles(""), "error": "SMILES too long (>512)."}
+    return [validate_smiles(s) if len(s) <= 512 else invalid_smiles("SMILES too long (>512).")
             for s in body.smiles_list]
 
 

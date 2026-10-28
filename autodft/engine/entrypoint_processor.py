@@ -601,6 +601,27 @@ def _get_or_create_molecule(
     return molecule
 
 
+def invalid_smiles(error: str | None = None) -> dict:
+    """A :func:`validate_smiles` result that refuses, with *error*."""
+    return {
+        "valid": False,
+        "canonical": None,
+        "atoms": None,
+        "heavy_atoms": None,
+        "charge": None,
+        "multiplicity": None,
+        "radical_centers": None,
+        # A diradical is submitted as a triplet and nothing else; the caller
+        # uses this to lock the requested-state choices.
+        "diradical": False,
+        "max_atomic_number": None,
+        "error": error,
+        # Non-fatal note about a structure that parses but is probably not
+        # what the user meant (see the multiplicity check in validate_smiles).
+        "warning": None,
+    }
+
+
 def validate_smiles(smiles: str) -> dict:
     """Check whether *smiles* can be parsed and used for a DFT job.
 
@@ -616,23 +637,7 @@ def validate_smiles(smiles: str) -> dict:
     GOAT input (e.g. single heavy atom — GOAT cannot run on a monomer)
     are rejected with a human-readable error string.
     """
-    base = {
-        "valid": False,
-        "canonical": None,
-        "atoms": None,
-        "heavy_atoms": None,
-        "charge": None,
-        "multiplicity": None,
-        "radical_centers": None,
-        # A diradical is submitted as a triplet and nothing else; the caller
-        # uses this to lock the requested-state choices.
-        "diradical": False,
-        "max_atomic_number": None,
-        "error": None,
-        # Non-fatal note about a structure that parses but is probably not
-        # what the user meant (see the multiplicity check below).
-        "warning": None,
-    }
+    base = invalid_smiles()
 
     if smiles is None or not str(smiles).strip():
         base["error"] = "SMILES is empty."

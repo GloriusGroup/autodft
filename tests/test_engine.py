@@ -22,6 +22,7 @@ from autodft.config import Settings
 from autodft.engine.entrypoint_processor import (
     calculate_altered_multiplicity,
     get_charge_and_multiplicity,
+    invalid_smiles,
     validate_smiles,
 )
 from autodft.engine.scheduler import SubmitResult
@@ -116,6 +117,9 @@ class TestValidateSmiles:
 
     def test_rejects_unparseable(self):
         assert validate_smiles("not a smiles")["valid"] is False
+
+    def test_an_invalid_result_has_the_validators_shape(self):
+        assert invalid_smiles("SMILES too long (>512).") == {**validate_smiles(""), "error": "SMILES too long (>512)."}
 
     def test_rejects_single_atoms(self):
         # GOAT cannot run on a monomer.

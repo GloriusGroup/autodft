@@ -2551,14 +2551,17 @@
                 + '" data-signin="1">Session expired — sign in</a>';
         }
 
+        // A reply's detail as text: FastAPI's 422 detail is a list of {msg}.
+        function detailText(detail) {
+            if (Array.isArray(detail)) return detail.map(function (d) { return d.msg || JSON.stringify(d); }).join('; ');
+            return detail != null && typeof detail !== 'string' ? JSON.stringify(detail) : detail;
+        }
+
         // A failed reply as an Error carrying the server's detail.
         async function apiError(resp) {
             var detail = null;
             try { detail = JSON.parse(await resp.text()).detail; } catch (_) {}
-            // FastAPI's 422 detail is a list of {msg}.
-            if (Array.isArray(detail)) detail = detail.map(function (d) { return d.msg || JSON.stringify(d); }).join('; ');
-            else if (detail != null && typeof detail !== 'string') detail = JSON.stringify(detail);
-            var err = new Error(detail || 'HTTP ' + resp.status);
+            var err = new Error(detailText(detail) || 'HTTP ' + resp.status);
             err.status = resp.status;
             return err;
         }
@@ -4028,7 +4031,7 @@
                 var text = await resp.text();
                 var data; try { data = JSON.parse(text); } catch (_) { data = { detail: text.slice(0, 200) }; }
                 if (!resp.ok) {
-                    feedback.textContent = data.detail || ('HTTP ' + resp.status);
+                    feedback.textContent = detailText(data.detail) || ('HTTP ' + resp.status);
                     feedback.className = 'submit-feedback error';
                 } else {
                     var rejected = data.rejected || [];
@@ -4205,7 +4208,7 @@
                     });
                 } else {
                     failed = lines.map(function (smi) {
-                        return { smiles: smi, error: data.detail || ('HTTP ' + resp.status) };
+                        return { smiles: smi, error: detailText(data.detail) || ('HTTP ' + resp.status) };
                     });
                 }
             } catch (err) {

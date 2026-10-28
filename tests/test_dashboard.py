@@ -1220,8 +1220,8 @@ function flush() { while (timers.length) timers.shift()(); }
 
 def _run_molecules(body: str) -> dict:
     html = (TEMPLATE / "dashboard.html").read_text()
-    code = _functions("escHtml", "isAbort", "errHtml", "checkSession", "uiFetch", "apiError", "apiJSON", "apiReply",
-                      "fmtFixed", "brokenBadge", "statusCell", "spExtraSlot",
+    code = _functions("escHtml", "isAbort", "errHtml", "checkSession", "uiFetch", "detailText", "apiError", "apiJSON",
+                      "apiReply", "fmtFixed", "brokenBadge", "statusCell", "spExtraSlot",
                       "spExtraHtml", "fetchSpTasks", "spTasksPromise", "applySpExtras", "loadMoleculesPage",
                       "appendMolChunks")
     consts = "\n".join(re.search(rf"\n *var {n} = [^\n]*\n", html).group(0)
@@ -2158,12 +2158,10 @@ def _extend_code() -> str:
             + notes + extend)
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-@pytest.mark.parametrize("tolerance", [-10, None])
-def test_extend_shows_the_projects_headers_and_tolerance_and_sends_no_tolerance(tolerance):
+def _extend_info(tolerance) -> dict:
     none = {"request_spec_uvvis": "none", "request_spec_ir": "none", "request_spec_nmr": "none", "request_esd": "none",
             "request_densities": "none", "request_singlepoint_nbo": "none", "request_sp_reactivity": "none"}
-    info = {"project": "nho/p", "molecules": 2, "archived": 0, "extendable": True, "reason": None,
+    return {"project": "nho/p", "molecules": 2, "archived": 0, "extendable": True, "reason": None,
             # Header 9 (UV/Vis would be refused) is in no dropdown: legacy, deleted or another user's.
             "headers": {"confsearch": None, "optimization": {"id": 7, "text": "!wB97X-D3 def2-SVP"},
                         "singlepoint": {"id": 9, "text": "!wB97X-D3 def2-TZVP\n%tddft nroots 5 end\n"}},
@@ -2171,6 +2169,49 @@ def test_extend_shows_the_projects_headers_and_tolerance_and_sends_no_tolerance(
             "states": {"T1": "none", "ox": "none", "red": "none"}, "max_conformers": {"S0": 1},
             "settings": {"request_singlepoint_vertical_excitations": True, "request_confsearch": False},
             "submit_only": [], "smiles": ["CCO", "CC=O"]}
+
+
+_EXTEND_FORM = """
+    $('submitForm').elements = [
+        field('smiles', 'textarea', ''), field('project', 'text', 'mine'), field('skipConfsearch', 'checkbox', 'on'),
+        select('headerConfsearch', ['id:5'], 'id:5'), select('headerOptimization', ['id:7', 'id:8'], 'id:8'),
+        select('headerSinglepoint', ['id:3'], 'id:3'), field('imagFreqTolerance', 'number', '0'),
+        field('requestUvvis', 'checkbox', 'on')];
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+@pytest.mark.parametrize("extend", [False, True])
+def test_a_422_list_detail_reads_as_its_messages(extend):
+    detail = [{"loc": ["body", "priority"], "msg": "Input should be a valid integer", "type": "int_parsing"},
+              {"loc": ["body", "uvvis_nroots"], "msg": "Input should be less than or equal to 100"}]
+    out = _run_overlay("""
+        var $ = function (id) { return document.getElementById(id); };
+        FORM
+        var reply = { status: 422, body: { detail: DETAIL } };
+        replies['/api/submit-batch'] = reply;
+        replies['/api/projects/nho%3Ap/extend'] = reply;
+        if (EXTEND) {
+            replies['/api/projects/nho%3Ap/extend-info'] = { status: 200, body: INFO };
+            await enterExtendMode('nho/p');
+        } else {
+            $('smiles').value = 'CCO';
+            window.lastSmilesResults = [{ result: { valid: true } }];
+        }
+        await $('submitForm').on.submit({ preventDefault: function () {} });
+        await idle();
+        out.text = $('submitFeedback').textContent;
+    """.replace("FORM", _EXTEND_FORM).replace("DETAIL", json.dumps(detail)).replace("EXTEND", json.dumps(extend))
+        .replace("INFO", json.dumps(_extend_info(-10))), _extend_code())
+    messages = "Input should be a valid integer; Input should be less than or equal to 100"
+    assert "[object Object]" not in out["text"]
+    assert out["text"] == (messages if extend else "Submitted 0/1 — Failed: CCO (" + messages + ")")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+@pytest.mark.parametrize("tolerance", [-10, None])
+def test_extend_shows_the_projects_headers_and_tolerance_and_sends_no_tolerance(tolerance):
+    info = _extend_info(tolerance)
     out = _run_overlay("""
         var $ = function (id) { return document.getElementById(id); };
         var slots = ['headerConfsearch', 'headerOptimization', 'headerSinglepoint'];
@@ -2180,11 +2221,7 @@ def test_extend_shows_the_projects_headers_and_tolerance_and_sends_no_tolerance(
                      locked: slots.concat(['imagFreqTolerance']).map(function (id) { return !!$(id).disabled; }),
                      tolerance: String($('imagFreqTolerance').value), uvvisNote: $('uvvisHeaderNote').textContent };
         }
-        $('submitForm').elements = [
-            field('smiles', 'textarea', ''), field('project', 'text', 'mine'), field('skipConfsearch', 'checkbox', 'on'),
-            select('headerConfsearch', ['id:5'], 'id:5'), select('headerOptimization', ['id:7', 'id:8'], 'id:8'),
-            select('headerSinglepoint', ['id:3'], 'id:3'), field('imagFreqTolerance', 'number', '0'),
-            field('requestUvvis', 'checkbox', 'on')];
+        FORM
         window.refreshCategoryDetails();
         out.before = snap();
         replies['/api/projects/nho%3Ap/extend-info'] = { status: 200, body: INFO };
@@ -2202,7 +2239,7 @@ def test_extend_shows_the_projects_headers_and_tolerance_and_sends_no_tolerance(
         out.body = sent['/api/projects/nho%3Ap/extend'];
         exitExtendMode();
         out.after = snap();
-    """.replace("INFO", json.dumps(info)), _extend_code())
+    """.replace("FORM", _EXTEND_FORM).replace("INFO", json.dumps(info)), _extend_code())
     assert out["before"] == {"values": ["id:5", "id:8", "id:3"], "options": [1, 2, 1],
                              "locked": [False] * 4, "tolerance": "0", "uvvisNote": ""}
     shown = {"values": ["", "id:7", "id:9"], "options": [2, 2, 2], "locked": [True] * 4,
