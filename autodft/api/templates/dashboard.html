@@ -4875,8 +4875,9 @@
             }
         }
 
-        // Pinned; loaded on the first viewer opened.
+        // Pinned with SRI; loaded on the first viewer opened.
         var THREEDMOL_URL = 'https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.4.2/3Dmol-min.js';
+        var THREEDMOL_SRI = 'sha384-zxWwO8usW1MzUHquSL3foT+Cw2ndelPQ5bNzHVYdKGiJ0vqvqQ8Y9XeKLmotffmQ';
         var _3dmolPromise = null;
         function load3Dmol() {
             if (window.$3Dmol) return Promise.resolve(window.$3Dmol);
@@ -4884,6 +4885,8 @@
                 _3dmolPromise = new Promise(function (resolve, reject) {
                     var s = document.createElement('script');
                     s.src = THREEDMOL_URL;
+                    s.integrity = THREEDMOL_SRI;
+                    s.crossOrigin = 'anonymous';
                     s.onload = function () {
                         if (window.$3Dmol) resolve(window.$3Dmol);
                         else reject(new Error('3Dmol.js did not initialise'));

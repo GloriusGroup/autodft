@@ -980,19 +980,37 @@ def test_a_user_gets_no_new_header_button_or_editor():
 
 # ── RDKit.js ────────────────────────────────────────────────────────────
 
-def test_no_cdn_url_is_unpinned():
-    for name in ("dashboard.html", "login.html"):
-        html = (TEMPLATE / name).read_text()
-        for url in re.findall(r"https://(?:unpkg\.com|cdn\.jsdelivr\.net/npm)/[^\s'\"<>]+", html):
-            assert re.match(r"https://[^/]+(?:/npm)?/(?:@[^/]+/)?[^/@]+@\d+(?:\.\d+)+/", url), url
+def _external_urls(html: str) -> list[str]:
+    return [u for u in re.findall(r"https?://[^\s'\"<>)]+", html) if not u.startswith("http://www.w3.org/")]
 
 
-def test_every_external_script_tag_has_integrity():
+def test_no_external_url_is_unpinned():
+    urls = [u for name in ("dashboard.html", "login.html") for u in _external_urls((TEMPLATE / name).read_text())]
+    assert len(urls) >= 2, urls
+    for url in urls:
+        assert re.search(r"(?:@|/)\d+(?:\.\d+)+/", url), url
+
+
+def test_every_external_script_has_integrity():
+    """Static tags and the dynamic loaders alike."""
+    loaded = []
     for name in ("dashboard.html", "login.html"):
         html = (TEMPLATE / name).read_text()
+        consts = dict(re.findall(r"\bvar (\w+) = '([^']*)';", html))
         for tag in re.findall(r"<script\b[^>]*\bsrc=[^>]*>", html):
-            assert re.search(r'\bintegrity="sha384-[A-Za-z0-9+/]+={0,2}"', tag), tag
+            assert re.search(r'\bintegrity="sha384-[A-Za-z0-9+/]{64}"', tag), tag
             assert 'crossorigin="anonymous"' in tag, tag
+            loaded.append(tag)
+        for m in re.finditer(r"(\w+)\.src = (\w+)(?: \+ '([^']*)')?;", html):
+            el, base, tail = m.group(1), m.group(2), m.group(3) or ""
+            url = consts[base] + tail
+            assert url.startswith("https://"), url
+            body = html[m.end():html.index(f"appendChild({el})", m.end())]
+            sri = re.search(rf"\b{el}\.integrity = (\w+);", body)
+            assert sri and re.fullmatch(r"sha384-[A-Za-z0-9+/]{64}", consts[sri.group(1)]), url
+            assert f"{el}.crossOrigin = 'anonymous';" in body, url
+            loaded.append(url)
+    assert any("RDKit_minimal.js" in u for u in loaded) and any("3Dmol-min.js" in u for u in loaded), loaded
 
 
 _RDKIT_STUB = r"""
