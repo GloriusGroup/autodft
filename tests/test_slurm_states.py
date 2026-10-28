@@ -204,6 +204,19 @@ class TestPolling:
         assert sum("SOME_NEW_STATE" in r.getMessage() for r in caplog.records) == 1
         assert len(fake.calls) == 1  # a judged job is not polled again
 
+    def test_a_job_with_an_id_and_no_status_is_polled_and_judged(self, session, submitted_job, fake_sacct):
+        submitted_job.slurm_status = None
+        session.add(submitted_job)
+        session.commit()
+
+        fake = fake_sacct({"123": "SOME_NEW_STATE"})
+        update_running_jobs(session, SlurmScheduler())
+        session.refresh(submitted_job)
+        assert fake.calls and fake.calls[0][0] == "sacct"
+        assert submitted_job.slurm_status == "SOME_NEW_STATE"
+        assert submitted_job.success is False
+        assert "SOME_NEW_STATE" in submitted_job.fail_reason
+
     def test_a_requeue_hold_keeps_being_polled(self, session, submitted_job, fake_sacct):
         fake_sacct({"123": "REQUEUE_HOLD"})
         update_running_jobs(session, SlurmScheduler())
