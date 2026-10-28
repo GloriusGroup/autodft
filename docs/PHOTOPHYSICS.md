@@ -95,7 +95,9 @@ two methods (`nmr_method`):
   `%maxcore` raised to current + N / 0.8 (ORCA leaves the response about
   83 % of it), rounded up to 500 MB, capped at 16000 MB per core and
   400 GB per job and never lowered, with the same cores; an escalated
-  retry for any other reason never lowers a `dh` job's `%maxcore`.
+  retry for any other reason never lowers a `dh` job's `%maxcore`. Once at
+  the cap, a further such failure fails the task as `MP2 response memory
+  cap reached` instead of rerunning it unchanged.
 
 The reference compounds run in the same method, so references and
 molecules share one NMR method. NMR needs a closed-shell singlet reference

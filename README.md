@@ -936,6 +936,8 @@ The pipeline is built to **fail loudly**, not silently:
     cluster-side change: nothing is cancelled and a critical is logged;
   * the same failure would repeat on every retry (`Excited Root`,
     `LibXC Needed`, `S1 Stays Bound`);
+  * an NMR MP2-memory retry is already at its cap and would rerun the
+    failed job unchanged (`MP2 response memory cap reached`);
   * building its job raised 10 consecutive times
     (`Job build failed 10 times: …`). A failed build costs no attempt;
   * its project is archived: the project's created and pending tasks fail

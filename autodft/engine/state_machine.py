@@ -40,7 +40,7 @@ from autodft.models.project_job import ProjectJob
 from autodft.models.state import MoleculeState
 from autodft.models.task import ComputationTask
 from autodft.qm.base import QMEngine
-from autodft.qm.orca.parser import DENSITY_CUBES, OrcaParser
+from autodft.qm.orca.parser import DENSITY_CUBES, MP2_RESPONSE_MEMORY, OrcaParser
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,9 @@ DETERMINISTIC_CHECKS = ("LibXC Needed", "S1 Stays Bound")
 
 # Consecutive raising job builds after which the task fails.
 MAX_BUILD_FAILURES = 10
+
+# Why an MP2 response retry at its %maxcore cap fails its task instead of rerunning unchanged.
+MP2_CAP_REACHED = "MP2 response memory cap reached"
 
 # fail_reason prefix of a job SLURM can never run; its task fails without a retry.
 UNSATISFIABLE = "unsatisfiable: "
@@ -1259,15 +1262,21 @@ def _build_job(
 
     A build that raises costs no attempt but counts towards
     :data:`MAX_BUILD_FAILURES`, after which the task fails with the last error.
+    A :class:`RetryWouldRepeat` fails it at once.
     """
     try:
         _create_job_for_task(session, task, attempt, settings,
                              qm_engine=qm_engine, previous_failed_job=previous_failed_job)
     except Exception as exc:  # noqa: BLE001 - one bad task must not stop the rest
-        logger.exception("Failed to build job (attempt %d) for task %d", attempt, task.id)
-        task.build_failures = (task.build_failures or 0) + 1
-        if task.build_failures >= MAX_BUILD_FAILURES:
-            reason = f"Job build failed {task.build_failures} times: {type(exc).__name__}: {exc}"
+        reason = None
+        if isinstance(exc, RetryWouldRepeat):
+            reason = str(exc)
+        else:
+            logger.exception("Failed to build job (attempt %d) for task %d", attempt, task.id)
+            task.build_failures = (task.build_failures or 0) + 1
+            if task.build_failures >= MAX_BUILD_FAILURES:
+                reason = f"Job build failed {task.build_failures} times: {type(exc).__name__}: {exc}"
+        if reason is not None:
             # The reason lives on a folderless failed job, as for _fail_task.
             session.add(ComputationJob(
                 task_id=task.id, attempt=attempt, success=False,
@@ -1386,6 +1395,10 @@ def _xyz_atoms(xyz_data: str) -> Optional[list[str]]:
 
 class JobInputError(ValueError):
     """Why a job's input cannot be built."""
+
+
+class RetryWouldRepeat(Exception):
+    """A retry would rerun the failed job unchanged; its task fails at once."""
 
 
 class _RenderedJob(NamedTuple):
@@ -1745,6 +1758,7 @@ def _apply_retry_modifications(
 
     applied: list[str] = []
     for prior in prior_failures:
+        unchanged = (input_content, submit_content)
         failure = FailureInfo(
             fail_reason=prior.fail_reason or "",
             previous_job_path=prior.job_path or "",
@@ -1760,6 +1774,10 @@ def _apply_retry_modifications(
             strategies=replayable,
         )
         applied.append(f"attempt {prior.attempt}: {prior.fail_reason}")
+    # At its cap the MP2 response retry leaves the latest failure's input as it was.
+    if MP2_RESPONSE_MEMORY in (prior_failures[-1].fail_reason or "") \
+            and (input_content, submit_content) == unchanged:
+        raise RetryWouldRepeat(MP2_CAP_REACHED)
 
     if perturbations:
         latest = prior_failures[-1]

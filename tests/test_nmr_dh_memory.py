@@ -3,13 +3,25 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
+
+from sqlmodel import select
 
 from autodft import categories
+from autodft.config import Settings
+from autodft.engine.state_machine import _create_job_for_task, create_retry_jobs
+from autodft.models import ComputationJob, ComputationTask, TaskStatus, TaskType
 from autodft.qm.orca.blocks import NMR_DH_ROUTE
 from autodft.qm.orca.input_generator import render_submit_script
 from autodft.qm.orca.parser import MP2_RESPONSE_MEMORY, OrcaParser
-from autodft.qm.orca.retry import FailureInfo, IncreaseMP2ResponseMemory, IncreaseResources
+from autodft.qm.orca.retry import (
+    MP2_RESPONSE_MAX_MAXCORE_MB,
+    FailureInfo,
+    IncreaseMP2ResponseMemory,
+    IncreaseResources,
+)
 from tests.test_orca_parser import ABNORMAL_TERMINATION
+from tests.test_uvvis_tasks import _s0_with_opt
 
 DH_INPUT = f"{NMR_DH_ROUTE} CPCM(MeCN)\n%maxcore 4000\n%pal nprocs 12 end\n\n*xyzfile 0 1 input.xyz\n"
 SHORT_LOG = ("  Memory available             ...   3335.3 MB\n  Memory needed per MO         ...     80.9 MB\n"
@@ -121,3 +133,68 @@ def test_dh_resources_are_validated_only_for_dh():
     assert "nmr_dh_maxcore" in (reject({"nmr_dh_maxcore": 500}) or "")
     assert "400 GB" in (reject({"nmr_dh_nprocs": 64, "nmr_dh_maxcore": 16000}) or "")
     assert reject({"nmr_method": "singlepoint", "nmr_dh_maxcore": 500}) is None
+
+
+def _failed_dh_attempt(session, tmp_path, maxcore, reason=str([MP2_RESPONSE_MEMORY])):
+    """A pending dh NMR task whose engine-built first attempt failed short of MP2 response memory."""
+    state, opt = _s0_with_opt(session, {categories.NMR: True, "nmr_method": "dh", "nmr_dh_maxcore": maxcore})
+    task = ComputationTask(
+        task_type=TaskType.singlepoint_nmr, status=TaskStatus.pending, state_id=state.id,
+        header_id=state.singlepoint_header_id, input_geometry_id=opt.output_geometry_id,
+        task_path=str(tmp_path / "nmr"),
+    )
+    session.add(task)
+    session.commit()
+    job = _create_job_for_task(session, task, 1, Settings(), qm_engine=OrcaParser())
+    # Only the MP2 response failed: no SCF signature for RecoverSinglepointSCF.
+    _failed_nmr_job(Path(job.job_path)).joinpath("output.out").write_text(
+        "ORCA finished by error termination in MP2 RESPONSE\n")
+    job.success, job.fail_reason = False, reason
+    session.add(job)
+    session.commit()
+    return task
+
+
+def _retry(session, task):
+    create_retry_jobs(session, Settings(), OrcaParser())
+    session.commit()
+    session.refresh(task)
+    return sorted(session.exec(select(ComputationJob).where(ComputationJob.task_id == task.id)).all(),
+                  key=lambda j: j.attempt)
+
+
+def test_below_the_cap_the_retry_escalates(session, tmp_path):
+    task = _failed_dh_attempt(session, tmp_path, 6000)
+    _, retry = _retry(session, task)
+    assert task.status == TaskStatus.pending and retry.attempt == 2 and retry.success is None
+    # 6000 + 1783.4 / 0.8 = 8229 -> 8500
+    assert "%maxcore 8500" in (Path(retry.job_path) / "input.inp").read_text()
+
+
+def test_at_the_cap_the_task_fails_instead_of_rerunning(session, tmp_path):
+    task = _failed_dh_attempt(session, tmp_path, MP2_RESPONSE_MAX_MAXCORE_MB)
+    first, record = _retry(session, task)
+    assert task.status == TaskStatus.failed and task.build_failures == 0
+    assert record.success is False and record.job_path is None
+    assert record.fail_reason == "MP2 response memory cap reached"
+    assert sorted(p.name for p in Path(task.task_path).glob("job_*")) == [f"job_{first.id}"]
+
+
+def test_at_the_cap_a_slurm_oom_still_grows_the_margin(session, tmp_path):
+    task = _failed_dh_attempt(session, tmp_path, MP2_RESPONSE_MAX_MAXCORE_MB,
+                              reason=str([MP2_RESPONSE_MEMORY, "OUT_OF_MEMORY"]))
+    _, retry = _retry(session, task)
+    assert task.status == TaskStatus.pending and retry.success is None
+    assert f"--mem={12 * 16050 * 5 // 4}\n" in (Path(retry.job_path) / "submit.cmd").read_text()
+
+
+def test_a_retry_that_reached_the_cap_fails_on_its_next_mp2_failure(session, tmp_path):
+    task = _failed_dh_attempt(session, tmp_path, 14000)
+    _, retry = _retry(session, task)
+    assert "%maxcore 16000" in (Path(retry.job_path) / "input.inp").read_text()
+    retry.success, retry.fail_reason = False, str([MP2_RESPONSE_MEMORY])
+    session.add(retry)
+    session.commit()
+    *_, record = _retry(session, task)
+    assert task.status == TaskStatus.failed and record.attempt == 3
+    assert record.fail_reason == "MP2 response memory cap reached" and record.job_path is None
