@@ -434,6 +434,29 @@ def test_export_and_delete_waits_for_the_project_name(typed, sent):
         assert not out["disabled"]
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+@pytest.mark.parametrize("molecules, archived, text", [
+    (3, 3, "3 molecules archived, 7 files"),
+    (2, 10, "10 molecules archived (2 this run), 7 files"),
+])
+def test_a_resumed_archive_reports_every_archived_molecule(molecules, archived, text):
+    result = {"molecules": molecules, "archived": archived, "files_copied": 7, "root": "/x"}
+    script = ("var els = {};\n"
+              "var document = {getElementById: function (id) {\n"
+              "    return els[id] || (els[id] = {id: id, value: id === 'exportConfirmName' ? 'nho/p' : '',"
+              " checked: false, textContent: '', innerHTML: '', style: {}});\n"
+              "}};\n"
+              "var currentProject = 'nho/p', exportDeletes = true;\n"
+              "function projectPath(n) { return n; }\n"
+              "function setTimeout() {}\n"
+              "async function startProjectJob() { return {ok: true, project: 'nho/p', job: {id: 1}}; }\n"
+              "async function pollProjectJob(p, id, h) { h.onSuccess({result: " + json.dumps(result) + "}); }\n"
+              + _functions("escHtml", "runExport")
+              + "\nrunExport().then(function () { process.stdout.write(els.exportModalFeedback.innerHTML); });\n")
+    out = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout
+    assert out == f"Exported and deleted <strong>nho/p</strong>: {text} → <code>/x</code>."
+
+
 # ── Loading overlay ─────────────────────────────────────────────────────
 
 _DOM_STUB = """

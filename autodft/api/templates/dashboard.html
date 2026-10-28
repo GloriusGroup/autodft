@@ -4479,9 +4479,13 @@
                 },
                 onSuccess: function (job) {
                     var r = job.result || {};
+                    // A resumed archive exports only the rest; r.archived counts them all.
+                    var count = r.archived == null ? escHtml(r.molecules) + ' molecules'
+                        : escHtml(r.archived) + ' molecules archived' +
+                          (r.archived !== r.molecules ? ' (' + escHtml(r.molecules) + ' this run)' : '');
                     fb.innerHTML = (deletes ? 'Exported and deleted ' : 'Exported ') +
                         '<strong>' + escHtml(started.project) + '</strong>: ' +
-                        escHtml(r.molecules) + ' molecules, ' + escHtml(r.files_copied) +
+                        count + ', ' + escHtml(r.files_copied) +
                         ' files → <code>' + escHtml(r.root) + '</code>.';
                     fb.className = 'submit-feedback success';
                     btn.disabled = false;
