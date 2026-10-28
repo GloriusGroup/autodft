@@ -227,10 +227,11 @@ The headers can be edited / extended in the dashboard's **Headers** page
 not offered on the submit form) or via the `/api/headers` endpoints.
 Anyone may use them; only admin creates, edits or deletes a header,
 because its text goes into the ORCA input verbatim. A header in use
-keeps its text and kind: an edit of either is saved as a new header. When a submission form or CLI/API call leaves a
-header slot on its default, the dashboard's header dropdown preselects
-the stored row whose text equals the package default, so what you see
-selected is what will actually run.
+keeps its text and kind: an edit of either is saved as a new header.
+When a submission form or CLI/API call leaves a header slot on its
+default, the dashboard's header dropdown preselects the stored row
+whose text equals the package default, so what you see selected is what
+will actually run.
 
 The same first run also **creates the `admin` account and logs its API
 key once**, in a banner. That key is stored only as a hash, so copy it
