@@ -184,6 +184,8 @@ def nmr_api(tmp_path):
     with get_session() as session:
         admin = accounts.get_user_by_username(session, "admin")
         key = accounts.rotate_api_key(session, admin)
+        nho = accounts.get_user_by_username(session, "nho") or accounts.create_user(session, "nho")[0]
+        accounts.get_or_create_project(session, nho, "p")
     with TestClient(create_app(active)) as client:
         yield client, {"X-AutoDFT-API-Key": key}, tmp_path
     project_jobs.join_all(timeout=10)
