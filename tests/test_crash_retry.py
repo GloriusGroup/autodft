@@ -6,7 +6,10 @@ from autodft.engine.state_machine import _restart_geometry
 from autodft.models.job import ComputationJob
 from autodft.qm.orca.parser import OrcaParser
 from autodft.qm.orca.retry import FailureInfo, IncreaseMaxIter, IncreaseResources
-from tests.test_orca_parser import ABNORMAL_TERMINATION, ENERGY_OUTPUT, NORMAL_TERMINATION
+from tests.test_orca_parser import (
+    ABNORMAL_TERMINATION, ENERGY_OUTPUT, NORMAL_TERMINATION, OPTIMIZATION_CONVERGED,
+    VIBRATIONAL_FREQUENCIES_IMAGINARY,
+)
 
 SEGFAULT = ("[worker:4087254] *** Process received signal ***\n"
             "[worker:4087254] Signal: Segmentation fault (11)\n"
@@ -22,6 +25,13 @@ def _job(tmp_path, output, err):
 def test_a_failed_job_with_a_segfault_fails_as_crashed_only(tmp_path):
     result = OrcaParser().check_output(_job(tmp_path, ABNORMAL_TERMINATION, SEGFAULT), "optimization")
     assert result.checks == {"Crashed": False}
+
+
+def test_a_segfault_after_normal_termination_keeps_the_specific_failure(tmp_path):
+    out = (ENERGY_OUTPUT + "\n" + VIBRATIONAL_FREQUENCIES_IMAGINARY + "\n"
+           + OPTIMIZATION_CONVERGED + "\n" + NORMAL_TERMINATION)
+    result = OrcaParser().check_output(_job(tmp_path, out, SEGFAULT), "optimization")
+    assert result.checks["Imaginary Frequencies"] is False and "Crashed" not in result.checks
 
 
 def test_a_successful_job_ignores_a_segfault_on_stderr(tmp_path):

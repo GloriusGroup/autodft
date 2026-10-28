@@ -194,8 +194,8 @@ class OrcaParser(QMEngine):
         if not success and task_type == "singlepoint_nmr" and mp2_response_memory_short(job_path) is not None:
             # More memory per rank fixes it, not more ranks: see IncreaseMP2ResponseMemory.
             return QMResult(success=False, checks={MP2_RESPONSE_MEMORY: False})
-        if not success and self._crashed(job_path):
-            # A segfault says nothing about the input: resubmit it unchanged.
+        if not success and not checks["Termination"] and self._crashed(job_path):
+            # A segfault without normal termination says nothing about the input: resubmit unchanged.
             return QMResult(success=False, checks={"Crashed": False})
 
         energy = self.extract_electronic_energy(content)
