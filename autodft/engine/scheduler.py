@@ -18,6 +18,9 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# Status of a job that neither sacct nor squeue knows.
+NOT_IN_SLURM = "NOT_IN_SLURM"
+
 
 # ---------------------------------------------------------------------------
 # Result container
@@ -84,6 +87,10 @@ class Scheduler(ABC):
     def find_submitted(self, script_path: Path) -> Optional[str]:
         """Id of a job already submitted from *script_path*, or None; raises if the query fails."""
         return None
+
+    def get_unsatisfiable(self, job_ids: list[str]) -> dict[str, str]:
+        """``{job_id: reason}`` for the pending *job_ids* whose request can never run."""
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +281,7 @@ class SlurmScheduler(Scheduler):
             return out
 
         env = os.environ.copy()
+        absent: list[str] = []
         for start in range(0, len(job_ids), self._SACCT_CHUNK):
             chunk = [str(j) for j in job_ids[start:start + self._SACCT_CHUNK]]
             cmd = self._command(["sacct", "-j", ",".join(chunk), *self._SACCT_ARGS])
@@ -285,16 +293,64 @@ class SlurmScheduler(Scheduler):
                 logger.error("Batched sacct query failed: %s", exc.stderr)
                 continue
 
-            wanted = set(chunk)
-            for job_id, state in self._parse_sacct(result.stdout).items():
-                if job_id in wanted:
-                    out.setdefault(job_id, state)
+            states = self._parse_sacct(result.stdout)
+            for job_id in chunk:
+                if job_id in states:
+                    out[job_id] = states[job_id]
+                else:
+                    absent.append(job_id)
+
+        # Not in slurmdbd yet (just submitted), or unknown to SLURM altogether.
+        queue = self._squeue(absent) if absent else None
+        if queue is not None:
+            for job_id in absent:
+                out[job_id] = queue[job_id][0] if job_id in queue else NOT_IN_SLURM
 
         missing = [j for j in job_ids if str(j) not in out]
         if missing:
             logger.warning("sacct returned no state for %d job(s)", len(missing))
         for job_id in missing:
             out[str(job_id)] = "UNKNOWN"
+        return out
+
+    def _squeue(self, job_ids: list[str]) -> Optional[dict[str, tuple[str, str]]]:
+        """``{job_id: (state, reason)}`` for the *job_ids* slurmctld holds; None if squeue fails."""
+        out: dict[str, tuple[str, str]] = {}
+        env = os.environ.copy()
+        for start in range(0, len(job_ids), self._SACCT_CHUNK):
+            chunk = [str(j) for j in job_ids[start:start + self._SACCT_CHUNK]]
+            cmd = self._command(["squeue", "-h", "-t", "all", "-j", ",".join(chunk), "-o", "%i|%T|%r"])
+            try:
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, check=True, env=env,
+                )
+            except subprocess.CalledProcessError as exc:
+                # A lone id slurmctld does not hold is an error rather than empty output.
+                if len(chunk) == 1 and "invalid job id" in (exc.stderr or "").lower():
+                    continue
+                logger.error("squeue query failed: %s", exc.stderr)
+                return None
+            wanted = set(chunk)
+            for line in result.stdout.splitlines():
+                fields = line.strip().split("|", 2)
+                if len(fields) == 3 and fields[0] in wanted:
+                    out[fields[0]] = (fields[1].strip(), fields[2].strip())
+        return out
+
+    # Pending reasons that only a change to the request or the cluster's configuration can clear.
+    _UNSATISFIABLE_REASONS = frozenset({
+        "PartitionConfig", "PartitionNodeLimit", "PartitionTimeLimit", "MaxMemPerLimit",
+        "InvalidAccount", "InvalidQOS", "BadConstraints", "DependencyNeverSatisfied",
+    })
+
+    def get_unsatisfiable(self, job_ids: list[str]) -> dict[str, str]:
+        """``{job_id: reason}`` for the pending *job_ids* whose squeue Reason says they can never run."""
+        out: dict[str, str] = {}
+        for job_id, (state, reason) in (self._squeue(job_ids) or {}).items():
+            # e.g. "ReqNodeNotAvail, UnavailableNodes:node1"
+            code = reason.split(",")[0].strip()
+            if state == "PENDING" and code in self._UNSATISFIABLE_REASONS:
+                out[job_id] = code
         return out
 
     # -- queue length ------------------------------------------------------

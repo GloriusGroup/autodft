@@ -8,20 +8,44 @@ import subprocess
 import pytest
 
 from autodft.engine import scheduler as scheduler_mod
-from autodft.engine.scheduler import SlurmScheduler
+from autodft.engine.scheduler import NOT_IN_SLURM, SlurmScheduler
 from autodft.engine.state_machine import process_finished_jobs, update_running_jobs
 from autodft.models import ComputationJob, SlurmStatus
 from autodft.qm.base import QMResult
 
 
-def _fake_sacct(states: dict[str, str], steps: int = 3):
-    """A subprocess.run stand-in that formats like sacct for the flags it is given."""
+def _fake_sacct(
+    states: dict[str, str], steps: int = 3, queue: dict[str, tuple[str, str]] | None = None,
+    sacct_fails: bool = False, squeue_fails: bool = False, scancel_fails: bool = False,
+):
+    """A subprocess.run stand-in that formats like sacct for the flags it is given.
+
+    *queue* is what slurmctld holds, ``{job_id: (state, reason)}``, for squeue.
+    """
     calls: list[list[str]] = []
+    queue = queue or {}
 
     def run(cmd, **kwargs):
         argv = " ".join(cmd).split()  # also covers the `bash -l -c "..."` fallback
         calls.append(argv)
+        if argv[0] == "scancel":
+            if scancel_fails:
+                raise subprocess.CalledProcessError(1, cmd, output="", stderr="scancel: error")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
         ids = argv[argv.index("-j") + 1].split(",")
+        if argv[0] == "squeue":
+            if squeue_fails:
+                raise subprocess.CalledProcessError(1, cmd, output="", stderr="Unable to contact slurm controller")
+            rows = [(j, *queue[j]) for j in ids if j in queue]
+            if not rows and len(ids) == 1:
+                # Real squeue: a lone id it does not hold is an error, several give empty output.
+                raise subprocess.CalledProcessError(
+                    1, cmd, output="", stderr="slurm_load_jobs error: Invalid job id specified",
+                )
+            out = "".join(f"{j}|{s}|{r}\n" for j, s, r in rows)
+            return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+        if sacct_fails:
+            raise subprocess.CalledProcessError(1, cmd, output="", stderr="slurmdbd: error")
         rows = []
         for jid in ids:
             if jid not in states:
@@ -68,11 +92,23 @@ class TestSacctParsing:
         fake_sacct({
             "101": "OUT_OF_MEMORY", "102": "CANCELLED by 123", "103": "REQUEUE_HOLD",
             "104": "SOME_NEW_STATE", "105": "RUNNING",
-        })
+        }, queue={"106": ("PENDING", "None")})
         assert SlurmScheduler().get_statuses(["101", "102", "103", "104", "105", "106"]) == {
             "101": "OUT_OF_MEMORY", "102": "CANCELLED", "103": "REQUEUE_HOLD",
-            "104": "SOME_NEW_STATE", "105": "RUNNING", "106": "UNKNOWN",
+            "104": "SOME_NEW_STATE", "105": "RUNNING", "106": "PENDING",
         }
+
+    def test_a_job_neither_sacct_nor_squeue_knows_is_not_in_slurm(self, fake_sacct):
+        fake_sacct({"101": "RUNNING"})
+        assert SlurmScheduler().get_statuses(["101", "106"]) == {"101": "RUNNING", "106": NOT_IN_SLURM}
+        assert SlurmScheduler().get_statuses(["106", "107"]) == {"106": NOT_IN_SLURM, "107": NOT_IN_SLURM}
+
+    def test_a_failed_query_leaves_the_job_unknown(self, fake_sacct):
+        fake_sacct({}, squeue_fails=True)
+        assert SlurmScheduler().get_statuses(["106"]) == {"106": "UNKNOWN"}
+        fake = fake_sacct({}, sacct_fails=True)
+        assert SlurmScheduler().get_statuses(["106"]) == {"106": "UNKNOWN"}
+        assert all(c[0] == "sacct" for c in fake.calls)  # squeue alone cannot tell a finished job from none
 
     def test_queries_ask_for_allocations_only_in_parsable_form(self, fake_sacct):
         fake = fake_sacct({"101": "RUNNING"})
@@ -153,3 +189,60 @@ class TestPolling:
         update_running_jobs(session, SlurmScheduler())
         session.refresh(submitted_job)
         assert submitted_job.slurm_status == "COMPLETED"
+
+    def test_a_job_slurm_has_no_record_of_fails(self, session, submitted_job, fake_sacct):
+        fake_sacct({})
+        update_running_jobs(session, SlurmScheduler())
+        session.refresh(submitted_job)
+        assert submitted_job.slurm_status == NOT_IN_SLURM
+        assert submitted_job.success is False
+        assert submitted_job.fail_reason == "SLURM has no record of the job"
+        assert submitted_job.time_end is not None
+
+    def test_an_unknown_job_stays_in_flight_while_slurm_cannot_be_asked(
+        self, session, submitted_job, fake_sacct,
+    ):
+        fake_sacct({}, squeue_fails=True)
+        update_running_jobs(session, SlurmScheduler())
+        session.refresh(submitted_job)
+        assert submitted_job.slurm_status == "UNKNOWN"
+        assert submitted_job.success is None
+
+
+class TestUnsatisfiable:
+    @pytest.mark.parametrize("reason", ["PartitionConfig", "PartitionTimeLimit", "MaxMemPerLimit"])
+    def test_a_job_that_can_never_run_is_cancelled_and_failed(
+        self, session, submitted_job, fake_sacct, reason,
+    ):
+        fake = fake_sacct({"123": "PENDING"}, queue={"123": ("PENDING", reason)})
+        update_running_jobs(session, SlurmScheduler())
+        session.refresh(submitted_job)
+        assert ["scancel", "123"] in fake.calls
+        assert submitted_job.success is False
+        assert submitted_job.fail_reason == f"unsatisfiable: {reason}"
+        assert submitted_job.slurm_status == "CANCELLED"
+        assert submitted_job.time_end is not None
+
+    @pytest.mark.parametrize("reason", [
+        "Resources", "Priority", "None", "Dependency", "JobHeldUser", "BeginTime",
+        "AssocMaxJobsLimit", "QOSMaxJobsPerUserLimit", "ReqNodeNotAvail, UnavailableNodes:worker.additive_3",
+    ])
+    def test_a_job_that_waits_is_left_alone(self, session, submitted_job, fake_sacct, reason):
+        fake = fake_sacct({"123": "PENDING"}, queue={"123": ("PENDING", reason)})
+        update_running_jobs(session, SlurmScheduler())
+        session.refresh(submitted_job)
+        assert not any(c[0] == "scancel" for c in fake.calls)
+        assert submitted_job.slurm_status == "PENDING"
+        assert submitted_job.success is None
+
+    def test_a_failed_scancel_leaves_the_job_for_the_next_tick(self, session, submitted_job, fake_sacct):
+        fake_sacct({"123": "PENDING"}, queue={"123": ("PENDING", "PartitionConfig")}, scancel_fails=True)
+        update_running_jobs(session, SlurmScheduler())
+        session.refresh(submitted_job)
+        assert submitted_job.success is None
+        assert submitted_job.slurm_status == "PENDING"
+
+    def test_reasons_are_read_only_for_pending_jobs(self, session, submitted_job, fake_sacct):
+        fake = fake_sacct({"123": "RUNNING"}, queue={"123": ("RUNNING", "None")})
+        update_running_jobs(session, SlurmScheduler())
+        assert [c[0] for c in fake.calls] == ["sacct"]

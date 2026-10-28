@@ -20,7 +20,7 @@ from sqlmodel import Session, col, select
 
 from autodft import categories
 from autodft.config import Settings
-from autodft.engine.scheduler import Scheduler, SubmitResult
+from autodft.engine.scheduler import NOT_IN_SLURM, Scheduler, SubmitResult
 from autodft.extraction import results
 from autodft.models.enums import (
     TERMINAL_SLURM_STATES,
@@ -111,13 +111,27 @@ def update_running_jobs(session: Session, scheduler: Scheduler) -> None:
         if new_status in TERMINAL_SLURM_STATES:
             job.time_end = datetime.now(timezone.utc)
         elif new_status not in TRANSIENT_SLURM_STATES and job.success is None:
-            logger.warning(
-                "Job %d (slurm %s): unrecognised SLURM state %r; failing the job",
-                job.id, job.slurm_jobid, new_status,
+            reason = (
+                "SLURM has no record of the job" if new_status == NOT_IN_SLURM
+                else f"Unrecognised SLURM state {new_status}"
             )
+            logger.warning("Job %d (slurm %s): %s; failing the job", job.id, job.slurm_jobid, reason)
             job.success = False
-            job.fail_reason = f"Unrecognised SLURM state {new_status}"[:500]
+            job.fail_reason = reason[:500]
             job.time_end = datetime.now(timezone.utc)
+        session.add(job)
+
+    pending = [j for j in jobs if j.slurm_status == SlurmStatus.PENDING and j.success is None]
+    unsatisfiable = scheduler.get_unsatisfiable([str(j.slurm_jobid) for j in pending]) if pending else {}
+    for job in pending:
+        reason = unsatisfiable.get(str(job.slurm_jobid))
+        if reason is None or not scheduler.cancel(str(job.slurm_jobid)):
+            continue  # a failed scancel is tried again next tick
+        logger.warning("Job %d (slurm %s) can never run (%s); cancelled", job.id, job.slurm_jobid, reason)
+        job.slurm_status = SlurmStatus.CANCELLED
+        job.success = False
+        job.fail_reason = f"unsatisfiable: {reason}"[:500]
+        job.time_end = datetime.now(timezone.utc)
         session.add(job)
 
     session.flush()
