@@ -5844,18 +5844,18 @@
                 renderPhotophysics(ppState.payload);
                 return;
             }
-            var project = ppState.project;
+            var project = ppState.project, shown = ppState.payload;
             try {
                 var payload = await apiJSON('Loading spectra…', '/api/projects/' + projectPath(project) +
                                             '/photophysics?molecule_id=' + molId);
-                // Another project was loaded meanwhile.
-                if (ppState.project !== project) return;
+                // The spectra were (re)loaded meanwhile.
+                if (ppState.payload !== shown) return;
                 if (!payload.molecules) throw new Error('The reply has no spectra.');
                 payload.molecules.forEach(function (d) {
                     ppState.details[ppKey(d)] = { data: d, html: ppPlots(d, d) };
                 });
             } catch (err) {
-                if (ppState.project !== project) return;
+                if (ppState.payload !== shown) return;
                 mols.forEach(function (m) {
                     ppState.details[ppKey(m)] = { data: null,
                         html: '<div class="pp-waiting">' + errHtml('Could not load spectra: ', err) + '</div>' };

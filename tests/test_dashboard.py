@@ -1991,6 +1991,24 @@ def test_late_photophysics_replies_for_the_last_project_are_dropped():
     assert out["started"] == []
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_spectra_asked_before_a_reload_of_the_same_project_are_dropped():
+    out = _run_overlay("""
+        replies['/api/projects/nho%%3Aa/photophysics'] = %s;
+        replies['/api/projects/nho%%3Aa/photophysics?molecule_id=7'] = {hang: true, status: 200,
+            body: {molecules: [{id: 7, state_id: 1}]}};
+        pick('projectSelectPP', 'nho/a');
+        await loadPhotophysicsPage();
+        var spectra = ppToggle(7);
+        await sleep(10);
+        await loadPhotophysicsPage();  // Refresh: a new payload of the same project
+        hung.forEach(function (r) { r(); });
+        await spectra;
+        out.open = Object.keys(ppState.details);
+    """ % json.dumps(_PP_A), _analysis_code())
+    assert out["open"] == []
+
+
 # ── Extend shows the project's setup ───────────────────────────────────
 
 _EXTEND_STUB = r"""
