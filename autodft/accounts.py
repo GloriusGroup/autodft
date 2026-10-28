@@ -9,6 +9,7 @@ bring a pre-accounts database forward.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 from datetime import datetime, timezone
@@ -90,9 +91,14 @@ def rotate_api_key(session: Session, user: User) -> str:
     return key
 
 
-def key_fingerprint(user: User) -> str:
-    """Names *user*'s current key in a session cookie; rotation changes it."""
-    return hashlib.sha256(user.api_key_hash.encode("utf-8")).hexdigest()[:16]
+def key_fingerprint(user: User, secret: str) -> str:
+    """Names *user*'s current key in a session cookie; rotation changes it.
+
+    Keyed by *secret* so a leaked cookie gives no offline check of key guesses.
+    """
+    return hmac.new(
+        str(secret).encode("utf-8"), user.api_key_hash.encode("utf-8"), hashlib.sha256,
+    ).hexdigest()[:16]
 
 
 def get_user_by_username(session: Session, username: str) -> Optional[User]:

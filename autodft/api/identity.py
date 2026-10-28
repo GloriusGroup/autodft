@@ -83,13 +83,14 @@ def resolve_identity(
 
     cookie = request.cookies.get(COOKIE_NAME)
     if cookie:
-        verified = verify_token(cookie, settings.session_secret())
+        secret = settings.session_secret()
+        verified = verify_token(cookie, secret)
         if verified:
             username, fingerprint = verified
             user = accounts.get_user_by_username(session, username)
             if (
                 user is not None and user.active
-                and hmac.compare_digest(fingerprint, accounts.key_fingerprint(user))
+                and hmac.compare_digest(fingerprint, accounts.key_fingerprint(user, secret))
             ):
                 return _from_user(user)
             # A cookie for an account that has since been deleted,

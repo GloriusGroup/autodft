@@ -28,8 +28,8 @@ A key is `adft_` plus 32 random characters. It is shown **once**, when the
 account is created or the key is rotated, and stored only as
 `sha256(key)` — it can never be read back, only replaced. Rotating takes
 effect immediately, and ends every session cookie issued under the old
-key: the cookie carries a fingerprint of the key (a hash of its stored
-hash, never the key), and a stale one gets **401** (API) or a **303** to
+key: the cookie carries a fingerprint of the key (an HMAC of its stored
+hash under the session secret, never the key), and a stale one gets **401** (API) or a **303** to
 `/login` (browser). Rotating one user's key leaves everyone else's
 sessions alone. Cookies issued before this check existed carry no
 fingerprint and are refused, so every user signs in once after the

@@ -55,15 +55,24 @@ class TestApiKeys:
 
     def test_rotation_changes_the_key_fingerprint(self, session):
         user, key = accounts.create_user(session, "mhoffmann")
-        before = accounts.key_fingerprint(user)
+        before = accounts.key_fingerprint(user, "s3cret")
         accounts.rotate_api_key(session, user)
-        assert accounts.key_fingerprint(user) != before
+        assert accounts.key_fingerprint(user, "s3cret") != before
 
     def test_the_fingerprint_reveals_neither_the_key_nor_its_hash(self, session):
         user, key = accounts.create_user(session, "mhoffmann")
-        fingerprint = accounts.key_fingerprint(user)
+        fingerprint = accounts.key_fingerprint(user, "s3cret")
         assert len(fingerprint) == 16
         assert fingerprint not in key and fingerprint not in user.api_key_hash
+
+    def test_the_fingerprint_is_keyed_by_the_session_secret(self, session):
+        """Unkeyed, a leaked cookie would let anyone test key guesses offline."""
+        import hashlib
+
+        user, key = accounts.create_user(session, "mhoffmann")
+        fingerprint = accounts.key_fingerprint(user, "s3cret")
+        assert fingerprint != accounts.key_fingerprint(user, "other")
+        assert fingerprint != hashlib.sha256(user.api_key_hash.encode()).hexdigest()[:16]
 
     def test_a_deactivated_user_cannot_authenticate(self, session):
         user, key = accounts.create_user(session, "mhoffmann")

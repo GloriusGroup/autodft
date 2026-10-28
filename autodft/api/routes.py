@@ -91,7 +91,7 @@ def login_submit(request: Request,
             user = accounts.resolve_api_key(session, password)
             if user is not None and user.username == username:
                 resolved = user.username
-                fingerprint = accounts.key_fingerprint(user)
+                fingerprint = accounts.key_fingerprint(user, settings.session_secret())
 
     if resolved is None:
         # One message for every failure: distinguishing "no such user"

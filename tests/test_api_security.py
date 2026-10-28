@@ -134,11 +134,23 @@ class TestAuthDoesNotCrashOnHostileInput:
     attacker-controlled, so a single high byte turned every request into a
     logged 500 -- pre-auth."""
 
-    def test_verify_token_on_non_ascii_signature(self):
-        assert verify_token("9999999999.alice.ü", "s3cret") is None
+    @pytest.fixture()
+    def compares(self, monkeypatch):
+        """Records each signature compare, so a test proves it got that far."""
+        import hmac as _hmac
 
-    def test_verify_token_on_a_non_ascii_username(self):
-        assert verify_token("9999999999.ü.deadbeef", "s3cret") is None
+        calls = []
+        real = _hmac.compare_digest
+        monkeypatch.setattr(_hmac, "compare_digest", lambda a, b: calls.append((a, b)) or real(a, b))
+        return calls
+
+    def test_verify_token_on_non_ascii_signature(self, compares):
+        assert verify_token("9999999999.alice.0123456789abcdef.ü", "s3cret") is None
+        assert len(compares) == 1
+
+    def test_verify_token_on_a_non_ascii_username(self, compares):
+        assert verify_token("9999999999.ü.0123456789abcdef.deadbeef", "s3cret") is None
+        assert len(compares) == 1
 
     def test_a_valid_token_round_trips(self):
         token = issue_token("s3cret", 60, "alice", "0123456789abcdef")
