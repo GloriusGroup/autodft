@@ -250,7 +250,7 @@ def test_commands_proceed_when_the_controller_runs_on_this_host(site, command):
         assert status == TaskStatus.created
 
 
-def test_export_files_registers_its_settings_for_frozen_payloads(site, tmp_path):
+def test_export_files_registers_its_settings_for_frozen_payloads(site, tmp_path, monkeypatch):
     """CLI-2: a partly archived project's frozen photophysics payload is found under --config's export root."""
     import autodft.api.routes as routes
 
@@ -266,11 +266,27 @@ def test_export_files_registers_its_settings_for_frozen_payloads(site, tmp_path)
     frozen.mkdir(parents=True)
     entry = {"smiles": SMILES, "state": "S0", "frozen_marker": "only-in-the-frozen-payload"}
     (frozen / f"mol_{ids['molecule']}.json").write_text(json.dumps({"summary": [entry], "detail": [entry]}))
-    routes.set_active_settings(load_settings(autodft.config.REPO_CONFIG))  # another site's, as a stale process
+    # Another site's, as a stale process; monkeypatch restores the registry afterwards.
+    monkeypatch.setattr(routes, "_active_settings", load_settings(autodft.config.REPO_CONFIG))
 
     result = runner.invoke(app, ["admin", "export-files", "--project", PROJECT, "--config", str(config)])
 
     assert result.exit_code == 0, result.output
     written = (tmp_path / "site" / "export_data" / "cfg" / "only" / "only_photophysics.json").read_text()
     assert "only-in-the-frozen-payload" in written
+    reset_engine()
+
+
+@pytest.mark.parametrize("fmt", ["csv", "json"])
+def test_export_registers_its_settings(site, monkeypatch, fmt):
+    """The csv/json export registers --config's settings over a stale process's."""
+    import autodft.api.routes as routes
+
+    config, _, _ = site
+    monkeypatch.setattr(routes, "_active_settings", load_settings(autodft.config.REPO_CONFIG))
+
+    result = runner.invoke(app, ["admin", "export", "--project", PROJECT, "--format", fmt, "--config", str(config)])
+
+    assert result.exit_code == 0, result.output
+    assert routes.get_active_settings().data_path == load_settings(config).data_path
     reset_engine()
