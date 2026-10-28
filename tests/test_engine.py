@@ -1340,8 +1340,11 @@ class TestRequeueFreshAttemptBudget:
 
         monkeypatch.setattr(cli_admin, "get_session", lambda *a, **k: contextlib.nullcontext(session))
         task = sample_task
+        task.status = TaskStatus.failed
+        session.add(task)
+        session.commit()
         assert task.retry_base is None
-        cli_admin.reset_task(task.id)
+        cli_admin.reset_task(task.id, force=False, config=None)
         session.refresh(task)
         assert task.status == TaskStatus.created
         assert task.retry_base is None

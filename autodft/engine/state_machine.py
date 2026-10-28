@@ -368,8 +368,8 @@ def _accept_cube_miss(session: Session, job: ComputationJob, max_attempts: int) 
 
 
 def update_task_statuses(session: Session, max_attempts: int = 3) -> None:
-    """Mark tasks successful if any job succeeded, failed if all attempts
-    exhausted with failures."""
+    """Mark tasks successful if a job of the current run succeeded, failed if
+    all its attempts are exhausted with failures."""
 
     pending_tasks = session.exec(
         select(ComputationTask).where(
@@ -385,8 +385,9 @@ def update_task_statuses(session: Session, max_attempts: int = 3) -> None:
         if not jobs:
             continue
 
-        # Any job with success=True -> task is successful
-        if any(j.success is True for j in jobs):
+        # A success from before the last requeue/reset does not count.
+        current = _current_run(task, jobs)
+        if any(j.success is True for j in current):
             task.status = TaskStatus.successful
             # For optimization tasks, find the output geometry
             if task.task_type == TaskType.optimization and task.output_geometry_id is None:
@@ -400,7 +401,7 @@ def update_task_statuses(session: Session, max_attempts: int = 3) -> None:
             continue
 
         # All judged (success is not None) and all failed, in the current run
-        judged = [j for j in _current_run(task, jobs) if j.success is not None]
+        judged = [j for j in current if j.success is not None]
         if len(judged) >= max_attempts and all(j.success is False for j in judged):
             task.status = TaskStatus.failed
             task.updated_at = datetime.now(timezone.utc)

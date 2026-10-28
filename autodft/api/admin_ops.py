@@ -1,4 +1,4 @@
-"""Destructive maintenance operations: wipe a project, a molecule, or everything.
+"""Destructive maintenance operations: wipe a project, a molecule, or everything; re-run a task.
 
 Separate from ``routes.py`` so the deletion logic can be read and tested on
 its own -- these functions delete data that cannot be recovered.
@@ -45,7 +45,7 @@ from typing import Optional
 
 from sqlmodel import Session, col, delete, func, select, update
 
-from autodft.models.enums import TRANSIENT_SLURM_STATES
+from autodft.models.enums import TERMINAL_SLURM_STATES, TRANSIENT_SLURM_STATES, TaskStatus, TaskType
 from autodft.paths import safe_subdirectory
 from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.models.geometry import MoleculeGeometry
@@ -717,6 +717,26 @@ def _job_result_count(session: Session, job_ids: list[int]) -> int:
 def _delete_molecule_rows(session: Session, molecule_ids: list[int]) -> dict[str, int]:
     """Delete molecules and everything hanging off them. Returns row counts."""
     state_ids, task_ids, geometry_ids, job_ids = _descendants(session, molecule_ids)
+    result_count = _delete_task_rows(session, task_ids, geometry_ids, job_ids)
+    if state_ids:
+        session.exec(delete(MoleculeState).where(col(MoleculeState.id).in_(state_ids)))
+    if molecule_ids:
+        session.exec(delete(Molecule).where(col(Molecule.id).in_(molecule_ids)))
+
+    return {
+        "molecules": len(molecule_ids),
+        "states": len(state_ids),
+        "tasks": len(task_ids),
+        "geometries": len(geometry_ids),
+        "jobs": len(job_ids),
+        "job_results": result_count,
+    }
+
+
+def _delete_task_rows(
+    session: Session, task_ids: list[int], geometry_ids: list[int], job_ids: list[int],
+) -> int:
+    """Delete these jobs (with their results), tasks and geometries; returns the result count."""
     result_count = _job_result_count(session, job_ids)
 
     if job_ids:
@@ -741,19 +761,7 @@ def _delete_molecule_rows(session: Session, molecule_ids: list[int]) -> dict[str
         session.exec(delete(ComputationTask).where(col(ComputationTask.id).in_(task_ids)))
     if geometry_ids:
         session.exec(delete(MoleculeGeometry).where(col(MoleculeGeometry.id).in_(geometry_ids)))
-    if state_ids:
-        session.exec(delete(MoleculeState).where(col(MoleculeState.id).in_(state_ids)))
-    if molecule_ids:
-        session.exec(delete(Molecule).where(col(Molecule.id).in_(molecule_ids)))
-
-    return {
-        "molecules": len(molecule_ids),
-        "states": len(state_ids),
-        "tasks": len(task_ids),
-        "geometries": len(geometry_ids),
-        "jobs": len(job_ids),
-        "job_results": result_count,
-    }
+    return result_count
 
 
 # ----------------------------------------------------------------------
@@ -985,6 +993,156 @@ def wipe_molecule(
         "jobs_cancelled": cancelled,
         "bytes_freed": freed,
         "freed_human": human_bytes(freed),
+    }
+
+
+# ----------------------------------------------------------------------
+# Task re-run
+# ----------------------------------------------------------------------
+
+_SEED_LABEL = "seed_from_task_"
+
+
+def in_flight_jobs(session: Session, task_ids: list[int]) -> list[ComputationJob]:
+    """Jobs of *task_ids* that SLURM has and has not finished."""
+    if not task_ids:
+        return []
+    return [
+        job for job in session.exec(
+            select(ComputationJob).where(
+                col(ComputationJob.task_id).in_(task_ids),
+                col(ComputationJob.success).is_(None),
+                col(ComputationJob.slurm_jobid).is_not(None),
+            )
+        ).all()
+        if job.slurm_status not in TERMINAL_SLURM_STATES
+    ]
+
+
+def _input_task_ids(task: ComputationTask) -> set[int]:
+    """The tasks an ESD rate task reads (its ``inputs_json`` roles)."""
+    stored = json.loads(task.inputs_json) if task.inputs_json else {}
+    return {
+        role[key] for name in ("S0", "S1", "T1")
+        if isinstance(role := stored.get(name), dict)
+        for key in ("opt", "soc") if key in role
+    }
+
+
+def _geometry_source(geom: MoleculeGeometry) -> Optional[int]:
+    """The task a geometry came from: its origin, or the S0* opt an ESD seed copies."""
+    if geom.origin_task_id is not None:
+        return geom.origin_task_id
+    source = (geom.label or "").removeprefix(_SEED_LABEL)
+    return int(source) if source != geom.label and source.isdigit() else None
+
+
+def task_dependents(session: Session, task: ComputationTask) -> tuple[list[ComputationTask], list[int]]:
+    """Tasks built on *task*'s results, recursively, and the geometries they and *task* made."""
+    state = session.get(MoleculeState, task.state_id)
+    state_ids = list(session.exec(
+        select(MoleculeState.id).where(MoleculeState.molecule_id == state.molecule_id)
+    ).all()) if state is not None else [task.state_id]
+    tasks = session.exec(select(ComputationTask).where(col(ComputationTask.state_id).in_(state_ids))).all()
+    geometries = session.exec(
+        select(MoleculeGeometry).where(col(MoleculeGeometry.state_id).in_(state_ids))
+    ).all()
+
+    found = {task.id}
+    while True:
+        made = {g.id for g in geometries if _geometry_source(g) in found}
+        more = {
+            t.id for t in tasks if t.id not in found and (
+                t.depends_on_task_id in found or t.input_geometry_id in made
+                or _input_task_ids(t) & found
+            )
+        }
+        if not more:
+            break
+        found |= more
+    return [t for t in tasks if t.id in found and t.id != task.id], sorted(made)
+
+
+def _reopen_esd(session: Session, molecule_id: int, removed: set[int], rate_states: set[int]) -> None:
+    """Let ESD seed again (its S0* was removed) or join again (a rate task was removed)."""
+    from autodft.engine import photophysics
+
+    for s1 in session.exec(
+        select(MoleculeState).where(
+            MoleculeState.molecule_id == molecule_id,
+            col(MoleculeState.metadata_json).contains('"esd_role": "S1"'),
+        )
+    ).all():
+        metadata = json.loads(s1.metadata_json)
+        t1 = photophysics.partner(session, s1, "T1")
+        reseed = metadata.get("esd_seed", {}).get("task") in removed
+        if not reseed and not {s1.id, t1.id if t1 else None} & rate_states:
+            continue
+        if reseed:
+            metadata.pop("esd_seed", None)
+        metadata.pop("esd_done", None)
+        s1.metadata_json = json.dumps(metadata)
+        session.add(s1)
+
+
+def _under(path: Path, root: Path) -> bool:
+    """Whether *path* lies strictly inside *root*."""
+    path, root = path.resolve(), root.resolve()
+    return path != root and path.is_relative_to(root)
+
+
+def rerun_task(session: Session, task: ComputationTask, comp_root: Path) -> dict:
+    """Return *task* to ``created`` with a fresh run: its jobs, every task built on
+    its results and their jobs, results, geometries and folders are deleted.
+
+    Raises:
+        ValueError: if any of these jobs is still in SLURM.
+    """
+    dependents, geometry_ids = task_dependents(session, task)
+    task_ids = [task.id, *(t.id for t in dependents)]
+    live = in_flight_jobs(session, task_ids)
+    if live:
+        ids = ", ".join(str(j.slurm_jobid) for j in live)
+        raise ValueError(f"{len(live)} job(s) still in SLURM ({ids}); wait for them or scancel them first.")
+
+    jobs = session.exec(select(ComputationJob).where(col(ComputationJob.task_id).in_(task_ids))).all()
+    folders = [Path(t.task_path) for t in dependents if t.task_path]
+    folders += [Path(j.job_path) for j in jobs if j.task_id == task.id and j.job_path]
+
+    state = session.get(MoleculeState, task.state_id)
+    if state is not None:
+        _reopen_esd(
+            session, state.molecule_id, set(task_ids),
+            {t.state_id for t in dependents if t.task_type.value.startswith("esd_")},
+        )
+
+    task.status = TaskStatus.created
+    task.output_geometry_id = None
+    task.retry_base = None
+    task.build_failures = 0
+    task.has_followups = task.task_type in (TaskType.confsearch, TaskType.optimization)
+    task.updated_at = datetime.now(timezone.utc)
+    session.add(task)
+    session.flush()
+    results = _delete_task_rows(session, task_ids[1:], geometry_ids, [j.id for j in jobs])
+    session.commit()
+
+    removed, orphaned = 0, []
+    for folder in folders:
+        if not _under(folder, comp_root):
+            logger.warning("Not deleting %s: outside comp_data %s", folder, comp_root)
+            continue
+        try:
+            removed += _remove_tree(folder)[0]
+        except OSError:
+            logger.exception("Could not delete %s", folder)
+            orphaned.append(str(folder))
+    _reset_disk_usage()
+    logger.warning("Task %d re-run: %d dependent task(s), %d job(s) deleted",
+                   task.id, len(dependents), len(jobs))
+    return {
+        "tasks": len(dependents), "jobs": len(jobs), "job_results": results,
+        "geometries": len(geometry_ids), "folders_removed": removed, "orphaned_dirs": orphaned,
     }
 
 

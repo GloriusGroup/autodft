@@ -436,6 +436,19 @@ class TestArchiveClosesOpenTasks:
         with get_session() as session:
             assert session.get(ComputationTask, task_id).status == TaskStatus.pending
 
+    def test_a_success_before_a_requeue_does_not_spare_the_task(self, env):
+        with get_session() as session:
+            task = _make_task(session, status=TaskStatus.pending)
+            task.retry_base = 1
+            session.add(ComputationJob(task_id=task.id, attempt=1, slurm_jobid=7,
+                                       slurm_status="COMPLETED", success=True))
+            session.commit()
+            task_id = task.id
+
+        assert project_jobs.fail_open_tasks(PROJECT) == 1
+        with get_session() as session:
+            assert session.get(ComputationTask, task_id).status == TaskStatus.failed
+
     def test_archive_failures_do_not_trip_the_breaker(self, env):
         from autodft.engine import circuit_breaker
 

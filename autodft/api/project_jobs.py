@@ -406,7 +406,7 @@ def fail_open_tasks(qualified_name: str) -> int:
             jobs = session.exec(
                 select(ComputationJob).where(ComputationJob.task_id == task.id)
             ).all()
-            if any(j.success is True for j in jobs):
+            if any(j.success is True and j.attempt > (task.retry_base or 0) for j in jobs):
                 continue  # update_task_statuses marks it successful
             unsent = [j for j in jobs
                       if j.success is None and j.slurm_jobid is None and j.slurm_status is None]

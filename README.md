@@ -916,14 +916,26 @@ The pipeline is built to **fail loudly**, not silently:
 Recovering:
 
 ```bash
-autodft admin reset-task 17                          # one task back to 'created'
+autodft admin reset-task 17                          # one failed task back to 'created'
+autodft admin reset-task 17 --force                  # re-run a task in any status
 autodft admin requeue-failed --project admin/phenols # bulk requeue
 autodft admin cleanup --days 30                      # purge old completed entrypoints
 ```
 
 A requeued task gets a fresh set of `pipeline.max_attempts` attempts; its
 earlier attempts stay in the job history but no longer count towards failing
-it again.
+it again, and a success among them no longer counts either. A job of the old
+run that never finished is marked `superseded by a reset`.
+
+`reset-task` refuses a task that is not `failed`. With `--force` it takes any
+status, e.g. an optimisation to redo with an imaginary mode, and deletes the
+task's jobs and every task built on its results: its singlepoints, category
+singlepoints and ESD rate tasks, recursively, with their jobs, results,
+geometries and folders under `comp_data`. A reset ESD seed (S0*) also
+deletes the S1/T1 work and seeds ESD again. Once the new job succeeds, the
+follow-ups are created again from its geometry. `reset-task` refuses, and
+`requeue-failed` skips, a task that still has a job in SLURM (pending or
+running); with `--force`, so does a job of any task it would delete.
 
 For an entrypoint that failed before being expanded (e.g. bad SMILES),
 fix the SMILES and resubmit; the original `processing_error` row stays

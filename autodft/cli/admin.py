@@ -96,9 +96,18 @@ def rotate_key(
     console.print("[yellow]Shown once. The previous key is now invalid.[/yellow]")
 
 
+# fail_reason of an unjudged job a requeue closes; left open it blocks the new run's retries.
+RESET_FAIL_REASON = "superseded by a reset"
+
+
 def _set_retry_base(session, task: ComputationTask) -> None:
     """Give a requeued task a fresh attempt budget from its jobs so far."""
     jobs = session.exec(select(ComputationJob).where(ComputationJob.task_id == task.id)).all()
+    now = datetime.now(timezone.utc)
+    for job in jobs:
+        if job.success is None:
+            job.success, job.fail_reason, job.time_end = False, RESET_FAIL_REASON, now
+            session.add(job)
     if jobs:
         task.retry_base = max(job.attempt for job in jobs)
 
@@ -106,32 +115,69 @@ def _set_retry_base(session, task: ComputationTask) -> None:
 @app.command("reset-task")
 def reset_task(
     task_id: int = typer.Argument(..., help="ID of the task to reset"),
+    force: bool = typer.Option(
+        False, "--force",
+        help="Any status: delete the task's jobs and every task built on its results, then re-run it",
+    ),
+    config: Optional[str] = typer.Option(None, "--config", help="Path to config TOML file"),
 ) -> None:
-    """Reset a task to 'created' status."""
-    with get_session() as session:
+    """Reset a failed task to 'created'. Refused while one of its jobs is in SLURM."""
+    from autodft.api import admin_ops
+    from autodft.config import load_settings
+
+    settings = load_settings(config)
+    with get_session(settings) as session:
         task = session.get(ComputationTask, task_id)
         if task is None:
             console.print(f"[red]Task #{task_id} not found.[/red]")
             raise typer.Exit(code=1)
 
         old_status = task.status
-        _set_retry_base(session, task)
-        task.status = TaskStatus.created
-        task.updated_at = datetime.now(timezone.utc)
-        session.add(task)
-        session.commit()
+        if not force and old_status != TaskStatus.failed:
+            console.print(
+                f"[red]Task #{task_id} is {old_status.value}, not failed.[/red] "
+                "--force re-runs it and deletes every task built on its results."
+            )
+            raise typer.Exit(code=1)
+
+        if force:
+            try:
+                summary = admin_ops.rerun_task(session, task, settings.comp_data_path)
+            except ValueError as exc:
+                console.print(f"[red]Task #{task_id} not reset:[/red] {exc}")
+                raise typer.Exit(code=1)
+            console.print(
+                f"  deleted {summary['tasks']} dependent task(s), {summary['jobs']} job(s), "
+                f"{summary['geometries']} geometries, {summary['folders_removed']} folder(s)"
+            )
+            for folder in summary["orphaned_dirs"]:
+                console.print(f"  [yellow]could not delete {folder}[/yellow]")
+        else:
+            live = admin_ops.in_flight_jobs(session, [task_id])
+            if live:
+                ids = ", ".join(str(j.slurm_jobid) for j in live)
+                console.print(f"[red]Task #{task_id} not reset:[/red] job(s) still in SLURM ({ids}).")
+                raise typer.Exit(code=1)
+            _set_retry_base(session, task)
+            task.status = TaskStatus.created
+            task.updated_at = datetime.now(timezone.utc)
+            session.add(task)
+            session.commit()
 
     console.print(
         f"[green]Task #{task_id} reset:[/green] {old_status.value} -> {TaskStatus.created.value}"
     )
-    logger.info("Task #%d reset from %s to created", task_id, old_status.value)
+    logger.info("Task #%d reset from %s to created%s",
+                task_id, old_status.value, " (forced)" if force else "")
 
 
 @app.command("requeue-failed")
 def requeue_failed(
     project: Optional[str] = typer.Option(None, "--project", help="Filter by project name"),
 ) -> None:
-    """Requeue all failed tasks back to 'created' status."""
+    """Requeue all failed tasks back to 'created' status, except those with a job in SLURM."""
+    from autodft.api.admin_ops import in_flight_jobs
+
     with get_session() as session:
         stmt = select(ComputationTask).where(ComputationTask.status == TaskStatus.failed)
 
@@ -149,9 +195,12 @@ def requeue_failed(
             console.print("[yellow]No failed tasks found.[/yellow]")
             return
 
+        busy = {j.task_id for j in in_flight_jobs(session, [t.id for t in failed_tasks])}
         count = 0
         now = datetime.now(timezone.utc)
         for task in failed_tasks:
+            if task.id in busy:
+                continue
             _set_retry_base(session, task)
             task.status = TaskStatus.created
             task.updated_at = now
@@ -162,6 +211,8 @@ def requeue_failed(
 
     project_msg = f" (project={project})" if project else ""
     console.print(f"[green]Requeued {count} failed task(s){project_msg}.[/green]")
+    if busy:
+        console.print(f"[yellow]Skipped {len(busy)} with a job still in SLURM.[/yellow]")
     logger.info("Requeued %d failed tasks%s", count, project_msg)
 
 
