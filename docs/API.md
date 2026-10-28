@@ -1013,7 +1013,7 @@ passed. Soft-deleted headers are excluded unless `include_deleted=true`.
   "validated":   false }
 ```
 
-`kind` must be one of `confsearch | optimization | singlepoint | null`.
+`kind` must be one of `confsearch | optimization | singlepoint | null`; `""` is stored as `null`.
 
 Admin only (**403** otherwise).
 

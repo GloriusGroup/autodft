@@ -159,3 +159,21 @@ def test_a_description_edit_of_a_used_header_stays_in_place(client):
                  json={"header_text": OLD_TEXT, "description": "renamed", "kind": "optimization"}).json()
     assert data["copied"] is False and data["id"] == old_id
     assert (_row(old_id).header_text, _row(old_id).description) == (OLD_TEXT, "renamed")
+
+
+def test_an_empty_kind_is_stored_as_none_so_a_later_edit_stays_in_place(client):
+    from autodft.models import Molecule, MoleculeState
+
+    c, headers = client
+    created = c.post("/api/headers", headers=headers, json={"header_text": OLD_TEXT, "kind": ""}).json()
+    assert created["kind"] is None and _row(created["id"]).kind is None
+    with get_session() as session:
+        mol = Molecule(smiles="C", project_name="admin/p")
+        session.add(mol)
+        session.commit()
+        session.add(MoleculeState(molecule_id=mol.id, description="S0", multiplicity=1, charge=0,
+                                  optimization_header_id=created["id"]))
+        session.commit()
+    data = c.put(f"/api/headers/{created['id']}", headers=headers,
+                 json={"header_text": OLD_TEXT, "description": "renamed", "kind": ""}).json()
+    assert data["copied"] is False and data["id"] == created["id"]

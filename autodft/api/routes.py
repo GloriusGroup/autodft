@@ -1571,7 +1571,7 @@ def api_create_header(
         header = ComputationHeader(
             header_text=body.header_text,
             description=body.description,
-            kind=body.kind,
+            kind=body.kind or None,
             validated=body.validated,
             owner_id=_caller_id(session, identity),
         )
