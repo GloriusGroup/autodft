@@ -1933,12 +1933,15 @@ def api_cluster_status(identity: Identity = Depends(current_identity)):
 
     Without this a user cannot tell "my jobs are stuck" from "the pipeline
     is halted" without asking an administrator. It exposes no one else's
-    data: a queue depth and the caller's own breaker flag.
+    data: a queue depth and a breaker flag, the caller's own or, for admin, any owner's.
     """
     from autodft.engine import circuit_breaker, submission_hold
 
     settings = get_active_settings()
-    state = circuit_breaker.read_state(settings.data_path, identity.username)
+    if identity.is_admin:
+        tripped = bool(circuit_breaker.tripped_owners(settings.data_path))
+    else:
+        tripped = circuit_breaker.read_state(settings.data_path, identity.username) is not None
     held = submission_hold.read_state(settings.data_path)
     with get_session() as session:
         waiting = session.exec(
@@ -1947,7 +1950,7 @@ def api_cluster_status(identity: Identity = Depends(current_identity)):
             .where(col(CalculationEntrypoint.time_started).is_(None))
         ).one()
     return {
-        "breaker_tripped": state is not None,
+        "breaker_tripped": tripped,
         "submissions_held": held is not None,
         "queued_entrypoints": waiting,
     }

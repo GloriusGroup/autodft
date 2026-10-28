@@ -645,7 +645,7 @@ is either scoped to the caller's own projects or deliberately shared
 | GET/POST | `/login`                          | sign-in form and its submission — no credential needed        |
 | GET    | `/logout`                           | clear the session cookie — no credential needed               |
 | GET    | `/api/whoami`                       | the signed-in account and the projects it owns                |
-| GET    | `/api/cluster`                      | read-only queue depth + the caller's breaker state, for every account |
+| GET    | `/api/cluster`                      | read-only queue depth + the caller's breaker state (admin: any owner's), for every account |
 | GET    | `/api/overview`                     | counts of molecules / tasks / jobs / queue                    |
 | GET    | `/api/molecules`                    | list molecules (`?project=&limit=&offset=`)                   |
 | GET    | `/api/molecules/{id}`               | full molecule with states / tasks / jobs                      |

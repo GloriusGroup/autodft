@@ -372,6 +372,15 @@ class TestRoutes:
             assert c.get("/api/cluster", headers=self._headers(env, "alice")).json()["breaker_tripped"] is True
             assert c.get("/api/cluster", headers=self._headers(env, "bob")).json()["breaker_tripped"] is False
 
+    def test_cluster_status_for_admin_reports_any_tripped_owner(self, env):
+        with self._client(env) as c:
+            assert c.get("/api/cluster", headers=self._headers(env, "admin")).json()["breaker_tripped"] is False
+        with get_session() as session:
+            _judged(session, "alice/p", failed=100)
+            circuit_breaker.check(session, env["settings"])
+        with self._client(env) as c:
+            assert c.get("/api/cluster", headers=self._headers(env, "admin")).json()["breaker_tripped"] is True
+
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_admin_page_offers_a_reset_per_tripped_owner():

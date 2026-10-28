@@ -120,7 +120,8 @@ The six seeded methods belong to `admin`, as does anything created
 before accounts existed.
 
 `GET /api/cluster` is readable by everyone and reports only
-`breaker_tripped` (the caller's own breaker) and `queued_entrypoints`, so
+`breaker_tripped` (the caller's own breaker; for admin, whether any
+owner's is tripped) and `queued_entrypoints`, so
 a user can tell "my jobs are stuck" from "the pipeline is halted" without
 asking an administrator.
 
@@ -1126,7 +1127,8 @@ no one's data:
 { "breaker_tripped": false, "queued_entrypoints": 143 }
 ```
 
-`breaker_tripped` is the caller's own breaker (see below). That is enough
+`breaker_tripped` is the caller's own breaker (see below); for admin it is
+true while any owner's breaker is tripped. That is enough
 to tell "my jobs are stuck" from "the pipeline is halted" without asking an
 administrator.
 
