@@ -20,3 +20,5 @@ class JobResult(SQLModel, table=True):
     parser_version: int
     data_json: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    # Bumped by every (re-)parse, so the analysis caches see a backfill. NULL on rows from before it.
+    updated_at: Optional[datetime] = Field(default_factory=lambda: datetime.now(timezone.utc))

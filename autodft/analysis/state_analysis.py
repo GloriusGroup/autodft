@@ -32,6 +32,7 @@ Reference values:
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -51,6 +52,7 @@ from autodft.models import (
     MoleculeState,
 )
 from autodft.models.geometry import MoleculeGeometry
+from autodft.models.result import JobResult
 from autodft.qm.orca.advanced import effective_header
 
 
@@ -299,28 +301,46 @@ def _load_results_from_archive_csv(csv_path: Path) -> list[ConformerResult]:
     return results
 
 
-# Cached analyses, keyed by project name. Each entry is
-# (signature, payload); the signature is a cheap pair of aggregates that
-# changes whenever any task in the project is updated, so a stale cache
-# cannot outlive new results.
+# Cached analyses, keyed by project name. Each entry is (signature, payload);
+# the signature changes with anything the analyses read from the database.
 _ANALYSIS_CACHE: dict[str, tuple[tuple, dict]] = {}
 
 
 def _cache_signature(project_name: str) -> tuple:
-    """A cheap fingerprint of the project's current results."""
-    with get_session() as session:
-        molecules = session.exec(
-            select(func.count()).select_from(Molecule)
-            .where(Molecule.project_name == project_name)
-        ).one()
-        tasks, latest = session.exec(
-            select(func.count(), func.max(ComputationTask.updated_at))
-            .select_from(ComputationTask)
-            .join(MoleculeState, ComputationTask.state_id == MoleculeState.id)
+    """A cheap fingerprint of the project's tasks, stored results, molecule and state metadata, and headers."""
+    def in_project(statement):
+        return (
+            statement.join(MoleculeState, ComputationTask.state_id == MoleculeState.id)
             .join(Molecule, MoleculeState.molecule_id == Molecule.id)
             .where(Molecule.project_name == project_name)
-        ).one()
-    return (molecules, tasks, str(latest))
+        )
+
+    with get_session() as session:
+        tasks = session.exec(in_project(
+            select(func.count(), func.max(ComputationTask.updated_at)).select_from(ComputationTask)
+        )).one()
+        records = session.exec(in_project(
+            select(func.count(), func.max(JobResult.updated_at)).select_from(JobResult)
+            .join(ComputationTask, JobResult.task_id == ComputationTask.id)
+        )).one()
+        states = session.exec(
+            select(
+                Molecule.id, Molecule.archived, Molecule.metadata_json, MoleculeState.id,
+                MoleculeState.metadata_json, MoleculeState.confsearch_header_id,
+                MoleculeState.optimization_header_id, MoleculeState.singlepoint_header_id,
+            )
+            .outerjoin(MoleculeState, MoleculeState.molecule_id == Molecule.id)
+            .where(Molecule.project_name == project_name)
+            .order_by(col(Molecule.id), col(MoleculeState.id))
+        ).all()
+        header_ids = sorted({hid for row in states for hid in row[5:] if hid is not None})
+        headers = session.exec(
+            select(ComputationHeader.id, ComputationHeader.header_text)
+            .where(col(ComputationHeader.id).in_(header_ids))
+            .order_by(col(ComputationHeader.id))
+        ).all() if header_ids else []
+    inputs = hashlib.sha256(repr(([tuple(r) for r in states], [tuple(h) for h in headers])).encode()).hexdigest()
+    return (*tasks, *records, inputs)
 
 
 def analyze_project(project_name: str, use_cache: bool = True) -> dict:
@@ -331,8 +351,8 @@ def analyze_project(project_name: str, use_cache: bool = True) -> dict:
     thousands of file reads over a network mount inside a synchronous
     request handler -- enough to stall the controller for minutes when
     someone opens the State Analysis tab. The cache is keyed on a
-    fingerprint of the project's task table, so new results invalidate it
-    automatically.
+    fingerprint of what the analysis reads from the database, so new
+    results, backfills, metadata and header edits invalidate it.
     """
     if use_cache:
         signature = _cache_signature(project_name)

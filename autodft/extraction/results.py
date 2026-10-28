@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
@@ -149,6 +149,7 @@ def _upsert(
     row.finished_at = finished_at
     row.parser_version = PARSER_VERSION
     row.data_json = json.dumps(record)
+    row.updated_at = datetime.now(timezone.utc)
     session.add(row)
 
 

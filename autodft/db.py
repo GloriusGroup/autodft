@@ -201,6 +201,7 @@ def _migrate_sqlite_schema(engine) -> None:
         ("computation_tasks",        "retry_base",      "INTEGER"),
         ("computation_tasks",        "build_failures",  "INTEGER NOT NULL DEFAULT 0"),
         ("molecule_geometries",      "degeneracy",      "INTEGER"),
+        ("job_results",              "updated_at",      "DATETIME"),
     ]
     # Indexes on the columns the pipeline loop actually filters by. The
     # model-level index=True fields cover foreign keys and lookups but none

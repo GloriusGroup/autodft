@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
-from sqlmodel import Session, col, func, select
+from sqlmodel import Session, col, select
 
 from autodft import categories
 from autodft.db import get_session
@@ -219,10 +219,7 @@ def analyze_spectra(
     from autodft.engine.nmr_references import REFERENCE_QUALIFIED
 
     # NMR shifts also depend on the reference project finishing its jobs.
-    signature = (
-        _cache_signature(project_name), _archived_count(project_name),
-        _cache_signature(REFERENCE_QUALIFIED),
-    )
+    signature = (_cache_signature(project_name), _cache_signature(REFERENCE_QUALIFIED))
     cached = _CACHE.get(project_name)
     if cached is not None and cached[0] == signature:
         return cached[1]
@@ -258,17 +255,6 @@ def pending_nmr_references(project_name: str) -> list[str]:
         if ref.get("status") == "pending"
     }
     return sorted(waiting)
-
-
-def _archived_count(project_name: str) -> int:
-    """Archiving changes no task, so the cache also watches this."""
-    with get_session() as session:
-        return session.exec(
-            select(func.count()).select_from(Molecule).where(
-                Molecule.project_name == project_name,
-                Molecule.archived == True,  # noqa: E712
-            )
-        ).one()
 
 
 def _molecule_entries(

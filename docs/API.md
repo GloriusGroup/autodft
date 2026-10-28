@@ -542,6 +542,10 @@ each, and S0, T1, ox and red are paired only within one. Each entry carries
 (`[confsearch, optimization, singlepoint]`); the dashboard names them on the
 card when a molecule has more than one.
 
+The payload is cached per project, and rebuilt when a task, a stored job
+result (also one `backfill-results` rewrites), molecule or state metadata,
+or the text of a header the project's states use changes.
+
 ### `POST /api/projects/{name}/state-analysis/export`
 
 Builds the same payload as a multi-sheet XLSX in a background job: returns
