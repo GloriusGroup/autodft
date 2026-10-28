@@ -29,6 +29,7 @@ from typing import Optional
 from sqlmodel import Session, col, select
 
 from autodft.models.enums import TaskStatus, TaskType
+from autodft.models.job import ARCHIVED_FAIL_REASON, ComputationJob
 from autodft.models.task import ComputationTask
 
 logger = logging.getLogger(__name__)
@@ -55,13 +56,18 @@ def recent_failure_ratio(session: Session, window: int) -> tuple[float, int, int
 
     Only ``successful`` / ``failed`` tasks count as judged -- tasks still
     running say nothing about whether the campaign is healthy. Category
-    tasks are excluded; see ``_CATEGORY_TASK_TYPES``.
+    tasks are excluded; see ``_CATEGORY_TASK_TYPES``. So are tasks an
+    archive closed.
     """
+    archived = select(ComputationJob.task_id).where(
+        ComputationJob.fail_reason == ARCHIVED_FAIL_REASON
+    )
     tasks = session.exec(
         select(ComputationTask.status)
         .where(
             col(ComputationTask.status).in_([TaskStatus.successful, TaskStatus.failed]),
             col(ComputationTask.task_type).notin_(_CATEGORY_TASK_TYPES),
+            col(ComputationTask.id).notin_(archived),
         )
         .order_by(col(ComputationTask.updated_at).desc())
         .limit(window)

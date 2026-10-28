@@ -39,6 +39,7 @@ def _without_archived(payload):
 
 
 def test_archived_molecules_are_served_from_the_frozen_payload(project, settings, monkeypatch):
+    project_jobs.fail_open_tasks("nho/p")  # the archive fails the pending UV/Vis task first
     summary = spectroscopy.analyze_spectra("nho/p", use_cache=False)
     detail = spectroscopy.analyze_spectra("nho/p", molecule_id=project["molecule"])
     result = _archive(settings, monkeypatch)
@@ -53,6 +54,7 @@ def test_archived_molecules_are_served_from_the_frozen_payload(project, settings
 
 
 def test_the_cached_summary_switches_to_the_frozen_payload(project, settings, monkeypatch):
+    project_jobs.fail_open_tasks("nho/p")
     live = spectroscopy.analyze_spectra("nho/p")
     _archive(settings, monkeypatch)
     shutil.rmtree(project["tmp_path"] / "jobs")

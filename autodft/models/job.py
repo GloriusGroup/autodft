@@ -8,6 +8,9 @@ from sqlmodel import Field, Relationship, SQLModel
 if TYPE_CHECKING:
     from autodft.models.task import ComputationTask
 
+# fail_reason of the job an archive leaves on each task it closes.
+ARCHIVED_FAIL_REASON = "project archived"
+
 
 class ComputationJob(SQLModel, table=True):
     __tablename__ = "computation_jobs"

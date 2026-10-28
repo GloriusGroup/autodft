@@ -47,8 +47,9 @@ from autodft.models.enums import (
     TRANSIENT_SLURM_STATES,
     ProjectJobKind,
     ProjectJobStatus,
+    TaskStatus,
 )
-from autodft.models.job import ComputationJob
+from autodft.models.job import ARCHIVED_FAIL_REASON, ComputationJob
 from autodft.models.molecule import Molecule
 from autodft.models.project_job import ProjectJob
 from autodft.models.state import MoleculeState
@@ -332,6 +333,7 @@ def _execute(
         # Do not rmtree under a job still writing files. The pause has already
         # stopped new jobs for this project; wait for what is left to finish.
         _wait_for_quiescence(qualified_name)
+        fail_open_tasks(qualified_name)
 
         from autodft.analysis import spectroscopy
 
@@ -368,6 +370,47 @@ def _in_flight_job_count(qualified_name: str) -> int:
                 )
             ).one()
         )
+
+
+def fail_open_tasks(qualified_name: str) -> int:
+    """Fail *qualified_name*'s created/pending tasks as archived; returns the count."""
+    now = datetime.now(timezone.utc)
+    with get_session() as session:
+        tasks = session.exec(
+            select(ComputationTask)
+            .join(MoleculeState, col(MoleculeState.id) == col(ComputationTask.state_id))
+            .join(Molecule, col(Molecule.id) == col(MoleculeState.molecule_id))
+            .where(
+                Molecule.project_name == qualified_name,
+                col(ComputationTask.status).in_([TaskStatus.created, TaskStatus.pending]),
+            )
+        ).all()
+        failed = 0
+        for task in tasks:
+            jobs = session.exec(
+                select(ComputationJob).where(ComputationJob.task_id == task.id)
+            ).all()
+            if any(j.success is True for j in jobs):
+                continue  # update_task_statuses marks it successful
+            unsent = [j for j in jobs
+                      if j.success is None and j.slurm_jobid is None and j.slurm_status is None]
+            if not unsent:
+                # The reason lives on a folderless failed job, as for a failed build.
+                attempt = max([task.retry_base or 0, *(j.attempt for j in jobs)]) + 1
+                unsent = [ComputationJob(task_id=task.id, attempt=attempt)]
+            for job in unsent:
+                job.success = False
+                job.fail_reason = ARCHIVED_FAIL_REASON
+                job.time_end = now
+                session.add(job)
+            task.status = TaskStatus.failed
+            task.updated_at = now
+            session.add(task)
+            failed += 1
+        session.commit()
+    if failed:
+        logger.info("Archive of %r failed %d open task(s)", qualified_name, failed)
+    return failed
 
 
 def _wait_for_quiescence(

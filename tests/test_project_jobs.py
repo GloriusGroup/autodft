@@ -352,3 +352,113 @@ class TestHttp:
 
         r = c.get(f"/api/jobs/{job_id}", headers={"X-AutoDFT-API-Key": stranger_key})
         assert r.status_code == 404
+
+
+# ----------------------------------------------------------------------
+# Archive closes open tasks; archived leftovers make no work
+# ----------------------------------------------------------------------
+
+
+def _jobs_of(session, task_id):
+    from sqlmodel import select
+    return session.exec(select(ComputationJob).where(ComputationJob.task_id == task_id)).all()
+
+
+class TestArchiveClosesOpenTasks:
+    def test_archive_fails_open_tasks_and_no_jobs_follow(self, env):
+        settings = env["settings"]
+        with get_session() as session:
+            created = _make_task(session)
+            unsent = _make_task(session, status=TaskStatus.pending)
+            session.add(ComputationJob(task_id=unsent.id, attempt=1))
+            retry = _make_task(session, status=TaskStatus.pending)
+            retry.task_path = str(env["tmp_path"] / f"task_{retry.id}")
+            session.add(ComputationJob(task_id=retry.id, attempt=1, slurm_jobid=7,
+                                       slurm_status="FAILED", success=False, fail_reason="['SCF']"))
+            other = _make_task(session, project="owner/other")
+            session.commit()
+            ids = [created.id, unsent.id, retry.id]
+            other_id = other.id
+
+        job = project_jobs.start_job(owner_id=env["owner_id"], qualified_name=PROJECT,
+                                     kind=ProjectJobKind.archive, params={}, settings=settings)
+        project_jobs.join_all(timeout=10)
+
+        with get_session() as session:
+            assert project_jobs.get_job(session, job["id"]).status == ProjectJobStatus.successful
+            for task_id in ids:
+                assert session.get(ComputationTask, task_id).status == TaskStatus.failed
+                assert _jobs_of(session, task_id)[-1].fail_reason == "project archived"
+            assert all(j.success is False for j in _jobs_of(session, unsent.id))
+            counts = {t: len(_jobs_of(session, t)) for t in ids}
+
+            state_machine.create_retry_jobs(session, settings, qm_engine=None)
+            state_machine.start_new_tasks(session, settings, qm_engine=None)
+            session.commit()
+
+            assert {t: len(_jobs_of(session, t)) for t in ids} == counts
+            # A different project's open task is untouched, and still starts.
+            assert session.get(ComputationTask, other_id).status == TaskStatus.pending
+
+    def test_a_task_with_a_successful_job_is_left_to_succeed(self, env):
+        with get_session() as session:
+            task = _make_task(session, status=TaskStatus.pending)
+            session.add(ComputationJob(task_id=task.id, attempt=1, slurm_jobid=7,
+                                       slurm_status="COMPLETED", success=True))
+            session.commit()
+            task_id = task.id
+
+        assert project_jobs.fail_open_tasks(PROJECT) == 0
+        with get_session() as session:
+            assert session.get(ComputationTask, task_id).status == TaskStatus.pending
+
+    def test_archive_failures_do_not_trip_the_breaker(self, env):
+        from autodft.engine import circuit_breaker
+
+        with get_session() as session:
+            for _ in range(3):
+                _make_task(session)
+        assert project_jobs.fail_open_tasks(PROJECT) == 3
+        with get_session() as session:
+            assert circuit_breaker.recent_failure_ratio(session, 100) == (0.0, 0, 0)
+
+
+class TestArchivedLeftovers:
+    def _archive(self, session, task):
+        state = session.get(MoleculeState, task.state_id)
+        mol = session.get(Molecule, state.molecule_id)
+        mol.archived = True
+        session.add(mol)
+        session.commit()
+
+    def test_an_archived_molecule_gets_no_job_and_no_backlog(self, env):
+        from autodft.engine.pipeline import PipelineWorker
+
+        settings = env["settings"]
+        with get_session() as session:
+            created = _make_task(session)
+            retry = _make_task(session, status=TaskStatus.pending)
+            retry.task_path = str(env["tmp_path"] / f"task_{retry.id}")
+            session.add(ComputationJob(task_id=retry.id, attempt=1, slurm_jobid=7,
+                                       slurm_status="FAILED", success=False, fail_reason="['SCF']"))
+            unsent = _make_task(session, status=TaskStatus.pending)
+            session.add(ComputationJob(task_id=unsent.id, attempt=1))
+            session.commit()
+            for task in (created, retry, unsent):
+                self._archive(session, task)
+            ids = [created.id, retry.id, unsent.id]
+
+            assert PipelineWorker._unsubmitted_job_count(session) == 0
+
+            state_machine.create_retry_jobs(session, settings, qm_engine=None)
+            state_machine.start_new_tasks(session, settings, qm_engine=None)
+            session.commit()
+
+            assert [len(_jobs_of(session, t)) for t in ids] == [0, 1, 1]
+            assert session.get(ComputationTask, created.id).status == TaskStatus.created
+
+            # The same leftovers in a live molecule do count.
+            live = _make_task(session)
+            session.add(ComputationJob(task_id=live.id, attempt=1))
+            session.commit()
+            assert PipelineWorker._unsubmitted_job_count(session) == 2

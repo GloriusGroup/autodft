@@ -660,6 +660,9 @@ def create_retry_jobs(
         )
     ).all()
 
+    # A retry would recreate an archived molecule's deleted job folders.
+    pending_tasks = [t for t in pending_tasks if not _molecule_is_archived(session, t)]
+
     # Don't create retry jobs for a project being archived/exported.
     paused = paused_project_names(session)
     if paused:

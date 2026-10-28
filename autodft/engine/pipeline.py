@@ -190,18 +190,30 @@ class PipelineWorker:
 
         from autodft.models.enums import TaskStatus
         from autodft.models.job import ComputationJob
+        from autodft.models.molecule import Molecule
+        from autodft.models.state import MoleculeState
         from autodft.models.task import ComputationTask
 
+        # Archived molecules' leftovers never run, so they hold nothing back.
         jobs = session.exec(
-            select(func.count()).select_from(ComputationJob).where(
+            select(func.count()).select_from(ComputationJob)
+            .join(ComputationTask, col(ComputationTask.id) == col(ComputationJob.task_id))
+            .join(MoleculeState, col(MoleculeState.id) == col(ComputationTask.state_id))
+            .join(Molecule, col(Molecule.id) == col(MoleculeState.molecule_id))
+            .where(
                 col(ComputationJob.slurm_jobid).is_(None),
                 col(ComputationJob.slurm_status).is_(None),
                 col(ComputationJob.success).is_(None),
+                col(Molecule.archived).is_(False),
             )
         ).one()
         tasks = session.exec(
-            select(func.count()).select_from(ComputationTask).where(
+            select(func.count()).select_from(ComputationTask)
+            .join(MoleculeState, col(MoleculeState.id) == col(ComputationTask.state_id))
+            .join(Molecule, col(Molecule.id) == col(MoleculeState.molecule_id))
+            .where(
                 ComputationTask.status == TaskStatus.created,
+                col(Molecule.archived).is_(False),
             )
         ).one()
         return int(jobs) + int(tasks)

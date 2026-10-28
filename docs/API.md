@@ -933,7 +933,9 @@ re-analysed, so the shift would stay `null` forever (a `failed`
 reference does not block it: the frozen detail keeps the shieldings, the
 shift stays `null`); `404` when the project holds no molecules. The
 archive job waits up to 300 s for the project's in-flight SLURM jobs to
-finish and aborts, deleting nothing, if any are still running.
+finish and aborts, deleting nothing, if any are still running. It then
+fails the project's `created` and `pending` tasks with the reason
+`project archived`; they do not count towards the circuit breaker.
 
 ---
 
