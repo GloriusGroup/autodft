@@ -1586,3 +1586,34 @@ def test_a_failed_molecules_load_shows_the_error_not_an_empty_project():
     assert "Failed: database is &lt;locked&gt;" in out["html"]
     assert "No molecules yet" not in out["html"]
     assert out["rows"] == [None]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_late_success_for_the_last_project_neither_renders_nor_caches():
+    out = _run_overlay("""
+        var $ = function (id) { return document.getElementById(id); };
+        var BTNS = ['exportProjectBtn', 'exportDeleteBtn', 'deleteProjectBtn'];
+        // p's reply is held until released; q fails at once.
+        var stubFetch = globalThis.fetch, release;
+        var held = new Promise(function (r) { release = r; });
+        globalThis.fetch = function (url, opts) {
+            var resp = stubFetch(url, opts);
+            return url === '/api/projects/nho%3Ap' ? held.then(function () { return resp; }) : resp;
+        };
+        replies['/api/projects/nho%3Ap'] = {status: 200, body: {status: 'complete', total_molecules: 1,
+            molecules: [{id: 7, smiles: 'CCO', states: 1, tasks: 2, successful: 2, failed: 0}]}};
+        replies['/api/projects/nho%3Aq'] = {status: 500, body: {detail: 'database is locked'}};
+        var a = loadProjectDetail('nho/p', true);
+        await loadProjectDetail('nho/q', true);
+        release();
+        await a;
+        out.banner = $('psbText').innerHTML;
+        out.cards = [$('projectCards').style.display, $('pcMolecules').textContent];
+        out.table = $('projectMoleculesBody').innerHTML;
+        out.disabled = BTNS.map(function (id) { return $(id).disabled; });
+        out.cached = projectsCached.summary;
+    """, _projects_code(), _functions("fmtTime"))
+    assert "database is locked" in out["banner"]
+    assert out["cards"] == ["none", "--"] and "CCO" not in out["table"]
+    assert out["disabled"] == [True] * 3
+    assert out["cached"] is None

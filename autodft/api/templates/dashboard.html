@@ -4395,6 +4395,8 @@
             var gen = projectsCached.gen;
             try {
                 var data = await apiJSON(ui ? 'Loading project…' : null, '/api/projects/' + projectPath(name));
+                // Another project was picked meanwhile.
+                if (currentProject !== name) return;
 
                 document.getElementById('projectCards').style.display = 'grid';
                 document.getElementById('projectExportSection').style.display = 'block';
