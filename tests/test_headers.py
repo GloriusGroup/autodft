@@ -66,3 +66,96 @@ def test_api_headers_defaults_carry_the_method_only_texts(client):
     assert by_kind["singlepoint"]["text"] == DEFAULT_HEADER_SINGLEPOINT
     for d in data["defaults"]:
         assert "CPCM" not in d["label"] + d["description"]
+
+
+# ── Edits of headers already in use ─────────────────────────────────────
+
+OLD_TEXT = "!B3LYP def2-SVP\n"
+NEW_TEXT = "!PBE0 def2-SVP\n"
+
+
+def _in_use(via: str | None) -> tuple[int, int | None]:
+    """A header owned by another user; (header id, task id) when *via* references it."""
+    from autodft.models import ComputationHeader, ComputationTask, Molecule, MoleculeState, TaskStatus, TaskType
+
+    with get_session() as session:
+        bob, _ = accounts.create_user(session, "bob")
+        header = ComputationHeader(header_text=OLD_TEXT, description="old", kind="optimization", owner_id=bob.id,
+                                   validated=True)
+        other = ComputationHeader(header_text="!HF def2-SVP\n", kind="optimization")
+        session.add_all([header, other])
+        session.commit()
+        if via is None:
+            return header.id, None
+        mol = Molecule(smiles="C", project_name="bob/p")
+        session.add(mol)
+        session.commit()
+        state = MoleculeState(molecule_id=mol.id, description="S0", multiplicity=1, charge=0,
+                              optimization_header_id=header.id if via == "state" else other.id)
+        session.add(state)
+        session.commit()
+        task = ComputationTask(task_type=TaskType.optimization, status=TaskStatus.successful, state_id=state.id,
+                               header_id=header.id if via == "task" else other.id, task_path="/nowhere")
+        session.add(task)
+        session.commit()
+        return header.id, task.id
+
+
+def _row(header_id: int):
+    from autodft.models import ComputationHeader
+
+    with get_session() as session:
+        return session.get(ComputationHeader, header_id)
+
+
+@pytest.mark.parametrize("via", ["state", "task"])
+def test_a_text_edit_of_a_used_header_is_saved_as_a_new_header(client, via):
+    from autodft.engine.state_machine import render_job_input
+    from autodft.models import ComputationTask, MoleculeState
+
+    c, headers = client
+    old_id, task_id = _in_use(via)
+    resp = c.put(f"/api/headers/{old_id}", headers=headers,
+                 json={"header_text": NEW_TEXT, "description": "new", "kind": "optimization"})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["copied"] is True and data["id"] != old_id
+    assert (data["header_text"], data["description"], data["kind"]) == (NEW_TEXT, "new", "optimization")
+    old, new = _row(old_id), _row(data["id"])
+    assert (old.header_text, old.description, old.kind) == (OLD_TEXT, "old", "optimization")
+    assert new.header_text == NEW_TEXT and not new.validated
+    with get_session() as session:
+        assert new.owner_id == accounts.get_user_by_username(session, "admin").id
+        task = session.get(ComputationTask, task_id)
+        if via == "state":
+            task.header_id = old_id
+        inp, _ = render_job_input(session, Settings(), task, session.get(MoleculeState, task.state_id), 1)
+    assert inp.startswith(OLD_TEXT.rstrip())
+
+
+def test_a_kind_edit_of_a_used_header_is_saved_as_a_new_header(client):
+    c, headers = client
+    old_id, _ = _in_use("state")
+    data = c.put(f"/api/headers/{old_id}", headers=headers, json={"kind": "singlepoint"}).json()
+    assert data["copied"] is True and data["id"] != old_id
+    assert (data["header_text"], data["kind"], data["description"]) == (OLD_TEXT, "singlepoint", "old")
+    assert _row(old_id).kind == "optimization"
+
+
+def test_an_unused_header_is_edited_in_place(client):
+    c, headers = client
+    old_id, _ = _in_use(None)
+    data = c.put(f"/api/headers/{old_id}", headers=headers,
+                 json={"header_text": NEW_TEXT, "kind": "singlepoint"}).json()
+    assert data["copied"] is False and data["id"] == old_id
+    assert (_row(old_id).header_text, _row(old_id).kind) == (NEW_TEXT, "singlepoint")
+
+
+def test_a_description_edit_of_a_used_header_stays_in_place(client):
+    c, headers = client
+    old_id, _ = _in_use("state")
+    # The editor sends every field, the unchanged text and kind included.
+    data = c.put(f"/api/headers/{old_id}", headers=headers,
+                 json={"header_text": OLD_TEXT, "description": "renamed", "kind": "optimization"}).json()
+    assert data["copied"] is False and data["id"] == old_id
+    assert (_row(old_id).header_text, _row(old_id).description) == (OLD_TEXT, "renamed")

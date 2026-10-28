@@ -226,7 +226,8 @@ The headers can be edited / extended in the dashboard's **Headers** page
 (full headers of before Advanced settings carry a "legacy" badge and are
 not offered on the submit form) or via the `/api/headers` endpoints.
 All six belong to `admin`; anyone may use them, only their owner or
-admin may change them. When a submission form or CLI/API call leaves a
+admin may change them. A header in use keeps its text and kind: an edit
+of either is saved as a new header. When a submission form or CLI/API call leaves a
 header slot on its default, the dashboard's header dropdown preselects
 the stored row whose text equals the package default, so what you see
 selected is what will actually run.
@@ -358,6 +359,9 @@ sees the whole database:
   (successful / failed) references don't block the delete. Anyone
   may create and use a header; only its owner (or admin) may edit or
   delete one — someone else's answers 403 with a hint to copy it.
+  Editing the text or kind of a header any state or task uses saves a
+  new header ("In use; saved as new header #N") and leaves the old one
+  as it ran; a description edit stays in place.
 * **Admin** — wipe one of your projects or a single molecule (each
   shows a preview and wants the exact name typed back), and, for admin
   only, the **Users** section (create an account, rotate a key,

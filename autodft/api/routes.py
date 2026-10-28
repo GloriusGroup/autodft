@@ -1602,7 +1602,11 @@ def api_update_header(
     header_id: int, body: HeaderUpdate,
     identity: Identity = Depends(current_identity),
 ):
-    """Update fields on an existing header. Owner or admin only."""
+    """Update fields on an existing header. Owner or admin only.
+
+    A text or kind change to a header any state or task references is
+    saved as a new header owned by the editor; the used one stays as it ran.
+    """
     if body.kind is not None and body.kind not in {"", "confsearch", "optimization", "singlepoint"}:
         return JSONResponse(
             status_code=400,
@@ -1614,6 +1618,15 @@ def api_update_header(
             return JSONResponse(status_code=404, content={"detail": "Header not found"})
         if not _may_change_header(session, identity, header):
             return JSONResponse(status_code=403, content=_HEADER_FORBIDDEN)
+        changes_method = ((body.header_text is not None and body.header_text != header.header_text)
+                          or (body.kind is not None and (body.kind or None) != header.kind))
+        copied = changes_method and _header_in_use(session, header_id)
+        if copied:
+            # Unvalidated, as a create is.
+            header = ComputationHeader(
+                header_text=header.header_text, description=header.description, kind=header.kind,
+                owner_id=_caller_id(session, identity),
+            )
         if body.header_text is not None:
             header.header_text = body.header_text
         if body.description is not None:
@@ -1631,7 +1644,19 @@ def api_update_header(
             "description": header.description,
             "kind": header.kind,
             "validated": header.validated,
+            "copied": copied,
         }
+
+
+def _header_in_use(session, header_id: int) -> bool:
+    """Whether any state or task (and so any job) references header *header_id*."""
+    state = session.exec(select(MoleculeState.id).where(
+        (MoleculeState.confsearch_header_id == header_id)
+        | (MoleculeState.optimization_header_id == header_id)
+        | (MoleculeState.singlepoint_header_id == header_id)
+    ).limit(1)).first()
+    task = session.exec(select(ComputationTask.id).where(ComputationTask.header_id == header_id).limit(1)).first()
+    return state is not None or task is not None
 
 
 @router.delete("/api/headers/{header_id}")

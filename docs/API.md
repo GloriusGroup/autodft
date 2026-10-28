@@ -111,10 +111,10 @@ projects first, then deactivate.
 
 Every signed-in account may list, use and create headers — a method
 library is only useful shared. Editing or deleting one is the **owner's**
-or admin's: a header change silently alters what the next submission
-referencing it computes. Someone else's answers **403** with a suggestion
-to copy it, rather than 404, because you can already see it in the
-listing.
+or admin's. Someone else's answers **403** with a suggestion to copy it,
+rather than 404, because you can already see it in the listing. A header
+any state or task uses keeps its text and kind for good: an edit of
+either is saved as a new header (see `PUT /api/headers/{id}`).
 
 The six seeded methods belong to `admin`, as does anything created
 before accounts existed.
@@ -991,6 +991,19 @@ The new header is owned by the caller.
 
 Partial update — pass only the fields you want changed. Owner or admin
 only; someone else's header answers **403** with a suggestion to copy it.
+
+When any state or task (and so any job) references the header, a change of
+`header_text` or `kind` creates a new header instead: the new text, kind and
+description, unvalidated, owned by the caller. The used header is left
+untouched, so its states, retries, follow-ups and the Methods page keep the
+text that ran. A `description` or `validated` change alone, or a body whose
+text and kind equal the stored ones, edits in place. The answer is the
+resulting header with `"copied": true` when a new one was made:
+
+```json
+{ "id": 12, "header_text": "!PBE0 def2-SVP\n", "description": "...",
+  "kind": "optimization", "validated": false, "copied": true }
+```
 
 ### `DELETE /api/headers/{id}`
 

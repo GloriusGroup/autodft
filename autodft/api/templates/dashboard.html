@@ -3650,7 +3650,14 @@
                     body: JSON.stringify(body),
                 });
                 var data = await resp.json();
-                if (resp.ok) {
+                if (resp.ok && data.copied) {
+                    // The old header stays as it ran; the editor now edits the copy.
+                    editingHeaderId = data.id;
+                    document.getElementById('headerEditorTitle').textContent = 'Edit Header #' + data.id;
+                    fb.textContent = 'In use; saved as new header #' + data.id;
+                    fb.className = 'submit-feedback success';
+                    await fetchHeaders();
+                } else if (resp.ok) {
                     fb.textContent = (editingHeaderId == null ? 'Created' : 'Updated') + ' header #' + data.id;
                     fb.className = 'submit-feedback success';
                     await fetchHeaders();

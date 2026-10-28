@@ -919,3 +919,32 @@ def test_start_up_waits_for_whoami_under_the_overlay_and_routes_once():
     assert out["waiting"]["visible"] and out["waiting"]["label"] == "Connecting…"
     assert out["routed"] == [] and out["routedAfter"] == ["projects.molecules"]
     assert not out["end"]["blocked"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+@pytest.mark.parametrize("copied", [True, False])
+def test_saving_a_used_header_says_it_was_saved_as_a_new_one(copied):
+    script = ("var els = {};\n"
+              "var document = {getElementById: function (id) {\n"
+              "    return els[id] || (els[id] = {id: id, value: id === 'headerText' ? '!PBE0' : '', textContent: ''});\n"
+              "}};\n"
+              "var editingHeaderId = 5, refreshed = 0, closed = 0;\n"
+              "function isAbort() { return false; }\n"
+              "async function fetchHeaders() { refreshed++; }\n"
+              "function closeHeaderEditor() { closed++; }\n"
+              "function setTimeout(f) { f(); }\n"
+              "async function loadingFetch(label, url, opts) {\n"
+              f"    return {{ok: true, json: async function () {{ return {{id: {12 if copied else 5}, "
+              f"copied: {json.dumps(copied)}}}; }}}};\n"
+              "}\n"
+              + _functions("saveHeader")
+              + "\nsaveHeader().then(function () { process.stdout.write(JSON.stringify({\n"
+              "    text: els.headerFeedback.textContent, refreshed: refreshed, closed: closed,\n"
+              "    editing: editingHeaderId, title: els.headerEditorTitle && els.headerEditorTitle.textContent})); });\n")
+    out = json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
+    assert out["refreshed"] == 1
+    if copied:
+        assert out == {"text": "In use; saved as new header #12", "refreshed": 1, "closed": 0,
+                       "editing": 12, "title": "Edit Header #12"}
+    else:
+        assert (out["text"], out["closed"]) == ("Updated header #5", 1)
