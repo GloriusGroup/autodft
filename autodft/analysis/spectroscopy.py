@@ -71,7 +71,7 @@ _OPEN = (TaskStatus.created, TaskStatus.pending)
 class Conformer:
     """One S0 optimisation, its outputs read once."""
 
-    conformer_index: int
+    conformer_index: Optional[int]  # None unless the optimisation succeeded
     opt: ComputationTask
     e_singlepoint: Optional[float] = None
     e_combined: Optional[float] = None
@@ -87,7 +87,7 @@ def conformer_pool(
     session: Session, extractor: PipelineExtractor, state: MoleculeState, ir: bool = False,
     sp_require: Iterable[str] = (),
 ) -> list[Conformer]:
-    """Every optimisation of *state*, numbered as on the Molecules page.
+    """Every optimisation of *state*; the successful ones carry their conformer number.
 
     A successful one has its output read once (G - E(el), and the IR modes
     when *ir*) and its energy singlepoint read once -- *sp_require* lets a
@@ -108,14 +108,15 @@ def conformer_pool(
         ).all()
     } if opts else {}
     checks = results.connectivity_by_task(session, [o.id for o in opts])
+    numbers = results.conformer_numbers(opts)
     pool = []
-    for index, opt in enumerate(opts, 1):
+    for opt in opts:
         record = (
             results.for_task(session, opt, require=("ir_modes",) if ir else ())
             if opt.status == TaskStatus.successful else None
         )
         note = results.record_exclusion(record, state) if record is not None else None
-        conformer = Conformer(index, opt, degeneracy=starts.get(opt.input_geometry_id) or 1,
+        conformer = Conformer(numbers.get(opt.id), opt, degeneracy=starts.get(opt.input_geometry_id) or 1,
                               connectivity_ok=checks[opt.id]["ok"] if opt.id in checks else None, note=note)
         pool.append(conformer)
         if record is None or results.excludes(note):
@@ -417,7 +418,7 @@ def freeze(project_name: str, settings) -> int:
 
 
 def broken_geometries(session: Session, s0: MoleculeState) -> list[dict]:
-    """Optimisations in *s0*'s state family whose geometry lost bonds, numbered as on the Molecules page."""
+    """Successful optimisations in *s0*'s state family whose geometry lost bonds, with their conformer numbers."""
     states = session.exec(
         select(MoleculeState).where(
             MoleculeState.molecule_id == s0.molecule_id,
@@ -435,12 +436,12 @@ def broken_geometries(session: Session, s0: MoleculeState) -> list[dict]:
     checks = results.connectivity_by_task(session, [o.id for o in opts])
     out = []
     for state in states:
-        mine = [o for o in opts if o.state_id == state.id]
-        for index, opt in enumerate(mine, 1):
-            found = checks.get(opt.id)
+        numbers = results.conformer_numbers(o for o in opts if o.state_id == state.id)
+        for opt_id, index in numbers.items():
+            found = checks.get(opt_id)
             if found is not None and not found["ok"]:
                 out.append({"state": state.description, "state_id": state.id, "conformer_index": index,
-                            "opt_task_id": opt.id, "detail": found["detail"]})
+                            "opt_task_id": opt_id, "detail": found["detail"]})
     return out
 
 

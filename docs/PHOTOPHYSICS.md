@@ -499,14 +499,12 @@ still report the lowest conformer; g changes only these weights (UV/Vis,
 IR, NMR, NBO).
 
 A molecule never mixes scales across its conformers. Conformer numbers in
-the photophysics data are the same 1-based numbering as the Molecules
-page.
+the photophysics data count the state's successful optimisations by id,
+from 1, as the CSV, the export tree and the Molecules page do.
 
 A conformer whose data is in but whose energy is not yet (or never will
 be) is left out of the weights and counted as `pending` (or
-`unweighted`). Photophysics conformer numbers count every optimisation,
-like the Molecules page; the CSV summary export counts only successful
-optimisations, so the two differ when an earlier optimisation failed.
+`unweighted`).
 
 ## Exports, archive and cleanup
 

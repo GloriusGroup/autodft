@@ -4708,7 +4708,9 @@
                         if (ci === 0) {
                             cells.push('<td rowspan="' + rowsForState + '" class="mol-state" title="charge ' + st.charge + ' / mult ' + st.multiplicity + '">' + escHtml(st.description) + '</td>');
                         }
-                        cells.push('<td class="mol-conf">' + escHtml(c.index) + brokenBadge(c.connectivity) + '</td>');
+                        // Only successful optimisations carry a conformer number.
+                        var confNo = c.index == null ? '<em style="color:var(--text-muted);" title="only successful optimisations are numbered">—</em>' : escHtml(c.index);
+                        cells.push('<td class="mol-conf">' + confNo + brokenBadge(c.connectivity) + '</td>');
                         cells.push('<td>' + statusCell(c.optimization) + spExtraSlot(c, 'optimization') + '</td>');
                         cells.push('<td>' + statusCell(c.singlepoint) + spExtraSlot(c, 'singlepoint') + '</td>');
                         cells.push('<td>' + statusCell(c.singlepoint_vert_ox) + spExtraSlot(c, 'singlepoint_vert_ox') + '</td>');

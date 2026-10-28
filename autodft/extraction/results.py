@@ -19,7 +19,7 @@ from sqlmodel import Session, case, col, func, select
 from autodft import categories
 from autodft.db import get_session
 from autodft.extraction import connectivity
-from autodft.models import ComputationJob, ComputationTask, Molecule, MoleculeState, TaskType
+from autodft.models import ComputationJob, ComputationTask, Molecule, MoleculeState, TaskStatus, TaskType
 from autodft.models.result import JobResult
 from autodft.qm.orca import esd_parser
 from autodft.qm.orca.esd_parser import Rate
@@ -366,6 +366,12 @@ def for_task(session: Session, task: ComputationTask, require: Iterable[str] = (
     """The record of *task*'s latest successful job, or None."""
     job = latest_successful_job(session, task.id)
     return for_job(session, job, task.task_type.value, require) if job is not None else None
+
+
+def conformer_numbers(opts: Iterable[ComputationTask]) -> dict[int, int]:
+    """Conformer number by task id: one state's successful optimisations by id, from 1."""
+    done = sorted(t.id for t in opts if t.task_type == TaskType.optimization and t.status == TaskStatus.successful)
+    return {task_id: number for number, task_id in enumerate(done, 1)}
 
 
 def exclusion(session: Session, opt_task: ComputationTask, state: MoleculeState) -> Optional[str]:

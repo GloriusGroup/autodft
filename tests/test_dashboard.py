@@ -772,6 +772,21 @@ def test_energies_that_land_mid_chunking_reach_the_later_chunks():
     assert out["urls"][1] == "/api/projects/p/sp-energies"
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_an_unsuccessful_optimisation_has_no_conformer_number():
+    out = _run_molecules("""
+        var page = loadMoleculesPage();
+        fetches[0].resolve({ molecules: [{ id: 1, smiles: 'C', states: [{ description: 'S0', charge: 0, multiplicity: 1,
+            conformers: [{ index: null, optimization: 'failed', tasks: {} },
+                         { index: 1, optimization: 'successful', tasks: {} }] }] }] });
+        await page;
+        flush();
+        out.conf = els.moleculesTableBody.children.map(function (r) { return /class="mol-conf"[^>]*>(.*?)<\\/td>/.exec(r.html)[1]; });
+    """)
+    assert "—" in out["conf"][0] and "null" not in out["conf"][0]
+    assert out["conf"][1] == "1"
+
+
 _MOLECULES_STUB = r"""
 // Rows as objects; enough of tbody for loadMoleculesPage and appendMolChunks.
 function Body() { this.children = []; }

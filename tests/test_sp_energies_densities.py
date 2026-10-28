@@ -323,6 +323,20 @@ class TestTaskFiles:
         assert response.headers["content-disposition"].endswith('_red_conf1_sp.out"')
         assert _file(env, "ox").headers["content-disposition"].endswith('_S0_conf1_vert_ox.out"')
 
+    def test_conformers_count_successful_optimisations(self, world):
+        env, session, w, state = world
+        w.task(state, TaskType.optimization, status=TaskStatus.failed)
+        first = w.task(state, TaskType.optimization, output=_output(-1.0, 0.1))
+        second = w.task(state, TaskType.optimization, output=_output(-1.1, 0.1))
+        sp = w.task(state, TaskType.singlepoint, parent=second, output=_output(-1.5))
+        mols = _get(env, "/api/projects/owner:p/molecules-detail").json()["molecules"]
+        confs = next(m for m in mols if m["id"] == state.molecule_id)["states"][0]["conformers"]
+        assert [(c["index"], c["optimization"]) for c in confs] == [
+            (None, "failed"), (1, "successful"), (2, "successful")]
+        for task, name in ((first, "conf1_opt.out"), (second, "conf2_opt.out"), (sp, "conf2_sp.out")):
+            response = _get(env, f"/api/projects/owner:p/tasks/{task.id}/files/out")
+            assert response.headers["content-disposition"].endswith(f'_S0_{name}"')
+
     def test_unknown_kind(self, env):
         assert _file(env, "opt", "gbw").status_code == 400
 

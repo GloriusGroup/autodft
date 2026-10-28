@@ -478,6 +478,10 @@ plus `esd`: one combined status (`failed` > `pending` > `created` >
 `singlepoint_soc` and every `esd_*` rate task. This is what the
 dashboard's *Project Overview → Molecules* subpage renders.
 
+`index` is the conformer number: the 1-based position among the state's
+successful optimisations by id, as in the exports. An optimisation that
+has not succeeded is listed with `index: null`.
+
 A conformer whose optimisation was judged since the broken-bond check
 existed adds `connectivity`: `{"ok": false, "lost": true, "fragments": 2,
 "detail": "dissociated: 2 fragments (C4H8F + H); C-H bonds 9 -> 8"}`
@@ -748,7 +752,8 @@ one). `spin` (Natural Spin Density) is present only on an open-shell
 state's atoms; a closed-shell state's atoms carry no `spin` key.
 
 `conformer_index` is the conformer's 1-based position among the state's
-optimisation tasks by id, the same numbering as the Molecules page.
+successful optimisation tasks by id, the same numbering as the CSV, the
+export tree and the Molecules page.
 `degeneracy` is GOAT's g of the conformer the optimisation started from (1
 without one); `weight` ∝ g·exp(−E/kT). A conformer whose optimisation was
 flagged by the broken-bond check adds `connectivity_ok: false`; see

@@ -305,6 +305,34 @@ def test_a_broken_geometry_is_listed_on_the_molecule(project):
     }]
 
 
+def test_conformers_are_numbered_by_successful_optimisations(project):
+    from autodft.models.result import JobResult
+
+    jobs = project["tmp_path"] / "renumbered"
+    with get_session() as session:
+        mol = Molecule(smiles="CC#N", project_name="nho/p")
+        session.add(mol)
+        session.commit()
+        state = MoleculeState(molecule_id=mol.id, description="S0", multiplicity=1, charge=0,
+                              metadata_json=json.dumps({categories.UVVIS: True, categories.IR: True}))
+        session.add(state)
+        session.commit()
+        _conformer(session, jobs, state, 1, None, None, opt_status=TaskStatus.failed)
+        _conformer(session, jobs, state, 2, -100.0, TaskStatus.successful)
+        second = _conformer(session, jobs, state, 3, -100.0, TaskStatus.successful)
+        job = results.latest_successful_job(session, second.id)
+        record = results.parse_job("optimization", Path(job.job_path), True)
+        session.add(JobResult(job_id=job.id, task_id=second.id, job_path=job.job_path, finished_at=job.time_end,
+                              parser_version=results.PARSER_VERSION,
+                              data_json=json.dumps({**record, "connectivity": {"ok": False, "detail": "x"}})))
+        session.commit()
+        mol_id, second_id = mol.id, second.id
+    detail = analyze_spectra("nho/p", molecule_id=mol_id, use_cache=False)["molecules"][0]
+    assert [c["conformer_index"] for c in detail["uvvis"]["conformers"]] == [1, 2]
+    assert [c["conformer_index"] for c in detail["ir"]["conformers"]] == [1, 2]
+    assert [(b["conformer_index"], b["opt_task_id"]) for b in detail["broken_bonds"]] == [(2, second_id)]
+
+
 def test_goat_degeneracy_enters_the_weights(project):
     from autodft.models import MoleculeGeometry
 

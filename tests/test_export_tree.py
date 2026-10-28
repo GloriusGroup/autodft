@@ -157,6 +157,27 @@ def test_summary_files_at_the_root(db):
         assert [r["conformer_index"] for r in csv.DictReader(f)] == ["1", "2"]
 
 
+def test_conformers_are_numbered_by_successful_optimisations(db):
+    with get_session() as session:
+        state = _molecule(session, {"imag_freq_tolerance": -10.0})
+        session.add(ComputationTask(task_type=TaskType.optimization, status=TaskStatus.failed, state_id=state.id,
+                                    header_id=1, has_followups=False))
+        session.commit()
+        first = _conformer(session, db, state, "a", -2.0).id
+        second = _conformer(session, db, state, "b", -1.0).id
+        opts = session.exec(select(ComputationTask).where(ComputationTask.task_type == TaskType.optimization)).all()
+        assert results.conformer_numbers(opts) == {first: 1, second: 2}
+        mol_id = state.molecule_id
+    _export(db, all_conformers=True)
+    with open(_root(db) / "p_all_conformers.csv", newline="", encoding="utf-8") as f:
+        assert [(r["opt_task_id"], r["conformer_index"]) for r in csv.DictReader(f)] == [
+            (str(first), "1"), (str(second), "2")]
+    assert {p.split("/")[1] for p in _tree(db, mol_id) if p.count("/") == 2} == {"conf1", "conf2"}
+    manifest = json.loads((_root(db) / "molecules" / str(mol_id) / "molecule.json").read_text())
+    assert [(c["opt_task_id"], c["conformer_index"], c["folder"]) for c in manifest["states"][0]["conformers"]] == [
+        (first, 1, "S0/conf1"), (second, 2, "S0/conf2")]
+
+
 def test_lowest_only_writes_reported_conformer(db):
     mol_id, _, _ = _standard(db, low_first=False)
     _export(db)

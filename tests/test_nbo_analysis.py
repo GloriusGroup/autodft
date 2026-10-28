@@ -113,6 +113,17 @@ class TestMoleculeNbo:
         assert s0["extremes"]["most_positive"]["element"] == "C"
         assert [c["conformer_index"] for c in s0["conformers"]] == [1, 2]
 
+    def test_conformers_are_numbered_by_successful_optimisations(self, db):
+        with get_session() as session:
+            _mol, state = _state(session, "nho/p", metadata={categories.NBO: True})
+            session.add(ComputationTask(task_type=TaskType.optimization, status=TaskStatus.failed,
+                                        state_id=state.id, header_id=1, has_followups=False))
+            session.commit()
+            _conformer(session, db, state, 1, -100.0, [("C", -0.30, None)])
+            _conformer(session, db, state, 2, -100.0, [("C", -0.20, None)])
+            payload = nbo.molecule_nbo(session, PipelineExtractor("nho/p"), state, True)
+        assert [c["conformer_index"] for c in payload["states"][0]["conformers"]] == [1, 2]
+
     def test_state_order_follows_s0_t1_ox_red(self, db):
         with get_session() as session:
             mol, s0 = _state(session, "nho/p", "S0", metadata={categories.NBO: True})

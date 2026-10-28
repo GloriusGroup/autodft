@@ -781,11 +781,13 @@ def api_project_molecules_detail(
                 (t for t in tasks_by_state.get(st.id, []) if t.task_type == TaskType.optimization),
                 key=lambda t: t.id,
             )
+            # Only successful optimisations are numbered, as in the exports.
+            numbers = stored.conformer_numbers(opt_tasks)
             conformers = []
-            for idx, opt in enumerate(opt_tasks, start=1):
+            for opt in opt_tasks:
                 deps = {d.task_type: d for d in deps_by_parent.get(opt.id, [])}
                 conformers.append({
-                    "index": idx,
+                    "index": numbers.get(opt.id),
                     "optimization":                  opt.status.value,
                     "singlepoint":                   _status_of(deps.get(TaskType.singlepoint)),
                     "singlepoint_vert_ox":           _status_of(deps.get(TaskType.singlepoint_vert_ox)),
@@ -1025,16 +1027,15 @@ def api_project_task_file(
         if kind == "xyz" and task.task_type != TaskType.optimization:
             return JSONResponse(status_code=404, content={"detail": "Only an optimisation has an output geometry."})
         state = session.get(MoleculeState, task.state_id)
-        # Conformers are numbered as on the molecules page: the state's optimisations by id.
-        opt_ids = list(session.exec(
-            select(ComputationTask.id).where(
+        numbers = stored.conformer_numbers(session.exec(
+            select(ComputationTask).where(
                 ComputationTask.state_id == task.state_id, ComputationTask.task_type == TaskType.optimization,
-            ).order_by(col(ComputationTask.id).asc())
+            )
         ).all())
         job = stored.latest_successful_job(session, task.id)
 
     opt_id = task.id if task.task_type == TaskType.optimization else task.depends_on_task_id
-    conf = opt_ids.index(opt_id) + 1 if opt_id in opt_ids else 0
+    conf = numbers.get(opt_id, 0)
     label = re.sub(r"[^A-Za-z0-9._-]+", "_", state.description or "state")
     filename = f"mol{state.molecule_id}_{label}_conf{conf}_{_TREE_STEMS[task.task_type.value]}.{kind}"
     job_dir = Path(job.job_path) if job is not None and job.job_path else None

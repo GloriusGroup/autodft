@@ -118,10 +118,14 @@ def db(tmp_path):
     reset_engine()
 
 
-def _glyoxal(session, tmp_path, method=None, inp=B3LYP_NMR, reference="tms"):
+def _glyoxal(session, tmp_path, method=None, inp=B3LYP_NMR, reference="tms", failed_first=False):
     metadata = {categories.NMR: True, "nmr_nuclei": ["H", "C", "F"], "nmr_reference": reference,
                 **({"nmr_method": method} if method else {})}
     _, state = _state(session, "O=CC=O", "nho/p", metadata)
+    if failed_first:
+        failed = _task(session, state, TaskType.optimization)
+        failed.status = TaskStatus.failed
+        session.commit()
     geom = MoleculeGeometry(state_id=state.id, xyz_data=(FIXTURES / "glyoxal_s0.xyz").read_text())
     session.add(geom)
     session.commit()
@@ -173,6 +177,13 @@ def test_the_summary_counts_and_carries_no_signals(db):
     assert summary["signals"] == {"H": 1, "C": 1}
     assert summary["reference"]["H"]["status"] == "ok"
     assert "nuclei" not in summary and "conformers" not in summary
+
+
+def test_conformers_are_numbered_by_successful_optimisations(db):
+    with get_session() as session:
+        _glyoxal(session, db, failed_first=True)
+        _tms(session, db)
+    assert [c["conformer_index"] for c in _detail()["conformers"]] == [1]
 
 
 def test_shifts_against_chloroform_add_its_shift_in_the_solvent(db):

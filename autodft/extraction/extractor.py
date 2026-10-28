@@ -194,10 +194,11 @@ class PipelineExtractor:
             ).order_by(ComputationTask.id.asc())  # type: ignore[union-attr]
         ).all()
 
+        numbers = stored.conformer_numbers(opt_tasks)
         results: list[ConformerResult] = []
-        for conf_idx, opt_task in enumerate(opt_tasks, 1):
+        for opt_task in opt_tasks:
             result = self._extract_conformer_energies(
-                session, mol, state, opt_task, conf_idx,
+                session, mol, state, opt_task, numbers[opt_task.id],
             )
             if result is not None:
                 results.append(result)
@@ -518,8 +519,10 @@ class PipelineExtractor:
         confsearch = next((t for t in tasks if t.task_type == TaskType.confsearch), None)
         if confsearch is not None:
             add(confsearch, state.description)
+        numbers = stored.conformer_numbers(opts)
         conformers = []
-        for index, opt in enumerate(opts, 1):
+        for opt in opts:
+            index = numbers[opt.id]
             folder = f"{state.description}/conf{index}" if opt.id in written else None
             members = [opt, *(t for t in tasks if t.depends_on_task_id == opt.id and t not in opts)]
             for task in members:
