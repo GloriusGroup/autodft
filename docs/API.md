@@ -528,8 +528,13 @@ project, for `xyz` on a singlepoint, and when the file is no longer on disk.
 
 Triplet energies, redox free energies / E vs SCE in MeCN, and 4-point
 Marcus reorganisation energies, for both the `lowest_energy` and the
-`rmsd_matched` conformer-selection modes. Solvation is detected from the
-header text; without it, redox values are reported as ΔG only. A pick
+`rmsd_matched` conformer-selection modes. E vs SCE needs both singlepoints
+whose energies enter ΔG (S0 and ox/red) in MeCN, read from each state's
+header as rendered with its Advanced settings; the optimisation's solvation
+does not count. Otherwise ox/red report ΔG only, and when an optimisation
+or singlepoint involved was in MeCN they add a `note` saying which
+singlepoint was not. `solvation_mecn` is true when any singlepoint ran in
+MeCN. A pick
 whose optimisation has a broken-bond check adds `connectivity` (same shape
 as in `molecules-detail`). One entry per method family, a molecule's states
 at one header set: a molecule resubmitted at other headers has an entry for

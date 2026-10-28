@@ -7,8 +7,8 @@ per conformer-selection mode:
   - T1 reorganisation energy   full 4-point Marcus on the S0↔T1 surface,
                                requires e_vert_spin_change on BOTH sides
   - Redox free energies        ΔG_ox = G(ox) − G(S0), ΔG_red = G(S0) − G(red)
-  - E vs SCE in MeCN           ΔG/F − E_ref_SCE  (only when MeCN solvation
-                               is detected in any header)
+  - E vs SCE in MeCN           ΔG/F − E_ref_SCE  (only when both states'
+                               singlepoints ran in MeCN)
   - Redox reorganisation       4-point Marcus on each S0↔ox / S0↔red surface,
                                requires the appropriate vertical SP on
                                both ends
@@ -146,6 +146,8 @@ class StatePick:
     e_vert_red: Optional[float]          # Hartree
     e_vert_spin_change: Optional[float]  # Hartree
     connectivity: Optional[dict] = None  # stored bond check of the optimisation (new jobs only)
+    opt_mecn: bool = False               # optimisation ran in MeCN
+    sp_mecn: bool = False                # singlepoint ran in MeCN
 
 
 @dataclass
@@ -164,14 +166,24 @@ class ModeAnalysis:
     ox_E_vs_sce_v: Optional[float] = None
     ox_lambda_fwd_h: Optional[float] = None
     ox_lambda_bwd_h: Optional[float] = None
+    ox_note: Optional[str] = None  # why E vs SCE is missing
     # Reduction: same layout as ox.
     red_dG_h: Optional[float] = None
     red_E_vs_sce_v: Optional[float] = None
     red_lambda_fwd_h: Optional[float] = None
     red_lambda_bwd_h: Optional[float] = None
+    red_note: Optional[str] = None
 
 
-def _compute_derived(picks: dict[str, StatePick], mecn: bool) -> ModeAnalysis:
+def _sce_note(pair: tuple[StatePick, StatePick]) -> Optional[str]:
+    """Why ΔG over *pair* has no E vs SCE; None for an all-gas pair."""
+    gas = [p.state for p in pair if not p.sp_mecn]
+    if not any(p.opt_mecn or p.sp_mecn for p in pair):
+        return None
+    return f"E vs SCE needs MeCN singlepoints; {' and '.join(gas)} {'is' if len(gas) == 1 else 'are'} not in MeCN"
+
+
+def _compute_derived(picks: dict[str, StatePick]) -> ModeAnalysis:
     """Compute every derived quantity in Hartree (energies) and V
     (redox potentials).
 
@@ -201,8 +213,11 @@ def _compute_derived(picks: dict[str, StatePick], mecn: bool) -> ModeAnalysis:
     # ── Oxidation ─────────────────────────────────────────────────────
     if s0 and ox and s0.e_combined is not None and ox.e_combined is not None:
         ana.ox_dG_h = ox.e_combined - s0.e_combined
-        if mecn:
+        # ΔG takes its electronic energies from the singlepoints.
+        if s0.sp_mecn and ox.sp_mecn:
             ana.ox_E_vs_sce_v = ana.ox_dG_h * HARTREE_TO_EV - SCE_ABS_MECN
+        else:
+            ana.ox_note = _sce_note((s0, ox))
 
     # λ_ox_fwd: on ox surface = E_vert_ox(S0) − E_sp(ox)
     if s0 and ox and s0.e_vert_ox is not None and ox.e_sp is not None:
@@ -217,8 +232,10 @@ def _compute_derived(picks: dict[str, StatePick], mecn: bool) -> ModeAnalysis:
     # (E°_red,SCE = ΔG/F − E_ref).
     if s0 and red and s0.e_combined is not None and red.e_combined is not None:
         ana.red_dG_h = s0.e_combined - red.e_combined
-        if mecn:
+        if s0.sp_mecn and red.sp_mecn:
             ana.red_E_vs_sce_v = ana.red_dG_h * HARTREE_TO_EV - SCE_ABS_MECN
+        else:
+            ana.red_note = _sce_note((s0, red))
 
     # λ_red_fwd: on red surface = E_vert_red(S0) − E_sp(red)
     if s0 and red and s0.e_vert_red is not None and red.e_sp is not None:
@@ -421,21 +438,19 @@ def _analyze_project_uncached(project_name: str) -> dict:
             if st.description == "S0":
                 s0_of.setdefault(family_of[st.id], st.id)
 
-        # Decided per family: one solvated header must not reference a
-        # gas-phase family's potential against the solvated SCE scale.
-        # Each header is read as rendered with its state's Advanced settings.
+        # State id -> (opt, SP) in MeCN, each header read as rendered with the state's Advanced settings.
         _header_by_id = {h.id: h for h in headers}
-        mecn_by_family: dict[tuple, bool] = {}
+        mecn_of: dict[int, tuple[bool, bool]] = {}
         for st in states:
             metadata = json.loads(st.metadata_json) if st.metadata_json else {}
-            st_mecn = any(
-                detects_mecn_solvation(effective_header(_header_by_id[hid].header_text, metadata, stage))
+            opt_mecn, sp_mecn = (
+                hid in _header_by_id
+                and detects_mecn_solvation(effective_header(_header_by_id[hid].header_text, metadata, stage))
                 for hid, stage in ((st.optimization_header_id, "optimization"),
                                    (st.singlepoint_header_id, "singlepoint"))
-                if hid in _header_by_id
             )
-            mecn_by_family[family_of[st.id]] = mecn_by_family.get(family_of[st.id], False) or st_mecn
-        solvation_mecn = any(mecn_by_family.values())
+            mecn_of[st.id] = (opt_mecn, sp_mecn)
+        solvation_mecn = any(sp for _, sp in mecn_of.values())
 
         opt_task_ids = [r.opt_task_id for r in all_results]
         opt_tasks = (
@@ -490,6 +505,7 @@ def _analyze_project_uncached(project_name: str) -> dict:
             return None
 
     def _pick_from(state: str, r: ConformerResult, ref: Optional[np.ndarray]) -> StatePick:
+        opt_mecn, sp_mecn = mecn_of.get(opt_by_id[r.opt_task_id].state_id, (False, False))
         return StatePick(
             state=state,
             conformer_index=r.conformer_index,
@@ -502,6 +518,8 @@ def _analyze_project_uncached(project_name: str) -> dict:
             e_vert_red=r.e_vert_red,
             e_vert_spin_change=r.e_vert_spin_change,
             connectivity=connectivity.get(r.opt_task_id),
+            opt_mecn=opt_mecn,
+            sp_mecn=sp_mecn,
         )
 
     out_mols = []
@@ -555,8 +573,7 @@ def _analyze_project_uncached(project_name: str) -> dict:
             if cand is None:
                 continue
             picks_low[st] = _pick_from(st, cand, s0_ref_coords)
-        mol_mecn = mecn_by_family.get(family, False)
-        ana_low = _compute_derived(picks_low, mol_mecn)
+        ana_low = _compute_derived(picks_low)
         ana_low.mode = "lowest_energy"
 
         # Mode 2 — RMSD-matched conformer per state (S0 keeps its lowest)
@@ -582,7 +599,7 @@ def _analyze_project_uncached(project_name: str) -> dict:
                 # to the lowest-energy pick so derived quantities still
                 # populate. Tagged via rmsd_to_s0 = None.
                 picks_rmsd[st] = picks_low[st]
-        ana_rmsd = _compute_derived(picks_rmsd, mol_mecn)
+        ana_rmsd = _compute_derived(picks_rmsd)
         ana_rmsd.mode = "rmsd_matched"
 
         out_mols.append({
@@ -606,7 +623,7 @@ def _analyze_project_uncached(project_name: str) -> dict:
 
 
 def _ana_to_dict(a: ModeAnalysis) -> dict:
-    return {
+    out = {
         "mode": a.mode,
         "picks": {
             st: _pick_to_dict(p)
@@ -630,6 +647,11 @@ def _ana_to_dict(a: ModeAnalysis) -> dict:
             "lambda_bwd_h":  a.red_lambda_bwd_h,
         },
     }
+    # Only a potential withheld for mixed solvation has one.
+    for key, note in (("ox", a.ox_note), ("red", a.red_note)):
+        if note:
+            out[key]["note"] = note
+    return out
 
 
 def _pick_to_dict(p: StatePick) -> dict:
