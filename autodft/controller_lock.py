@@ -75,8 +75,11 @@ def acquire(settings) -> Path:
             continue  # released meanwhile
         if not holder:
             raise LockHeld(f"{path} is unreadable; remove it if no controller runs")
+        if holder.get("host") == me["host"] and holder.get("pid") == me["pid"]:
+            return path  # our own link, its EEXIST an NFS retransmit
         if holder.get("host") != me["host"] or _alive(holder.get("pid")):
-            raise LockHeld(f"a controller holds {path}: {describe(holder)}")
+            raise LockHeld(f"a controller holds {path}: {describe(holder)}; "
+                           f"delete {path} if no controller is running")
         # Stale: move it aside, then check it was the record judged dead.
         stale = path.with_name(f"{path.name}.stale.{me['host']}.{me['pid']}")
         try:

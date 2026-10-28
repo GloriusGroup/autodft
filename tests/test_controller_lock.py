@@ -83,11 +83,28 @@ def test_acquire_writes_host_and_pid_and_release_removes_it(settings):
     assert not path.exists()
 
 
-def test_a_second_acquire_is_refused_while_held(settings):
-    path = controller_lock.acquire(settings)
-    with pytest.raises(controller_lock.LockHeld, match=f"pid {os.getpid()} on {HOST}"):
+def test_an_acquire_is_refused_while_another_live_pid_holds_it(settings):
+    _hold(settings, HOST, os.getppid())
+    with pytest.raises(controller_lock.LockHeld, match=f"pid {os.getppid()} on {HOST}"):
         controller_lock.acquire(settings)
+    assert _holder(settings)["pid"] == os.getppid()
+
+
+def test_a_lock_naming_this_host_and_pid_is_acquired(settings):
+    """An NFS link() retransmit reports EEXIST for the link it made: the record is ours."""
+    _hold(settings, HOST, os.getpid())
+    path = controller_lock.acquire(settings)
+    assert path == controller_lock.lock_path(settings)
     controller_lock.release(path)
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("host, pid", [("controller.elsewhere", 1), (HOST, os.getppid())])
+def test_the_held_message_says_to_delete_the_lock_if_no_controller_runs(settings, host, pid):
+    _hold(settings, host, pid)
+    with pytest.raises(controller_lock.LockHeld) as info:
+        controller_lock.acquire(settings)
+    assert f"delete {controller_lock.lock_path(settings)} if no controller is running" in str(info.value)
 
 
 def test_release_leaves_another_holders_lock(settings):
@@ -111,13 +128,13 @@ def test_run_releases_the_lock_when_the_tick_raises(settings, worker, monkeypatc
 
 
 def test_run_refuses_while_a_live_controller_on_this_host_holds_it(settings, worker):
-    _hold(settings, HOST, os.getpid())
+    _hold(settings, HOST, os.getppid())
     result = _run()
     assert result.exit_code == 1
-    assert f"pid {os.getpid()} on {HOST}" in result.output
+    assert f"pid {os.getppid()} on {HOST}" in result.output
     assert worker.seen == []
     assert not (settings.data_path / "autodft.db").exists()  # before any database work
-    assert _holder(settings)["pid"] == os.getpid()
+    assert _holder(settings)["pid"] == os.getppid()
 
 
 def test_run_refuses_a_lock_naming_another_host(settings, worker):

@@ -275,8 +275,10 @@ Production always starts it as
 
 Before any scheduler or database work, `run` takes `<data_path>/controller.lock`,
 which records the host, pid and start time. A second `run` exits 1 and names
-the holder while the lock names a live pid on this host or names another host.
-A lock left on this host by a dead pid (a killed controller) is taken over. The
+the holder while the lock names a live pid on this host or names another host;
+the message says to delete the lock if no controller is running. A lock left on
+this host by a dead pid (a killed controller) is taken over, and one naming this
+host and the process's own pid (an NFS `link()` retransmit) counts as taken. The
 lock is removed on exit. To move the controller to another host, stop it
 there first, or delete a lock whose controller is gone for certain.
 
