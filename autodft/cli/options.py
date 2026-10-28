@@ -23,7 +23,7 @@ def required_config_option():
     return typer.Option(..., "--config", help="Path to config TOML file (required)")
 
 
-def read_only_settings(config: Optional[str]):
+def cli_settings(config: Optional[str]):
     """Settings of *config*; exit 1 when controller.lock names another host (SQLite on NFS: one host only)."""
     from autodft.config import load_cli_settings
     from autodft.controller_lock import describe, other_host

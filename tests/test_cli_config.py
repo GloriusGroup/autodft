@@ -219,21 +219,35 @@ def _lock(config: Path, host: str) -> None:
     (data / "controller.lock").write_text(json.dumps({"host": host, "pid": 1, "started": "then"}))
 
 
-@pytest.mark.parametrize("command", [["status", "overview"], ["admin", "progress", "--project", PROJECT]])
-def test_read_only_commands_refuse_when_the_controller_runs_on_another_host(site, command):
-    config, _, _ = site
+@pytest.mark.parametrize("command", sorted(ARGS), ids=" ".join)
+def test_every_command_refuses_before_the_database_when_the_controller_runs_on_another_host(
+    command, tmp_path, monkeypatch,
+):
+    config = _write_config(tmp_path / "site.toml", tmp_path / "site")
+    (tmp_path / "site").mkdir()
     _lock(config, "controller.elsewhere")
-    result = runner.invoke(app, [*command, "--config", str(config)])
-    assert result.exit_code == 1
+    monkeypatch.chdir(tmp_path)
+    reset_engine()
+
+    result = runner.invoke(app, [*command, *ARGS[command], "--config", str(config)])
+
+    assert result.exit_code == 1, result.output
     assert "controller.elsewhere" in result.output
+    assert not (tmp_path / "site" / "autodft.db").exists()
+    reset_engine()
 
 
-def test_read_only_commands_proceed_when_the_controller_runs_on_this_host(site):
-    config, _, _ = site
+@pytest.mark.parametrize("command", [["status", "molecules"], ["admin", "requeue-failed"]])
+def test_commands_proceed_when_the_controller_runs_on_this_host(site, command):
+    config, ids, db_file = site
     _lock(config, socket.gethostname())
-    result = runner.invoke(app, ["status", "molecules", "--config", str(config)])
+    result = runner.invoke(app, [*command, "--config", str(config)])
     assert result.exit_code == 0, result.output
-    assert SMILES in result.output
+    if command[0] == "status":
+        assert SMILES in result.output
+    else:
+        (status,) = _read(db_file, select(ComputationTask.status).where(ComputationTask.id == ids["failed"]))
+        assert status == TaskStatus.created
 
 
 def test_export_files_registers_its_settings_for_frozen_payloads(site, tmp_path):

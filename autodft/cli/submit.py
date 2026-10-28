@@ -363,9 +363,9 @@ def submit(
 ) -> None:
     """Submit a single molecule by SMILES string."""
     options = dict(locals())  # the parameters, for _advanced_from_options
-    from autodft.config import load_settings
+    from autodft.cli.options import cli_settings
 
-    settings = load_settings(config)
+    settings = cli_settings(config)
     init_db(settings)
 
     _check_reference_state(smiles, request_t1, request_ox, request_red)
@@ -525,9 +525,9 @@ def submit_batch(
 ) -> None:
     """Submit molecules from a CSV file."""
     options = dict(locals())  # the parameters, for _advanced_from_options
-    from autodft.config import load_settings
+    from autodft.cli.options import cli_settings
 
-    settings = load_settings(config)
+    settings = cli_settings(config)
     init_db(settings)
 
     if not file.exists():

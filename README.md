@@ -109,7 +109,10 @@ The loader merges three layers, highest-priority last:
    `admin` command but `progress`. Without it they exit before loading
    anything. The read-only `status *` and `admin progress` default to
    `config/reaction.toml` of the checkout they run from (beside the `autodft`
-   package), whatever the current directory
+   package), whatever the current directory. Every command but `run` exits 1,
+   naming the host, before opening the database when
+   `<data_path>/controller.lock` names another host (SQLite on NFS: one host
+   only); without a lock file it proceeds. `run` refuses through the lock itself
 3. environment variables (`AUTODFT_*`)
 
 Loading is strict: a `--config` path that does not exist, a key or section
@@ -866,10 +869,10 @@ The CLI talks to the database directly, with no account behind it, so
 `--project` wants the **qualified** name (`admin/phenols`, not
 `phenols`) — that is the string stored on every molecule. Each command
 reads the database of `--config`, by default the checkout's
-`config/reaction.toml`. They exit 1, naming the host, when
-`<data_path>/controller.lock` says the controller runs on another host: the
-SQLite database on NFS may be opened from one host only. Without a lock file
-they proceed:
+`config/reaction.toml`. They, and every `submit` and `admin` command, exit 1,
+naming the host, when `<data_path>/controller.lock` says the controller runs on
+another host: the SQLite database on NFS may be opened from one host only.
+Without a lock file they proceed:
 
 ```bash
 autodft status overview                          # totals
