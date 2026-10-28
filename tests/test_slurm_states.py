@@ -345,3 +345,13 @@ class TestUnsatisfiableGuard:
         assert sum(c[0] == "scancel" for c in fake.calls) == 10
         assert [j.success for j in jobs[:10]] == [False] * 10
         assert not any(r.levelno == logging.CRITICAL for r in caplog.records)
+
+
+def test_the_login_shell_fallback_quotes_pipe_formats(monkeypatch):
+    import shutil
+
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    cmd = SlurmScheduler._command(["printf", "%s", "%i|%T|%r"])
+    assert cmd[:3] == ["bash", "-l", "-c"]
+    out = subprocess.run(["bash", "-c", cmd[3]], capture_output=True, text=True)
+    assert out.stdout == "%i|%T|%r"

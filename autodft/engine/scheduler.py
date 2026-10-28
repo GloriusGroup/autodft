@@ -9,6 +9,7 @@ from __future__ import annotations
 import getpass
 import logging
 import os
+import shlex
 import subprocess
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -125,7 +126,7 @@ class SlurmScheduler(Scheduler):
         if shutil.which(argv[0]) is not None:
             return argv
         logger.debug("%s not on PATH; falling back to a login shell", argv[0])
-        return SlurmScheduler._LOGIN_SHELL + [" ".join(str(a) for a in argv)]
+        return SlurmScheduler._LOGIN_SHELL + [shlex.join(str(a) for a in argv)]
 
     # -- submit ------------------------------------------------------------
 
