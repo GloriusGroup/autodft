@@ -499,18 +499,19 @@ class TestArchivedLeftovers:
             assert PipelineWorker._unsubmitted_job_count(session) == 2
 
 
-def test_an_empty_csv_export_reports_nothing_and_drops_the_stale_file(env):
+@pytest.mark.parametrize("kind,ext", [(ProjectJobKind.export_csv, "csv"), (ProjectJobKind.export_json, "json")])
+def test_an_empty_export_reports_nothing_and_drops_the_stale_file(env, kind, ext):
     from autodft.paths import project_file_stem, safe_subdirectory
 
     settings = env["settings"]
     out = safe_subdirectory(settings.export_data_path, PROJECT)
     out.mkdir(parents=True, exist_ok=True)
-    stale = out / f"{project_file_stem(PROJECT)}.csv"
+    stale = out / f"{project_file_stem(PROJECT)}.{ext}"
     stale.write_text("old\n", encoding="utf-8")
 
     job = project_jobs.start_job(
         owner_id=env["owner_id"], qualified_name=PROJECT,
-        kind=ProjectJobKind.export_csv, params={}, settings=settings,
+        kind=kind, params={}, settings=settings,
     )
     project_jobs.join_all(timeout=10)
 

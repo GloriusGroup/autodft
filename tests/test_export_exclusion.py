@@ -274,3 +274,10 @@ def test_an_empty_csv_export_removes_the_stale_file_and_says_so(db):
     other.write_text("keep\n", encoding="utf-8")
     assert PipelineExtractor(PROJECT).export_summary_csv(stale) is False
     assert not stale.exists() and other.exists()
+
+
+def test_an_empty_json_export_removes_the_stale_file_and_says_so(db):
+    stale = db / "p.json"
+    stale.write_text("[1]", encoding="utf-8")
+    assert PipelineExtractor(PROJECT).export_summary_json(stale) is False
+    assert not stale.exists()

@@ -315,15 +315,25 @@ def export(
 
     extractor = PipelineExtractor(project)
 
-    if format == "csv":
-        if not extractor.export_summary_csv(output, all_conformers=all_conformers):
-            console.print("[yellow]Nothing to export[/yellow]")
-            return
-    elif format == "json":
-        extractor.export_summary_json(output, all_conformers=all_conformers)
-    else:
+    if format not in ("csv", "json"):
         console.print(f"[red]Unknown format:[/red] {format}. Use 'csv' or 'json'.")
         raise typer.Exit(code=1)
+
+    # The archive's kept CSV/JSON is the only copy; a re-export must not replace it.
+    with get_session() as session:
+        archived = session.exec(
+            select(Molecule.id).where(Molecule.project_name == project, Molecule.archived == True)  # noqa: E712
+        ).first()
+    if archived is not None:
+        console.print(f"[red]Project {project!r} is archived:[/red] its source files are gone, nothing to re-export.")
+        raise typer.Exit(code=1)
+
+    write = extractor.export_summary_csv if format == "csv" else extractor.export_summary_json
+    if not write(output, all_conformers=all_conformers):
+        from autodft.api.project_jobs import NOTHING_TO_EXPORT
+
+        console.print(f"[yellow]{NOTHING_TO_EXPORT}[/yellow]")
+        return
 
     console.print(f"[green]Exported to {output}[/green]")
 

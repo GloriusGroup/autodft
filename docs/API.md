@@ -914,8 +914,8 @@ the filename stem:
 
 Poll `GET /api/projects/{name}/jobs` for the job's `status` and, once
 `successful`, its `result` (the written path); download the file via
-`GET /api/jobs/{id}/download`. A `csv` export with no results to write
-removes the stale file at its target and answers
+`GET /api/jobs/{id}/download`. A `csv` or `json` export with no results to
+write removes the stale file at its target and answers
 `{"format": "csv", "message": "Nothing to export", "downloadable": false}`.
 
 `404` when the project holds no molecules; `409` when a job is already

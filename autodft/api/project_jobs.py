@@ -317,7 +317,8 @@ def _execute(
 
     if kind == ProjectJobKind.export_json:
         target = out_root / f"{stem}.json"
-        extractor.export_summary_json(target, all_conformers=all_conformers)
+        if not extractor.export_summary_json(target, all_conformers=all_conformers):
+            return {"format": "json", "message": NOTHING_TO_EXPORT, "downloadable": False}
         return {"format": "json", "path": str(target), "downloadable": True}
 
     if kind == ProjectJobKind.export_files:

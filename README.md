@@ -843,8 +843,9 @@ autodft admin export \
     --output /tmp/phenols.json
 ```
 
-A CSV export with no results to write prints "Nothing to export" and removes
-the old file at the target path; the API job answers the same, with no download.
+A CSV or JSON export with no results to write prints "Nothing to export" and
+removes the old file at the target path; the API job answers the same, with no
+download. The command refuses an archived project, whose kept files are the only copy.
 
 The export tree (summary files and `molecules/<id>/<state>/conf<N>/…`, as
 "Export Project" writes it):

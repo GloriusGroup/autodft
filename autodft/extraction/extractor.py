@@ -359,12 +359,17 @@ class PipelineExtractor:
 
     def export_summary_json(
         self, output_path: str | Path, all_conformers: bool = False,
-    ) -> None:
-        """Export an energy summary to JSON."""
+    ) -> bool:
+        """Export an energy summary to JSON; with nothing to write, remove a stale file and return False."""
         _, data = self._summary_rows(all_conformers)
         path = Path(output_path)
+        if not data:
+            logger.warning("No results to export for project '%s'", self.project_name)
+            path.unlink(missing_ok=True)
+            return False
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
         logger.info("Exported %d entries to %s", len(data), path)
+        return True
 
     def _summary_rows(self, all_conformers: bool) -> tuple[list[str], list[dict]]:
         """The summary's columns and rows; with each row's state and headers when a molecule repeats a state."""
