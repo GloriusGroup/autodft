@@ -2272,13 +2272,6 @@
         </div>
     </div>
 
-    <!-- RDKit-JS (WASM) — client-side 2-D structures on the Molecules page.
-         Bigger (~5 MB) than SmilesDrawer but accurate on all aromatic
-         systems / charged species / stereo etc. Cached aggressively by
-         the browser after first load. -->
-    <script src="https://unpkg.com/@rdkit/rdkit/dist/RDKit_minimal.js"></script>
-
-
     <script>
         const POLL_INTERVAL = 5000;
 
@@ -4555,9 +4548,9 @@
 
         // ── Project Overview > Molecules subpage ────────────────────────
 
-        // RDKit-JS loads as WASM. The <script> tag at the bottom of
-        // <body> defines window.initRDKitModule(); we await it once
-        // and cache the module on _rdkit so subsequent draws are sync.
+        // RDKit-JS (WASM, ~7 MB): pinned with SRI, loaded on the first structure drawn.
+        var RDKIT_BASE = 'https://unpkg.com/@rdkit/rdkit@2026.9.1/dist/';
+        var RDKIT_SRI = 'sha384-gBdna7fxxnpz64Sewln4eBm8+sAiS6ur6q7X0xEum//b7MzSjJGK3ENuAmuRL5Y3';
         var _rdkit = null;
         var _rdkitPromise = null;
         // Cache SVGs per SMILES — the user often switches projects /
@@ -4566,24 +4559,21 @@
 
         function loadRDKit() {
             if (_rdkit) return Promise.resolve(_rdkit);
-            if (_rdkitPromise) return _rdkitPromise;
-            _rdkitPromise = new Promise(function (resolve, reject) {
-                var tries = 0;
-                var poll = function () {
-                    if (window.initRDKitModule) {
-                        window.initRDKitModule()
-                            .then(function (mod) { _rdkit = mod; resolve(mod); })
-                            .catch(reject);
-                        return;
-                    }
-                    if (tries++ > 100) {
-                        reject(new Error('initRDKitModule never appeared'));
-                        return;
-                    }
-                    setTimeout(poll, 100);
-                };
-                poll();
-            });
+            if (!_rdkitPromise) {
+                _rdkitPromise = new Promise(function (resolve, reject) {
+                    var s = document.createElement('script');
+                    s.src = RDKIT_BASE + 'RDKit_minimal.js';
+                    s.integrity = RDKIT_SRI;
+                    s.crossOrigin = 'anonymous';
+                    s.onload = function () {
+                        if (!window.initRDKitModule) { reject(new Error('RDKit.js did not initialise')); return; }
+                        window.initRDKitModule({ locateFile: function (f) { return RDKIT_BASE + f; } })
+                            .then(function (mod) { _rdkit = mod; resolve(mod); }, reject);
+                    };
+                    s.onerror = function () { _rdkitPromise = null; reject(new Error('could not load RDKit.js')); };
+                    document.head.appendChild(s);
+                });
+            }
             return _rdkitPromise;
         }
 
@@ -4626,17 +4616,8 @@
                 }
             }).catch(function (err) {
                 console.warn('RDKit-JS failed to initialize:', err);
-                _structFallback(container, '(rdkit failed to load)', true);
-            });
-        }
-
-        // Kick off the WASM download as soon as the page is interactive
-        // so the first molecules render fast.
-        if (document.readyState !== 'loading') {
-            loadRDKit().catch(function () { /* surfaced per-cell */ });
-        } else {
-            document.addEventListener('DOMContentLoaded', function () {
-                loadRDKit().catch(function () { /* surfaced per-cell */ });
+                container.innerHTML = '<div title="RDKit.js did not load" style="color: #6b7080; font-size: 11px;'
+                    + ' padding: 6px; word-break: break-all;">' + escHtml(smiles) + '</div>';
             });
         }
 

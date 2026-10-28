@@ -976,3 +976,86 @@ def test_a_user_gets_no_new_header_button_or_editor():
     # Headers may have rendered before whoami answered.
     assert "renderHeadersList();" in identity
     assert 'id="newHeaderBtn"' in html and 'id="headerEditor"' in html
+
+
+# ── RDKit.js ────────────────────────────────────────────────────────────
+
+def test_no_cdn_url_is_unpinned():
+    for name in ("dashboard.html", "login.html"):
+        html = (TEMPLATE / name).read_text()
+        for url in re.findall(r"https://(?:unpkg\.com|cdn\.jsdelivr\.net/npm)/[^\s'\"<>]+", html):
+            assert re.match(r"https://[^/]+(?:/npm)?/(?:@[^/]+/)?[^/@]+@\d+(?:\.\d+)+/", url), url
+
+
+def test_every_external_script_tag_has_integrity():
+    for name in ("dashboard.html", "login.html"):
+        html = (TEMPLATE / name).read_text()
+        for tag in re.findall(r"<script\b[^>]*\bsrc=[^>]*>", html):
+            assert re.search(r'\bintegrity="sha384-[A-Za-z0-9+/]+={0,2}"', tag), tag
+            assert 'crossorigin="anonymous"' in tag, tag
+
+
+_RDKIT_STUB = r"""
+var appended = [];
+var document = {
+    createElement: function (t) { return { tag: t }; },
+    head: { appendChild: function (s) { appended.push(s); } },
+};
+var window = {};
+function escHtml(str) {
+    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function cell() { return { innerHTML: '' }; }
+function tick() { return new Promise(function (r) { setTimeout(r, 0); }); }
+console.warn = function () {};
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_rdkit_is_absent_at_start_and_loads_pinned_on_the_first_structure():
+    html = (TEMPLATE / "dashboard.html").read_text()
+    start = html.index("        // ── Project Overview > Molecules subpage")
+    block = html[start:html.index("        function statusCell(", start)]
+    script = (_RDKIT_STUB + "(async function () { var out = {};\n" + block + """
+        out.atStart = appended.length;
+        var a = cell(), b = cell();
+        drawStructureInto(a, 'C1=CC=CC=C1<x>');
+        drawStructureInto(b, 'CCO');
+        var s = appended[0];
+        out.first = { n: appended.length, src: s.src, integrity: s.integrity, cors: s.crossOrigin };
+        out.loading = a.innerHTML;
+        s.onerror();
+        await tick();
+        out.failed = [a.innerHTML, b.innerHTML];
+        // A later structure tries again; this time the script and the WASM load.
+        var c = cell();
+        drawStructureInto(c, 'CCN');
+        out.retry = appended.length;
+        var wasm = null;
+        window.initRDKitModule = function (opts) {
+            wasm = opts.locateFile('RDKit_minimal.wasm');
+            return Promise.resolve({ get_mol: function (smi) { return {
+                is_valid: function () { return true; }, delete: function () {},
+                get_svg_with_highlights: function () { return '<svg>' + smi + '</svg>'; } }; } });
+        };
+        appended[1].onload();
+        await tick();
+        out.drawn = c.innerHTML;
+        out.wasm = wasm;
+        return out;
+    })().then(function (out) { process.stdout.write(JSON.stringify(out)); },
+              function (e) { console.error(e); process.exit(1); });
+    """)
+    result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    out = json.loads(result.stdout)
+    assert out["atStart"] == 0
+    first = out["first"]
+    assert first["n"] == 1
+    assert first["src"] == "https://unpkg.com/@rdkit/rdkit@2026.9.1/dist/RDKit_minimal.js"
+    assert re.fullmatch(r"sha384-[A-Za-z0-9+/]{64}", first["integrity"]) and first["cors"] == "anonymous"
+    assert "loading" in out["loading"]
+    assert "C1=CC=CC=C1&lt;x&gt;" in out["failed"][0] and "CCO" in out["failed"][1]
+    assert out["retry"] == 2
+    assert out["drawn"] == "<svg>CCN</svg>"
+    assert out["wasm"] == "https://unpkg.com/@rdkit/rdkit@2026.9.1/dist/RDKit_minimal.wasm"

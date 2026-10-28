@@ -337,7 +337,9 @@ sees the whole database:
 * **Project Overview** — pick a project from the dropdown to see its
   molecules, submission progress, success rate, and per-row task
   counts. Subpages: **Summary**, **Molecules** (per-conformer
-  status with a rendered structure; three tickboxes, unticked on every
+  status with a rendered structure, drawn by RDKit.js 2026.9.1 from
+  unpkg, pinned with SRI and fetched on the first structure shown; the
+  SMILES text stays if it cannot load; three tickboxes, unticked on every
   project load: **Show energies** puts E (Eh) under every successful
   singlepoint but NMR/UV-Vis and G = E + G−E(el) of the parent opt (raw,
   no quasi-RRHO) under the relaxed one, **Show densities** adds
