@@ -842,13 +842,13 @@ def test_a_smiles_check_that_errored_is_neutral_retried_and_a_real_answer_is_cac
             await sleep(400);
             return hint.textContent;
         }
-        replies['/api/validate-smiles'] = REPLY;
+        replies['/api/validate-smiles-batch'] = REPLY;
         out.first = await check('CCO');
         out.firstState = hint.className;
         out.firstDisabled = !!submit.disabled;
         out.gate = window.lastSmilesResults.map(function (x) { return !!(x.result.valid || x.result.unchecked); });
-        replies['/api/validate-smiles'] = { status: 200, body: { valid: true, atoms: 9, heavy_atoms: 3,
-                                                                  charge: 0, multiplicity: 1, canonical: 'CCO' } };
+        replies['/api/validate-smiles-batch'] = { status: 200, body: [{ valid: true, atoms: 9, heavy_atoms: 3,
+                                                                         charge: 0, multiplicity: 1, canonical: 'CCO' }] };
         out.second = await check('CCO ');
         out.third = await check('CCO');
         out.hits = hits.length;
@@ -860,6 +860,40 @@ def test_a_smiles_check_that_errored_is_neutral_retried_and_a_real_answer_is_cac
     assert not out["firstDisabled"] and out["gate"] == [True]
     assert out["second"].startswith("OK — 9 atoms") and out["third"] == out["second"]
     assert out["hits"] == 2 and out["assigned"] == []
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_pasted_list_is_checked_100_lines_a_request_and_each_line_once():
+    html = (TEMPLATE / "dashboard.html").read_text()
+    start = html.index("        // ── Live SMILES validation")
+    block = html[start:html.index("        // ── Headers: fetch", start)]
+    out = _run_overlay("""
+        var input = document.getElementById('smiles'), hint = document.getElementById('smilesHint');
+        var sent = [];
+        globalThis.fetch = function (url, opts) {
+            var lines = JSON.parse(opts.body).smiles_list;
+            sent.push([url, lines.length]);
+            return Promise.resolve(new Response(JSON.stringify(lines.map(function (s) {
+                return { valid: s !== 'bad', error: s === 'bad' ? 'RDKit could not parse' : null };
+            }))));
+        };
+        async function paste(lines) {
+            input.value = lines.join('\\n');
+            input.on.input();
+            await sleep(400);
+        }
+        var lines = [];
+        for (var i = 0; i < 230; i++) lines.push('C'.repeat(i + 1));
+        await paste(lines.concat(lines.slice(0, 20), ['bad']));
+        out.sent = sent.slice();
+        out.gate = window.lastSmilesResults.length;
+        out.hint = hint.textContent;
+        await paste(lines.concat(['CCO']));
+        out.again = sent.slice(out.sent.length);
+    """, _REPLIES_STUB, "var window = globalThis;", _functions("escHtml", "setConnected"), block)
+    assert out["sent"] == [["/api/validate-smiles-batch", 100]] * 2 + [["/api/validate-smiles-batch", 31]]
+    assert out["gate"] == 251 and out["hint"].startswith("1/251 invalid")
+    assert out["again"] == [["/api/validate-smiles-batch", 1]]
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")

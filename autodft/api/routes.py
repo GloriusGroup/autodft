@@ -2408,6 +2408,19 @@ def api_validate_smiles(body: ValidateSmilesRequest):
     return validate_smiles(body.smiles)
 
 
+class ValidateSmilesBatchRequest(BaseModel):
+    smiles_list: list[str] = Field(max_length=100)
+
+
+@router.post("/api/validate-smiles-batch")
+def api_validate_smiles_batch(body: ValidateSmilesBatchRequest):
+    """``/api/validate-smiles`` for up to 100 SMILES, answered in order; a line over 512 characters is invalid."""
+    from autodft.engine.entrypoint_processor import validate_smiles
+
+    return [validate_smiles(s) if len(s) <= 512 else {**validate_smiles(""), "error": "SMILES too long (>512)."}
+            for s in body.smiles_list]
+
+
 @router.get("/api/advanced-defaults")
 def api_advanced_defaults(identity: Identity = Depends(current_identity)):
     """The config defaults and choices of the Advanced settings, for the submit form."""

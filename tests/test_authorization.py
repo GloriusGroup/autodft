@@ -87,6 +87,7 @@ SCOPED = {
 # Deliberately shared by everyone who is logged in.
 SHARED = {
     "/api/validate-smiles",   # pure SMILES parsing, touches no data
+    "/api/validate-smiles-batch",  # the same, up to 100 at a time
     "/api/advanced-defaults", # config defaults of the submit form
     "/api/headers",           # saved methods are shared; writing them is admin-only
     "/api/headers/{header_id}",

@@ -3338,9 +3338,9 @@
 
         // ── Live SMILES validation (multi-line) ─────────────────────────
         // Debounces input by 300 ms, splits the textarea by newlines,
-        // validates each unique non-empty line via /api/validate-smiles
-        // (cached per SMILES), and reports per-line state. The submit
-        // handler reads window.lastSmilesResults to gate sending.
+        // validates each unique non-empty line via /api/validate-smiles-batch
+        // (100 a request, cached per SMILES), and reports per-line state. The
+        // submit handler reads window.lastSmilesResults to gate sending.
 
         (function () {
             var input     = document.getElementById('smiles');
@@ -3400,21 +3400,34 @@
                 if (lockNote) lockNote.style.display = locked ? '' : 'none';
             }
 
-            // Only real answers are cached; an error reply is asked again next time.
-            async function validateOne(smi) {
-                if (cache[smi]) return cache[smi];
-                try {
-                    var data = await apiJSON(null, '/api/validate-smiles', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ smiles: smi }),
-                    });
-                    cache[smi] = data;
-                    return data;
-                } catch (err) {
-                    // Neither valid nor invalid: the server re-checks on submit.
-                    return { valid: false, unchecked: true, error: 'Could not check: ' + err.message };
+            var VALIDATE_BATCH = 100;
+
+            // Each uncached line once, 100 a request; only real answers are cached, an error is asked again
+            // next time. Returns the answers by SMILES, or null when a newer keystroke superseded *token*.
+            async function validateLines(lines, token) {
+                var answers = Object.create(null);
+                var seen = Object.create(null);
+                var missing = lines.filter(function (s) { return !cache[s] && !seen[s] && (seen[s] = true); });
+                for (var i = 0; i < missing.length; i += VALIDATE_BATCH) {
+                    var chunk = missing.slice(i, i + VALIDATE_BATCH);
+                    try {
+                        var data = await apiJSON(null, '/api/validate-smiles-batch', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ smiles_list: chunk }),
+                        });
+                        if (!Array.isArray(data) || data.length !== chunk.length) throw new Error('unexpected reply');
+                        chunk.forEach(function (s, j) { cache[s] = data[j]; });
+                    } catch (err) {
+                        // Neither valid nor invalid: the server re-checks on submit.
+                        chunk.forEach(function (s) {
+                            answers[s] = { valid: false, unchecked: true, error: 'Could not check: ' + err.message };
+                        });
+                    }
+                    if (lastToken !== token) return null;
                 }
+                lines.forEach(function (s) { if (cache[s]) answers[s] = cache[s]; });
+                return answers;
             }
 
             async function checkAll(lines) {
@@ -3424,12 +3437,9 @@
                     ? 'Checking...'
                     : 'Checking ' + lines.length + ' SMILES...');
 
-                var results = [];
-                for (var i = 0; i < lines.length; i++) {
-                    var r = await validateOne(lines[i]);
-                    if (lastToken !== token) return;  // superseded by a newer keystroke
-                    results.push({ smiles: lines[i], result: r });
-                }
+                var answers = await validateLines(lines, token);
+                if (!answers || lastToken !== token) return;  // superseded by a newer keystroke
+                var results = lines.map(function (s) { return { smiles: s, result: answers[s] }; });
                 window.lastSmilesResults = results;
 
                 var diradicals = results.filter(function (x) { return x.result.diradical; });

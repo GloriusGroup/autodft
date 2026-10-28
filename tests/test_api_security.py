@@ -555,3 +555,20 @@ class TestInputValidation:
         response = client.post("/api/submit", headers=key, json={"smiles": "CCO", "project": "p",
                                                                  "max_conformers_S0": 0})
         assert response.status_code == 200, response.text
+
+    def test_a_batch_validation_answers_per_line_in_order(self, app_env):
+        client, key = app_env
+        response = client.post("/api/validate-smiles-batch", headers=key,
+                               json={"smiles_list": ["CCO", "not-a-smiles", "C" * 513]})
+        assert response.status_code == 200, response.text
+        single = client.post("/api/validate-smiles", headers=key, json={"smiles": "CCO"}).json()
+        first, bad, long = response.json()
+        assert first == single
+        assert not bad["valid"] and "could not parse" in bad["error"]
+        assert not long["valid"] and long["error"] == "SMILES too long (>512)." and long.keys() == single.keys()
+
+    def test_a_batch_validation_takes_at_most_100_lines_and_needs_a_key(self, app_env):
+        client, key = app_env
+        assert client.post("/api/validate-smiles-batch", headers=key,
+                           json={"smiles_list": ["CCO"] * 101}).status_code == 422
+        assert client.post("/api/validate-smiles-batch", json={"smiles_list": ["CCO"]}).status_code == 401
