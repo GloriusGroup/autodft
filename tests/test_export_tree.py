@@ -648,16 +648,34 @@ def test_archive_route_passes_the_dialog_options(api, db):
     client, headers = api
     _standard(db)
     r = client.post("/api/projects/nho:p/archive", headers=headers,
-                    json={"all_conformers": True, "keep_gbw": True})
+                    json={"confirm": "nho/p", "all_conformers": True, "keep_gbw": True})
     assert r.status_code == 202, r.text
     assert r.json()["job"]["params"] == {"all_conformers": True, "keep_gbw": True}
+
+
+@pytest.mark.parametrize("body", [{}, {"confirm": ""}, {"confirm": "p"}, {"confirm": "NHO/P"}])
+def test_archive_route_needs_the_project_name_typed(api, db, body):
+    client, headers = api
+    mol_id, _, _ = _standard(db)
+    r = client.post("/api/projects/nho:p/archive", headers=headers, json=body)
+    assert r.status_code == 400, r.text
+    assert "nho/p" in r.json()["detail"]
+    assert (db.comp_data_path / f"mol_{mol_id}").is_dir()
+    assert client.get("/api/projects/nho:p/jobs", headers=headers).json()["jobs"] == []
+
+
+def test_archive_route_accepts_the_project_name(api, db):
+    client, headers = api
+    _standard(db)
+    r = client.post("/api/projects/nho:p/archive", headers=headers, json={"confirm": "nho/p"})
+    assert r.status_code == 202, r.text
 
 
 def test_archive_route_refuses_unknown_fields(api, db):
     """An old client's ``extensions`` must not archive without its .hess/.gbw."""
     client, headers = api
     mol_id, _, _ = _standard(db)
-    r = client.post("/api/projects/nho:p/archive", headers=headers, json={"extensions": [".hess"]})
+    r = client.post("/api/projects/nho:p/archive", headers=headers, json={"confirm": "nho/p", "extensions": [".hess"]})
     assert r.status_code == 422, r.text
     assert (db.comp_data_path / f"mol_{mol_id}").is_dir()
 

@@ -974,10 +974,13 @@ deleted with it. Answers **202** with the job, like the exports.
 **Body:**
 
 ```json
-{ "all_conformers": false, "keep_gbw": false }
+{ "confirm": "alice/screening", "all_conformers": false, "keep_gbw": false }
 ```
 
-Any other field answers **422**.
+`confirm` is required and must equal the qualified project name exactly, as
+for the wipe; a missing or different one answers **400** and nothing starts.
+The dashboard asks for the name to be typed back. Any other field answers
+**422**.
 
 **Job result:**
 

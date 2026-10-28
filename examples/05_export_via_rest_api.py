@@ -152,7 +152,11 @@ def archive_project(
     return call(
         "POST",
         f"/api/projects/{project_path(project, owner)}/archive",
-        body={"all_conformers": bool(all_conformers), "keep_gbw": bool(keep_gbw)},
+        body={
+            "confirm": f"{owner}/{project}",
+            "all_conformers": bool(all_conformers),
+            "keep_gbw": bool(keep_gbw),
+        },
     )
 
 

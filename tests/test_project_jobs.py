@@ -593,7 +593,7 @@ class TestHttp:
         assert listing.json()["jobs"][0]["id"] == job["id"]
 
     @pytest.mark.parametrize("path,body", [
-        ("export?format=csv", None), ("state-analysis/export", None), ("archive", {}),
+        ("export?format=csv", None), ("state-analysis/export", None), ("archive", {"confirm": "ghost/p"}),
     ])
     def test_a_project_without_its_row_answers_404(self, client, path, body):
         c, _, env = client

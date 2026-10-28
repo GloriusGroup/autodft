@@ -413,7 +413,7 @@ Delete** then deletes every `<comp_data>/mol_*/` of the project — everything
 not in the tree is gone — flagging each molecule `archived` just before its
 folder is deleted; the project stays browsable in Project Overview but can no
 longer be exported (409). Refused for a protected project and for one that is
-already archived. From its start the project gets no new job or `sbatch`, and
+already archived; the dialog asks for the project name to be typed back. From its start the project gets no new job or `sbatch`, and
 it waits until every job the project sent to SLURM has finished and been
 judged, so a result that lands during the wait is exported, not deleted; a job
 whose `sbatch` reported failure is first looked up in SLURM and, if found,
@@ -782,9 +782,9 @@ DATABASE`), refuse to run while another one is in flight (409), and
 delete the rows before the files. The files themselves are renamed aside
 and unlinked on a background thread, so the request returns in well under
 a second while a project-sized deletion runs for minutes — poll
-`GET /api/wipe-status` for that. The archive endpoint is the exception:
-it is destructive but takes no confirmation string, because the
-dashboard's modal is the confirmation.
+`GET /api/wipe-status` for that. `POST /api/projects/{name}/archive` takes the
+same `confirm` (the qualified project name; 400 without it), and the Export
+and Delete dialog asks for the name to be typed back.
 
 Field-level reference for each endpoint, including every option of
 `POST /api/submit`, is in [`docs/API.md`](docs/API.md).

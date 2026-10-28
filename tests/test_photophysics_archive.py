@@ -204,7 +204,8 @@ class TestArchiveWaitsForNmrReferences:
                                         state_id=ref_state.id, header_id=3, has_followups=True))
             session.commit()
 
-        r = client.post("/api/projects/nho:p/archive", headers=headers, json={})
+        r = client.post("/api/projects/nho:p/archive", headers=headers,
+                        json={"confirm": "nho/p"})
         assert r.status_code == 409, r.text
         assert "C[Si](C)(C)C" in r.json()["detail"]
 
@@ -214,7 +215,8 @@ class TestArchiveWaitsForNmrReferences:
             _glyoxal(session, tmp_path)
             _tms(session, tmp_path)
 
-        r = client.post("/api/projects/nho:p/archive", headers=headers, json={})
+        r = client.post("/api/projects/nho:p/archive", headers=headers,
+                        json={"confirm": "nho/p"})
         assert r.status_code == 202, r.text
 
     def test_202_for_a_project_without_nmr_molecules(self, nmr_api):
@@ -227,5 +229,6 @@ class TestArchiveWaitsForNmrReferences:
                                       charge=0, metadata_json=json.dumps({})))
             session.commit()
 
-        r = client.post("/api/projects/nho:p/archive", headers=headers, json={})
+        r = client.post("/api/projects/nho:p/archive", headers=headers,
+                        json={"confirm": "nho/p"})
         assert r.status_code == 202, r.text

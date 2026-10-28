@@ -408,6 +408,32 @@ def test_the_project_wipe_preview_lists_exports_only_when_ticked(with_exports):
     assert ("total      1.005 GB" if with_exports else "total      1 GB") in out
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+@pytest.mark.parametrize("typed, sent", [("", False), ("p", False), ("nho/p", True)])
+def test_export_and_delete_waits_for_the_project_name(typed, sent):
+    script = ("var els = {};\n"
+              "var document = {getElementById: function (id) {\n"
+              "    return els[id] || (els[id] = {id: id, value: id === 'exportConfirmName' ? "
+              + json.dumps(typed) + " : '', checked: false, textContent: '', style: {}});\n"
+              "}};\n"
+              "var currentProject = 'nho/p', exportDeletes = true, bodies = [];\n"
+              "function projectPath(n) { return n; }\n"
+              "async function startProjectJob(url, opts) {\n"
+              "    bodies.push(JSON.parse(opts.body)); return {ok: false, detail: 'stop'};\n"
+              "}\n"
+              + _functions("runExport")
+              + "\nrunExport().then(function () { process.stdout.write(JSON.stringify({\n"
+              "    bodies: bodies, text: els.exportModalFeedback.textContent,\n"
+              "    disabled: !!els.exportConfirmBtn.disabled})); });\n")
+    out = json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
+    if sent:
+        assert out["bodies"] == [{"confirm": "nho/p", "all_conformers": False, "keep_gbw": False}]
+    else:
+        assert out["bodies"] == []
+        assert out["text"] == "Type the project name exactly to confirm."
+        assert not out["disabled"]
+
+
 # ── Loading overlay ─────────────────────────────────────────────────────
 
 _DOM_STUB = """

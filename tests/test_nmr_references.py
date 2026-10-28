@@ -86,7 +86,7 @@ class TestProtection:
     def test_it_cannot_be_archived_or_wiped(self, admin_api):
         client, admin, _, _, _ = admin_api
         assert client.post("/api/projects/admin:reference_systems/archive",
-                           headers=admin, json={}).status_code == 409
+                           headers=admin, json={"confirm": "admin/reference_systems"}).status_code == 409
         r = client.post("/api/projects/admin:reference_systems/wipe", headers=admin,
                         json={"confirm": "admin/reference_systems"})
         assert r.status_code == 409

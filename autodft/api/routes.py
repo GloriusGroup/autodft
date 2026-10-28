@@ -1183,6 +1183,8 @@ def _state_sort_key(s: MoleculeState) -> tuple[int, str]:
 class ArchiveRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # The qualified project name, typed back as for a wipe.
+    confirm: str = ""
     all_conformers: bool = False
     keep_gbw: bool = False
 
@@ -1224,6 +1226,7 @@ def api_project_archive(
     the created job.
 
     Refuses with 4xx when:
+    * ``confirm`` is not the project name exactly (400)
     * the project is ``"default"`` (protected — never archivable)
     * the project doesn't exist (404)
     * the project is already archived (409)
@@ -1237,6 +1240,9 @@ def api_project_archive(
     with get_session() as session:
         name = resolve_project(session, identity, name)
     from autodft.api import project_jobs
+
+    if body.confirm != name:
+        return _confirmation_error(name, body.confirm)
 
     if _is_protected(name):
         return JSONResponse(

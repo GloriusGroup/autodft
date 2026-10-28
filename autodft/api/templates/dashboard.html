@@ -1940,6 +1940,9 @@
                         <code>.gbw</code> files unless kept, failed attempts, SLURM logs, trajectories and
                         every other by-product.
                     </p>
+                    <label for="exportConfirmName" class="modal-warn">Type the project name to confirm:
+                        <strong id="exportConfirmHint" class="mono"></strong></label>
+                    <input type="text" id="exportConfirmName" autocomplete="off" style="max-width:280px;">
                 </div>
                 <div class="form-row" style="justify-content: flex-end; margin-top: 16px;">
                     <button type="button" class="btn-mini"      id="exportCancelBtn">Cancel</button>
@@ -4422,6 +4425,8 @@
             btn.textContent = deletes ? 'Export and delete' : 'Export';
             btn.className = deletes ? 'btn btn-danger' : 'btn';
             btn.disabled = false;
+            document.getElementById('exportConfirmHint').textContent = currentProject;
+            document.getElementById('exportConfirmName').value = '';
             var fb = document.getElementById('exportModalFeedback');
             fb.textContent = '';
             fb.className = 'submit-feedback';
@@ -4439,6 +4444,12 @@
             var keepGbw = document.getElementById('exportKeepGbw').checked;
             var fb = document.getElementById('exportModalFeedback');
             var btn = document.getElementById('exportConfirmBtn');
+            var typed = document.getElementById('exportConfirmName').value;
+            if (deletes && typed !== currentProject) {
+                fb.textContent = 'Type the project name exactly to confirm.';
+                fb.className = 'submit-feedback error';
+                return;
+            }
             fb.textContent = 'Starting…';
             fb.className = 'submit-feedback';
             btn.disabled = true;
@@ -4447,7 +4458,7 @@
                 ? await startProjectJob(base + '/archive', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ all_conformers: allConf, keep_gbw: keepGbw }),
+                      body: JSON.stringify({ confirm: typed, all_conformers: allConf, keep_gbw: keepGbw }),
                   })
                 : await startProjectJob(base + '/export?format=files&all_conformers=' + allConf +
                                         '&keep_gbw=' + keepGbw, { method: 'POST' });
