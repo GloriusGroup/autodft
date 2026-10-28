@@ -1279,7 +1279,7 @@ def _start_up_code() -> str:
     html = (TEMPLATE / "dashboard.html").read_text()
     start = html.index("        // Initial load")
     assert html.count("\n        startUp();\n") == 1
-    return (_functions("adminJSON", "loadIdentity") + html[start:html.index("        Promise.all([fetchHeaders()", start)]
+    return (_functions("adminJSON", "loadIdentity") + html[start:html.index("        Promise.all([", start)]
             + "var routed = [];\n"
             # As the real one: navigation retires the open reads.
             + "function activateRoute(r) { loadingRetireReads(); routed.push(r); }\n"
@@ -1340,6 +1340,32 @@ def test_navigation_during_start_up_waits_for_whoami_and_routes_once_to_the_new_
     assert not out["aborted"] and out["routedDuring"] == [] and out["calls"] == 1
     assert out["routed"] == ["status"] and out["name"] == "nho"
     assert out["note"] is None and not out["end"]["blocked"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_saved_form_is_restored_after_whoami_and_kept_until_the_restore_ends():
+    html = (TEMPLATE / "dashboard.html").read_text()
+    restore = re.search(r"\n *Promise\.all\(\[[^\n]*restoreSubmitForm[^\n]*\n", html).group(0)
+    out = _run_overlay("""
+        await sleep(30);
+        out.before = extended.slice();
+        calls[0].resolve(JSON.stringify({ username: 'nho', is_admin: false }));
+        await idle();
+        out.after = extended;
+        out.left = Object.keys(store);
+    """, "var store = {};\n"
+         "var sessionStorage = { getItem: function (k) { return k in store ? store[k] : null; },\n"
+         "    setItem: function (k, v) { store[k] = String(v); }, removeItem: function (k) { delete store[k]; } };\n",
+        _submit_form_key(),
+        "store[SUBMIT_FORM_KEY] = JSON.stringify({ fields: {}, extend: 'nho/q' });\n"
+        "function fetchHeaders() { return Promise.resolve(); }\n"
+        "function fetchAdvancedDefaults() { return Promise.resolve(); }\n"
+        "var extended = [];\n"
+        "async function enterExtendMode(p) { extended.push([p, identityState, SUBMIT_FORM_KEY in store]); await sleep(5); }\n",
+        _start_up_code(), _functions("restoreSubmitForm"), restore)
+    assert out["before"] == []
+    assert out["after"] == [["nho/q", "done", True]]
+    assert out["left"] == []
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")

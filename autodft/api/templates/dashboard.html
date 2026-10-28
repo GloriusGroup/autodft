@@ -3816,22 +3816,22 @@
             } catch (_) {}
         }
 
-        // Once, after the header and Advanced selects are filled.
+        // Once, after whoami and the header and Advanced selects are filled.
         async function restoreSubmitForm() {
             var saved = null;
-            try {
-                saved = JSON.parse(sessionStorage.getItem(SUBMIT_FORM_KEY));
-                sessionStorage.removeItem(SUBMIT_FORM_KEY);
-            } catch (_) {}
-            if (!saved || !saved.fields) return;
-            if (saved.extend) await enterExtendMode(saved.extend);
-            Object.keys(saved.fields).forEach(function (id) {
-                var el = document.getElementById(id);
-                if (!el || el.disabled || el.readOnly) return;
-                if (el.type === 'checkbox') el.checked = !!saved.fields[id];
-                else el.value = saved.fields[id];
-                el.dispatchEvent(new Event(el.type === 'checkbox' || el.tagName === 'SELECT' ? 'change' : 'input'));
-            });
+            try { saved = JSON.parse(sessionStorage.getItem(SUBMIT_FORM_KEY)); } catch (_) {}
+            if (saved && saved.fields) {
+                if (saved.extend) await enterExtendMode(saved.extend);
+                Object.keys(saved.fields).forEach(function (id) {
+                    var el = document.getElementById(id);
+                    if (!el || el.disabled || el.readOnly) return;
+                    if (el.type === 'checkbox') el.checked = !!saved.fields[id];
+                    else el.value = saved.fields[id];
+                    el.dispatchEvent(new Event(el.type === 'checkbox' || el.tagName === 'SELECT' ? 'change' : 'input'));
+                });
+            }
+            // Only now: a reload mid-restore finds it again.
+            try { sessionStorage.removeItem(SUBMIT_FORM_KEY); } catch (_) {}
         }
 
         // ── Extend: add calculations to a project's existing molecules ──
@@ -6208,6 +6208,8 @@
         // Routed once, after whoami (the Admin page depends on it); the overlay covers the wait.
         // 'pending' while whoami runs, 'cancelled' after Cancel, then 'done'.
         var identityState = 'pending';
+        // Resolves once whoami has answered; its routing would abort a restore's reads.
+        var identityReady, identityDone = new Promise(function (resolve) { identityReady = resolve; });
 
         // Navigation and retry: waits for a running whoami (it routes to the hash when it ends), asks again after a Cancel.
         function navigate() {
@@ -6222,16 +6224,20 @@
             document.querySelectorAll('.cancelled-note').forEach(function (el) { el.remove(); });
             withLoading('Connecting…', loadIdentity).then(function () {
                 identityState = 'done';
-                activateRoute(currentRoute());
             }, function (err) {
                 identityState = isAbort(err) ? 'cancelled' : 'done';
-                if (identityState === 'done') { activateRoute(currentRoute()); return; }
+            }).then(function () {
+                if (identityState === 'done') {
+                    activateRoute(currentRoute());
+                    identityReady();
+                    return;
+                }
                 document.querySelector('.container').insertAdjacentHTML('afterbegin',
                     '<div class="empty-state cancelled-note">' + CANCELLED_HTML + '</div>');
             });
         }
         startUp();
-        Promise.all([fetchHeaders(), fetchAdvancedDefaults()]).then(restoreSubmitForm).catch(function () {});
+        Promise.all([identityDone, fetchHeaders(), fetchAdvancedDefaults()]).then(restoreSubmitForm).catch(function () {});
         refreshAll();
 
         // Poll every 5 seconds
