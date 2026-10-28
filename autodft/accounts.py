@@ -21,6 +21,7 @@ from sqlmodel import Session, col, select
 
 from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.models.molecule import Molecule
+from autodft.models.project_job import ProjectJob
 from autodft.models.user import (
     Project,
     User,
@@ -33,6 +34,7 @@ from autodft.models.user import (
     split_qualified,
     validate_project_name,
 )
+from autodft.paths import safe_subdirectory
 
 logger = logging.getLogger(__name__)
 
@@ -214,13 +216,12 @@ def owner_of(session: Session, qualified_name: str) -> Optional[User]:
     return session.get(User, project.owner_id)
 
 
-def reassign_project(session: Session, qualified_name: str, new_owner: User) -> Project:
-    """Move a project to *new_owner*, rewriting every reference to it.
+def reassign_project(
+    session: Session, qualified_name: str, new_owner: User, *, export_root: Path,
+) -> Project:
+    """Move a project to *new_owner* with its molecules, entrypoints, jobs and export directory.
 
-    The qualified name is the join key used by molecules and by queued
-    entrypoints, so changing the owner means rewriting those strings in the
-    same transaction -- otherwise the rows would point at a name that no
-    longer resolves.
+    The directory is renamed before the commit and back if the commit fails.
     """
     project = get_project(session, qualified_name)
     if project is None:
@@ -233,17 +234,64 @@ def reassign_project(session: Session, qualified_name: str, new_owner: User) -> 
         raise AccountError(
             f"{new_owner.username!r} already has a project called {project.name!r}."
         )
+    old_dir = safe_subdirectory(export_root, qualified_name)
+    new_dir = safe_subdirectory(export_root, new_qualified)
+    if new_dir.exists():
+        raise AccountError(f"The export directory {new_dir} already exists.")
 
     moved = _rewrite_project_name(session, qualified_name, new_qualified)
+    jobs = _rewrite_project_jobs(session, qualified_name, new_qualified, str(old_dir), str(new_dir))
     project.owner_id = new_owner.id
     project.qualified_name = new_qualified
     session.add(project)
-    session.commit()
+    renamed = False
+    try:
+        session.flush()
+        if old_dir.exists():
+            new_dir.parent.mkdir(parents=True, exist_ok=True)
+            old_dir.rename(new_dir)
+            renamed = True
+        session.commit()
+    except BaseException:
+        session.rollback()
+        if renamed:
+            try:
+                new_dir.rename(old_dir)
+            except OSError:
+                logger.exception("Could not move %s back to %s", new_dir, old_dir)
+        raise
     logger.warning(
-        "Reassigned %r to %r (%d molecule(s), %d entrypoint(s))",
-        qualified_name, new_owner.username, moved["molecules"], moved["entrypoints"],
+        "Reassigned %r to %r (%d molecule(s), %d entrypoint(s), %d job(s))",
+        qualified_name, new_owner.username, moved["molecules"], moved["entrypoints"], jobs,
     )
     return project
+
+
+def _rewrite_project_jobs(session: Session, old: str, new: str, old_dir: str, new_dir: str) -> int:
+    """Point project jobs, and the export paths in their results, at the new name."""
+    jobs = session.exec(select(ProjectJob).where(ProjectJob.qualified_name == old)).all()
+    for job in jobs:
+        job.qualified_name = new
+        if job.result_json:
+            try:
+                result = json.loads(job.result_json)
+            except (ValueError, TypeError):
+                result = None
+            if result is not None:
+                job.result_json = json.dumps(_moved_paths(result, old_dir, new_dir))
+        session.add(job)
+    return len(jobs)
+
+
+def _moved_paths(value, old_dir: str, new_dir: str):
+    """*value* with every path under *old_dir* rewritten to *new_dir*."""
+    if isinstance(value, dict):
+        return {k: _moved_paths(v, old_dir, new_dir) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_moved_paths(v, old_dir, new_dir) for v in value]
+    if isinstance(value, str) and (value == old_dir or value.startswith(old_dir + "/")):
+        return new_dir + value[len(old_dir):]
+    return value
 
 
 def _rewrite_project_name(session: Session, old: str, new: str) -> dict[str, int]:

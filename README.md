@@ -715,7 +715,7 @@ is either scoped to the caller's own projects or deliberately shared
 | POST   | `/api/admin/users`                  | create an account; the response carries its API key, once     |
 | POST   | `/api/admin/users/{name}`           | deactivate / reactivate (`?active=false`)                     |
 | POST   | `/api/admin/users/{name}/rotate-key`| new key; the old one and its sessions stop working immediately |
-| POST   | `/api/admin/projects/{name}/reassign`| move a project to another owner                              |
+| POST   | `/api/admin/projects/{name}/reassign`| move a project, its job rows and export directory to another owner (409 while a job runs or if the target exists) |
 
 ### Accounts
 

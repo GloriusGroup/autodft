@@ -559,3 +559,162 @@ class TestProtectedProjects:
             admin_ops.wipe_project(
                 session, "admin/default", project["comp_root"], project["export_root"],
             )
+
+
+class TestReassign:
+    """Reassign moves exports, frozen archive data and job rows with the molecules."""
+
+    @pytest.fixture()
+    def archived(self, tmp_path, monkeypatch):
+        import json
+        import shutil
+
+        from autodft import accounts, categories
+        from autodft.analysis import spectroscopy
+        from autodft.api import project_jobs, routes
+        from autodft.config import Settings
+        from autodft.db import get_session, init_db, reset_engine
+        from autodft.models import ProjectJob, ProjectJobKind, ProjectJobStatus
+        from tests.test_spectroscopy_analysis import _conformer
+
+        settings = Settings()
+        settings.storage.data_path = str(tmp_path)
+        reset_engine()
+        init_db(settings)
+        routes.set_active_settings(settings)
+        with get_session() as session:
+            nho, _ = accounts.create_user(session, "nho")
+            accounts.create_user(session, "lab")
+            accounts.get_or_create_project(session, nho, "p")
+            mol = Molecule(smiles="c1ccccc1", project_name="nho/p")
+            session.add(mol)
+            session.commit()
+            state = MoleculeState(molecule_id=mol.id, description="S0", multiplicity=1, charge=0,
+                                  metadata_json=json.dumps({categories.UVVIS: True}))
+            session.add(state)
+            session.commit()
+            _conformer(session, tmp_path, state, 1, -100.0, TaskStatus.successful)
+            nho_id = nho.id
+        live = spectroscopy.analyze_spectra("nho/p", use_cache=False)
+        monkeypatch.setattr(project_jobs, "_wait_for_quiescence", lambda name: None)
+        archive = project_jobs._execute(ProjectJobKind.archive, "nho/p", {}, settings)
+        xlsx = project_jobs._execute(ProjectJobKind.export_xlsx, "nho/p", {}, settings)
+        with get_session() as session:
+            for kind, result in ((ProjectJobKind.archive, archive), (ProjectJobKind.export_xlsx, xlsx)):
+                session.add(ProjectJob(qualified_name="nho/p", owner_id=nho_id, kind=kind,
+                                       status=ProjectJobStatus.successful, result_json=json.dumps(result)))
+            session.commit()
+        shutil.rmtree(tmp_path / "jobs")  # stands for the deleted comp_data
+        yield {"settings": settings, "live": live, "export_root": settings.export_data_path.resolve()}
+        routes.set_active_settings(None)
+        reset_engine()
+
+    @staticmethod
+    def _reassign(admin_identity, owner="lab"):
+        from autodft.api.routes import ReassignRequest, api_reassign_project
+
+        return api_reassign_project("nho/p", ReassignRequest(owner=owner), admin_identity)
+
+    @staticmethod
+    def _unmoved(archived):
+        from autodft.db import get_session
+        from autodft.models import ProjectJob
+
+        root = archived["export_root"]
+        assert (root / "nho" / "p" / "photophysics").is_dir()
+        with get_session() as session:
+            assert {m.project_name for m in session.exec(select(Molecule)).all()} == {"nho/p"}
+            assert {j.qualified_name for j in session.exec(select(ProjectJob)).all()} == {"nho/p"}
+
+    def test_an_archived_project_stays_browsable_for_its_new_owner(self, archived, admin_identity):
+        from pathlib import Path
+
+        from autodft.analysis import spectroscopy
+        from autodft.analysis.state_analysis import analyze_project
+        from autodft.api import project_jobs
+        from autodft.db import get_session
+        from autodft.models import ProjectJob
+
+        assert self._reassign(admin_identity) == {"project": "lab/p", "owner": "lab"}
+
+        root = archived["export_root"]
+        assert not (root / "nho" / "p").exists()
+        after = spectroscopy.analyze_spectra("lab/p", use_cache=False)
+        assert [m["archived"] for m in after["molecules"]] == [True]
+        assert after["molecules"][0]["uvvis"] == archived["live"]["molecules"][0]["uvvis"]
+        assert analyze_project("lab/p", use_cache=False)["archive_source"].startswith(str(root / "lab" / "p"))
+        with get_session() as session:
+            jobs = [project_jobs.serialize(j) for j in session.exec(select(ProjectJob)).all()]
+        assert {j["qualified_name"] for j in jobs} == {"lab/p"}
+        xlsx = next(j["result"] for j in jobs if j["kind"] == "export_xlsx")
+        assert Path(xlsx["path"]).is_file() and Path(xlsx["path"]).parent == root / "lab" / "p"
+
+    def test_refused_while_a_job_runs(self, archived, admin_identity):
+        from autodft.db import get_session
+        from autodft.models import ProjectJob, ProjectJobKind, ProjectJobStatus
+
+        with get_session() as session:
+            session.add(ProjectJob(qualified_name="nho/p", kind=ProjectJobKind.export_csv,
+                                   status=ProjectJobStatus.running))
+            session.commit()
+
+        response = self._reassign(admin_identity)
+
+        assert response.status_code == 409
+        self._unmoved(archived)
+
+    def test_refused_when_the_target_export_directory_exists(self, archived, admin_identity):
+        (archived["export_root"] / "lab" / "p").mkdir(parents=True)
+
+        response = self._reassign(admin_identity)
+
+        assert response.status_code == 409
+        self._unmoved(archived)
+
+    def test_refused_when_the_target_project_exists(self, archived, admin_identity):
+        from autodft import accounts
+        from autodft.db import get_session
+
+        with get_session() as session:
+            accounts.get_or_create_project(session, accounts.get_user_by_username(session, "lab"), "p")
+
+        response = self._reassign(admin_identity)
+
+        assert response.status_code == 409
+        self._unmoved(archived)
+
+    def test_a_failed_commit_moves_the_files_back(self, archived, monkeypatch):
+        from sqlalchemy.exc import OperationalError
+
+        from autodft import accounts
+        from autodft.db import get_session
+
+        def boom():
+            raise OperationalError("COMMIT", {}, Exception("disk I/O error"))
+
+        with get_session() as session:
+            monkeypatch.setattr(session, "commit", boom)
+            with pytest.raises(OperationalError):
+                accounts.reassign_project(session, "nho/p", accounts.get_user_by_username(session, "lab"),
+                                          export_root=archived["settings"].export_data_path)
+
+        assert not (archived["export_root"] / "lab" / "p").exists()
+        self._unmoved(archived)
+
+    def test_a_failed_move_changes_no_row(self, archived, monkeypatch):
+        from pathlib import Path
+
+        from autodft import accounts
+        from autodft.db import get_session
+
+        def boom(self, target):
+            raise OSError("stale file handle")
+
+        monkeypatch.setattr(Path, "rename", boom)
+        with get_session() as session:
+            with pytest.raises(OSError):
+                accounts.reassign_project(session, "nho/p", accounts.get_user_by_username(session, "lab"),
+                                          export_root=archived["settings"].export_data_path)
+        monkeypatch.undo()
+
+        self._unmoved(archived)

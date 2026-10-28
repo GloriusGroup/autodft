@@ -251,7 +251,7 @@ class TestMigration:
 
 
 class TestReassignment:
-    def test_a_project_moves_with_all_its_rows(self, session):
+    def test_a_project_moves_with_all_its_rows(self, session, tmp_path):
         one, _ = accounts.create_user(session, "mhoffmann")
         two, _ = accounts.create_user(session, "nhoelter")
         accounts.get_or_create_project(session, one, "screening")
@@ -262,7 +262,7 @@ class TestReassignment:
         ))
         session.commit()
 
-        accounts.reassign_project(session, "mhoffmann/screening", two)
+        accounts.reassign_project(session, "mhoffmann/screening", two, export_root=tmp_path)
 
         assert accounts.owner_of(session, "nhoelter/screening").id == two.id
         assert accounts.get_project(session, "mhoffmann/screening") is None
@@ -270,14 +270,14 @@ class TestReassignment:
         entry = session.exec(select(CalculationEntrypoint)).first()
         assert json.loads(entry.request_metadata)["project_name"] == "nhoelter/screening"
 
-    def test_a_collision_is_refused(self, session):
+    def test_a_collision_is_refused(self, session, tmp_path):
         one, _ = accounts.create_user(session, "mhoffmann")
         two, _ = accounts.create_user(session, "nhoelter")
         accounts.get_or_create_project(session, one, "screening")
         accounts.get_or_create_project(session, two, "screening")
 
         with pytest.raises(accounts.AccountError, match="already has"):
-            accounts.reassign_project(session, "mhoffmann/screening", two)
+            accounts.reassign_project(session, "mhoffmann/screening", two, export_root=tmp_path)
 
 
 class TestCliSubmission:

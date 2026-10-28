@@ -2118,12 +2118,17 @@ def api_reassign_project(
     name: str, body: ReassignRequest,
     identity: Identity = Depends(current_identity),
 ):
-    """Move a project to another owner, rewriting every reference to it."""
+    """Move a project to another owner, with its job rows and export directory.
+
+    Refused (409) while the project has a background job running, or when the
+    new owner already has that project name or its export directory.
+    """
     require_admin(identity)
     bad = _reject_bad_project(name)
     if bad is not None:
         return bad
     from autodft import accounts
+    from autodft.api import project_jobs
 
     with get_session() as session:
         name = resolve_project(session, identity, name)
@@ -2140,8 +2145,11 @@ def api_reassign_project(
                 status_code=404, content={"detail": f"No user named {body.owner!r}."},
             )
         try:
-            project = accounts.reassign_project(session, name, new_owner)
-        except accounts.AccountError as exc:
+            project_jobs.assert_no_active_job(session, name)
+            project = accounts.reassign_project(
+                session, name, new_owner, export_root=get_active_settings().export_data_path,
+            )
+        except (accounts.AccountError, project_jobs.JobInProgress) as exc:
             return JSONResponse(status_code=409, content={"detail": str(exc)})
         return {"project": project.qualified_name, "owner": new_owner.username}
 

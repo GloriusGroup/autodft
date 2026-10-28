@@ -109,6 +109,15 @@ confirm the project exists.
 | `POST /api/admin/users/{username}?active=false` | deactivate |
 | `POST /api/admin/projects/{name}/reassign` | move a project to another owner |
 
+Reassign takes `{"owner": "<username>"}` and moves the molecules, queued
+entrypoints, background-job rows and the export directory
+`export_data/<owner>/<project>` (an archive's frozen CSVs and photophysics
+payloads included) to the new name, so an archived project stays browsable
+and exportable for its new owner. It answers **409** while the project has
+an archive or export running, and when the new owner already has a project
+or an export directory of that name. The directory is renamed before the
+database commit and renamed back if the commit fails.
+
 There is no delete-user. An account whose projects still hold hundreds of
 gigabytes should not disappear in one click: wipe or reassign the
 projects first, then deactivate.
