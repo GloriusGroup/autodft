@@ -1568,3 +1568,26 @@ class TestRetryBaseMigration:
         with engine.connect() as conn:
             columns = {row[1] for row in conn.execute(text("PRAGMA table_info(computation_tasks)"))}
         assert "retry_base" in columns
+
+
+class TestSlurmStatusIndex:
+    def test_the_polled_job_group_queries_search_the_index(self, tmp_path):
+        """The dashboard's 5 s poll counts and lists jobs by slurm_status group."""
+        from sqlalchemy import text
+
+        from autodft.db import get_engine, init_db, reset_engine
+
+        reset_engine()
+        try:
+            init_db(_settings(tmp_path))
+            with get_engine().connect() as conn:
+                names = {row[0] for row in conn.execute(text(
+                    "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'computation_jobs'"))}
+                where = "FROM computation_jobs WHERE slurm_status IN ('RUNNING', 'COMPLETING')"
+                plans = [" ".join(row[3] for row in conn.execute(text("EXPLAIN QUERY PLAN " + query)))
+                         for query in (f"SELECT count(*) {where}", f"SELECT * {where} ORDER BY id DESC LIMIT 200")]
+        finally:
+            reset_engine()
+        assert "ix_computation_jobs_slurm_status" in names
+        assert all("USING INDEX ix_computation_jobs_slurm_status" in plan
+                   or "USING COVERING INDEX ix_computation_jobs_slurm_status" in plan for plan in plans), plans
