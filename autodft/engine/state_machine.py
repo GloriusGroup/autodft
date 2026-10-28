@@ -62,7 +62,8 @@ MAX_BUILD_FAILURES = 10
 
 # Consecutive sbatch rejections of a job after which it fails as an attempt.
 MAX_SBATCH_REJECTIONS = 3
-_SBATCH_RETRYING = "sbatch failed (retrying)"
+_SBATCH_FAILED = "sbatch failed"
+_SBATCH_RETRYING = f"{_SBATCH_FAILED} (retrying)"
 _SBATCH_REJECTED = re.compile(r"^sbatch failed \(rejected (\d+)/")
 
 
@@ -950,8 +951,8 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
             continue
 
         adopted = None
-        # An sbatch that failed this way may still have been accepted.
-        if (job.fail_reason or "").startswith(_SBATCH_RETRYING):
+        # Any failed sbatch may still have been accepted.
+        if (job.fail_reason or "").startswith(_SBATCH_FAILED):
             try:
                 adopted = _find_submitted(scheduler, submit_script)
             except Exception:  # noqa: BLE001 - resubmitting blind could run the job twice
@@ -990,7 +991,7 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
                 logger.error("Job %d: sbatch rejected (%d/%d, will retry): %s",
                              job.id, rejections, MAX_SBATCH_REJECTIONS, result.error)
                 job.fail_reason = (
-                    f"sbatch failed (rejected {rejections}/{MAX_SBATCH_REJECTIONS}, "
+                    f"{_SBATCH_FAILED} (rejected {rejections}/{MAX_SBATCH_REJECTIONS}, "
                     f"retrying): {result.error}"
                 )[:500]
                 session.add(job)

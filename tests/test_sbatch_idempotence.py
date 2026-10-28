@@ -6,22 +6,32 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from sqlmodel import select
 
 from autodft.config import Settings
 from autodft.engine import scheduler as scheduler_mod
 from autodft.engine.scheduler import SlurmScheduler
-from autodft.engine.state_machine import MAX_SBATCH_REJECTIONS, submit_pending_jobs
-from autodft.models import ComputationJob, SlurmStatus
+from autodft.engine.state_machine import (
+    MAX_SBATCH_REJECTIONS,
+    create_retry_jobs,
+    start_new_tasks,
+    submit_pending_jobs,
+    update_task_statuses,
+)
+from autodft.models import ComputationJob, SlurmStatus, TaskStatus
+from autodft.qm.orca.parser import OrcaParser
 
 TIMEOUT = "sbatch: error: Batch job submission failed: Socket timed out on send/recv operation"
 REJECT = "sbatch: error: Batch job submission failed: Invalid partition name specified"
+GARBLED = "sbatch: error: slurm_receive_msg: Zero Bytes were transmitted or received"
 
 
 class _FakeSlurm:
     """subprocess.run stand-in for sbatch, squeue and sacct.
 
     *outcomes* holds one entry per sbatch call: ``("ok", id)``, ``("lost", id)``
-    (accepted, then the reply timed out), ``("timeout", None)`` or ``("reject", None)``.
+    (accepted, then the reply timed out), ``("garbled", id)`` (accepted, then an
+    unrecognised error), ``("timeout", None)`` or ``("reject", None)``.
     """
 
     def __init__(self, outcomes, lookup_fails=False):
@@ -53,6 +63,8 @@ class _FakeSlurm:
                 raise subprocess.CalledProcessError(1, cmd, output="", stderr=TIMEOUT)
             if kind == "reject":
                 raise subprocess.CalledProcessError(1, cmd, output="", stderr=REJECT)
+            if kind == "garbled":
+                raise subprocess.CalledProcessError(1, cmd, output="", stderr=GARBLED)
             return subprocess.CompletedProcess(cmd, 0, stdout=f"Submitted batch job {job_id}\n", stderr="")
         if prog == "squeue" and "-n" not in argv:
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
@@ -135,6 +147,15 @@ class TestAdoption:
         assert ready_job.success is None
         assert ready_job.fail_reason is None
 
+    def test_an_unrecognised_error_after_acceptance_is_adopted(self, session, ready_job, slurm):
+        fake = slurm([("garbled", "781")])
+        _tick(session, ready_job)
+        assert ready_job.fail_reason.startswith("sbatch failed (rejected 1/3")
+
+        _tick(session, ready_job)
+        assert len(fake.sbatch_calls()) == 1
+        assert ready_job.slurm_jobid == 781
+
     def test_a_job_already_gone_from_squeue_is_found_in_sacct(self, session, ready_job, slurm):
         fake = slurm([("lost", "777")])
         _tick(session, ready_job)
@@ -195,7 +216,7 @@ class TestRejections:
         assert ready_job.fail_reason.startswith("sbatch rejected 3 times")
         assert "Invalid partition" in ready_job.fail_reason
         assert ready_job.time_end is not None
-        assert fake.lookups() == []  # a rejected job was never accepted
+        assert len(fake.lookups()) == 4  # squeue and sacct before the 2nd and 3rd sbatch, both empty
 
         _tick(session, ready_job)
         assert len(fake.sbatch_calls()) == 3
@@ -214,3 +235,24 @@ class TestRejections:
         for _ in range(5):
             _tick(session, ready_job)
         assert ready_job.success is None
+
+    def test_rejected_attempts_are_retried_until_the_task_fails(self, session, sample_task, slurm, tmp_path):
+        settings = Settings()
+        settings.storage.comp_data_path = str(tmp_path)
+        max_attempts = settings.pipeline.max_attempts
+        fake = slurm([("reject", None)] * (MAX_SBATCH_REJECTIONS * max_attempts))
+
+        start_new_tasks(session, settings, OrcaParser())
+        session.commit()
+        for _ in range(MAX_SBATCH_REJECTIONS * max_attempts + 2):
+            update_task_statuses(session, max_attempts)
+            create_retry_jobs(session, settings, OrcaParser())
+            submit_pending_jobs(session, SlurmScheduler(), settings)
+            session.commit()
+
+        jobs = session.exec(select(ComputationJob).where(ComputationJob.task_id == sample_task.id)).all()
+        assert sorted(j.attempt for j in jobs) == list(range(1, max_attempts + 1))
+        assert all(j.success is False and j.fail_reason.startswith("sbatch rejected 3 times") for j in jobs)
+        session.refresh(sample_task)
+        assert sample_task.status == TaskStatus.failed
+        assert len(fake.sbatch_calls()) == MAX_SBATCH_REJECTIONS * max_attempts
