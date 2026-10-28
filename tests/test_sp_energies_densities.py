@@ -781,7 +781,7 @@ class TestPerKindFlags:
 def test_a_download_click_probes_one_byte_then_navigates_or_says_what_is_missing():
     from tests.test_dashboard import _functions
 
-    script = (_functions("projectPath", "escHtml", "isAbort", "errHtml", "apiError", "downloadTaskFile") + """
+    script = (_functions("projectPath", "escHtml", "isAbort", "errHtml", "detailText", "apiError", "downloadTaskFile") + """
 var CANCELLED_HTML = 'cancelled';
 var status = { textContent: 'old', innerHTML: '' };
 var clicked = [], probes = [], blobs = 0;
@@ -840,7 +840,7 @@ def test_a_large_cube_asks_before_loading(size, answer, asked, shown):
 
     html = (TEMPLATE / "dashboard.html").read_text()
     limit = re.search(r"\n *var DENSITY_ASK_BYTES = .*\n", html).group(0)
-    script = (limit + _functions("projectPath", "apiError", "openDensityModal", "closeDensityModal") + """
+    script = (limit + _functions("projectPath", "detailText", "apiError", "openDensityModal", "closeDensityModal") + """
 var els = {};
 var document = { getElementById: function (id) { return els[id] || (els[id] = { style: {}, textContent: '', innerHTML: '' }); } };
 var densityView = { token: 0, viewer: null, volume: null, kind: null, ctl: null };
