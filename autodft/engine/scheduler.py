@@ -12,6 +12,7 @@ import os
 import subprocess
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -29,6 +30,8 @@ class SubmitResult:
     success: bool
     job_id: Optional[str] = None
     error: Optional[str] = None
+    # sbatch refused the job; resubmitting the same script fails the same way.
+    rejected: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +81,10 @@ class Scheduler(ABC):
         """Cancel many jobs, returning how many were cancelled."""
         return sum(1 for jid in job_ids if self.cancel(jid))
 
+    def find_submitted(self, script_path: Path) -> Optional[str]:
+        """Id of a job already submitted from *script_path*, or None; raises if the query fails."""
+        return None
+
 
 # ---------------------------------------------------------------------------
 # SLURM implementation
@@ -113,6 +120,12 @@ class SlurmScheduler(Scheduler):
 
     # -- submit ------------------------------------------------------------
 
+    # sbatch errors after which slurmctld may still accept (or have accepted) the job.
+    _TRANSIENT_SBATCH_ERRORS = (
+        "timed out", "unable to contact slurm controller", "temporarily unable",
+        "temporarily unavailable", "connection refused", "maxsubmit",
+    )
+
     def submit(self, script_path: Path, nice: int | None = None) -> SubmitResult:
         """Run ``sbatch`` on *script_path* and parse the returned job ID.
 
@@ -145,7 +158,50 @@ class SlurmScheduler(Scheduler):
 
         except subprocess.CalledProcessError as exc:
             logger.error("sbatch failed: %s", exc.stderr)
-            return SubmitResult(success=False, error=f"{exc}: {exc.stderr}")
+            stderr = (exc.stderr or "").lower()
+            return SubmitResult(
+                success=False, error=f"{exc}: {exc.stderr}",
+                rejected=not any(m in stderr for m in self._TRANSIENT_SBATCH_ERRORS),
+            )
+
+    # -- lookup ------------------------------------------------------------
+
+    def find_submitted(self, script_path: Path) -> Optional[str]:
+        """Our job named as in *script_path* and running in its folder, from squeue then sacct.
+
+        Raises ``subprocess.CalledProcessError`` if either query fails.
+        """
+        script_path = Path(script_path)
+        try:
+            lines = script_path.read_text().splitlines()
+            # Written before any sbatch of it; an hour covers clock skew between hosts.
+            since = datetime.fromtimestamp(script_path.stat().st_mtime - 3600)
+        except OSError:
+            return None  # sbatch cannot read it either, and its rejections are counted
+        name = next(
+            (line.split("=", 1)[1].strip() for line in lines if line.startswith("#SBATCH --job-name=")),
+            None,
+        )
+        if not name:
+            return None
+        work_dir = os.path.realpath(script_path.parent)
+        user = getpass.getuser()
+        queries = (
+            # slurmctld first: a just-accepted job can take a while to reach slurmdbd.
+            ["squeue", "-h", "-t", "all", "-u", user, "-n", name, "-o", "%i|%Z"],
+            ["sacct", "-X", "-P", "--noheader", "-u", user, f"--name={name}",
+             "-S", since.strftime("%Y-%m-%dT%H:%M:%S"), "--format=JobID,WorkDir"],
+        )
+        for argv in queries:
+            result = subprocess.run(
+                self._command(argv), capture_output=True, text=True, check=True,
+                env=os.environ.copy(),
+            )
+            for line in result.stdout.splitlines():
+                job_id, sep, job_dir = line.strip().partition("|")
+                if sep and job_id.isdigit() and os.path.realpath(job_dir) == work_dir:
+                    return job_id
+        return None
 
     # -- status ------------------------------------------------------------
 

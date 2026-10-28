@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 from datetime import datetime, timezone
 from time import monotonic
@@ -19,7 +20,7 @@ from sqlmodel import Session, col, select
 
 from autodft import categories
 from autodft.config import Settings
-from autodft.engine.scheduler import Scheduler
+from autodft.engine.scheduler import Scheduler, SubmitResult
 from autodft.extraction import results
 from autodft.models.enums import (
     TERMINAL_SLURM_STATES,
@@ -58,6 +59,11 @@ DETERMINISTIC_CHECKS = ("LibXC Needed", "S1 Stays Bound")
 
 # Consecutive raising job builds after which the task fails.
 MAX_BUILD_FAILURES = 10
+
+# Consecutive sbatch rejections of a job after which it fails as an attempt.
+MAX_SBATCH_REJECTIONS = 3
+_SBATCH_RETRYING = "sbatch failed (retrying)"
+_SBATCH_REJECTED = re.compile(r"^sbatch failed \(rejected (\d+)/")
 
 
 def _commit_batch(session: Session, index: int) -> None:
@@ -802,6 +808,12 @@ def _pending_breakdown(scheduler: Scheduler) -> tuple[int, int]:
     return getter()
 
 
+def _find_submitted(scheduler: Scheduler, submit_script: Path) -> Optional[str]:
+    """*scheduler*'s job already submitted from *submit_script*; None for schedulers without a lookup."""
+    finder = getattr(scheduler, "find_submitted", None)
+    return finder(submit_script) if finder is not None else None
+
+
 def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settings) -> None:
     """Find jobs that have been created (no slurm_jobid, no slurm_status)
     and submit them to the scheduler.
@@ -937,11 +949,27 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
             _fail(job, f"Submit script missing: {submit_script}")
             continue
 
-        result = scheduler.submit(submit_script, nice=settings.slurm.nice)
+        adopted = None
+        # An sbatch that failed this way may still have been accepted.
+        if (job.fail_reason or "").startswith(_SBATCH_RETRYING):
+            try:
+                adopted = _find_submitted(scheduler, submit_script)
+            except Exception:  # noqa: BLE001 - resubmitting blind could run the job twice
+                logger.exception("Job %d: SLURM lookup of an earlier sbatch failed; "
+                                 "deferring to the next tick", job.id)
+                continue
+
+        if adopted is not None:
+            logger.warning("Job %d: adopting SLURM job %s from an sbatch that reported failure",
+                           job.id, adopted)
+            result = SubmitResult(success=True, job_id=adopted)
+        else:
+            result = scheduler.submit(submit_script, nice=settings.slurm.nice)
         if result.success:
             job.slurm_jobid = int(result.job_id)  # type: ignore[arg-type]
             job.slurm_status = SlurmStatus.PENDING
             job.time_start = datetime.now(timezone.utc)
+            job.fail_reason = None
             session.add(job)
             # Commit immediately: sbatch has already run, so a later rollback
             # of this step would leave a real SLURM job with no row pointing
@@ -952,6 +980,20 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
             queue_len += 1
             since_poll += 1
             logger.info("Job %d submitted (slurm_jobid=%s)", job.id, result.job_id)
+        elif getattr(result, "rejected", False):
+            # A rejection repeats on the same script, so a few cost an attempt.
+            previous = _SBATCH_REJECTED.match(job.fail_reason or "")
+            rejections = (int(previous.group(1)) if previous else 0) + 1
+            if rejections >= MAX_SBATCH_REJECTIONS:
+                _fail(job, f"sbatch rejected {rejections} times: {result.error}")
+            else:
+                logger.error("Job %d: sbatch rejected (%d/%d, will retry): %s",
+                             job.id, rejections, MAX_SBATCH_REJECTIONS, result.error)
+                job.fail_reason = (
+                    f"sbatch failed (rejected {rejections}/{MAX_SBATCH_REJECTIONS}, "
+                    f"retrying): {result.error}"
+                )[:500]
+                session.add(job)
         else:
             # sbatch failures are usually transient -- slurmctld restarting,
             # a socket timeout, a QOS submit limit that clears. Failing the
@@ -960,7 +1002,7 @@ def submit_pending_jobs(session: Session, scheduler: Scheduler, settings: Settin
             # reason for visibility but leave success NULL so the next tick
             # retries; the per-tick submission cap bounds the retry rate.
             logger.error("Job %d: sbatch failed (will retry): %s", job.id, result.error)
-            job.fail_reason = f"sbatch failed (retrying): {result.error}"[:500]
+            job.fail_reason = f"{_SBATCH_RETRYING}: {result.error}"[:500]
             session.add(job)
 
     session.flush()
