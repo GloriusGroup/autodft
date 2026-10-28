@@ -179,6 +179,18 @@ the dashboard for live form validation; equally useful from a script.
 include empty strings, anything RDKit refuses to parse, and single-atom
 species (GOAT needs ≥2 atoms).
 
+### `POST /api/validate-smiles-batch`
+
+The same check for up to 100 SMILES, answered as a list in the order sent;
+the dashboard's live form checks a pasted list this way, 100 lines a request.
+A line over 512 characters comes back `valid=false` with `error` "SMILES too
+long (>512)." (the same fields as any refusal); more than 100 lines answer
+422. Any signed-in account.
+
+```json
+{ "smiles_list": ["CCO", "not-a-smiles"] }
+```
+
 ### `POST /api/submit`
 
 Queue one calculation entrypoint. The server validates the SMILES first
@@ -201,7 +213,7 @@ include a deleted one.
 | Field                                       | Type   | Default       | Notes                                                                                       |
 | ------------------------------------------- | ------ | ------------- | ------------------------------------------------------------------------------------------- |
 | `smiles`                                    | str    | *required*    | Validated server-side. Max 512 characters — RDKit's parser overflows the C stack on longer input, and it runs inside the controller process. |
-| `project`                                   | str    | `"default"`   | A **bare** name, qualified with your namespace on the way in (`screening` → `alice/screening`) and created on first use. Groups molecules and scopes exports / archives. |
+| `project`                                   | str    | `"default"`   | A **bare** name, qualified with your namespace on the way in (`screening` → `alice/screening`) and created on first use. Groups molecules and scopes exports / archives. 1–64 letters, digits, `.`, `_` or `-`; anything else, `/` or `:` included, answers 400. |
 | `author`                                    | str    | `"web"`       | **Accepted and ignored.** The provenance label stored as `project_author` in `request_metadata` is always the calling account's username, admin included. The field is still accepted so pre-accounts scripts do not get a 422; the real value comes back in the response. |
 | `priority`                                  | int    | `10`          | Higher = served first, and sets the queue allowance: `priority * queue_slots_per_priority` (default 10) waiting SLURM jobs. Ties broken by submission order. Admin only, 1 to 1000 (400 outside); any other account must send the default or nothing, else 400 "Only admin can set priority." Applies to submit, submit-batch and extend. |
 | `request_t1`                                | bool   | `false`       | Build a T1 state and run the full chain on it.                                              |
@@ -215,7 +227,7 @@ include a deleted one.
 | `max_conformers_T1`                         | int    | `1`           | Conformer cap for the T1 state.                                                             |
 | `max_conformers_ox`                         | int    | `1`           | Conformer cap for the ox state.                                                             |
 | `max_conformers_red`                        | int    | `1`           | Conformer cap for the red state.                                                            |
-| `max_conformers`                            | int?   | `null`        | Legacy override — when set, applies to every state, regardless of the per-state fields.     |
+| `max_conformers`                            | int?   | `null`        | Legacy override — when set, applies to every state, regardless of the per-state fields. Every `max_conformers*` is 0 or more (0 asks for none); a negative one answers 400, on Extend too. |
 | `header_confsearch`                         | str?   | `null`        | Raw ORCA header block (multi-line). Used if no header id is set.                            |
 | `header_optimization`                       | str?   | `null`        | Raw ORCA header block. Used if no header id is set.                                         |
 | `header_singlepoint`                        | str?   | `null`        | Raw ORCA header block. **Must not contain `Opt` or `Freq`.**                                |
@@ -333,7 +345,8 @@ caller can log what was refused and keep the rest:
 ```
 
 `400` is returned for the whole batch only when `smiles_list` is empty, or
-`advanced` or a header is refused (as for `POST /api/submit`).
+a field is refused as for `POST /api/submit` (`advanced`, a header,
+`project`, `priority`, `imag_freq_tolerance`, a negative `max_conformers*`).
 
 ### `GET /api/advanced-defaults`
 
@@ -408,7 +421,10 @@ since the broken-bond check existed adds `connectivity` (below).
 
 `status` is one of `created | pending | successful | failed`; `type` is
 one of `confsearch | optimization | singlepoint | singlepoint_vert_ox |
-singlepoint_vert_red | singlepoint_vert_spin_change`.
+singlepoint_vert_red | singlepoint_vert_spin_change | singlepoint_nbo |
+singlepoint_uvvis | singlepoint_nmr | singlepoint_soc | esd_isc | esd_risc |
+esd_ic | esd_fluor | esd_isc_t1s0 | esd_phosp`. Any other value answers 400
+listing the valid ones.
 
 ### `GET /api/jobs` `?status=&limit=`
 
@@ -869,9 +885,9 @@ IR, and ESD (S1 plus a triplet seeded from the lowest S0 conformer —
 has stay as they are, whatever options the body carries; added ones take the
 body's options. ESD added this way keeps the S0 conformers' own `Opt` level
 (no TightOpt). A molecule is rejected when it is archived, not in the
-project, or asks for densities or NBO it does not have (they run inside the
-energy singlepoints: first submission only); one with nothing to add is
-`skipped`. ESD needs the S0 Hessians: every optimisation keeps its
+project, over 512 characters, or asks for densities or NBO it does not have
+(they run inside the energy singlepoints: first submission only); one with
+nothing to add is `skipped`. ESD needs the S0 Hessians: every optimisation keeps its
 `input.hess` since 2026-09-28, and a lowest S0 conformer without one stops
 the molecule's ESD before S1 and T1 start, with that reason. Answers
 `{project, queued: [{id, smiles}], rejected: [{smiles, detail}], skipped:

@@ -703,8 +703,14 @@ curl -X POST http://localhost:8085/api/submit-batch \
 ```
 
 The endpoint returns `400` with the RDKit reason if the SMILES is
-invalid — no row is queued. Validate a SMILES without submitting via
-`POST /api/validate-smiles`:
+invalid — no row is queued. Submit and submit-batch also answer `400` for a
+project name that is not bare (`/` or `:` in it, or anything but 1–64
+letters, digits, `.`, `_`, `-`) and for a negative `max_conformers*` (Extend
+too; `0` asks for none). Submit-batch and Extend reject an entry over 512
+characters on its own, in `rejected`. Validate a SMILES without submitting via
+`POST /api/validate-smiles`, or up to 100 in order via
+`POST /api/validate-smiles-batch` (`{"smiles_list": [...]}`; a line over 512
+characters comes back invalid, more than 100 lines answer 422):
 
 ```bash
 curl -X POST http://localhost:8085/api/validate-smiles \
@@ -728,15 +734,16 @@ is either scoped to the caller's own projects or deliberately shared
 | GET    | `/api/overview`                     | counts of molecules / tasks / jobs / queue                    |
 | GET    | `/api/molecules`                    | list molecules (`?project=&limit=&offset=`)                   |
 | GET    | `/api/molecules/{id}`               | full molecule with states / tasks / jobs                      |
-| GET    | `/api/tasks`                        | list tasks (`?status=&type=&limit=`)                          |
-| GET    | `/api/jobs`                         | list jobs (`?status=&limit=`)                                 |
+| GET    | `/api/tasks`                        | list tasks (`?status=&type=&limit=`); 400 for an unknown status or type |
+| GET    | `/api/jobs`                         | newest jobs (`?status=&limit=`): a SLURM state or the group `running`/`pending`; `X-Total-Count` counts all matches |
 | GET    | `/api/queue`                        | unstarted entrypoints                                         |
 | GET    | `/api/entrypoints/failed`           | entrypoints whose processing raised before any task was made  |
 | GET    | `/api/headers`                      | seeded defaults + custom headers (`?kind=…&include_deleted=`) |
 | POST   | `/api/headers`                      | create a custom header (admin; 403 otherwise)                 |
 | PUT    | `/api/headers/{id}`                 | update text / description / kind / validated (admin)         |
 | DELETE | `/api/headers/{id}`                 | soft-delete (admin; blocked by in-flight tasks)               |
-| POST   | `/api/validate-smiles`              | validate a SMILES string (used by the live form)              |
+| POST   | `/api/validate-smiles`              | validate a SMILES string                                      |
+| POST   | `/api/validate-smiles-batch`        | validate up to 100 SMILES in order (used by the live form)    |
 | POST   | `/api/submit`                       | submit a new SMILES                                           |
 | POST   | `/api/submit-batch`                 | submit many SMILES in one request (see below)                 |
 | GET    | `/api/projects`                     | list projects with summary counts                             |
