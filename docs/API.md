@@ -973,8 +973,11 @@ the export folders (and frozen photophysics payloads) of the molecules
 already archived, deletes any raw folder they have left, and exports and
 deletes only the rest. The controller also deletes, when it next starts,
 any raw folder an archived molecule has left, which covers an archive killed
-on its last molecule (the project is then archived and cannot be re-run),
-unless that project has a job running. The database rows are **kept**, so the
+on its last molecule (the project is then archived and cannot be re-run).
+It does so only when the project's export folder exists and one of the
+molecule's job paths lies in that folder (so a database paired with another
+`comp_data` deletes nothing), and not while the project has a job running;
+a folder it keeps is named in the log. The database rows are **kept**, so the
 project stays listed and browsable as read-only history — what is gone is
 the raw tree on disk, which is why an archived project can no longer be
 exported. Everything not in the tree (other conformers when only the

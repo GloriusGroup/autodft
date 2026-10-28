@@ -541,15 +541,16 @@ def removal_status() -> Optional[dict]:
 # ----------------------------------------------------------------------
 
 # What ``_batch_name`` produces: ``<pid>-<n>``.
-_BATCH_RE = re.compile(r"^(\d+)-\d+$")
+_BATCH_RE = re.compile(r"([0-9]+)-[0-9]+")
 
 
 def _pid_alive(pid: int) -> bool:
+    """Whether *pid* may be running; unsure counts as alive."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
-    except OSError:  # EPERM: alive, someone else's
+    except (OSError, OverflowError):  # EPERM: someone else's; overflow: not ours to judge
         return True
     return True
 
@@ -560,17 +561,47 @@ def _dead_export_trash(export_root: Path) -> list[Path]:
     A project wipe stages its export folder there, and no wipe sweeps it.
     """
     out: list[Path] = []
-    if not export_root.is_dir():
+    try:
+        owners = sorted(export_root.iterdir()) if export_root.is_dir() else []
+    except OSError:
+        logger.exception("Start-up cleanup: could not list %s", export_root)
         return out
-    for owner in sorted(export_root.iterdir()):
+    for owner in owners:
         trash = owner / _TRASH_DIRNAME
-        if not trash.is_dir() or trash.is_symlink():
-            continue
-        for batch in sorted(trash.iterdir()):
-            match = _BATCH_RE.match(batch.name)
-            if match and batch.is_dir() and not _pid_alive(int(match.group(1))):
-                out.append(batch)
+        try:
+            if owner.is_symlink() or trash.is_symlink() or not trash.is_dir():
+                continue
+            for batch in sorted(trash.iterdir()):
+                match = _BATCH_RE.fullmatch(batch.name)
+                if match and batch.is_dir() and not _pid_alive(int(match.group(1))):
+                    out.append(batch)
+        except OSError:
+            logger.exception("Start-up cleanup: could not list %s", trash)
     return out
+
+
+def _archived_job_paths(settings: Settings) -> dict[int, tuple[str, list[str]]]:
+    """``{molecule_id: (project, job_paths)}`` for every archived molecule."""
+    out: dict[int, tuple[str, list[str]]] = {}
+    with get_session(settings) as session:
+        rows = session.exec(
+            select(Molecule.id, Molecule.project_name, ComputationJob.job_path)
+            .outerjoin(MoleculeState, MoleculeState.molecule_id == Molecule.id)
+            .outerjoin(ComputationTask, ComputationTask.state_id == MoleculeState.id)
+            .outerjoin(ComputationJob, ComputationJob.task_id == ComputationTask.id)
+            .where(Molecule.archived == True)  # noqa: E712
+        ).all()
+    for mol_id, project, job_path in rows:
+        paths = out.setdefault(mol_id, (project, []))[1]
+        if job_path:
+            paths.append(job_path)
+    return out
+
+
+def _owns(mol_dir: Path, job_paths: list[str]) -> bool:
+    """Whether a job path of the molecule lies under *mol_dir*."""
+    root = mol_dir.resolve()
+    return any(Path(p).resolve().is_relative_to(root) for p in job_paths)
 
 
 def _clean_up(settings: Settings) -> None:
@@ -578,21 +609,31 @@ def _clean_up(settings: Settings) -> None:
         try:
             _, freed = _remove_tree(batch)
             logger.warning("Start-up cleanup: removed wipe trash %s (%s)", batch, human_bytes(freed))
+        except OSError:
+            logger.exception("Start-up cleanup: could not remove %s", batch)
+            continue
+        try:
             if not any(batch.parent.iterdir()):
                 batch.parent.rmdir()
         except OSError:
-            logger.exception("Start-up cleanup: could not remove %s", batch)
+            logger.warning("Start-up cleanup: could not remove the emptied %s", batch.parent)
 
     # An archive killed during a molecule's delete leaves it flagged with its folder.
-    with get_session(settings) as session:
-        archived = session.exec(
-            select(Molecule.id, Molecule.project_name).where(Molecule.archived == True)  # noqa: E712
-        ).all()
-    for mol_id, project in archived:
+    # Deleted only when its export exists and its job paths agree with this comp_data.
+    for mol_id, (project, job_paths) in _archived_job_paths(settings).items():
         mol_dir = settings.comp_data_path / f"mol_{mol_id}"
-        if not mol_dir.is_dir():
-            continue
         try:
+            if not (mol_dir.is_dir() or mol_dir.is_symlink()):
+                continue
+            if not safe_subdirectory(settings.export_data_path, project).is_dir():
+                logger.warning("Start-up cleanup: kept %s, %r has no export folder", mol_dir, project)
+                continue
+            if not _owns(mol_dir, job_paths):
+                logger.warning(
+                    "Start-up cleanup: kept %s, no job of archived molecule %d lies in it",
+                    mol_dir, mol_id,
+                )
+                continue
             with project_jobs.wiping(project):
                 _, freed = _remove_tree(mol_dir)
             logger.warning(
@@ -601,8 +642,8 @@ def _clean_up(settings: Settings) -> None:
             )
         except project_jobs.JobInProgress:
             logger.info("Start-up cleanup: %r has a job running; left %s", project, mol_dir)
-        except OSError:
-            logger.exception("Start-up cleanup: could not remove %s", mol_dir)
+        except (OSError, ValueError):
+            logger.exception("Start-up cleanup: could not check or remove %s", mol_dir)
 
 
 def clean_up_at_start(settings: Settings) -> threading.Thread:

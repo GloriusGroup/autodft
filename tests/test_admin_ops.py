@@ -903,7 +903,7 @@ class TestStartupCleanup:
         from autodft.db import init_db, reset_engine
 
         settings = Settings()
-        settings.storage.data_path = str(tmp_path)
+        settings.storage.data_path = str(tmp_path / "data")
         settings.api.enabled = False
         reset_engine()
         init_db(settings)
@@ -912,12 +912,9 @@ class TestStartupCleanup:
 
     @staticmethod
     def _dead_pid() -> int:
-        import subprocess
-        import sys
-
-        proc = subprocess.Popen([sys.executable, "-c", "pass"])
-        proc.wait()
-        return proc.pid
+        """Above pid_max, so never a running process."""
+        with open("/proc/sys/kernel/pid_max") as f:
+            return int(f.read()) + 1
 
     def _trash_layout(self, export_root):
         import os
@@ -931,12 +928,46 @@ class TestStartupCleanup:
             "lookalike": export_root / "alice" / "wipe-trash" / f"{self._dead_pid()}-1" / "f",
             "sibling": export_root / "alice" / ".wipe-trash-old" / f"{self._dead_pid()}-1" / "f",
             "not_a_batch": trash / "keep-me" / "f",
+            "unicode_digits": trash / "\u0661\u0662-1" / "f",
             "live_batch": trash / f"{os.getpid()}-1" / "f",
+            "overflow": trash / "99999999999999999999-1" / "f",
         }
         for path in kept.values():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("keep")
         return dead, kept
+
+    @staticmethod
+    def _archived(settings, project="alice/p", *, archived=True, export=True, job_root=None):
+        """An archived molecule with a job under its comp_data folder (or under *job_root*)."""
+        from autodft.db import get_session
+
+        with get_session(settings) as session:
+            header = ComputationHeader(header_text="!B3LYP\n", description="t", validated=True)
+            mol = Molecule(smiles="CCO", project_name=project, archived=archived)
+            session.add_all([header, mol])
+            session.commit()
+            state = MoleculeState(
+                molecule_id=mol.id, description="S0", multiplicity=1, charge=0,
+                optimization_header_id=header.id,
+            )
+            session.add(state)
+            session.commit()
+            task = ComputationTask(
+                state_id=state.id, task_type=TaskType.optimization,
+                status=TaskStatus.successful, header_id=header.id,
+            )
+            session.add(task)
+            session.commit()
+            mol_dir = settings.comp_data_path / f"mol_{mol.id}"
+            job_dir = (job_root or mol_dir) / "tasks" / f"{task.id}_optimization"
+            session.add(ComputationJob(task_id=task.id, attempt=1, job_path=str(job_dir)))
+            session.commit()
+        (mol_dir / "tasks").mkdir(parents=True)
+        (mol_dir / "tasks" / "o.out").write_text("x")
+        if export:
+            (settings.export_data_path / project).mkdir(parents=True, exist_ok=True)
+        return mol_dir
 
     def test_dead_wipe_trash_under_an_owner_is_removed(self, live, caplog):
         dead, kept = self._trash_layout(live.export_data_path)
@@ -945,8 +976,9 @@ class TestStartupCleanup:
             admin_ops.clean_up_at_start(live).join(10)
 
         assert not dead.exists()
-        assert all(p.read_text() == "keep" for p in kept.values())
+        assert {k: p.read_text() for k, p in kept.items()} == dict.fromkeys(kept, "keep")
         assert any(str(dead) in r.getMessage() for r in caplog.records)
+        assert not any(r.levelname == "ERROR" for r in caplog.records)
 
     def test_an_emptied_trash_directory_is_pruned(self, live):
         trash = live.export_data_path / "bob" / admin_ops._TRASH_DIRNAME
@@ -957,49 +989,117 @@ class TestStartupCleanup:
         assert not trash.exists()
         assert (live.export_data_path / "bob").is_dir()
 
-    def test_archived_molecules_raw_folders_go_and_nothing_else(self, live, caplog):
+    def test_a_symlinked_batch_loses_only_the_link(self, live, tmp_path):
+        target = tmp_path / "outside"
+        (target / "p").mkdir(parents=True)
+        (target / "p" / "f").write_text("keep")
+        trash = live.export_data_path / "bob" / admin_ops._TRASH_DIRNAME
+        trash.mkdir(parents=True)
+        link = trash / f"{self._dead_pid()}-1"
+        link.symlink_to(target)
+
+        admin_ops.clean_up_at_start(live).join(10)
+
+        assert not link.is_symlink()
+        assert (target / "p" / "f").read_text() == "keep"
+
+    def test_a_symlinked_owner_is_not_followed(self, live, tmp_path):
+        outside = tmp_path / "outside"
+        batch = outside / admin_ops._TRASH_DIRNAME / f"{self._dead_pid()}-1"
+        batch.mkdir(parents=True)
+        live.export_data_path.mkdir(parents=True, exist_ok=True)
+        (live.export_data_path / "carol").symlink_to(outside)
+
+        admin_ops.clean_up_at_start(live).join(10)
+
+        assert batch.is_dir()
+
+    def test_an_unreadable_owner_does_not_stop_the_rest(self, live, monkeypatch):
+        from pathlib import Path
+
+        bad = live.export_data_path / "aaa" / admin_ops._TRASH_DIRNAME
+        bad.mkdir(parents=True)
+        dead, _ = self._trash_layout(live.export_data_path)
+        mol_dir = self._archived(live)
+        real = Path.iterdir
+
+        def flaky(self):
+            if self == bad:
+                raise PermissionError(13, "denied", str(self))
+            return real(self)
+
+        monkeypatch.setattr(Path, "iterdir", flaky)
+        admin_ops.clean_up_at_start(live).join(10)
+
+        assert not dead.exists()
+        assert not mol_dir.exists()
+
+    def test_an_archived_molecules_raw_folder_goes_and_nothing_else(self, live, caplog):
         from autodft.db import get_session
 
+        gone = self._archived(live)
+        alive = self._archived(live, archived=False)
         with get_session(live) as session:
-            gone = Molecule(smiles="CCO", project_name="alice/p", archived=True)
-            no_dir = Molecule(smiles="CCN", project_name="alice/p", archived=True)
-            alive = Molecule(smiles="CCC", project_name="alice/p")
-            session.add_all([gone, no_dir, alive])
+            session.add(Molecule(smiles="CCN", project_name="alice/p", archived=True))
             session.commit()
-            ids = gone.id, alive.id
-        comp = live.comp_data_path
-        for mid in ids:
-            (comp / f"mol_{mid}" / "tasks").mkdir(parents=True)
-            (comp / f"mol_{mid}" / "tasks" / "o.out").write_text("x")
-        stranger = comp / "mol_999"
+        stranger = live.comp_data_path / "mol_999"
         stranger.mkdir()
 
         with caplog.at_level("INFO", logger="autodft.api.admin_ops"):
             admin_ops.clean_up_at_start(live).join(10)
 
-        assert not (comp / f"mol_{ids[0]}").exists()
-        assert (comp / f"mol_{ids[1]}" / "tasks" / "o.out").exists()
+        assert not gone.exists()
+        assert (alive / "tasks" / "o.out").exists()
         assert stranger.is_dir()
-        assert any(f"mol_{ids[0]}" in r.getMessage() for r in caplog.records)
+        assert any(gone.name in r.getMessage() for r in caplog.records)
+
+    def test_without_an_export_folder_the_raw_folder_is_kept(self, live, caplog):
+        mol_dir = self._archived(live, export=False)
+
+        with caplog.at_level("INFO", logger="autodft.api.admin_ops"):
+            admin_ops.clean_up_at_start(live).join(10)
+
+        assert (mol_dir / "tasks" / "o.out").exists()
+        assert [r.getMessage() for r in caplog.records if mol_dir.name in r.getMessage()] == [
+            f"Start-up cleanup: kept {mol_dir}, 'alice/p' has no export folder"
+        ]
+
+    def test_job_paths_elsewhere_keep_the_raw_folder(self, live, tmp_path, caplog):
+        """The DB belongs to another comp_data: its ids say nothing about this one."""
+        mol_dir = self._archived(live, job_root=tmp_path / "other_comp" / "mol_1")
+
+        with caplog.at_level("INFO", logger="autodft.api.admin_ops"):
+            admin_ops.clean_up_at_start(live).join(10)
+
+        assert (mol_dir / "tasks" / "o.out").exists()
+        assert len([r for r in caplog.records if mol_dir.name in r.getMessage()]) == 1
+
+    def test_a_symlinked_archived_folder_loses_only_the_link(self, live, tmp_path):
+        mol_dir = self._archived(live)
+        target = tmp_path / "elsewhere"
+        mol_dir.rename(target)
+        mol_dir.symlink_to(target)
+
+        admin_ops.clean_up_at_start(live).join(10)
+
+        assert not mol_dir.is_symlink()
+        assert (target / "tasks" / "o.out").read_text() == "x"
 
     def test_a_project_with_a_running_job_is_left_alone(self, live):
         from autodft.db import get_session
         from autodft.models import ProjectJob, ProjectJobKind, ProjectJobStatus
 
+        mol_dir = self._archived(live)
         with get_session(live) as session:
-            mol = Molecule(smiles="CCO", project_name="alice/p", archived=True)
-            session.add(mol)
             session.add(ProjectJob(
                 qualified_name="alice/p", kind=ProjectJobKind.archive,
                 status=ProjectJobStatus.running,
             ))
             session.commit()
-            leftover = live.comp_data_path / f"mol_{mol.id}"
-        leftover.mkdir(parents=True)
 
         admin_ops.clean_up_at_start(live).join(10)
 
-        assert leftover.is_dir()
+        assert mol_dir.is_dir()
 
     def test_the_run_command_starts_it(self, live, monkeypatch):
         from autodft import config
