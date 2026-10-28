@@ -422,10 +422,8 @@ the payload shape.
 
 **Files and archive.** `export files` copies each conformer's
 cubes as `conf<N>_sp_<name>` (e.g. `conf1_sp_ElDens.cube`), alongside the
-singlepoint's usual input, geometry and output. Archiving a project with
-any Densities-flagged molecule adds `.cube` to the kept extensions
-automatically, but only when the request body left `extensions` unset; an
-explicit list is kept exactly as given.
+singlepoint's usual input, geometry and output. Archiving writes the same
+tree before it deletes the raw folders, so the cubes are kept.
 
 **Photophysics page and export.** Densities has no summary or detail of
 its own anywhere in this payload: it never gets a molecule into the

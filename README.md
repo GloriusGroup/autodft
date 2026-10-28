@@ -413,21 +413,21 @@ Delete** then deletes every `<comp_data>/mol_*/` of the project — everything
 not in the tree is gone — flagging each molecule `archived` just before its
 folder is deleted; the project stays browsable in Project Overview but can no
 longer be exported (409). Refused for a protected project and for one that is
-already archived; the dialog asks for the project name to be typed back. From its start the project gets no new job or `sbatch`, and
-it waits until every job the project sent to SLURM has finished and been
-judged, so a result that lands during the wait is exported, not deleted; a job
-whose `sbatch` reported failure is first looked up in SLURM and, if found,
-waited for too, and so is a cube build or `.out`/`.xyz` download of the
-project already under way. An archive cut short (a restart, an NFS error)
-can be re-run: it keeps the export folders of the molecules already
-archived, deletes the raw folders they have left, and exports and deletes
-the rest. A molecule whose raw data is gone but which is not flagged (an
-archive cut short under older code) keeps its export folder and is flagged.
-The controller deletes an archived molecule's raw folder left
-behind at its next start, if the project's export folder exists and one
-of the molecule's job paths lies in that raw folder. A plain Export Project of
-such a project keeps those folders too, and so leaves a molecule whose raw
-data is gone as it is. While it runs, a molecule wipe,
+already archived; the dialog asks for the project name to be typed back. From
+its start the project gets no new job or `sbatch`, and it waits until every
+job the project sent to SLURM has finished and been judged, so a result that
+lands during the wait is exported, not deleted; a job whose `sbatch` reported
+failure is first looked up in SLURM and, if found, waited for too, and so is
+a cube build or `.out`/`.xyz` download of the project already under way. An
+archive cut short (a restart, an NFS error) can be re-run: it keeps the
+export folders of the molecules already archived, deletes the raw folders
+they have left, and exports and deletes the rest. A molecule whose raw data
+is gone but which is not flagged (an archive cut short under older code)
+keeps its export folder and is flagged. The controller deletes an archived
+molecule's raw folder left behind at its next start, if the project's export
+folder exists and one of the molecule's job paths lies in that raw folder. A
+plain Export Project of such a project keeps those folders too, and so leaves
+a molecule whose raw data is gone as it is. While it runs, a molecule wipe,
 Delete Project, density cube builds, `.out`/`.xyz` downloads and another
 export or archive of the project answer 409 ("Export and Delete is running
 for this project."); they work again once it ends, failed or not.
@@ -793,13 +793,13 @@ DATABASE`), refuse to run while another one is in flight (409), while
 the project (any project, for the reset) has an export or archive running
 (409), or while one of its jobs is mid-`sbatch` with no SLURM id to cancel
 yet (409). That clears within a tick, but a claim a crash left `SUBMITTING`,
-or a job whose `sbatch` reported failure, blocks every wipe of its project
-and the reset until the controller has run again and resolved it. The rows
-go first; the jobs SLURM still has are then `scancel`ed (given up after
-60 s, which the response's `scancel_warning` names), and only then the files
-are renamed aside and unlinked on a background thread, so the request
-returns in well under a second while a project-sized deletion runs for
-minutes — poll
+or a job whose `sbatch` reported failure, blocks the wipe of its project,
+the wipe of its molecule and the reset until the controller has run again
+and resolved it. The rows go first; the jobs SLURM still has are then
+`scancel`ed (given up after 60 s, which the response's `scancel_warning`
+names), and only then the files are renamed aside and unlinked on a
+background thread, so the request returns in well under a second while a
+project-sized deletion runs for minutes — poll
 `GET /api/wipe-status` for that. `POST /api/projects/{name}/archive` takes the
 same `confirm` (the qualified project name; 400 without it), and the Export
 and Delete dialog asks for the name to be typed back.

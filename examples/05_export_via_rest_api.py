@@ -9,7 +9,8 @@ Endpoints exercised:
 * ``GET  /api/projects``                  — list with summary counts
 * ``GET  /api/projects/{name}``           — molecules + progress + status
 * ``POST /api/projects/{name}/export``    — CSV / JSON / the export tree (``files``)
-* ``POST /api/projects/{name}/archive``   — DESTRUCTIVE: export tree, then comp_data wiped
+* ``POST /api/projects/{name}/archive``   — DESTRUCTIVE: export tree, then comp_data wiped;
+  the body's ``confirm`` must be the qualified ``owner/project`` name
 
 ``{name}`` is a project, and projects belong to accounts: they are stored
 as ``owner/project`` and written ``owner:project`` in a URL. A slash would
@@ -145,9 +146,11 @@ def archive_project(
 ) -> dict:
     """**Destructive** ``POST /api/projects/{name}/archive``.
 
-    Raises ``APIError`` with HTTP 409 if any task is still in flight, and
-    404 for a project outside your namespace — 404 rather than 403, so the
-    API never confirms that someone else's project exists.
+    Sends ``confirm``, the qualified ``owner/project`` name; without it, or
+    any other spelling, the API answers 400. Raises ``APIError`` with HTTP
+    409 for a protected or archived project or while a job or wipe of it
+    runs, and 404 for a project outside your namespace — 404 rather than
+    403, so the API never confirms that someone else's project exists.
     """
     return call(
         "POST",
