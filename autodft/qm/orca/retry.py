@@ -381,7 +381,7 @@ _STRONG_SCF = re.compile(r"\b(?:Tight|VeryTight|Extreme)SCF\b", re.IGNORECASE)
 def _add_keyword(text: str, keyword: str) -> str:
     """Append a keyword to the first ``!`` line, ahead of any ``#`` comment."""
     return re.sub(
-        r"(?m)^(!.*?)(\s*#.*)?$",
+        r"(?m)^(!.*?)([ \t]*#.*)?$",
         lambda m: f"{m.group(1)} {keyword}" + (f" {m.group(2).lstrip()}" if m.group(2) else ""),
         text, count=1,
     )
@@ -415,7 +415,7 @@ class TightenConvergence(RetryStrategy):
             input_content = _SCF_BLOCK.sub(
                 lambda m: _raise_to_tight(m.group(0)), input_content,
             )
-        elif not _STRONG_SCF.search(input_content):
+        elif not _STRONG_SCF.search(re.sub(r"#.*", "", input_content)):
             input_content = _add_keyword(input_content, "TightSCF")
 
         # A %geom Convergence would override (loosen) a VeryTightOpt keyword.

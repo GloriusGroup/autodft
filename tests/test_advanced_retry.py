@@ -9,7 +9,7 @@ import pytest
 from autodft.config import Settings
 from autodft.qm.orca import advanced
 from autodft.qm.orca.retry import (
-    FailureInfo, IncreaseResources, RecoverSinglepointSCF, TightenConvergence,
+    FailureInfo, IncreaseResources, RecoverSinglepointSCF, TightenConvergence, _add_keyword,
 )
 
 ADV = advanced.defaults(Settings())
@@ -297,3 +297,20 @@ def test_slowconv_inserts_before_a_comment():
     inp = "!M062X def2-TZVPD TightSCF # note\n" + XYZ
     out = RecoverSinglepointSCF().modify(inp, "", _scf(3))[0]
     assert out.startswith("!M062X def2-TZVPD NormalSCF SlowConv # note\n")
+
+
+def test_add_keyword_leaves_a_following_comment_line_alone():
+    inp = "!B3LYP def2-SVP\n# note\n" + XYZ
+    out = _add_keyword(inp, "TightSCF")
+    assert out == inp.replace("def2-SVP\n", "def2-SVP TightSCF\n", 1)
+
+
+def test_add_keyword_leaves_a_comment_after_a_blank_line_alone():
+    inp = "!B3LYP def2-SVP\n\n# note\n" + XYZ
+    out = _add_keyword(inp, "TightSCF")
+    assert out == inp.replace("def2-SVP\n", "def2-SVP TightSCF\n", 1)
+
+
+def test_tighten_ignores_a_stronger_keyword_in_a_comment():
+    out = _tighten("! B3LYP def2-SVP # was VeryTightSCF\n" + XYZ)
+    assert out.startswith("! B3LYP def2-SVP TightSCF # was VeryTightSCF\n")
