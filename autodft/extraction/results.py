@@ -155,26 +155,40 @@ def _upsert(
 
 def store(session: Session, task: ComputationTask, job: ComputationJob, job_path: Path) -> bool:
     """Parse *job*'s output once and keep the record; False without an output or a stored type."""
+    record = parse(session, task, job_path)
+    if record is None:
+        return False
+    save(session, task, job, record)
+    return True
+
+
+def parse(session: Session, task: ComputationTask, job_path: Path) -> Optional[dict]:
+    """The record :func:`store` keeps for a job of *task*; only reads, so it runs before the write lock."""
     task_type = task.task_type.value
     if task_type not in STORED_TYPES:
-        return False
+        return None
     # An unrelated pending row (e.g. a bad geometry from this same tick) must
     # not be autoflushed by our own queries -- that would raise from inside
     # this function's caller's log-and-ignore instead of at the normal flush.
     with session.no_autoflush:
         record = parse_job(task_type, job_path, _wants_ir(session, task_type, task.state_id))
         if record is None:
-            return False
+            return None
         if task_type == "optimization":
             try:
                 found = _connectivity(session, task.state_id, job_path)
             except Exception:  # noqa: BLE001 - the record matters more than the check
-                logger.warning("Connectivity check failed for job %d; stored without it", job.id, exc_info=True)
+                logger.warning("Connectivity check failed for %s; stored without it", job_path, exc_info=True)
                 found = None
             if found is not None:
                 record["connectivity"] = found
+    return record
+
+
+def save(session: Session, task: ComputationTask, job: ComputationJob, record: dict) -> None:
+    """Keep *record*, from :func:`parse`, as *job*'s row."""
+    with session.no_autoflush:
         _upsert(session, job.id, task.id, job.job_path, job.time_end, record)
-    return True
 
 
 def _connectivity(session: Session, state_id: int, job_path: Path) -> Optional[dict]:

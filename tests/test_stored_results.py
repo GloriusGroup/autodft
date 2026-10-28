@@ -1088,7 +1088,7 @@ class TestWriter:
         def _raise(*a, **k):
             raise RuntimeError("boom")
 
-        monkeypatch.setattr(results, "store", _raise)
+        monkeypatch.setattr(results, "parse", _raise)
         with caplog.at_level(logging.ERROR):
             process_finished_jobs(session, _StubEngine(QMResult(success=True, checks={})))
 

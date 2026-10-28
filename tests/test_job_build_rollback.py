@@ -146,16 +146,26 @@ def test_perturbation_shape_mismatch_raises_value_error(tmp_path, monkeypatch):
         PerturbImaginaryMode().modify("*xyzfile 0 1 input.xyz\n", "", failure)
 
 
-def test_a_rolled_back_start_leaves_no_job(session, task, settings):
+class _Crash(BaseException):
+    pass
+
+
+def _crash(*args, **kwargs):
+    raise _Crash
+
+
+def test_a_rolled_back_start_leaves_no_job(session, task, settings, monkeypatch):
     """The job row commits only with the task's move to pending."""
-    start_new_tasks(session, settings, OrcaParser())
+    with monkeypatch.context() as m, pytest.raises(_Crash):
+        m.setattr(session, "commit", _crash)
+        start_new_tasks(session, settings, OrcaParser())
     session.rollback()
     session.refresh(task)
     assert task.status == TaskStatus.created
     assert _jobs(session, task) == []
 
 
-def test_a_rolled_back_retry_leaves_no_job(session, sample_task, settings, tmp_path):
+def test_a_rolled_back_retry_leaves_no_job(session, sample_task, settings, tmp_path, monkeypatch):
     sample_task.task_path = str(tmp_path / "task")
     sample_task.status = TaskStatus.pending
     session.add(sample_task)
@@ -163,6 +173,8 @@ def test_a_rolled_back_retry_leaves_no_job(session, sample_task, settings, tmp_p
                                fail_reason="['Termination']", job_path=str(tmp_path / "job_old")))
     session.commit()
 
-    create_retry_jobs(session, settings, OrcaParser())
+    with monkeypatch.context() as m, pytest.raises(_Crash):
+        m.setattr(session, "commit", _crash)
+        create_retry_jobs(session, settings, OrcaParser())
     session.rollback()
     assert [j.attempt for j in _jobs(session, sample_task)] == [1]

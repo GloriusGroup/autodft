@@ -39,7 +39,7 @@ from autodft.models.molecule import Molecule
 from autodft.models.project_job import ProjectJob
 from autodft.models.state import MoleculeState
 from autodft.models.task import ComputationTask
-from autodft.qm.base import QMEngine
+from autodft.qm.base import QMEngine, QMResult
 from autodft.qm.orca.parser import DENSITY_CUBES, MP2_RESPONSE_MEMORY, OrcaParser
 
 logger = logging.getLogger(__name__)
@@ -49,12 +49,9 @@ logger = logging.getLogger(__name__)
 # one SQLite file with the worker, and SQLite allows exactly one writer. The
 # heavy steps below interleave row updates with filesystem work on a network
 # mount -- parsing ORCA outputs, writing input decks -- so a step that held a
-# single transaction across the whole batch kept the write lock for minutes.
-# Everything else blocked behind it for the full `busy_timeout` (60 s), which
-# is how a submission script doing one INSERT per molecule ended up timing
-# out mid-campaign. Committing every few items caps the hold at one item's
-# I/O and lets waiting writers through between batches.
-_COMMIT_BATCH = 25
+# single transaction across the whole batch kept the write lock for minutes,
+# and every other writer timed out behind it. They now commit per item, and
+# step 2 parses each output before its first write, with the lock free.
 
 # Failed checks that recur identically on every attempt, whatever else failed.
 DETERMINISTIC_CHECKS = ("LibXC Needed", "S1 Stays Bound")
@@ -79,12 +76,6 @@ _SBATCH_RETRYING = f"{SBATCH_FAILED} (retrying)"
 # fail_reason prefix of such a job SLURM was found not to have.
 _NOT_ACCEPTED = "not in SLURM after"
 _SBATCH_REJECTED = re.compile(r"^sbatch failed \(rejected (\d+)/")
-
-
-def _commit_batch(session: Session, index: int) -> None:
-    """Release the SQLite write lock every ``_COMMIT_BATCH`` items."""
-    if index and index % _COMMIT_BATCH == 0:
-        session.commit()
 
 
 # ======================================================================
@@ -164,7 +155,8 @@ def update_running_jobs(session: Session, scheduler: Scheduler) -> None:
 def process_finished_jobs(session: Session, qm_engine: QMEngine, max_attempts: int = 3) -> None:
     """For jobs with a terminal slurm_status but ``success IS NULL``:
     check the QM output, set ``success`` / ``fail_reason``, and extract
-    geometries for successful confsearch/optimization jobs.
+    geometries for successful confsearch/optimization jobs. Each job's files
+    are read before its first write, and each job commits on its own.
     """
 
     # An explicit terminal whitelist. The original list (COMPLETED / FAILED /
@@ -178,107 +170,155 @@ def process_finished_jobs(session: Session, qm_engine: QMEngine, max_attempts: i
     # parsing a job mid-epilog marks a healthy run failed with
     # ['Termination'] -- which is exactly the trigger that escalates its
     # retry to 32 ranks for 4 days.
-    statement = (
-        select(ComputationJob)
-        .where(
-            col(ComputationJob.slurm_status).in_(sorted(TERMINAL_SLURM_STATES)),
-            col(ComputationJob.success).is_(None),
-        )
+    statement = select(ComputationJob.id).where(
+        col(ComputationJob.slurm_status).in_(sorted(TERMINAL_SLURM_STATES)),
+        col(ComputationJob.success).is_(None),
     )
-    jobs = session.exec(statement).all()
+    for job_id in session.exec(statement).all():
+        _process_finished_job(session, job_id, qm_engine, max_attempts)
+        session.commit()
 
-    for processed, job in enumerate(jobs):
-        _commit_batch(session, processed)
-        job_id = job.id
-        task = session.get(ComputationTask, job.task_id)
-        if task is None:
-            logger.error("Job %d references missing task %d", job.id, job.task_id)
-            continue
 
-        job_path = Path(job.job_path) if job.job_path else None
-        if job_path is None or not job_path.exists():
-            job.success = False
-            job.fail_reason = "Job path missing or does not exist"
-            job.time_end = job.time_end or datetime.now(timezone.utc)
-            session.add(job)
-            continue
+class _Verdict(NamedTuple):
+    success: bool
+    fail_reason: Optional[str] = None
+    result: Optional[QMResult] = None
+    # The optimised XYZ, or why it could not be read.
+    xyz: Optional[str] = None
+    xyz_error: Optional[Exception] = None
+    record: Optional[dict] = None
 
-        # Output parsing touches files a killed job may have left truncated,
-        # and the parser raises on several of those shapes. Isolate it per
-        # job: an unhandled exception here used to unwind out of the whole
-        # pipeline tick, discarding every other molecule's progress and
-        # re-raising on the same job forever.
-        try:
-            result = qm_engine.check_output(
-                job_path, _check_type(session, task), _imag_freq_tolerance(session, task),
+
+def _process_finished_job(session: Session, job_id: int, qm_engine: QMEngine, max_attempts: int) -> None:
+    """Judge one finished job: read its files with no write pending, then write it under one claim."""
+    job = session.get(ComputationJob, job_id)
+    if job is None or job.success is not None:
+        return
+    task = session.get(ComputationTask, job.task_id)
+    if task is None:
+        logger.error("Job %d references missing task %d", job.id, job.task_id)
+        return
+    job_path = Path(job.job_path) if job.job_path else None
+    verdict = _judge(session, job, task, job_path, qm_engine, max_attempts)
+
+    # Judged or removed since it was read: someone else's write stands.
+    if not _claim_finished(session, job_id):
+        session.rollback()
+        return
+    job.success = verdict.success
+    if verdict.fail_reason is not None:
+        job.fail_reason = verdict.fail_reason
+    job.time_end = job.time_end or datetime.now(timezone.utc)
+    session.add(job)
+
+    if not job.success:
+        return
+
+    # -- Extract geometries for successful jobs -----------------------
+
+    result = verdict.result
+    try:
+        if task.task_type == TaskType.confsearch and result.conformers:
+            _create_conformer_geometries(
+                session, task, result.conformers, result.energy,
+                result.conformer_energies, result.conformer_degeneracies,
             )
-        except Exception as exc:  # noqa: BLE001 - deliberately broad
-            logger.exception("Failed to parse output for job %d", job.id)
-            job.success = False
-            job.fail_reason = f"Output parsing failed: {type(exc).__name__}: {exc}"[:500]
-            job.time_end = job.time_end or datetime.now(timezone.utc)
-            session.add(job)
-            continue
 
-        job.success = result.success
-        if not result.success:
-            failed_checks = [k for k, v in result.checks.items() if not v]
-            # A SLURM OOM kill usually truncates output.out before ORCA can
-            # print anything, so the only reliable memory signal is the SLURM
-            # state. Fold it into fail_reason so the retry escalates per-rank
-            # memory (the one failure mode where that is the right response).
-            if job.slurm_status == "OUT_OF_MEMORY":
-                failed_checks.append("OUT_OF_MEMORY")
-            if failed_checks == [DENSITY_CUBES] and _accept_cube_miss(session, job, max_attempts):
-                # Retried once already, or no retry left; the energy is fine.
-                logger.warning(
-                    "Job %d: density cubes still missing or empty after a retry in %s (%s); "
-                    "accepting the job", job.id, job_path, ", ".join(OrcaParser.missing_cubes(job_path)),
-                )
-                job.success = True
-            else:
-                job.fail_reason = str(failed_checks)
-        job.time_end = job.time_end or datetime.now(timezone.utc)
+        elif task.task_type == TaskType.optimization:
+            if verdict.xyz_error is not None:
+                raise verdict.xyz_error
+            _create_optimization_geometry(session, task, verdict.xyz, result.energy)
+    except Exception as exc:  # noqa: BLE001 - deliberately broad
+        logger.exception("Failed to extract geometries for job %d", job.id)
+        job.success = False
+        job.fail_reason = f"Geometry extraction failed: {type(exc).__name__}: {exc}"[:500]
         session.add(job)
+        # Drop anything the failed extraction already wrote. Leaving
+        # partial rows behind means the eventual successful retry mixes
+        # them into "keep the N lowest conformers", since they carry the
+        # same origin_task_id.
+        for partial in session.exec(
+            select(MoleculeGeometry).where(MoleculeGeometry.origin_task_id == task.id)
+        ).all():
+            session.delete(partial)
 
-        if not job.success:
-            continue
-
-        # -- Extract geometries for successful jobs -----------------------
-
+    if job.success and verdict.record is not None:
+        # Parsed once here; analyses and exports read it from the database.
         try:
-            if task.task_type == TaskType.confsearch and result.conformers:
-                _create_conformer_geometries(
-                    session, task, result.conformers, result.energy,
-                    result.conformer_energies, result.conformer_degeneracies,
-                )
+            results.save(session, task, job, verdict.record)
+        except Exception:  # noqa: BLE001 - readers re-parse a job without a record
+            logger.exception("Could not store the parsed results of job %d", job_id)
 
-            elif task.task_type == TaskType.optimization:
-                _create_optimization_geometry(
-                    session, task, job_path, result.energy,
-                )
-        except Exception as exc:  # noqa: BLE001 - deliberately broad
-            logger.exception("Failed to extract geometries for job %d", job.id)
-            job.success = False
-            job.fail_reason = f"Geometry extraction failed: {type(exc).__name__}: {exc}"[:500]
-            session.add(job)
-            # Drop anything the failed extraction already wrote. Leaving
-            # partial rows behind means the eventual successful retry mixes
-            # them into "keep the N lowest conformers", since they carry the
-            # same origin_task_id.
-            for partial in session.exec(
-                select(MoleculeGeometry).where(MoleculeGeometry.origin_task_id == task.id)
-            ).all():
-                session.delete(partial)
 
-        if job.success:
-            # Parsed once here; analyses and exports read it from the database.
-            try:
-                results.store(session, task, job, job_path)
-            except Exception:  # noqa: BLE001 - readers re-parse a job without a record
-                logger.exception("Could not store the parsed results of job %d", job_id)
+def _judge(
+    session: Session, job: ComputationJob, task: ComputationTask, job_path: Optional[Path],
+    qm_engine: QMEngine, max_attempts: int,
+) -> _Verdict:
+    """*job*'s outcome from its files; reads only, so no write lock is held across them."""
+    if job_path is None or not job_path.exists():
+        return _Verdict(False, "Job path missing or does not exist")
 
-    session.flush()
+    # Output parsing touches files a killed job may have left truncated,
+    # and the parser raises on several of those shapes. Isolate it per
+    # job: an unhandled exception here used to unwind out of the whole
+    # pipeline tick, discarding every other molecule's progress and
+    # re-raising on the same job forever.
+    try:
+        result = qm_engine.check_output(
+            job_path, _check_type(session, task), _imag_freq_tolerance(session, task),
+        )
+    except Exception as exc:  # noqa: BLE001 - deliberately broad
+        logger.exception("Failed to parse output for job %d", job.id)
+        return _Verdict(False, f"Output parsing failed: {type(exc).__name__}: {exc}"[:500])
+
+    if not result.success:
+        failed_checks = [k for k, v in result.checks.items() if not v]
+        # A SLURM OOM kill usually truncates output.out before ORCA can
+        # print anything, so the only reliable memory signal is the SLURM
+        # state. Fold it into fail_reason so the retry escalates per-rank
+        # memory (the one failure mode where that is the right response).
+        if job.slurm_status == "OUT_OF_MEMORY":
+            failed_checks.append("OUT_OF_MEMORY")
+        if not (failed_checks == [DENSITY_CUBES] and _accept_cube_miss(session, job, max_attempts)):
+            return _Verdict(False, str(failed_checks), result)
+        # Retried once already, or no retry left; the energy is fine.
+        logger.warning(
+            "Job %d: density cubes still missing or empty after a retry in %s (%s); "
+            "accepting the job", job.id, job_path, ", ".join(OrcaParser.missing_cubes(job_path)),
+        )
+
+    xyz = xyz_error = None
+    if task.task_type == TaskType.optimization:
+        try:
+            xyz = _read_optimised_xyz(job_path)
+        except Exception as exc:  # noqa: BLE001 - fails the job as a geometry extraction
+            xyz_error = exc
+    record = None
+    if xyz_error is None:
+        try:
+            record = results.parse(session, task, job_path)
+        except Exception:  # noqa: BLE001 - readers re-parse a job without a record
+            logger.exception("Could not store the parsed results of job %d", job.id)
+    return _Verdict(True, None, result, xyz, xyz_error, record)
+
+
+def _claim_finished(session: Session, job_id: int) -> bool:
+    """Take the write lock for judging *job_id*; False when it is gone or already judged."""
+    return bool(session.exec(
+        update(ComputationJob)
+        .where(col(ComputationJob.id) == job_id, col(ComputationJob.success).is_(None))
+        .values(success=None)
+        .execution_options(synchronize_session=False)
+    ).rowcount)
+
+
+def _read_optimised_xyz(job_path: Path) -> Optional[str]:
+    """The optimised XYZ ORCA left in *job_path*, or None when there is none."""
+    xyz_file = job_path / "input.xyz"
+    if not xyz_file.exists():
+        logger.error("Optimised XYZ not found at %s", xyz_file)
+        return None
+    return xyz_file.read_text(encoding="utf-8")
 
 
 def _create_conformer_geometries(
@@ -328,15 +368,12 @@ def _create_conformer_geometries(
 def _create_optimization_geometry(
     session: Session,
     task: ComputationTask,
-    job_path: Path,
+    xyz_data: Optional[str],
     energy: Optional[float],
 ) -> None:
-    """Read the optimised XYZ from disk and store it as a geometry."""
-    xyz_file = job_path / "input.xyz"
-    if not xyz_file.exists():
-        logger.error("Optimised XYZ not found at %s", xyz_file)
+    """Store the optimised XYZ as a geometry; nothing without one."""
+    if xyz_data is None:
         return
-    xyz_data = xyz_file.read_text(encoding="utf-8")
     geom = MoleculeGeometry(
         state_id=task.state_id,
         xyz_data=xyz_data,
@@ -698,9 +735,7 @@ def create_retry_jobs(
 ) -> None:
     """For pending tasks with fewer than ``max_attempts`` failed jobs and
     no successful or in-flight jobs: create a new job attempt with
-    failure-specific retry strategies applied."""
-
-    max_attempts = settings.pipeline.max_attempts
+    failure-specific retry strategies applied. Each task commits on its own."""
 
     pending_tasks = session.exec(
         select(ComputationTask).where(
@@ -718,57 +753,65 @@ def create_retry_jobs(
     # Nor for an owner whose circuit breaker has tripped.
     pending_tasks = _unblocked(session, pending_tasks, blocked_owners)
 
-    for processed, task in enumerate(pending_tasks):
-        _commit_batch(session, processed)
-        jobs = session.exec(
-            select(ComputationJob).where(ComputationJob.task_id == task.id)
-        ).all()
+    for task_id in [t.id for t in pending_tasks]:
+        task = session.get(ComputationTask, task_id)
+        if task is not None and task.status == TaskStatus.pending:
+            _retry_task(session, task, settings, qm_engine)
+        session.commit()
 
-        # Skip if there are still in-flight jobs (success is None)
-        if any(j.success is None for j in jobs):
-            continue
 
-        current_run = _current_run(task, jobs)
-        failed_count = sum(1 for j in current_run if j.success is False)
-        success_count = sum(1 for j in current_run if j.success is True)
+def _retry_task(session: Session, task: ComputationTask, settings: Settings, qm_engine: QMEngine) -> None:
+    """Create *task*'s next attempt if its current run calls for one."""
+    max_attempts = settings.pipeline.max_attempts
+    jobs = session.exec(
+        select(ComputationJob).where(ComputationJob.task_id == task.id)
+    ).all()
 
-        # Skip if already succeeded or exhausted
-        if success_count > 0 or failed_count >= max_attempts:
-            continue
+    # Skip if there are still in-flight jobs (success is None)
+    if any(j.success is None for j in jobs):
+        return
 
-        # Find the most recent failed job (this run) to get failure info
-        last_failed = max(
-            (j for j in current_run if j.success is False),
-            key=lambda j: j.attempt,
-            default=None,
-        )
+    current_run = _current_run(task, jobs)
+    failed_count = sum(1 for j in current_run if j.success is False)
+    success_count = sum(1 for j in current_run if j.success is True)
 
-        reason = (last_failed.fail_reason or "") if last_failed is not None else ""
-        # A functional without third derivatives, an S1 that collapses or
-        # dissociates, or a request SLURM can never run fails identically every time.
-        if (
-            reason == "['Excited Root']" or reason.startswith(UNSATISFIABLE)
-            or any(f"'{c}'" in reason for c in DETERMINISTIC_CHECKS)
-        ):
-            task.status = TaskStatus.failed
-            task.updated_at = datetime.now(timezone.utc)
-            session.add(task)
-            logger.info("Task %d failed deterministically (%s); not retried", task.id, reason)
-            continue
+    # Skip if already succeeded or exhausted
+    if success_count > 0 or failed_count >= max_attempts:
+        return
 
-        next_attempt = (task.retry_base or 0) + failed_count + 1
-        # The paused list above was read at the step's start; an archive may have begun since.
-        if not _claim_task(session, task, TaskStatus.pending):
-            continue
-        # Per task: retry-strategy application reads files from previous job
-        # directories, which archive/cleanup may have removed. One raising
-        # task must not discard every other task's retry job for the tick.
-        if not _build_job(session, task, next_attempt, settings, qm_engine, last_failed):
-            continue
-        logger.info(
-            "Created retry job (attempt %d) for task %d",
-            next_attempt, task.id,
-        )
+    # Find the most recent failed job (this run) to get failure info
+    last_failed = max(
+        (j for j in current_run if j.success is False),
+        key=lambda j: j.attempt,
+        default=None,
+    )
+
+    reason = (last_failed.fail_reason or "") if last_failed is not None else ""
+    # A functional without third derivatives, an S1 that collapses or
+    # dissociates, or a request SLURM can never run fails identically every time.
+    if (
+        reason == "['Excited Root']" or reason.startswith(UNSATISFIABLE)
+        or any(f"'{c}'" in reason for c in DETERMINISTIC_CHECKS)
+    ):
+        task.status = TaskStatus.failed
+        task.updated_at = datetime.now(timezone.utc)
+        session.add(task)
+        logger.info("Task %d failed deterministically (%s); not retried", task.id, reason)
+        return
+
+    next_attempt = (task.retry_base or 0) + failed_count + 1
+    # The paused list was read at the step's start; an archive may have begun since.
+    if not _claim_task(session, task, TaskStatus.pending):
+        return
+    # Per task: retry-strategy application reads files from previous job
+    # directories, which archive/cleanup may have removed. One raising
+    # task must not discard every other task's retry job for the tick.
+    if not _build_job(session, task, next_attempt, settings, qm_engine, last_failed):
+        return
+    logger.info(
+        "Created retry job (attempt %d) for task %d",
+        next_attempt, task.id,
+    )
 
 
 # ======================================================================
@@ -782,7 +825,7 @@ def start_new_tasks(
     blocked_owners: Collection[str] = (),
 ) -> None:
     """For tasks in ``created`` status: create the initial job, generate
-    input files, and transition to ``pending``."""
+    input files, and transition to ``pending``. Each task commits on its own."""
 
     tasks = session.exec(
         select(ComputationTask).where(
@@ -805,38 +848,41 @@ def start_new_tasks(
     # Nor for an owner whose circuit breaker has tripped.
     tasks = _unblocked(session, tasks, blocked_owners)
 
-    base_path = settings.comp_data_path
+    for task_id in [t.id for t in tasks]:
+        task = session.get(ComputationTask, task_id)
+        if task is not None:
+            _start_task(session, task, settings, qm_engine)
+        session.commit()
 
-    for processed, task in enumerate(tasks):
-        _commit_batch(session, processed)
-        if not _claim_task(session, task, TaskStatus.created):
-            continue  # an archive began since the paused list was read
-        # Ensure task directory exists
-        if not task.task_path:
-            state = session.get(MoleculeState, task.state_id)
-            if state is None:
-                continue
-            # Created with the job folder, inside its rollback.
-            task_dir = (
-                base_path
-                / f"mol_{state.molecule_id}"
-                / f"state_{state.id}_{state.description}"
-                / "tasks"
-                / f"{task.id}_{task.task_type.value}"
-            )
-            task.task_path = str(task_dir)
 
-        # Per task, for the same reason as create_retry_jobs: one task that
-        # raises here used to discard the whole step for every molecule.
-        if not _build_job(session, task, (task.retry_base or 0) + 1, settings, qm_engine):
-            continue
+def _start_task(session: Session, task: ComputationTask, settings: Settings, qm_engine: QMEngine) -> None:
+    """Build *task*'s first job and mark it ``pending``."""
+    if not _claim_task(session, task, TaskStatus.created):
+        return  # an archive began since the paused list was read
+    # Ensure task directory exists
+    if not task.task_path:
+        state = session.get(MoleculeState, task.state_id)
+        if state is None:
+            return
+        # Created with the job folder, inside its rollback.
+        task_dir = (
+            settings.comp_data_path
+            / f"mol_{state.molecule_id}"
+            / f"state_{state.id}_{state.description}"
+            / "tasks"
+            / f"{task.id}_{task.task_type.value}"
+        )
+        task.task_path = str(task_dir)
 
-        task.status = TaskStatus.pending
-        task.updated_at = datetime.now(timezone.utc)
-        session.add(task)
-        logger.info("Task %d started (type=%s)", task.id, task.task_type.value)
+    # Per task, for the same reason as create_retry_jobs: one task that
+    # raises here used to discard the whole step for every molecule.
+    if not _build_job(session, task, (task.retry_base or 0) + 1, settings, qm_engine):
+        return
 
-    session.flush()
+    task.status = TaskStatus.pending
+    task.updated_at = datetime.now(timezone.utc)
+    session.add(task)
+    logger.info("Task %d started (type=%s)", task.id, task.task_type.value)
 
 
 # ======================================================================
