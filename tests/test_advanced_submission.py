@@ -38,6 +38,15 @@ def api(tmp_path, monkeypatch):
     reset_engine()
 
 
+def _stored(text: str) -> None:
+    """Save *text* as a header, as admin would; a user may only send stored text."""
+    from autodft.models import ComputationHeader
+
+    with get_session() as session:
+        session.add(ComputationHeader(header_text=text))
+        session.commit()
+
+
 def _process(settings):
     with get_session() as session:
         while ep.process_next_entrypoint(session, settings):
@@ -99,6 +108,7 @@ def test_submit_batch_stores_advanced(api):
 ])
 def test_submit_refuses_owned_keyword_header(api, slot, header, needle):
     client, key, _ = api
+    _stored(header)
     r = client.post("/api/submit", headers=key, json={"smiles": "c1ccccc1", "project": "p", slot: header})
     assert r.status_code == 400
     assert needle in r.json()["detail"]
@@ -109,6 +119,7 @@ def test_submit_refuses_owned_keyword_header(api, slot, header, needle):
 def test_goat_blocks_are_method(api):
     client, key, _ = api
     header = "!GOAT XTB\n%xtb\n  XTBInputString \"--gxtb\"\nend\n%GOAT\nMAXEN 10.0\nEND\n"
+    _stored(header)
     r = client.post("/api/submit", headers=key, json={"smiles": "c1ccccc1", "project": "p", "header_confsearch": header})
     assert r.status_code == 200, r.text
 

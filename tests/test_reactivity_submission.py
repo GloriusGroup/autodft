@@ -21,6 +21,15 @@ REACT = {"smiles": "c1ccccc1", "project": "p", "request_sp_reactivity": True,
          "request_t1": True, "request_ox": True, "request_red": True}
 
 
+def _stored(text: str) -> None:
+    """Save *text* as a header, as admin would; a user may only send stored text."""
+    from autodft.models import ComputationHeader
+
+    with get_session() as session:
+        session.add(ComputationHeader(header_text=text))
+        session.commit()
+
+
 def _api(tmp_path, nbo_exe):
     settings = Settings()
     settings.storage.data_path = str(tmp_path)
@@ -72,6 +81,7 @@ def test_api_submit_reactivity_snapshots_every_state(api, monkeypatch):
 ])
 def test_api_refuses_conflicting_header(api, header, label):
     client, key, _ = api
+    _stored(header)
     r = client.post("/api/submit", headers=key, json={**REACT, "header_singlepoint": header})
     assert r.status_code == 400
     assert label in r.json()["detail"]

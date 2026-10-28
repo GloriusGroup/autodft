@@ -13,7 +13,7 @@ from autodft.engine import entrypoint_processor as ep
 from autodft.engine import nmr_references
 from autodft.models import CalculationEntrypoint, ComputationHeader, Molecule, MoleculeState
 from autodft.qm.orca.advanced import method_settings, resolve
-from tests.test_advanced_submission import _legacy_project, _meta, _process, api  # noqa: F401
+from tests.test_advanced_submission import _legacy_project, _meta, _process, _stored, api  # noqa: F401
 from tests.test_nmr_analysis import _detail, _glyoxal, _tms, db  # noqa: F401
 
 BARE = {"header_confsearch": None, "header_optimization": "!B3LYP def2-SVP\n",
@@ -84,6 +84,7 @@ def test_resubmit_with_other_grid_at_other_headers_makes_new_states(api):
     client, key, settings = api
     assert _submit(client, key).status_code == 200
     _process(settings)
+    _stored("!wB97X-D3 def2-QZVP\n")
     r = _submit(client, key, header_singlepoint="!wB97X-D3 def2-QZVP\n", advanced={"singlepoint": {"grid": "DEFGRID2"}})
     assert r.status_code == 200, r.text
     _process(settings)

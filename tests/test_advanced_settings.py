@@ -191,3 +191,13 @@ def test_resources_only_ignores_method_keywords():
     assert owned_keyword("!B3LYP Opt DEFGRID3\n", resources_only=True) is None
     assert "cores" in owned_keyword("!GOAT XTB PAL8\n", resources_only=True)
     assert "memory" in owned_keyword("!GOAT XTB\n%maxcore 500\n", resources_only=True)
+
+
+@pytest.mark.parametrize("key,value", [
+    ("solvent", "water\n%compound"), ("solvent", "water%"), ("solvent", "water\n"),
+    ("grid", "DEFGRID2\n"), ("grid", "DEFGRID2\n%compound"), ("scf_convergence", "%Tight"),
+    ("ri", "RIJCOSX\n"), ("aux_basis", "def2/J%"), ("solvation", "CPCM\n"),
+])
+def test_newline_or_percent_in_a_string_setting_is_refused(settings, key, value):
+    full, error = resolve({"singlepoint": {key: value}}, settings)
+    assert full is None and f"advanced.singlepoint.{key}" in error

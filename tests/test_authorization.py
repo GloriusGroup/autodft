@@ -88,7 +88,7 @@ SCOPED = {
 SHARED = {
     "/api/validate-smiles",   # pure SMILES parsing, touches no data
     "/api/advanced-defaults", # config defaults of the submit form
-    "/api/headers",           # saved methods are shared across users
+    "/api/headers",           # saved methods are shared; writing them is admin-only
     "/api/headers/{header_id}",
     "/api/cluster",           # read-only queue depth + breaker state
     "/api/whoami",            # who am I, and what may I do
@@ -511,90 +511,114 @@ class TestLogin:
         assert "Incorrect username or key" in response.text
 
 
-class TestHeaderOwnership:
-    """Everyone may *use* every saved method -- a library is only useful
-    shared -- but editing one silently changes what the next submission
-    referencing it computes, so changes are the owner's or admin's."""
+class TestHeaderAdminOnly:
+    """Header text goes into input.inp verbatim, so only admin writes it;
+    everyone reads and uses every saved header."""
+
+    TEXT = "!B3LYP def2-SVP\n"
 
     @staticmethod
-    def _create(client, headers, description):
-        return client.post("/api/headers", headers=headers, json={
-            "header_text": "!B3LYP def2-SVP OPT\n",
-            "description": description,
-            "kind": "optimization",
+    def _earlier(username: str) -> int:
+        """A header *username* created before headers became admin-only."""
+        from autodft.models import ComputationHeader
+
+        with get_session() as session:
+            user = accounts.get_user_by_username(session, username)
+            header = ComputationHeader(header_text="!PBE0 def2-SVP\n", description="mine",
+                                       kind="optimization", owner_id=user.id)
+            session.add(header)
+            session.commit()
+            return header.id
+
+    def _create(self, app_env, who):
+        return app_env["client"].post("/api/headers", headers=app_env[who], json={
+            "header_text": self.TEXT, "description": "a method", "kind": "optimization",
         })
 
-    def test_anyone_may_create_and_it_is_theirs(self, app_env):
-        response = self._create(app_env["client"], app_env["owner"], "owner's method")
-        assert response.status_code == 200
-        from sqlmodel import select
-
-        from autodft.models import ComputationHeader, User
-        with get_session() as session:
-            header = session.get(ComputationHeader, response.json()["id"])
-            user = session.exec(select(User).where(User.username == "owner")).one()
-            assert header.owner_id == user.id
-
-    def test_everyone_can_still_see_and_use_it(self, app_env):
-        made = self._create(app_env["client"], app_env["owner"], "owner's method")
-        listing = app_env["client"].get("/api/headers", headers=app_env["stranger"])
-        assert listing.status_code == 200
-        # The listing splits package defaults from stored rows.
-        stored = listing.json()["custom"]
-        assert made.json()["id"] in [h["id"] for h in stored]
-
-    def test_someone_else_cannot_edit_it(self, app_env):
-        made = self._create(app_env["client"], app_env["owner"], "owner's method")
-        response = app_env["client"].put(
-            f"/api/headers/{made.json()['id']}",
-            headers=app_env["stranger"], json={"description": "hijacked"},
-        )
+    def test_a_user_cannot_create_one(self, app_env):
+        response = self._create(app_env, "owner")
         assert response.status_code == 403
-        assert "another user" in response.json()["detail"]
+        assert "admin" in response.json()["detail"]
 
-    def test_someone_else_cannot_delete_it(self, app_env):
-        made = self._create(app_env["client"], app_env["owner"], "owner's method")
-        response = app_env["client"].delete(
-            f"/api/headers/{made.json()['id']}", headers=app_env["stranger"],
-        )
+    @pytest.mark.parametrize("body", [{"description": "revised"}, {"header_text": "!HF def2-SVP\n"}])
+    def test_a_user_cannot_edit_one_even_their_own(self, app_env, body):
+        header_id = self._earlier("owner")
+        response = app_env["client"].put(f"/api/headers/{header_id}", headers=app_env["owner"], json=body)
         assert response.status_code == 403
-
-    def test_the_owner_can(self, app_env):
-        made = self._create(app_env["client"], app_env["owner"], "owner's method")
-        assert app_env["client"].put(
-            f"/api/headers/{made.json()['id']}",
-            headers=app_env["owner"], json={"description": "revised"},
-        ).status_code == 200
-
-    def test_admin_can_change_anyones(self, app_env):
-        made = self._create(app_env["client"], app_env["owner"], "owner's method")
-        assert app_env["client"].put(
-            f"/api/headers/{made.json()['id']}",
-            headers=app_env["admin"], json={"description": "corrected"},
-        ).status_code == 200
-
-    def test_the_seeded_defaults_belong_to_admin(self, app_env):
-        """They predate accounts; ownerless would mean nobody owns them."""
-        from sqlmodel import select
-
-        from autodft.models import ComputationHeader, User
-        with get_session() as session:
-            admin = session.exec(select(User).where(User.username == "admin")).one()
-            seeded = session.exec(select(ComputationHeader)).all()
-            assert seeded, "expected the standard headers to be seeded"
-            assert all(h.owner_id == admin.id for h in seeded)
-
-    def test_a_user_cannot_edit_a_seeded_default(self, app_env):
-        from sqlmodel import select
-
         from autodft.models import ComputationHeader
         with get_session() as session:
-            first = session.exec(select(ComputationHeader)).first()
-        response = app_env["client"].put(
-            f"/api/headers/{first.id}",
-            headers=app_env["owner"], json={"description": "changed"},
-        )
+            row = session.get(ComputationHeader, header_id)
+            assert (row.header_text, row.description) == ("!PBE0 def2-SVP\n", "mine")
+
+    def test_a_user_cannot_delete_one_even_their_own(self, app_env):
+        header_id = self._earlier("owner")
+        assert app_env["client"].delete(f"/api/headers/{header_id}", headers=app_env["owner"]).status_code == 403
+        from autodft.models import ComputationHeader
+        with get_session() as session:
+            assert not session.get(ComputationHeader, header_id).deleted
+
+    def test_admin_creates_edits_and_deletes(self, app_env):
+        client, admin = app_env["client"], app_env["admin"]
+        made = self._create(app_env, "admin")
+        assert made.status_code == 200
+        header_id = made.json()["id"]
+        assert client.put(f"/api/headers/{header_id}", headers=admin,
+                          json={"description": "corrected"}).status_code == 200
+        assert client.put(f"/api/headers/{self._earlier('owner')}", headers=admin,
+                          json={"description": "corrected"}).status_code == 200
+        assert client.delete(f"/api/headers/{header_id}", headers=admin).status_code == 200
+
+    def test_everyone_can_still_see_and_use_them(self, app_env):
+        header_id = self._earlier("owner")
+        listing = app_env["client"].get("/api/headers", headers=app_env["stranger"])
+        assert listing.status_code == 200
+        assert header_id in [h["id"] for h in listing.json()["custom"]]
+
+    def test_a_user_submits_with_a_header_a_user_made_earlier(self, app_env):
+        header_id = self._earlier("owner")
+        for path, body in (("/api/submit", {"smiles": "CCO"}), ("/api/submit-batch", {"smiles_list": ["CCO"]})):
+            response = app_env["client"].post(path, headers=app_env["stranger"], json={
+                **body, "project": "screening", "header_optimization_id": header_id,
+            })
+            assert response.status_code == 200, response.text
+        from sqlmodel import select
+
+        from autodft.models import CalculationEntrypoint
+        with get_session() as session:
+            entries = session.exec(select(CalculationEntrypoint)).all()
+            assert [e.header_optimization for e in entries] == ["!PBE0 def2-SVP\n"] * 2
+
+    @pytest.mark.parametrize("path,body", [
+        ("/api/submit", {"smiles": "CCO"}), ("/api/submit-batch", {"smiles_list": ["CCO"]}),
+    ])
+    @pytest.mark.parametrize("slot", ["header_confsearch", "header_optimization", "header_singlepoint"])
+    def test_a_user_cannot_submit_new_header_text(self, app_env, path, body, slot):
+        response = app_env["client"].post(path, headers=app_env["owner"], json={
+            **body, "project": "screening", slot: '!B3LYP def2-SVP\n%compound "x" end\n',
+        })
         assert response.status_code == 403
+        assert "admin" in response.json()["detail"]
+        from sqlmodel import select
+
+        from autodft.models import CalculationEntrypoint
+        with get_session() as session:
+            assert session.exec(select(CalculationEntrypoint)).all() == []
+
+    def test_a_user_may_send_the_text_of_a_stored_or_default_header(self, app_env):
+        from autodft.qm.orca.defaults import DEFAULT_HEADER_SINGLEPOINT
+
+        self._earlier("stranger")
+        response = app_env["client"].post("/api/submit", headers=app_env["owner"], json={
+            "smiles": "CCO", "project": "screening",
+            "header_optimization": "!PBE0 def2-SVP\n", "header_singlepoint": DEFAULT_HEADER_SINGLEPOINT,
+        })
+        assert response.status_code == 200, response.text
+
+    def test_admin_may_submit_new_header_text(self, app_env):
+        response = app_env["client"].post("/api/submit", headers=app_env["admin"], json={
+            "smiles": "CCO", "project": "screening", "header_optimization": "!TPSS def2-SVP\n",
+        })
+        assert response.status_code == 200, response.text
 
 
 def test_create_app_binds_the_database_to_its_settings(tmp_path):

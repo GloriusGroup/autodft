@@ -948,3 +948,31 @@ def test_saving_a_used_header_says_it_was_saved_as_a_new_one(copied):
                        "editing": 12, "title": "Edit Header #12"}
     else:
         assert (out["text"], out["closed"]) == ("Updated header #5", 1)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+@pytest.mark.parametrize("is_admin", [True, False])
+def test_the_headers_page_is_read_only_for_a_user(is_admin):
+    script = ("var list = {innerHTML: '', querySelectorAll: function () { return []; }};\n"
+              "var document = {getElementById: function () { return list; }};\n"
+              f"var ME = {{is_admin: {json.dumps(is_admin)}}};\n"
+              "var headerCache = {custom: [{id: 3, kind: 'optimization', description: 'm', text: '!x'}]};\n"
+              "function escHtml(s) { return String(s); }\n"
+              + _functions("renderHeadersList")
+              + "\nrenderHeadersList(); var rows = list.innerHTML;\n"
+              "headerCache.custom = []; renderHeadersList();\n"
+              "process.stdout.write(JSON.stringify({rows: rows, empty: list.innerHTML}));\n")
+    out = json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
+    assert "#3" in out["rows"]
+    assert ('data-action="edit"' in out["rows"] and 'data-action="delete"' in out["rows"]) is is_admin
+    assert ("New Header" in out["empty"]) is is_admin
+
+
+def test_a_user_gets_no_new_header_button_or_editor():
+    html = (TEMPLATE / "dashboard.html").read_text()
+    identity = _functions("loadIdentity")
+    user_branch = identity[identity.index("if (!ME.is_admin) {"):]
+    assert "'newHeaderBtn'" in user_branch and "'headerEditor'" in user_branch
+    # Headers may have rendered before whoami answered.
+    assert "renderHeadersList();" in identity
+    assert 'id="newHeaderBtn"' in html and 'id="headerEditor"' in html

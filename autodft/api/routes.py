@@ -1544,34 +1544,15 @@ def _caller_id(session, identity: Identity):
     return None if user is None else user.id
 
 
-def _may_change_header(session, identity: Identity, header) -> bool:
-    """Whether *identity* may edit or remove *header*.
-
-    Everyone uses every header; only its owner or admin changes one.
-    """
-    if identity.is_admin:
-        return True
-    owner_id = getattr(header, "owner_id", None)
-    return owner_id is not None and owner_id == _caller_id(session, identity)
-
-
-_HEADER_FORBIDDEN = {
-    "detail": "This header belongs to another user. Create your own copy "
-              "instead, or ask an administrator to change it."
-}
-
-
 @router.post("/api/headers")
 def api_create_header(
     body: HeaderCreate, identity: Identity = Depends(current_identity),
 ):
-    """Create a new custom computation header, owned by the caller.
+    """Create a new custom computation header. Admin only; everyone uses it.
 
-    Anyone may create one, and anyone may *use* anyone's -- a method
-    library is only useful shared. Only the owner (or admin) may later
-    change or remove it, because editing a header silently changes what
-    the next submission referencing it computes.
+    Header text goes into the ORCA input verbatim.
     """
+    require_admin(identity)
     if body.kind and body.kind not in {"confsearch", "optimization", "singlepoint"}:
         return JSONResponse(
             status_code=400,
@@ -1602,11 +1583,12 @@ def api_update_header(
     header_id: int, body: HeaderUpdate,
     identity: Identity = Depends(current_identity),
 ):
-    """Update fields on an existing header. Owner or admin only.
+    """Update fields on an existing header. Admin only.
 
     A text or kind change to a header any state or task references is
     saved as a new header owned by the editor; the used one stays as it ran.
     """
+    require_admin(identity)
     if body.kind is not None and body.kind not in {"", "confsearch", "optimization", "singlepoint"}:
         return JSONResponse(
             status_code=400,
@@ -1616,8 +1598,6 @@ def api_update_header(
         header = session.get(ComputationHeader, header_id)
         if header is None:
             return JSONResponse(status_code=404, content={"detail": "Header not found"})
-        if not _may_change_header(session, identity, header):
-            return JSONResponse(status_code=403, content=_HEADER_FORBIDDEN)
         changes_method = ((body.header_text is not None and body.header_text != header.header_text)
                           or (body.kind is not None and (body.kind or None) != header.kind))
         copied = changes_method and _header_in_use(session, header_id)
@@ -1663,7 +1643,7 @@ def _header_in_use(session, header_id: int) -> bool:
 def api_delete_header(
     header_id: int, identity: Identity = Depends(current_identity),
 ):
-    """Soft-delete a custom header. Owner or admin only.
+    """Soft-delete a custom header. Admin only.
 
     Refused only when an *in-flight* task (status ``created`` or
     ``pending``) still references it directly or through its state.
@@ -1674,12 +1654,11 @@ def api_delete_header(
     """
     from autodft.models.state import MoleculeState
 
+    require_admin(identity)
     with get_session() as session:
         header = session.get(ComputationHeader, header_id)
         if header is None:
             return JSONResponse(status_code=404, content={"detail": "Header not found"})
-        if not _may_change_header(session, identity, header):
-            return JSONResponse(status_code=403, content=_HEADER_FORBIDDEN)
 
         # 1. Direct references on ComputationTask
         direct_inflight = session.exec(
@@ -2442,6 +2421,32 @@ def _resolved_headers(session, body: SubmitRequest) -> tuple[Optional[str], Opti
     )
 
 
+def _new_header_error(session, identity: Identity, body: SubmitRequest) -> Optional[JSONResponse]:
+    """A 403 when a non-admin's *body* brings header text that is neither stored nor a default, else None."""
+    from autodft.qm.orca.defaults import (
+        DEFAULT_HEADER_CONFSEARCH,
+        DEFAULT_HEADER_OPTIMIZATION,
+        DEFAULT_HEADER_SINGLEPOINT,
+    )
+
+    if identity.is_admin:
+        return None
+    known = {DEFAULT_HEADER_CONFSEARCH, DEFAULT_HEADER_OPTIMIZATION, DEFAULT_HEADER_SINGLEPOINT}
+    for slot in ("confsearch", "optimization", "singlepoint"):
+        text = getattr(body, f"header_{slot}")
+        header_id = getattr(body, f"header_{slot}_id")
+        if not text or (header_id is not None and session.get(ComputationHeader, header_id) is not None):
+            continue
+        if text not in known and session.exec(
+            select(ComputationHeader.id).where(ComputationHeader.header_text == text).limit(1)
+        ).first() is None:
+            return JSONResponse(status_code=403, content={"detail": (
+                f"header_{slot}: only the admin account adds header text; "
+                f"pick a saved header (header_{slot}_id)."
+            )})
+    return None
+
+
 def _tolerance_error(body: SubmitRequest) -> Optional[JSONResponse]:
     """A 400 when *body*'s imag_freq_tolerance is out of range or it sends strict_convergence, else None."""
     from autodft.qm.orca.parser import IMAG_FREQ_TOLERANCE_MIN
@@ -2542,6 +2547,9 @@ def api_submit(
     if bad is not None:
         return bad
     with get_session() as session:
+        forbidden = _new_header_error(session, identity, body)
+        if forbidden is not None:
+            return forbidden
         headers = _resolved_headers(session, body)
         advanced, detail = _submission_advanced(session, body, _target_project(session, identity, body), headers)
         if detail is not None:
@@ -2782,6 +2790,9 @@ def api_submit_batch(
     from autodft.api import project_jobs
 
     with get_session() as session:
+        forbidden = _new_header_error(session, identity, body)
+        if forbidden is not None:
+            return forbidden
         headers = _resolved_headers(session, body)
         project_name, author = _submission_owner(session, identity, body)
         try:

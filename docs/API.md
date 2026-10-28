@@ -109,10 +109,12 @@ projects first, then deactivate.
 
 ### Saved headers
 
-Every signed-in account may list, use and create headers — a method
-library is only useful shared. Editing or deleting one is the **owner's**
-or admin's. Someone else's answers **403** with a suggestion to copy it,
-rather than 404, because you can already see it in the listing. A header
+Every signed-in account may list and use headers — a method library is
+only useful shared. Creating, editing or deleting one is admin's alone
+(**403** otherwise), because header text goes into the ORCA input verbatim;
+headers users created earlier stay usable. For the same reason a raw
+`header_*` text in a submission from anyone but admin must equal a stored
+header's or a package default's text. A header
 any state or task uses keeps its text and kind for good: an edit of
 either is saved as a new header (see `PUT /api/headers/{id}`).
 
@@ -166,7 +168,10 @@ Queue one calculation entrypoint. The server validates the SMILES first
 `header_*_id` nor `header_*` (raw text) is provided, falls back to the
 package defaults in `autodft/qm/orca/defaults.py`: method only
 (`!wB97X-D3 def2-SVP`, `!wB97X-D3 def2-TZVP`, GOAT g-xTB without `%pal` /
-`%maxcore`), everything else comes from `advanced`.
+`%maxcore`), everything else comes from `advanced`. From anyone but
+admin a raw `header_*` text must equal a stored header's or a package
+default's text; any other text answers **403** (only admin adds header
+text), on `POST /api/submit-batch` too.
 
 **Body — every option:**
 
@@ -946,8 +951,8 @@ fails the project's `created` and `pending` tasks with the reason
 Stored ORCA header templates that populate the dashboard's submission
 dropdowns. Six are seeded on first init; the rest are user-created.
 
-Every signed-in account may list, use and create headers; only the
-owner or admin may edit or delete one (see §0). The `defaults` block in
+Every signed-in account may list and use headers; only admin creates,
+edits or deletes one (see §0). The `defaults` block in
 the listing below is separate again: three package constants, always
 present, addressed by the string ids `default_confsearch` /
 `default_optimization` / `default_singlepoint` and not editable.
@@ -985,16 +990,16 @@ passed. Soft-deleted headers are excluded unless `include_deleted=true`.
 
 `kind` must be one of `confsearch | optimization | singlepoint | null`.
 
-The new header is owned by the caller.
+Admin only (**403** otherwise).
 
 ### `PUT /api/headers/{id}`
 
-Partial update — pass only the fields you want changed. Owner or admin
-only; someone else's header answers **403** with a suggestion to copy it.
+Partial update — pass only the fields you want changed. Admin only
+(**403** otherwise).
 
 When any state or task (and so any job) references the header, a change of
 `header_text` or `kind` creates a new header instead: the new text, kind and
-description, unvalidated, owned by the caller. The used header is left
+description, unvalidated, owned by admin. The used header is left
 untouched, so its states, retries, follow-ups and the Methods page keep the
 text that ran. A `description` or `validated` change alone, or a body whose
 text and kind equal the stored ones, edits in place. The answer is the
@@ -1008,7 +1013,7 @@ resulting header with `"copied": true` when a new one was made:
 ### `DELETE /api/headers/{id}`
 
 Soft-delete. Sets `deleted=true`; the row stays in the table so finished
-tasks keep their FK pointers. Owner or admin only (**403** otherwise).
+tasks keep their FK pointers. Admin only (**403** otherwise).
 Refused with `409` only when an **in-flight** task (`created` or
 `pending`) still references the header, directly or through its state.
 

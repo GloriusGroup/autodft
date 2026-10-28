@@ -225,9 +225,9 @@ double-hybrid NMR option runs on its own cores and memory
 The headers can be edited / extended in the dashboard's **Headers** page
 (full headers of before Advanced settings carry a "legacy" badge and are
 not offered on the submit form) or via the `/api/headers` endpoints.
-All six belong to `admin`; anyone may use them, only their owner or
-admin may change them. A header in use keeps its text and kind: an edit
-of either is saved as a new header. When a submission form or CLI/API call leaves a
+Anyone may use them; only admin creates, edits or deletes a header,
+because its text goes into the ORCA input verbatim. A header in use
+keeps its text and kind: an edit of either is saved as a new header. When a submission form or CLI/API call leaves a
 header slot on its default, the dashboard's header dropdown preselects
 the stored row whose text equals the package default, so what you see
 selected is what will actually run.
@@ -349,7 +349,8 @@ sees the whole database:
   ORCA input of every job type and the pipeline settings). The Export
   panel has three buttons: **Export Project**, **Export and Delete** and
   **Delete Project** (see below).
-* **Headers** — create, edit, soft-delete computation headers. Each
+* **Headers** — list computation headers; admin creates, edits and
+  soft-deletes them (other users see the page read-only). Each
   has a `kind` (confsearch / optimization / singlepoint / any), a
   free-form description (shown in the submission dropdowns), and the
   raw ORCA block. Multi-line headers including blocks like
@@ -357,8 +358,8 @@ sees the whole database:
   or `%pal nprocs N end` are supported verbatim. Headers referenced
   by `created` or `pending` tasks can't be deleted; finished
   (successful / failed) references don't block the delete. Anyone
-  may create and use a header; only its owner (or admin) may edit or
-  delete one — someone else's answers 403 with a hint to copy it.
+  may use a header; creating, editing or deleting one answers 403 to
+  anyone but admin, and headers users made earlier stay usable.
   Editing the text or kind of a header any state or task uses saves a
   new header ("In use; saved as new header #N") and leaves the old one
   as it ran; a description edit stays in place.
@@ -491,8 +492,10 @@ Every submission path (CLI, REST, Python) ends up writing the same
   (cores and memory may differ); Extend takes the molecule's own; see
   [`docs/API.md`](docs/API.md#post-apisubmit).
 * `header_confsearch_id / _optimization_id / _singlepoint_id` — pick a
-  stored header by ID. Or pass raw `header_*` text. The method-only
-  defaults from `autodft/qm/orca/defaults.py` apply when neither is set.
+  stored header by ID. Or pass raw `header_*` text; from anyone but
+  admin it must be a stored header's or a default's text (403 otherwise).
+  The method-only defaults from `autodft/qm/orca/defaults.py` apply when
+  neither is set.
 
 `request_S1` is not exposed — S1 isn't supported yet.
 

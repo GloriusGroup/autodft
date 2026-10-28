@@ -3568,16 +3568,18 @@
                         '<div class="desc" title="' + escHtml(c.description || '') + '">' + escHtml(c.description || ('Header #' + c.id)) + '</div>' +
                         '<div class="badges">' + (c.validated ? '<span class="badge badge-successful">validated</span>' : '') +
                             (c.legacy ? '<span class="badge badge-pending" title="Sets what Advanced owns; kept for running projects, not offered on the submit form.">legacy</span>' : '') + '</div>' +
-                        '<div class="actions">' +
+                        // Only admin writes headers; the server refuses anyone else.
+                        (ME.is_admin ? '<div class="actions">' +
                             '<button type="button" class="btn-mini" data-action="edit"   data-id="' + escHtml(c.id) + '">Edit</button>' +
                             '<button type="button" class="btn-mini danger" data-action="delete" data-id="' + escHtml(c.id) + '">Delete</button>' +
-                        '</div>' +
+                        '</div>' : '') +
                     '</div>'
                 );
             });
 
             if (rows.length === 0) {
-                list.innerHTML = '<div class="empty-state">No headers yet — click "+ New Header" to create one.</div>';
+                list.innerHTML = '<div class="empty-state">No headers yet'
+                    + (ME.is_admin ? ' — click "+ New Header" to create one.' : '.') + '</div>';
             } else {
                 list.innerHTML = rows.join('');
             }
@@ -5925,7 +5927,7 @@
             // on everyone's data are removed -- the server refuses them
             // regardless, this stops the page offering them.
             if (!ME.is_admin) {
-                ['adminUsersSection', 'adminResetSection', 'adminBreakerSection']
+                ['adminUsersSection', 'adminResetSection', 'adminBreakerSection', 'newHeaderBtn', 'headerEditor']
                     .forEach(function (id) {
                         var el = document.getElementById(id);
                         if (el) { el.remove(); }
@@ -5938,6 +5940,8 @@
                         + 'can be undone.';
                 }
             }
+            // Headers may have rendered before whoami answered.
+            renderHeadersList();
         }
 
         // Initial load

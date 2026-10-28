@@ -15,6 +15,15 @@ from autodft.db import get_session, init_db, reset_engine
 from autodft.models import CalculationEntrypoint, Molecule
 
 
+def _stored(text: str) -> None:
+    """Save *text* as a header, as admin would; a user may only send stored text."""
+    from autodft.models import ComputationHeader
+
+    with get_session() as session:
+        session.add(ComputationHeader(header_text=text))
+        session.commit()
+
+
 @pytest.fixture()
 def api(tmp_path):
     settings = Settings()
@@ -82,6 +91,7 @@ class TestSubmit:
         ok = client.post("/api/submit", headers=key,
                          json={"smiles": "c1ccccc1", "project": "p", "request_spec_ir": True})
         assert ok.status_code == 200  # the default optimisation header has Freq
+        _stored("!B3LYP def2-SVP Opt\n")
         bad = client.post("/api/submit", headers=key, json={
             "smiles": "c1ccncc1", "project": "p", "request_spec_ir": True,
             "header_optimization": "!B3LYP def2-SVP Opt\n",
@@ -180,6 +190,7 @@ class TestDensityOptions:
 
     def test_a_plots_block_in_the_singlepoint_header_is_a_400(self, api):
         client, key = api
+        _stored("!B3LYP\n%plots dim1 40 end\n")
         r = client.post("/api/submit", headers=key, json={
             "smiles": "c1ccccc1", "project": "p", "request_densities": True,
             "header_singlepoint": "!B3LYP\n%plots dim1 40 end\n",
