@@ -1,6 +1,7 @@
 """Per-molecule state analysis.
 
-Computes, per molecule and per conformer-selection mode:
+Computes, per molecule method family (its states at one header set) and
+per conformer-selection mode:
 
   - Triplet energy             ΔE(T1) = E_comb(T1) − E_comb(S0)
   - T1 reorganisation energy   full 4-point Marcus on the S0↔T1 surface,
@@ -378,17 +379,6 @@ def _analyze_project_uncached(project_name: str) -> dict:
         extractor = PipelineExtractor(project_name)
         all_results = extractor.extract_results(all_conformers=True)
 
-    # (mol_id, state_desc) -> [ConformerResult, ...], ordered by opt_task_id
-    groups: dict[tuple[int, str], list[ConformerResult]] = {}
-    excluded: dict[int, dict[str, list[ConformerResult]]] = {}  # mol_id -> state -> imaginary-mode rows
-    for r in all_results:
-        if stored.excludes(r.note):
-            excluded.setdefault(r.molecule_id, {}).setdefault(r.state, []).append(r)
-            continue
-        groups.setdefault((r.molecule_id, r.state), []).append(r)
-    for k in groups:
-        groups[k].sort(key=lambda r: r.opt_task_id)
-
     with get_session() as session:
         mols = session.exec(
             select(Molecule)
@@ -421,11 +411,21 @@ def _analyze_project_uncached(project_name: str) -> dict:
             ).all()
             if header_ids else []
         )
-        # Decided per molecule: one solvated header must not reference a
-        # gas-phase molecule's potential against the solvated SCE scale.
+        # A method family is a molecule's states at one header set; each is analysed on its own.
+        family_of = {st.id: (st.molecule_id, stored.method_family(st)) for st in states}
+        families: dict[int, list[tuple]] = {}
+        s0_of: dict[tuple, int] = {}
+        for st in sorted(states, key=lambda st: st.id):
+            if family_of[st.id] not in families.setdefault(st.molecule_id, []):
+                families[st.molecule_id].append(family_of[st.id])
+            if st.description == "S0":
+                s0_of.setdefault(family_of[st.id], st.id)
+
+        # Decided per family: one solvated header must not reference a
+        # gas-phase family's potential against the solvated SCE scale.
         # Each header is read as rendered with its state's Advanced settings.
         _header_by_id = {h.id: h for h in headers}
-        mecn_by_molecule: dict[int, bool] = {}
+        mecn_by_family: dict[tuple, bool] = {}
         for st in states:
             metadata = json.loads(st.metadata_json) if st.metadata_json else {}
             st_mecn = any(
@@ -434,10 +434,8 @@ def _analyze_project_uncached(project_name: str) -> dict:
                                    (st.singlepoint_header_id, "singlepoint"))
                 if hid in _header_by_id
             )
-            mecn_by_molecule[st.molecule_id] = (
-                mecn_by_molecule.get(st.molecule_id, False) or st_mecn
-            )
-        solvation_mecn = any(mecn_by_molecule.values())
+            mecn_by_family[family_of[st.id]] = mecn_by_family.get(family_of[st.id], False) or st_mecn
+        solvation_mecn = any(mecn_by_family.values())
 
         opt_task_ids = [r.opt_task_id for r in all_results]
         opt_tasks = (
@@ -456,6 +454,19 @@ def _analyze_project_uncached(project_name: str) -> dict:
         )
         geom_by_id = {g.id: g for g in out_geoms}
         connectivity = stored.connectivity_by_task(session, opt_task_ids)
+
+    # family -> state -> [ConformerResult, ...], ordered by opt_task_id; rows are placed by their task's state
+    groups: dict[tuple, dict[str, list[ConformerResult]]] = {}
+    excluded: dict[tuple, dict[str, list[ConformerResult]]] = {}  # family -> state -> imaginary-mode rows
+    for r in all_results:
+        task = opt_by_id.get(r.opt_task_id)
+        if task is None:
+            continue
+        target = excluded if stored.excludes(r.note) else groups
+        target.setdefault(family_of[task.state_id], {}).setdefault(r.state, []).append(r)
+    for per_state in groups.values():
+        for rs in per_state.values():
+            rs.sort(key=lambda r: r.opt_task_id)
 
     def _coords_for(opt_task_id: int) -> Optional[np.ndarray]:
         task = opt_by_id.get(opt_task_id)
@@ -494,28 +505,27 @@ def _analyze_project_uncached(project_name: str) -> dict:
         )
 
     out_mols = []
-    for m in mols:
+    entries = [(m, f) for m in mols for f in families.get(m.id) or [(m.id, (None, None, None))]]
+    for m, family in entries:
         mol_id = m.id
-        per_state: dict[str, list[ConformerResult]] = {}
-        for (mid, st_desc), rs in groups.items():
-            if mid != mol_id:
-                continue
-            per_state[st_desc] = rs
+        per_state = groups.get(family, {})
         left_out = {
             st: {"count": len(rs), "conformers": [
                 {"conformer_index": r.conformer_index, "opt_task_id": r.opt_task_id, "note": r.note}
                 for r in sorted(rs, key=lambda r: r.opt_task_id)
             ]}
-            for st, rs in excluded.get(mol_id, {}).items()
+            for st, rs in excluded.get(family, {}).items()
         }
-        stated = {"excluded": left_out} if left_out else {}
+        extra = {"state_id": s0_of.get(family), "header_ids": list(family[1])}
+        if left_out:
+            extra["excluded"] = left_out
 
         if "S0" not in per_state:
             out_mols.append({
                 "id": mol_id, "smiles": m.smiles, "modes": None,
                 "note": "Every S0 conformer has an imaginary mode below its cutoff; analysis skipped."
                 if "S0" in left_out else "No S0 conformers extracted yet — analysis skipped.",
-                **stated,
+                **extra,
             })
             continue
 
@@ -528,7 +538,7 @@ def _analyze_project_uncached(project_name: str) -> dict:
             out_mols.append({
                 "id": mol_id, "smiles": m.smiles, "modes": None,
                 "note": "S0 has no conformer with both SP energy and free-energy correction.",
-                **stated,
+                **extra,
             })
             continue
 
@@ -545,7 +555,7 @@ def _analyze_project_uncached(project_name: str) -> dict:
             if cand is None:
                 continue
             picks_low[st] = _pick_from(st, cand, s0_ref_coords)
-        mol_mecn = mecn_by_molecule.get(mol_id, False)
+        mol_mecn = mecn_by_family.get(family, False)
         ana_low = _compute_derived(picks_low, mol_mecn)
         ana_low.mode = "lowest_energy"
 
@@ -582,7 +592,7 @@ def _analyze_project_uncached(project_name: str) -> dict:
                 "lowest_energy": _ana_to_dict(ana_low),
                 "rmsd_matched":  _ana_to_dict(ana_rmsd),
             },
-            **stated,
+            **extra,
         })
 
     return {
@@ -705,6 +715,14 @@ def _broken_bonds(ana: Optional[dict]) -> Optional[str]:
     )
 
 
+_FAMILY_COLUMNS = ["S0_state_id", "confsearch_header_id", "optimization_header_id", "singlepoint_header_id"]
+
+
+def _family_cells(m: dict) -> list:
+    """An analysis row's family: its S0 state id and header ids."""
+    return [m.get("state_id"), *(m.get("header_ids") or [None] * 3)]
+
+
 def build_xlsx_bytes(payload: dict) -> bytes:
     """Render the state-analysis ``payload`` (the dict returned by
     :func:`analyze_project`) into an XLSX file and return the raw bytes.
@@ -742,8 +760,9 @@ def build_xlsx_bytes(payload: dict) -> bytes:
     summary["B5"] = "Pavlishchuk & Addison, Inorg. Chim. Acta 2000"
     summary["A6"] = "Source"
     summary["B6"] = payload.get("archive_source") or "live ORCA outputs"
+    ids = [m.get("id") for m in payload.get("molecules", [])]
     summary["A7"] = "Molecules"
-    summary["B7"] = len(payload.get("molecules", []))
+    summary["B7"] = len(set(ids))
     for row in range(1, 8):
         summary.cell(row=row, column=1).font = Font(bold=True)
     summary.column_dimensions["A"].width = 26
@@ -759,6 +778,9 @@ def build_xlsx_bytes(payload: dict) -> bytes:
         for ana in (m.get("modes") or {}).values() if ana
         for p in (ana.get("picks") or {}).values()
     )
+    # A molecule with several method families gets one row each, named by the last columns.
+    families = len(set(ids)) < len(ids)
+    tail = (["broken_bonds"] if checked else []) + (_FAMILY_COLUMNS if families else [])
     for mode_key, sheet_title in (
         ("lowest_energy", "Lowest Energy"),
         ("rmsd_matched",  "RMSD Matched"),
@@ -779,10 +801,11 @@ def build_xlsx_bytes(payload: dict) -> bytes:
                 else:
                     val = _lookup(row_src, path) if ana else None
                 ws.cell(row=r_idx, column=c_idx, value=val)
-            if checked:
-                ws.cell(row=r_idx, column=len(columns) + 1, value=_broken_bonds(ana))
-        if checked:
-            cell = ws.cell(row=1, column=len(columns) + 1, value="broken_bonds")
+            values = ([_broken_bonds(ana)] if checked else []) + (_family_cells(m) if families else [])
+            for c_idx, val in enumerate(values, start=len(columns) + 1):
+                ws.cell(row=r_idx, column=c_idx, value=val)
+        for c_idx, label in enumerate(tail, start=len(columns) + 1):
+            cell = ws.cell(row=1, column=c_idx, value=label)
             cell.font = header_font
             cell.fill = header_fill
 
@@ -801,7 +824,7 @@ def build_xlsx_bytes(payload: dict) -> bytes:
         "mode", "mol_id", "smiles", "state", "conformer_index", "opt_task_id",
         "rmsd_to_S0_A", "e_sp_Eh", "e_correction_Eh", "e_combined_Eh",
         "e_vert_ox_Eh", "e_vert_red_Eh", "e_vert_spin_change_Eh",
-    ] + (["connectivity"] if checked else [])
+    ] + (["connectivity"] if checked else []) + (_FAMILY_COLUMNS if families else [])
     for col_idx, label in enumerate(headers, start=1):
         cell = ws.cell(row=1, column=col_idx, value=label)
         cell.font = header_font
@@ -830,8 +853,10 @@ def build_xlsx_bytes(payload: dict) -> bytes:
                 ws.cell(row=r, column=11, value=p.get("e_vert_ox"))
                 ws.cell(row=r, column=12, value=p.get("e_vert_red"))
                 ws.cell(row=r, column=13, value=p.get("e_vert_spin_change"))
-                if checked:
-                    ws.cell(row=r, column=14, value=_check_text(p.get("connectivity")))
+                values = ([_check_text(p.get("connectivity"))] if checked else []) + (
+                    _family_cells(m) if families else [])
+                for c_idx, val in enumerate(values, start=14):
+                    ws.cell(row=r, column=c_idx, value=val)
                 r += 1
     for col_idx, width in enumerate(
         [16, 8, 30, 8, 8, 10, 14, 18, 18, 18, 18, 18, 22], start=1

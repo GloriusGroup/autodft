@@ -374,6 +374,21 @@ def conformer_numbers(opts: Iterable[ComputationTask]) -> dict[int, int]:
     return {task_id: number for number, task_id in enumerate(done, 1)}
 
 
+def method_family(state: MoleculeState) -> tuple:
+    """*state*'s method family: its confsearch, optimization and singlepoint header ids."""
+    return (state.confsearch_header_id, state.optimization_header_id, state.singlepoint_header_id)
+
+
+def shared_descriptions(states: Iterable[MoleculeState]) -> set[tuple[int, str]]:
+    """``(molecule id, description)`` pairs that more than one of *states* holds."""
+    seen: set[tuple[int, str]] = set()
+    shared = set()
+    for state in states:
+        key = (state.molecule_id, state.description)
+        (shared if key in seen else seen).add(key)
+    return shared
+
+
 def exclusion(session: Session, opt_task: ComputationTask, state: MoleculeState) -> Optional[str]:
     """Why exports leave *opt_task*'s conformer out, ``"unchecked"`` without a record, else None."""
     return record_exclusion(for_task(session, opt_task, require=("imaginary",)), state)

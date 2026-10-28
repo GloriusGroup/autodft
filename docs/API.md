@@ -530,7 +530,12 @@ Marcus reorganisation energies, for both the `lowest_energy` and the
 `rmsd_matched` conformer-selection modes. Solvation is detected from the
 header text; without it, redox values are reported as ΔG only. A pick
 whose optimisation has a broken-bond check adds `connectivity` (same shape
-as in `molecules-detail`).
+as in `molecules-detail`). One entry per method family, a molecule's states
+at one header set: a molecule resubmitted at other headers has an entry for
+each, and S0, T1, ox and red are paired only within one. Each entry carries
+`state_id` (the family's S0 state, `null` without one) and `header_ids`
+(`[confsearch, optimization, singlepoint]`); the dashboard names them on the
+card when a molecule has more than one.
 
 ### `POST /api/projects/{name}/state-analysis/export`
 
@@ -542,7 +547,10 @@ Energy, RMSD Matched, Conformers). Energies in Hartree, potentials in V
 vs SCE. When any pick has a broken-bond check, the mode sheets add a last
 column `broken_bonds` (`<state>: ok`, `<state>: <detail>` or
 `<state>: unchecked` per pick, joined by ` | `) and
-Conformers a last column `connectivity`.
+Conformers a last column `connectivity`. When a molecule has more than one
+method family, both add `S0_state_id`, `confsearch_header_id`,
+`optimization_header_id` and `singlepoint_header_id` after those, and the
+Summary's Molecules counts each molecule once.
 
 ### `GET /api/projects/{name}/photophysics` `?molecule_id=`
 
@@ -857,7 +865,10 @@ format — none of them block the request. Writes into
 `<export_data>/<owner>/<project>/`, with the **bare** project name as
 the filename stem:
 
-* `csv`   → `<project>.csv` (summary table of energies)
+* `csv`   → `<project>.csv` (summary table of energies; when a molecule
+  holds two states of one name, every row adds `state_id`,
+  `confsearch_header_id`, `optimization_header_id`, `singlepoint_header_id`,
+  as does `json`)
 * `json`  → `<project>.json`
 * `files` → the export tree, the dashboard's "Export Project" (below);
   `all_conformers` writes every valid conformer's folder instead of only
@@ -920,6 +931,7 @@ a wiped one's folder is written to `molecules/<mol_id>_2/`):
     S0/conf1/opt.inp opt.out opt.xyz  sp.inp sp.out [sp.gbw]  vert_ox.inp vert_ox.out
              uvvis.inp uvvis.out  nmr.*  esd_fluor.*  esd_isc_part1.*  sp_ElDens.cube …
     T1/ ox/ red/ …
+    S0__state<state_id>/ …       # instead of S0/, for each of two states of one name
 ```
 
 Only each successful task's latest successful job is copied, and of it only

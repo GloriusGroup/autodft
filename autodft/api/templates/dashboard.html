@@ -5072,18 +5072,27 @@
                    '</div>';
         }
 
+        // A method family: the molecule's states at one header set (confsearch/opt/SP ids).
+        function saFamilyLabel(m) {
+            var ids = (m.header_ids || []).map(function (h) { return h == null ? '–' : h; });
+            return 'S0 state ' + (m.state_id == null ? '–' : m.state_id) + ' · headers ' + ids.join('/');
+        }
+
         function renderSaCards(payload, mode, unitKey) {
             var host = document.getElementById('saCards');
             if (!payload || !payload.molecules || payload.molecules.length === 0) {
                 host.innerHTML = '<div class="empty-state" style="padding: 30px 0;">No molecules analysed yet.</div>';
                 return;
             }
+            var perMolecule = {};
+            payload.molecules.forEach(function (m) { perMolecule[m.id] = (perMolecule[m.id] || 0) + 1; });
             host.innerHTML = payload.molecules.map(function (m) {
+                var label = perMolecule[m.id] > 1 ? ' <span class="sa-smiles">(' + escHtml(saFamilyLabel(m)) + ')</span>' : '';
                 if (!m.modes) {
                     return '<div class="sa-card">' +
                            '<div class="sa-card-head">' +
                            '<span class="sa-mol-id">#' + escHtml(m.id) + '</span>' +
-                           '<span class="sa-smiles">' + escHtml(m.smiles) + '</span>' +
+                           '<span class="sa-smiles">' + escHtml(m.smiles) + '</span>' + label +
                            '</div>' +
                            '<div class="sa-card-note">' + escHtml(m.note || 'No analysis available.') + '</div>' +
                            '</div>';
@@ -5157,7 +5166,7 @@
                 return '<div class="sa-card">' +
                        '<div class="sa-card-head">' +
                        '<span class="sa-mol-id">#' + escHtml(m.id) + '</span>' +
-                       '<span class="sa-smiles">' + escHtml(m.smiles) + '</span>' +
+                       '<span class="sa-smiles">' + escHtml(m.smiles) + '</span>' + label +
                        '</div>' +
                        '<div class="sa-grid">' + grid + '</div>' +
                        '<div class="sa-picks">Conformers used:' + pickRows + '</div>' +

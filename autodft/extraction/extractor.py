@@ -50,6 +50,7 @@ class ConformerResult:
     e_vert_ox: Optional[float] = None
     e_vert_red: Optional[float] = None
     note: Optional[str] = None  # results.exclusion(): why it is left out, or "unchecked"
+    state_id: Optional[int] = None
 
 
 # ======================================================================
@@ -299,6 +300,7 @@ class PipelineExtractor:
             e_vert_ox=e_vert_ox,
             e_vert_red=e_vert_red,
             note=stored.record_exclusion(record, state),
+            state_id=state.id,
         )
 
     def _get_energy_from_task(
@@ -341,45 +343,39 @@ class PipelineExtractor:
         self, output_path: str | Path, all_conformers: bool = False,
     ) -> None:
         """Export an energy summary to CSV."""
-        results = self.extract_results(all_conformers=all_conformers)
-        if not results:
+        fields, rows = self._summary_rows(all_conformers)
+        if not rows:
             logger.warning("No results to export for project '%s'", self.project_name)
             return
 
         path = Path(output_path)
-        fields = [
-            "molecule_id", "smiles", "state", "conformer_index", "opt_task_id",
-            "e_singlepoint", "e_correction", "e_combined",
-            "e_vert_spin_change", "e_vert_ox", "e_vert_red", "note",
-        ]
         with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fields)
             writer.writeheader()
-            for r in results:
-                writer.writerow({
-                    "molecule_id": r.molecule_id,
-                    "smiles": r.smiles,
-                    "state": r.state,
-                    "conformer_index": r.conformer_index,
-                    "opt_task_id": r.opt_task_id,
-                    "e_singlepoint": r.e_singlepoint,
-                    "e_correction": r.e_correction,
-                    "e_combined": r.e_combined,
-                    "e_vert_spin_change": r.e_vert_spin_change,
-                    "e_vert_ox": r.e_vert_ox,
-                    "e_vert_red": r.e_vert_red,
-                    "note": r.note,
-                })
-        logger.info("Exported %d rows to %s", len(results), path)
+            writer.writerows(rows)
+        logger.info("Exported %d rows to %s", len(rows), path)
 
     def export_summary_json(
         self, output_path: str | Path, all_conformers: bool = False,
     ) -> None:
         """Export an energy summary to JSON."""
-        results = self.extract_results(all_conformers=all_conformers)
+        _, data = self._summary_rows(all_conformers)
         path = Path(output_path)
-        data = [
-            {
+        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        logger.info("Exported %d entries to %s", len(data), path)
+
+    def _summary_rows(self, all_conformers: bool) -> tuple[list[str], list[dict]]:
+        """The summary's columns and rows; with each row's state and headers when a molecule repeats a state."""
+        results = self.extract_results(all_conformers=all_conformers)
+        with get_session() as session:
+            states = {s.id: s for s in session.exec(
+                select(MoleculeState).join(Molecule, Molecule.id == MoleculeState.molecule_id)
+                .where(Molecule.project_name == self.project_name)
+            ).all()}
+        family = bool(stored.shared_descriptions(states.values()))
+        rows = []
+        for r in results:
+            row = {
                 "molecule_id": r.molecule_id,
                 "smiles": r.smiles,
                 "state": r.state,
@@ -393,10 +389,12 @@ class PipelineExtractor:
                 "e_vert_red": r.e_vert_red,
                 "note": r.note,
             }
-            for r in results
-        ]
-        path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        logger.info("Exported %d entries to %s", len(data), path)
+            if family:
+                row["state_id"] = r.state_id
+                row.update(zip(_HEADER_FIELDS, stored.method_family(states[r.state_id])))
+            rows.append(row)
+        fields = _SUMMARY_FIELDS + (["state_id", *_HEADER_FIELDS] if family else [])
+        return fields, rows
 
     # ------------------------------------------------------------------
     # Export tree: "Export Project" and "Export and Delete"
@@ -479,16 +477,22 @@ class PipelineExtractor:
         states = session.exec(
             select(MoleculeState).where(MoleculeState.molecule_id == mol.id).order_by(col(MoleculeState.id))
         ).all()
+        shared = stored.shared_descriptions(states)
         for state in states:
-            entry, state_copies = self._plan_state(session, mol, state, all_conformers, keep_gbw)
+            # A description held by two states (other headers, NMR methods) gets the state id.
+            base = state.description
+            if (mol.id, base) in shared:
+                base = f"{base}__state{state.id}"
+            entry, state_copies = self._plan_state(session, mol, state, base, all_conformers, keep_gbw)
             manifest["states"].append(entry)
             copies.extend(state_copies)
         return manifest, copies
 
     def _plan_state(
-        self, session: Session, mol: Molecule, state: MoleculeState, all_conformers: bool, keep_gbw: bool,
+        self, session: Session, mol: Molecule, state: MoleculeState, base: str, all_conformers: bool,
+        keep_gbw: bool,
     ) -> tuple[dict, list[_TreeJob]]:
-        """One state's molecule.json entry and jobs; only successful tasks' latest successful jobs."""
+        """One state's molecule.json entry and jobs under folder *base*; successful tasks' latest successful jobs."""
         tasks = session.exec(
             select(ComputationTask).where(
                 ComputationTask.state_id == state.id,
@@ -518,12 +522,12 @@ class PipelineExtractor:
 
         confsearch = next((t for t in tasks if t.task_type == TaskType.confsearch), None)
         if confsearch is not None:
-            add(confsearch, state.description)
+            add(confsearch, base)
         numbers = stored.conformer_numbers(opts)
         conformers = []
         for opt in opts:
             index = numbers[opt.id]
-            folder = f"{state.description}/conf{index}" if opt.id in written else None
+            folder = f"{base}/conf{index}" if opt.id in written else None
             members = [opt, *(t for t in tasks if t.depends_on_task_id == opt.id and t not in opts)]
             for task in members:
                 add(task, folder)
@@ -672,6 +676,14 @@ def _flagged_tasks(session: Session, flag: str, task_types: tuple[str, ...]) -> 
             col(ComputationTask.state_id).in_(states),
         )
     ).all())
+
+
+_SUMMARY_FIELDS = [
+    "molecule_id", "smiles", "state", "conformer_index", "opt_task_id",
+    "e_singlepoint", "e_correction", "e_combined",
+    "e_vert_spin_change", "e_vert_ox", "e_vert_red", "note",
+]
+_HEADER_FIELDS = ("confsearch_header_id", "optimization_header_id", "singlepoint_header_id")
 
 
 # ======================================================================

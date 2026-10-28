@@ -399,9 +399,13 @@ photophysics molecules, the reactivity workbook (`_reactivity.xlsx` and
 vertical singlepoint of the conformers chosen in the dialog) for a project
 with Reactivity molecules, and `molecules/<mol_id>/` with a `molecule.json`
 (the mapping back to the database) and `<state>/conf<N>/opt.inp opt.out
-opt.xyz sp.inp sp.out vert_ox.* uvvis.* …`. Only the final files of
-successful tasks are copied; a conformer with an imaginary mode gets no
-folder and is named in the all-conformers CSV. **Export and Delete** then
+opt.xyz sp.inp sp.out vert_ox.* uvvis.* …`. A molecule holding two states
+of one name (resubmitted at other headers, or the NMR reference project's S0
+per NMR method) writes them to `<state>__state<state_id>/`, and then both
+CSVs add `state_id` and the three header ids to every row. The state analysis
+has one row per method family (a molecule's states at one header set). Only
+the final files of successful tasks are copied; a conformer with an imaginary
+mode gets no folder and is named in the all-conformers CSV. **Export and Delete** then
 deletes every `<comp_data>/mol_*/` of the project — everything not in the
 tree is gone — and flags the molecules `archived`; the project stays
 browsable in Project Overview but can no longer be exported (409). Refused for
