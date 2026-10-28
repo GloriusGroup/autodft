@@ -198,3 +198,22 @@ def test_a_retry_that_reached_the_cap_fails_on_its_next_mp2_failure(session, tmp
     *_, record = _retry(session, task)
     assert task.status == TaskStatus.failed and record.attempt == 3
     assert record.fail_reason == "MP2 response memory cap reached" and record.job_path is None
+
+
+def test_a_failed_job_that_ran_below_the_replay_is_retried_at_the_replay(session, tmp_path):
+    # Its attempt ran 12000 MB/rank (older code); today's replay gives 16000.
+    task = _failed_dh_attempt(session, tmp_path, MP2_RESPONSE_MAX_MAXCORE_MB)
+    first = session.exec(select(ComputationJob).where(ComputationJob.task_id == task.id)).one()
+    inp = Path(first.job_path) / "input.inp"
+    inp.write_text(inp.read_text().replace(f"%maxcore {MP2_RESPONSE_MAX_MAXCORE_MB}", "%maxcore 12000"))
+    _, retry = _retry(session, task)
+    assert task.status == TaskStatus.pending and retry.success is None and retry.job_path
+    assert f"%maxcore {MP2_RESPONSE_MAX_MAXCORE_MB}" in (Path(retry.job_path) / "input.inp").read_text()
+
+
+def test_without_the_failed_jobs_files_the_replay_decides(session, tmp_path):
+    task = _failed_dh_attempt(session, tmp_path, MP2_RESPONSE_MAX_MAXCORE_MB)
+    first = session.exec(select(ComputationJob).where(ComputationJob.task_id == task.id)).one()
+    (Path(first.job_path) / "input.inp").unlink()
+    _, record = _retry(session, task)
+    assert task.status == TaskStatus.failed and record.fail_reason == "MP2 response memory cap reached"

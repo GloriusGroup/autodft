@@ -1692,6 +1692,28 @@ def _parse_resources_from_header(
     return nprocs, mem_per_core
 
 
+def _job_resources(input_text: str, submit_text: str) -> tuple[Optional[str], ...]:
+    """(%maxcore, %pal nprocs, --ntasks-per-node, --mem) of a job's files."""
+    import re
+
+    found = (re.search(r"%maxcore\s+(\d+)", input_text, re.IGNORECASE),
+             re.search(r"%pal\s+nprocs\s+(\d+)", input_text, re.IGNORECASE),
+             re.search(r"#SBATCH --ntasks-per-node=(\d+)", submit_text),
+             re.search(r"#SBATCH --mem=(\d+)", submit_text))
+    return tuple(m.group(1) if m else None for m in found)
+
+
+def _job_dir_resources(job_path: Optional[str]) -> Optional[tuple[Optional[str], ...]]:
+    """:func:`_job_resources` of a job folder; None when its files can't be read."""
+    if not job_path:
+        return None
+    try:
+        return _job_resources((Path(job_path) / "input.inp").read_text(encoding="utf-8"),
+                              (Path(job_path) / "submit.cmd").read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
 def _apply_retry_modifications(
     session: Session,
     job_path: Path,
@@ -1774,10 +1796,13 @@ def _apply_retry_modifications(
             strategies=replayable,
         )
         applied.append(f"attempt {prior.attempt}: {prior.fail_reason}")
-    # At its cap the MP2 response retry leaves the latest failure's input as it was.
-    if MP2_RESPONSE_MEMORY in (prior_failures[-1].fail_reason or "") \
-            and (input_content, submit_content) == unchanged:
-        raise RetryWouldRepeat(MP2_CAP_REACHED)
+    # At its cap the MP2 response retry would rerun the failed job's resources;
+    # the replay's own step decides only when that job's files are gone.
+    if MP2_RESPONSE_MEMORY in (prior_failures[-1].fail_reason or ""):
+        ran = _job_dir_resources(prior_failures[-1].job_path)
+        if (_job_resources(input_content, submit_content) == ran if ran is not None
+                else (input_content, submit_content) == unchanged):
+            raise RetryWouldRepeat(MP2_CAP_REACHED)
 
     if perturbations:
         latest = prior_failures[-1]
