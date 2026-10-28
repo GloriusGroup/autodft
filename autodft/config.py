@@ -16,9 +16,9 @@ from __future__ import annotations
 
 import logging
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, is_dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Union, get_args, get_origin, get_type_hints
 
 logger = logging.getLogger(__name__)
 
@@ -356,21 +356,46 @@ def _merge(target: dict, source: dict) -> dict:
     return target
 
 
-def _dict_to_dataclass(cls: type, data: dict[str, Any]) -> Any:
-    """Recursively convert a dict to a dataclass instance."""
-    field_types = {f.name: f.type for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
+def _type_ok(value: Any, ft: Any) -> bool:
+    """Whether a TOML *value* fits the field type *ft*."""
+    if get_origin(ft) is Union:
+        return any(_type_ok(value, arg) for arg in get_args(ft))
+    if ft is type(None):
+        return value is None
+    if ft is float:
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if ft is int:
+        return isinstance(value, int) and not isinstance(value, bool)
+    return isinstance(value, ft)
+
+
+def _type_name(ft: Any) -> str:
+    if get_origin(ft) is Union:
+        return " or ".join(_type_name(arg) for arg in get_args(ft) if arg is not type(None))
+    return "table" if is_dataclass(ft) else ft.__name__
+
+
+def _dict_to_dataclass(cls: type, data: dict[str, Any], prefix: str = "",
+                       errors: Optional[list[str]] = None) -> Any:
+    """Recursively convert a dict to a dataclass instance; raise ValueError naming every bad key."""
+    top = errors is None
+    errors = [] if errors is None else errors
+    field_types = get_type_hints(cls)
     kwargs: dict[str, Any] = {}
     for key, value in data.items():
+        name = f"{prefix}{key}"
         if key not in field_types:
+            errors.append(f"unknown key {name}")
             continue
         ft = field_types[key]
-        # Resolve string annotations
-        if isinstance(ft, str):
-            ft = eval(ft)  # noqa: S307 - only our own type names
-        if isinstance(value, dict) and hasattr(ft, "__dataclass_fields__"):
-            kwargs[key] = _dict_to_dataclass(ft, value)
+        if is_dataclass(ft) and isinstance(value, dict):
+            kwargs[key] = _dict_to_dataclass(ft, value, f"{name}.", errors)
+        elif is_dataclass(ft) or not _type_ok(value, ft):
+            errors.append(f"{name} must be {_type_name(ft)}, not {type(value).__name__} {value!r}")
         else:
             kwargs[key] = value
+    if top and errors:
+        raise ValueError("config: " + "; ".join(errors))
     return cls(**kwargs)
 
 
@@ -432,7 +457,7 @@ def _apply_env_overrides(data: dict[str, Any]) -> None:
 
 
 def load_settings(config_path: str | Path | None = None) -> Settings:
-    """Load settings from *config_path*, falling back to defaults.
+    """Load settings from *config_path* over default.toml; a missing file, unknown key or bad type raises.
 
     Priority (highest wins): env vars > user config > default.toml
     """
@@ -443,9 +468,10 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
     # Overlay user-supplied config
     if config_path is not None:
         user_path = Path(config_path)
-        if user_path.exists():
-            with open(user_path, "rb") as f:
-                _merge(data, tomllib.load(f))
+        if not user_path.is_file():
+            raise FileNotFoundError(f"config file not found: {user_path}")
+        with open(user_path, "rb") as f:
+            _merge(data, tomllib.load(f))
 
     # Environment variable overrides (highest priority)
     _apply_env_overrides(data)

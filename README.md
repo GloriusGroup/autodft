@@ -112,6 +112,12 @@ The loader merges three layers, highest-priority last:
    package), whatever the current directory
 3. environment variables (`AUTODFT_*`)
 
+Loading is strict: a `--config` path that does not exist, a key or section
+the loader does not know (e.g. `stall_minute`, `[pipeline.optimisation]`) and a
+value of the wrong type (e.g. `port = "8085"`) each stop the command with an
+error naming the path or every offending key, instead of falling back to
+defaults. An integer is accepted where a float is expected.
+
 For production, the entire config is anchored on `data_path` and the
 ORCA section:
 
