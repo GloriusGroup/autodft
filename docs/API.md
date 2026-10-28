@@ -928,9 +928,8 @@ from the payload archiving froze — see [`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.m
 
 **The export tree** (`files` and the archive), replacing a previous one in
 the same directory (only the folders of the molecules exported now are replaced;
-archived or wiped molecules, and those an interrupted archive was deleting, keep
-theirs, and a molecule whose id is still held by a wiped one's folder is written
-to `molecules/<mol_id>_2/`):
+archived or wiped molecules keep theirs, and a molecule whose id is still held by
+a wiped one's folder is written to `molecules/<mol_id>_2/`):
 
 ```
 <export_data>/<owner>/<project>/
@@ -959,12 +958,13 @@ and is named, with its note, in `<project>_all_conformers.csv` and
 ### `POST /api/projects/{name}/archive`
 
 **Destructive** — the dashboard's "Export and Delete". Writes the export
-tree (above), then deletes the project's `<comp_data>/mol_<id>/` one
-molecule at a time, flagging each `archived = true` as soon as its folder
-is gone. An archive interrupted by a restart or an error leaves the project
-partly archived, and re-running it is safe: it keeps the export folders of
-the molecules already archived or mid-deletion and exports and deletes only
-the rest. The database rows are **kept**, so the
+tree (above), then goes through the project's molecules one at a time:
+it flags the molecule `archived = true` and then deletes its
+`<comp_data>/mol_<id>/`. An archive interrupted by a restart or an error
+leaves the project partly archived, and re-running it is safe. It keeps
+the export folders (and frozen photophysics payloads) of the molecules
+already archived, deletes any raw folder they have left, and exports and
+deletes only the rest. The database rows are **kept**, so the
 project stays listed and browsable as read-only history — what is gone is
 the raw tree on disk, which is why an archived project can no longer be
 exported. Everything not in the tree (other conformers when only the
@@ -982,10 +982,14 @@ Any other field answers **422**.
 **Job result:**
 
 ```json
-{ "molecules": 12, "files_copied": 96,
+{ "molecules": 12, "files_copied": 96, "archived": 12,
   "root": "/.../export_data/admin/phenols",
   "downloadable": false, "photophysics_frozen": 5 }
 ```
+
+`molecules` and `files_copied` count what this run exported; `archived`
+counts all of the project's archived molecules, including those a cut-short
+earlier run already archived.
 
 `photophysics_frozen` counts the molecules whose UV/Vis, IR, NMR, ESD or
 NBO payload was frozen for later serving (see

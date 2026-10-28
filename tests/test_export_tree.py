@@ -344,7 +344,7 @@ def test_archive_removes_comp_data_and_flags(db):
     summary = PipelineExtractor(PROJECT).archive_project(
         db.export_data_path, db.comp_data_path, all_conformers=False, keep_gbw=False,
     )
-    assert summary == {"molecules": 1, "files_copied": len(CONF1) + 1, "root": str(_root(db))}
+    assert summary == {"molecules": 1, "files_copied": len(CONF1) + 1, "root": str(_root(db)), "archived": 1}
     assert not (db.comp_data_path / f"mol_{mol_id}").exists()
     assert _tree(db, mol_id) == {"molecule.json", "S0/confsearch.out", *CONF1}
     with get_session() as session:
@@ -424,11 +424,15 @@ def test_an_archived_molecule_keeps_its_folder_on_a_later_export(db):
 def _snapshot(settings, mol_id) -> dict:
     base = _root(settings) / "molecules" / str(mol_id)
     return {p.relative_to(base).as_posix(): (p.read_bytes(), p.stat().st_mtime_ns)
-            for p in base.rglob("*") if p.is_file() and p.name != ".autodft_archiving"}
+            for p in base.rglob("*") if p.is_file()}
 
 
-def _interrupt_archive(settings, monkeypatch, victim: int, where: str) -> None:
-    """Archive, killed at *where* in *victim*'s deletion (the molecules before it are done)."""
+def _archive(settings) -> dict:
+    return PipelineExtractor(PROJECT).archive_project(settings.export_data_path, settings.comp_data_path)
+
+
+def _interrupt_archive(settings, monkeypatch, victim: int, where: str, run=_archive) -> None:
+    """Archive, killed at *where* in *victim*'s turn (the molecules before it are done)."""
     real_rmtree, real_mark = shutil.rmtree, PipelineExtractor._mark_archived
 
     def rmtree(path, *args, **kwargs):
@@ -449,28 +453,64 @@ def _interrupt_archive(settings, monkeypatch, victim: int, where: str) -> None:
         if where == "before flag":
             m.setattr(PipelineExtractor, "_mark_archived", staticmethod(mark))
         with pytest.raises(OSError):
-            PipelineExtractor(PROJECT).archive_project(settings.export_data_path, settings.comp_data_path)
+            run(settings)
 
 
-@pytest.mark.parametrize("where", ["before delete", "mid delete", "before flag"])
+@pytest.mark.parametrize("where", ["before flag", "before delete", "mid delete"])
 def test_a_rerun_archive_resumes(db, monkeypatch, where):
     ids = [_standard(db)[0] for _ in range(3)]
     full = {"molecule.json", "S0/confsearch.out", *CONF1}
     _interrupt_archive(db, monkeypatch, ids[1], where)
+    flagged = where != "before flag"
     with get_session() as session:
-        assert [session.get(Molecule, i).archived for i in ids] == [True, False, False]
+        assert [session.get(Molecule, i).archived for i in ids] == [True, flagged, False]
     assert not (db.comp_data_path / f"mol_{ids[0]}").exists()
+    assert (db.comp_data_path / f"mol_{ids[1]}").is_dir()
     assert (db.comp_data_path / f"mol_{ids[2]}").is_dir()
-    kept = {i: _snapshot(db, i) for i in ids[:2]}
+    kept = {i: _snapshot(db, i) for i in ids[:1 + flagged]}
 
-    summary = PipelineExtractor(PROJECT).archive_project(db.export_data_path, db.comp_data_path)
-    assert summary["molecules"] == 1
-    assert {i: _snapshot(db, i) for i in ids[:2]} == kept
+    summary = _archive(db)
+    assert (summary["molecules"], summary["archived"]) == (2 - flagged, 3)
+    assert {i: _snapshot(db, i) for i in kept} == kept
     for i in ids:
         assert _tree(db, i) == full
         assert not (db.comp_data_path / f"mol_{i}").exists()
     with get_session() as session:
         assert all(session.get(Molecule, i).archived for i in ids)
+    # The archived project's energy source keeps every molecule.
+    with (_root(db) / "p_all_conformers.csv").open() as f:
+        assert sorted({int(r["molecule_id"]) for r in csv.DictReader(f)}) == ids
+
+
+def test_a_cut_short_molecule_takes_no_new_results(db, monkeypatch):
+    from autodft.engine.entrypoint_processor import _check_extension
+    from autodft.engine.state_machine import _molecule_is_archived
+
+    ids = [_standard(db)[0] for _ in range(2)]
+    _interrupt_archive(db, monkeypatch, ids[1], "mid delete")
+    kept = _snapshot(db, ids[1])
+    with get_session() as session:
+        task = session.exec(select(ComputationTask).join(MoleculeState).where(
+            MoleculeState.molecule_id == ids[1])).first()
+        assert admin_ops.rerun_blocker(session, task) == "project archived; nothing can re-run"
+        assert _molecule_is_archived(session, task)
+        with pytest.raises(ValueError, match="archived"):
+            _check_extension(session, session.get(Molecule, ids[1]), {}, {categories.UVVIS})
+    # Fully archived now: the export is kept, and nothing is left to delete or re-run.
+    with pytest.raises(ValueError, match="archived"):
+        _archive(db)
+    assert _snapshot(db, ids[1]) == kept
+
+
+def test_a_rerun_deletes_a_cut_short_molecules_leftover(db, monkeypatch):
+    ids = [_standard(db)[0] for _ in range(3)]
+    _interrupt_archive(db, monkeypatch, ids[1], "mid delete")
+    kept = _snapshot(db, ids[1])
+    leftover = db.comp_data_path / f"mol_{ids[1]}"
+    assert leftover.is_dir()
+    _archive(db)
+    assert not leftover.exists()
+    assert _snapshot(db, ids[1]) == kept
 
 
 def test_a_plain_export_keeps_a_partly_archived_projects_folders(db, monkeypatch):
@@ -544,12 +584,27 @@ def test_archive_job_takes_the_dialog_options(db, monkeypatch):
 
 
 def test_a_rerun_archive_job_resumes(db, monkeypatch):
+    """Resumes through the job, never re-freezing a molecule already archived."""
+    from autodft.analysis.spectroscopy import frozen_dir
+
     monkeypatch.setattr(project_jobs, "_wait_for_quiescence", lambda name: None)
-    ids = [_standard(db)[0] for _ in range(2)]
-    _interrupt_archive(db, monkeypatch, ids[1], "mid delete")
+    ids = [_standard(db)[0] for _ in range(3)]
+    with get_session() as session:
+        for state in session.exec(select(MoleculeState)).all():
+            state.metadata_json = json.dumps({**json.loads(state.metadata_json), categories.UVVIS: True})
+            session.add(state)
+        session.commit()
+
+    def job(settings):
+        return project_jobs._execute(ProjectJobKind.archive, PROJECT, {}, settings)
+    _interrupt_archive(db, monkeypatch, ids[1], "mid delete", run=job)
+    frozen = frozen_dir(PROJECT, db)
+    assert sorted(p.name for p in frozen.iterdir()) == [f"mol_{i}.json" for i in ids]
+    (frozen / f"mol_{ids[1]}.json").write_text("first run")
     kept = _snapshot(db, ids[1])
-    result = project_jobs._execute(ProjectJobKind.archive, PROJECT, {}, db)
-    assert result["molecules"] == 0
+    result = job(db)
+    assert (frozen / f"mol_{ids[1]}.json").read_text() == "first run"
+    assert (result["molecules"], result["archived"], result["photophysics_frozen"]) == (1, 3, 1)
     assert _snapshot(db, ids[1]) == kept
     with get_session() as session:
         assert all(session.get(Molecule, i).archived for i in ids)
