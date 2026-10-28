@@ -2098,6 +2098,7 @@ def test_extend_shows_the_projects_headers_and_tolerance_and_sends_no_tolerance(
         replies['/api/projects/nho%3Ap/extend-info'] = { status: 200, body: INFO };
         await enterExtendMode('nho/p');
         out.extending = snap();
+        out.labels = slots.map(function (id) { return $(id).options.map(function (o) { return o.textContent; }); });
         out.note = $('extendHeaders').textContent;
         // A header reload while extending keeps the project's headers.
         replies['/api/headers'] = { status: 200, body: headerCache };
@@ -2115,6 +2116,7 @@ def test_extend_shows_the_projects_headers_and_tolerance_and_sends_no_tolerance(
     shown = {"values": ["", "id:7", "id:9"], "options": [2, 2, 2], "locked": [True] * 4,
              "tolerance": "" if tolerance is None else str(tolerance)}
     assert {k: out["extending"][k] for k in shown} == shown
+    assert [labels[-1] for labels in out["labels"]] == ["None", "", "Header #9 (this project)"]
     assert "UV/Vis will be refused" in out["extending"]["uvvisNote"]
     assert out["reloaded"] == out["extending"]
     assert ("-10 cm" in out["note"]) is (tolerance is not None)
