@@ -965,11 +965,13 @@
             background: var(--green-bg);
         }
         .project-status-banner.complete .status-pulse { background: var(--green); }
-        .project-status-banner.complete_with_failures {
+        .project-status-banner.complete_with_failures,
+        .project-status-banner.failed {
             border-color: rgba(239, 68, 68, 0.3);
             background: var(--red-bg);
         }
-        .project-status-banner.complete_with_failures .status-pulse { background: var(--red); }
+        .project-status-banner.complete_with_failures .status-pulse,
+        .project-status-banner.failed .status-pulse { background: var(--red); }
         .project-status-banner.empty {
             border-color: var(--border);
             background: var(--bg-card);
@@ -4483,8 +4485,30 @@
                     projectsCached.summaryAt = Date.now();
                 }
             } catch (err) {
-                if (!isAbort(err)) console.warn('Failed to load project detail:', err);
+                if (currentProject === name) showProjectError(errHtml('Could not load ' + name + ': ', err));
             }
+        }
+
+        // A failed load: nothing of the last project stays, and its actions wait for a good load.
+        function showProjectError(html) {
+            ['projectCards', 'projectExtendSection', 'projectMoleculesSection'].forEach(function (id) {
+                document.getElementById(id).style.display = 'none';
+            });
+            ['pcMolecules', 'pcSubmitted', 'pcSuccess', 'pcTaskSucc', 'pcTaskFail'].forEach(function (id) {
+                document.getElementById(id).textContent = '--';
+            });
+            document.getElementById('projectMoleculesBody').innerHTML = '';
+            document.getElementById('projectExportSection').style.display = 'block';
+            ['exportProjectBtn', 'exportDeleteBtn', 'deleteProjectBtn'].forEach(function (id) {
+                var btn = document.getElementById(id);
+                btn.disabled = true;
+                btn.title = 'The project did not load.';
+            });
+            var banner = document.getElementById('projectStatusBanner');
+            banner.style.display = 'flex';
+            banner.className = 'project-status-banner failed';
+            document.getElementById('psbText').innerHTML = html;
+            document.getElementById('psbDetail').textContent = '';
         }
 
         // Defensive: read the response body as text first, parse JSON

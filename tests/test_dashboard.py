@@ -1100,7 +1100,8 @@ function withLoading(label, fn) { return Promise.resolve().then(function () { re
 var fetches = [];
 function loadingFetch(label, url) {
     return new Promise(function (resolve) {
-        fetches.push({ url: url, resolve: function (body) { resolve(new Response(JSON.stringify(body))); } });
+        fetches.push({ url: url, resolve: function (body, status) {
+            resolve(new Response(JSON.stringify(body), { status: status || 200 })); } });
     });
 }
 function molecules(n, prefix) {
@@ -1535,3 +1536,53 @@ def test_an_extend_reloads_the_summary_on_screen(route, reloads):
         out.reloads = count('GET /api/projects/nho%%3Ap') - before;
     """ % json.dumps(route), _projects_code())
     assert out["reloads"] == reloads
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_failed_project_load_shows_the_error_and_nothing_of_the_last_project():
+    out = _run_overlay("""
+        var $ = function (id) { return document.getElementById(id); };
+        var BTNS = ['exportProjectBtn', 'exportDeleteBtn', 'deleteProjectBtn'];
+        replies['/api/projects/nho%3Ap'] = {status: 200, body: {status: 'complete', total_molecules: 1,
+            molecules: [{id: 7, smiles: 'CCO', states: 1, tasks: 2, successful: 2, failed: 0}],
+            submission_progress: {started: 1, total: 1},
+            success_rate: {successful_molecules: 1, total_molecules: 1}}};
+        replies['/api/projects/nho%3Aq'] = {status: 500, body: {detail: 'database is <locked>'}};
+        activateRoute('projects.summary');
+        await idle();
+        out.good = [$('pcMolecules').textContent, $('projectMoleculesBody').innerHTML,
+                    BTNS.map(function (id) { return $(id).disabled; })];
+        await loadProjectDetail('nho/q', true);
+        out.banner = $('psbText').innerHTML;
+        out.cards = [$('projectCards').style.display, $('pcMolecules').textContent, $('pcSubmitted').textContent,
+                     $('pcSuccess').textContent, $('pcTaskSucc').textContent];
+        out.table = [$('projectMoleculesSection').style.display, $('projectMoleculesBody').innerHTML];
+        out.disabled = BTNS.map(function (id) { return $(id).disabled; });
+        // A good load gives the buttons back.
+        await loadProjectDetail('nho/p', true);
+        out.back = BTNS.map(function (id) { return $(id).disabled; });
+    """, _projects_code(), _functions("fmtTime"))
+    assert out["good"][0] == 1 and "CCO" in out["good"][1] and out["good"][2] == [False] * 3
+    assert "database is &lt;locked&gt;" in out["banner"] and "No molecules yet" not in out["banner"]
+    assert out["cards"] == ["none", "--", "--", "--", "--"]
+    assert out["table"][0] == "none" and "CCO" not in out["table"][1]
+    assert out["disabled"] == [True] * 3
+    assert out["back"] == [False] * 3
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_failed_molecules_load_shows_the_error_not_an_empty_project():
+    out = _run_molecules("""
+        var a = loadMoleculesPage();
+        fetches[0].resolve(molecules(2, 'A'));
+        await a;
+        flush();
+        var b = loadMoleculesPage();
+        fetches[1].resolve({ detail: 'database is <locked>' }, 500);
+        await b;
+        out.html = els.moleculesTableBody.children.map(function (r) { return r.html; }).join('');
+        out.rows = els.moleculesTableBody.children.map(function (r) { return r.smiles; });
+    """)
+    assert "Failed: database is &lt;locked&gt;" in out["html"]
+    assert "No molecules yet" not in out["html"]
+    assert out["rows"] == [None]
