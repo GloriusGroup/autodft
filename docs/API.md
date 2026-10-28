@@ -1012,7 +1012,15 @@ The pipeline is built to fail loudly:
   `GET /api/entrypoints/failed`. The controller does not retry them.
 * A job that runs but fails ORCA's checks sets `success=false` and a
   `fail_reason` on `ComputationJob`. The owning task moves to `failed`
-  only after `pipeline.max_attempts` unsuccessful jobs (default 3).
+  after `pipeline.max_attempts` unsuccessful jobs (default 3). A job also
+  fails as an attempt after 3 consecutive sbatch rejections
+  (`sbatch rejected 3 times: …`), in an unknown SLURM state
+  (`Unrecognised SLURM state <state>`), or when SLURM has no record of it
+  on two polls running (`SLURM has no record of the job`).
+* A task fails at once when its pending job is unsatisfiable
+  (`unsatisfiable: <Reason>`, e.g. `PartitionConfig`), when building its
+  job raised 10 consecutive times, or with `project archived` when its
+  project is archived. The README's "Failure handling" has the details.
 
 To recover: fix the SMILES / header / config and resubmit. For the
 recovery CLI commands see the README.

@@ -856,9 +856,35 @@ The pipeline is built to **fail loudly**, not silently:
   entrypoint with `processing_error` and appear on
   `/api/entrypoints/failed` and the dashboard's "Failed Entrypoints"
   widget. The controller never silently retries them.
-* Tasks transition to `failed` only after `pipeline.max_attempts`
-  unsuccessful job runs. Before that they remain `pending` while
-  retries are still possible — that's what the "Pending" card counts.
+* A task normally transitions to `failed` after `pipeline.max_attempts`
+  unsuccessful jobs. Before that it remains `pending` while retries are
+  still possible — that's what the "Pending" card counts. A job uses an
+  attempt when:
+  * ORCA's checks fail on its output, or SLURM ends it (`FAILED`,
+    `TIMEOUT`, `OUT_OF_MEMORY`, `CANCELLED`, …);
+  * 3 consecutive sbatch rejections of its script (an error not on the
+    transient list) fail it as `sbatch rejected 3 times`. Transient errors
+    (timeouts, slurmctld unreachable, munge/authentication, submit limits)
+    are retried for free, and a tick in which every sbatch failed is taken
+    as an outage and counts no rejection;
+  * it is in a SLURM state the pipeline does not know:
+    `Unrecognised SLURM state <state>`;
+  * neither sacct nor squeue knows its job id on two polls running:
+    `SLURM has no record of the job`.
+* A task fails at once, without using its remaining attempts, when:
+  * its pending job is unsatisfiable: the squeue Reason says the request
+    can never run (`PartitionConfig`, `PartitionTimeLimit`,
+    `MaxMemPerLimit`, `BadConstraints`, `DependencyNeverSatisfied`). The
+    job is scancelled and fails as `unsatisfiable: <Reason>`. If more than
+    ten pending jobs, or over half of them, show the same Reason in one
+    tick, it is taken as a cluster-side change: nothing is cancelled and a
+    critical is logged;
+  * the same failure would repeat on every retry (`Excited Root`,
+    `LibXC Needed`, `S1 Stays Bound`);
+  * building its job raised 10 consecutive times
+    (`Job build failed 10 times: …`). A failed build costs no attempt;
+  * its project is archived: the project's created and pending tasks fail
+    as `project archived`, which the circuit breaker does not count.
 
 Recovering:
 
