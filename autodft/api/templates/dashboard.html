@@ -5163,21 +5163,31 @@
                 ? 'Building cube with orca_plot… this can take a few minutes.'
                 : 'Loading cube…';
             document.getElementById('densityModal').style.display = 'flex';
-            try {
-                var lib = load3Dmol();
-                var resp = await uiFetch(null, '/api/projects/' + projectPath(project) + '/densities/'
-                    + encodeURIComponent(tid) + '/' + kind, { method: 'POST', signal: ctl.signal });
+            var url = '/api/projects/' + projectPath(project) + '/densities/' + encodeURIComponent(tid) + '/' + kind;
+            async function post() {
+                var resp = await uiFetch(null, url, { method: 'POST', signal: ctl.signal });
                 if (!resp.ok) {
                     var err = await apiError(resp);
                     err.busy = resp.status === 503;
                     throw err;
                 }
+                return resp;
+            }
+            try {
+                var lib = load3Dmol();
+                var resp = await post();
                 if (avail.build) avail.build[kind] = false;
                 var size = parseInt(resp.headers.get('Content-Length'), 10) || 0;
-                if (size > DENSITY_ASK_BYTES && !confirm('This cube is ' + Math.round(size / (1024 * 1024))
-                        + ' MB. Loading it into the viewer takes a lot of memory. Load it?')) {
-                    closeDensityModal();
-                    return;
+                if (size > DENSITY_ASK_BYTES) {
+                    // Asked with the reply dropped (unread, it holds the project's read); Yes posts again for the built cube.
+                    ctl.abort();
+                    if (!confirm('This cube is ' + Math.round(size / (1024 * 1024))
+                            + ' MB. Loading it into the viewer takes a lot of memory. Load it?')) {
+                        closeDensityModal();
+                        return;
+                    }
+                    ctl = densityView.ctl = new AbortController();
+                    resp = await post();
                 }
                 var cube = await resp.text();
                 var $3D = await lib;

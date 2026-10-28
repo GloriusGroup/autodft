@@ -1249,6 +1249,58 @@ def test_the_density_viewer_is_not_under_the_overlay_and_close_aborts():
     assert "signal: ctl.signal" in body and "densityView.ctl.abort()" in body
 
 
+def _density_code() -> str:
+    html = (TEMPLATE / "dashboard.html").read_text()
+    start = html.index("        var DENSITY_ISO = ")
+    return (html[start:html.index("        function renderDensity(", start)]
+            + "var molsSp = { project: 'nho/p', densities: { 5: { build: { eldens: true } } } };\n"
+            + "function projectPath(n) { return encodeURIComponent(n.replace('/', ':')); }\n"
+            + "function load3Dmol() { return Promise.resolve('3D'); }\n"
+            + "var rendered = [], asked = [];\n"
+            + "function renderDensity($3D, cube) { rendered.push(cube); }\n")
+
+
+_BIG_CUBE = {"Content-Length": str(200 * 1024 * 1024)}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+@pytest.mark.parametrize("answer", [True, False])
+def test_a_large_cube_is_asked_for_with_its_read_released_and_fetched_again_on_yes(answer):
+    out = _run_overlay("""
+        globalThis.confirm = function (m) { asked.push([m.indexOf('200 MB') !== -1, calls[0].opts.signal.aborted]); return ANSWER; };
+        var p = openDensityModal('5', 'eldens');
+        await sleep(5);
+        calls[0].resolve('cube', BIG);
+        await sleep(20);
+        if (calls[1]) calls[1].resolve('cube', BIG);
+        await p;
+        out.asked = asked;
+        out.posts = calls.map(function (c) { return c.opts.method + ' ' + c.url; });
+        out.rendered = rendered;
+        out.modal = els.densityModal.style.display;
+    """.replace("ANSWER", json.dumps(answer)).replace("BIG", json.dumps(_BIG_CUBE)), _density_code())
+    assert out["asked"] == [[True, True]]
+    post = "POST /api/projects/nho%3Ap/densities/5/eldens"
+    assert out["posts"] == ([post, post] if answer else [post])
+    assert out["rendered"] == (["cube"] if answer else [])
+    assert out["modal"] == ("flex" if answer else "none")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_cube_without_content_length_loads_without_asking():
+    out = _run_overlay("""
+        globalThis.confirm = function () { asked.push(true); return false; };
+        var p = openDensityModal('5', 'eldens');
+        await sleep(5);
+        calls[0].resolve('cube');
+        await p;
+        out.asked = asked;
+        out.posts = calls.length;
+        out.rendered = rendered;
+    """, _density_code())
+    assert out["asked"] == [] and out["posts"] == 1 and out["rendered"] == ["cube"]
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_navigation_retires_the_old_pages_reads_but_not_actions():
     out = _run_overlay("""
