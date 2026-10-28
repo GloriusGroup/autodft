@@ -700,6 +700,32 @@ def test_a_polled_401_stays_on_the_page_offers_sign_in_and_stops_polling():
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_after_a_polled_401_a_good_user_load_reconnects_and_polling_resumes():
+    out = _run_overlay("""
+        var $ = function (id) { return document.getElementById(id); };
+        %s.forEach(function (u) { replies[u] = { status: 401, body: { detail: 'Authentication required.' } }; });
+        await refreshAll();
+        out.expired = $('statusText').innerHTML;
+        // Signed in again in another tab: the next load the user starts succeeds.
+        replies = GOOD;
+        await loadingFetch('Loading…', '/api/x');
+        await idle();
+        var seen = hits.length;
+        pollTick();
+        await sleep(20);
+        out.polled = hits.slice(seen).sort();
+        out.text = $('statusText').textContent;
+        out.dot = $('statusDot').className;
+        out.running = String($('cardRunning').textContent);
+        out.assigned = location.assigned;
+    """ % json.dumps(_POLLED), _polling_code(), "var GOOD = %s;" % json.dumps(_good_poll()))
+    assert "Session expired" in out["expired"]
+    assert out["polled"] == sorted(_POLLED)
+    assert out["text"] == "Connected" and "disconnected" not in out["dot"]
+    assert out["running"] == "3" and out["assigned"] == []
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_a_user_started_401_saves_the_form_and_restores_it_once():
     out = _run_overlay("""
         var form = document.getElementById('submitForm');
@@ -853,13 +879,16 @@ def test_a_smiles_check_that_errored_is_neutral_retried_and_a_real_answer_is_cac
         out.third = await check('CCO');
         out.hits = hits.length;
         out.assigned = location.assigned;
-    """, _REPLIES_STUB, "var window = globalThis;", "var REPLY = %s;" % json.dumps(reply),
-        _functions("escHtml", "setConnected"), block)
+        out.refreshed = refreshed;
+    """, _REPLIES_STUB, "var window = globalThis; var refreshed = 0; function refreshAll() { refreshed++; }",
+        "var REPLY = %s;" % json.dumps(reply), _functions("escHtml", "setConnected"), block)
     assert out["first"].startswith("Could not check") and reply["body"]["detail"] in out["first"]
     assert "unchecked" in out["firstState"] and "invalid" not in out["firstState"]
     assert not out["firstDisabled"] and out["gate"] == [True]
     assert out["second"].startswith("OK — 9 atoms") and out["third"] == out["second"]
     assert out["hits"] == 2 and out["assigned"] == []
+    # A good reply after a 401 reconnects and polls once.
+    assert out["refreshed"] == (1 if reply["status"] == 401 else 0)
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")

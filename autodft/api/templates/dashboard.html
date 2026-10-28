@@ -2517,7 +2517,15 @@
         // polls and timers only offer the link, so nothing unsent is lost behind the user's back.
         var signingIn = false, sessionExpired = false;
         function checkSession(resp, userStarted) {
-            if (resp.status !== 401) return resp;
+            if (resp.status !== 401) {
+                // Signed in again (e.g. in another tab): reconnect and poll again.
+                if (sessionExpired) {
+                    sessionExpired = false;
+                    setConnected(true);
+                    refreshAll();
+                }
+                return resp;
+            }
             if (userStarted) toLogin();
             else if (!sessionExpired) {
                 sessionExpired = true;
