@@ -946,8 +946,9 @@ A retry after an abnormal termination, timeout or SLURM kill runs on
 and `increased_time_limit` unless the stage's is longer. It keeps the job's
 `%maxcore`, except after a memory failure (`OUT_OF_MEMORY` or an ORCA
 out-of-memory message): then `increased_mem_per_core` (at most 2500 MB), or
-1.5× the job's own when that is already as high. `max_mem_per_job_mb`, when
-set, bounds that rise and then the extra cores, never below the job's own.
+1.5× the job's own when that is already as high. `max_mem_per_job_mb`
+(unset: 400 GB) bounds that rise and then the extra cores, never below the
+job's own.
 No retry lowers a job's cores or `%maxcore`.
 
 Recovering:

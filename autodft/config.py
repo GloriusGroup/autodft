@@ -75,15 +75,16 @@ class RetryConfig:
     # failure (timeout, SCF, convergence) gets more cores and time but keeps
     # the job's own %maxcore. No retry lowers cores or %maxcore.
     increased_mem_per_core: int = 2500
-    # Ceiling on the SLURM --mem of an escalated job, in MB. 0 disables it.
+    # Ceiling on the SLURM --mem of an escalated job, in MB. 0 means the
+    # built-in MAX_JOB_MEM_MB (400 GB).
     #
     # SET THIS to the memory of the largest node in your partition. If a job's
     # allocation exceeds it the *rank count* is reduced to fit (never below the
     # job's own), never the per-rank %maxcore (lowering that would starve a job
-    # that died needing more memory per rank). It also bounds an OOM retry's %maxcore rise on
-    # the job's own rank count, never below the job's own %maxcore.
-    # Defaults to 0 so that enabling it is a deliberate choice made against
-    # real hardware.
+    # that died needing more memory per rank). It also bounds an OOM retry's
+    # %maxcore rise on the job's own rank count, never below the job's own
+    # %maxcore. Defaults to 0 so that enabling it is a deliberate choice made
+    # against real hardware.
     max_mem_per_job_mb: int = 0
 
 

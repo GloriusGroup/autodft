@@ -161,11 +161,12 @@ def test_an_oom_retry_stays_within_max_mem_per_job():
     assert nprocs * (maxcore + 50) <= mem <= 250000
 
 
-def test_max_mem_per_job_never_cuts_below_the_jobs_own_memory():
+def test_max_mem_per_job_never_cuts_below_the_jobs_own_memory(caplog):
     strategy = IncreaseResources(max_mem_per_job_mb=100000)
     out, sub = strategy.modify(_sp(nprocs=32, maxcore=6000), _submit(32, 6000), OOM)
     nprocs, maxcore, _, mem = _resources(out, sub)
     assert (nprocs, maxcore) == (32, 6000) and mem >= 32 * 6050
+    assert "Escalation to 32 ranks x 6000 MB" in caplog.text
 
 
 def test_default_escalation_is_unchanged():
@@ -174,3 +175,37 @@ def test_default_escalation_is_unchanged():
     assert _resources(out, sub) == (24, 1000, 24, 24 * 1050)
     out, sub = IncreaseResources().modify(inp, _submit(12, 1000), OOM)
     assert _resources(out, sub) == (24, 2500, 24, 24 * 2550)
+
+
+def _chain(strategy: IncreaseResources, nprocs: int, maxcore: int, times: int = 4) -> list[tuple[int, int, int, int]]:
+    inp = f"!M062X\n%maxcore {maxcore}\n%pal nprocs {nprocs} end\n" + XYZ
+    sub, seen = _submit(nprocs, maxcore), []
+    for _ in range(times):
+        inp, sub = strategy.modify(inp, sub, OOM)
+        seen.append(_resources(inp, sub))
+    return seen
+
+
+def test_an_oom_retry_without_max_mem_stays_within_a_node():
+    from autodft.qm.orca.retry import MAX_JOB_MEM_MB
+
+    out, sub = IncreaseResources().modify(
+        "!M062X\n%maxcore 16000\n%pal nprocs 8 end\n" + XYZ, _submit(8, 16000), OOM)
+    nprocs, maxcore, _, mem = _resources(out, sub)
+    assert maxcore > 16000 and nprocs >= 8
+    assert nprocs * (maxcore + 50) <= mem <= MAX_JOB_MEM_MB
+
+
+def test_repeated_ooms_never_exceed_max_job_mem():
+    from autodft.qm.orca.retry import MAX_JOB_MEM_MB
+
+    seen = _chain(IncreaseResources(), 8, 6000)
+    assert all(n >= 8 and n * (m + 50) <= mem <= MAX_JOB_MEM_MB for n, m, _, mem in seen)
+    assert [m for _, m, _, _ in seen] == sorted(m for _, m, _, _ in seen)
+
+
+def test_repeated_ooms_stay_within_max_mem_per_job(caplog):
+    seen = _chain(IncreaseResources(max_mem_per_job_mb=200000), 8, 6000)
+    assert all(n >= 8 and n * (m + 50) <= mem <= 200000 for n, m, _, mem in seen)
+    assert seen[-1] == seen[-2]
+    assert "leaves no room to raise it" in caplog.text

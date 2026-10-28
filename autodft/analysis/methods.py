@@ -21,7 +21,7 @@ from autodft.models import ComputationHeader, ComputationJob, ComputationTask, M
 from autodft.qm.orca.advanced import STAGE_KEYS, STAGES, with_geom_floor
 from autodft.qm.orca.blocks import _keyword_lines, is_tight_optimization, with_tight_opt
 from autodft.qm.orca.parser import IMAGINARY_FREQ_THRESHOLD
-from autodft.qm.orca.retry import build_strategies
+from autodft.qm.orca.retry import MAX_JOB_MEM_MB, build_strategies
 
 # Documented ORCA defaults; the others say "ORCA default" without a value.
 _ORCA_DEFAULTS = {"grid": "DEFGRID2", "geom_convergence": "Normal"}
@@ -37,8 +37,7 @@ _RETRY_EFFECTS = {
     "IncreaseResources": lambda s: (
         f"abnormal termination or timeout: at least {s.nprocs} cores and {s.time_limit}; on a memory "
         f"failure only, %maxcore up to {s.mem_per_core} MB, or 1.5x a job's own if already as high; "
-        "never fewer cores or less memory"
-        + (f"; --mem capped at {s.max_mem_per_job_mb} MB" if s.max_mem_per_job_mb else "")),
+        f"never fewer cores or less memory; --mem capped at {s.max_mem_per_job_mb or MAX_JOB_MEM_MB} MB"),
     "IncreaseMaxIter": lambda s: f"optimisation not converged: %geom MaxIter {s.max_iter}",
     "TightenConvergence": lambda s: "imaginary frequencies: TightSCF and %geom Convergence Tight, never loosened",
     "PerturbImaginaryMode": lambda s: (

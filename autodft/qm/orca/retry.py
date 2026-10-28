@@ -41,7 +41,8 @@ DEFAULT_DISPLACEMENT: float = 0.1
 INCREASED_TIME: str = "4-00:00:00"
 
 # Ceiling on the %maxcore (MB) an OOM retry escalates to from mem_per_core;
-# a job's own higher value is kept, and raised x1.5 on an OOM instead.
+# a job's own higher value is kept, and raised x1.5 on an OOM instead
+# (within max_mem_per_job_mb, else MAX_JOB_MEM_MB, per job).
 MAX_MAXCORE_MB: int = 2500
 # An NMR MP2 response retry: ORCA leaves the response ~83 % of %maxcore, so a
 # shortfall of N MB needs N / 0.8 more; capped per rank and per job (smallest CPU node ~470 GB).
@@ -142,7 +143,8 @@ class IncreaseResources(RetryStrategy):
 
     Default target: at least 24 cores, extended time limit, and on a memory
     failure ``mem_per_core`` (at most :data:`MAX_MAXCORE_MB`) per rank, or
-    1.5x the job's own if that is already as high.
+    1.5x the job's own if that is already as high; the job stays within
+    ``max_mem_per_job_mb``, else :data:`MAX_JOB_MEM_MB`.
     """
 
     def __init__(
@@ -210,36 +212,41 @@ class IncreaseResources(RetryStrategy):
         #
         # Never below the job's own cores or %maxcore. Only a memory failure raises
         # %maxcore: to mem_per_core (bounded by MAX_MAXCORE_MB) if that is more,
-        # else x1.5; max_mem_per_job_mb bounds the rise on the job's own ranks.
+        # else x1.5. The job ceiling (max_mem_per_job_mb, else MAX_JOB_MEM_MB)
+        # bounds the rise on the job's own ranks, then the extra ranks.
         current_match = re.search(r"%maxcore\s+(\d+)", input_content, re.IGNORECASE)
         base_maxcore = int(current_match.group(1)) if current_match else 1000
         current_nprocs = re.search(
             r"%pal\s+nprocs\s+(\d+)\s+end", input_content, re.IGNORECASE,
         )
         original_nprocs = int(current_nprocs.group(1)) if current_nprocs else 1
+        ceiling = self.max_mem_per_job_mb or MAX_JOB_MEM_MB
         target_maxcore = base_maxcore
         if memory_failure:
             escalated = min(self.mem_per_core, MAX_MAXCORE_MB)
             if escalated <= base_maxcore:
                 escalated = math.ceil(base_maxcore * 1.5 / 500) * 500
-            if self.max_mem_per_job_mb:
-                escalated = min(escalated, self.max_mem_per_job_mb // original_nprocs - 50)
+            escalated = min(escalated, ceiling // original_nprocs - 50)
             target_maxcore = max(base_maxcore, escalated)
-
-        # If a max_mem ceiling is configured, reduce the *core count* to fit
-        # rather than the per-rank memory: clamping --mem alone would leave ORCA
-        # free to allocate more per rank than SLURM granted. Never below the
-        # job's own core count.
-        target_nprocs = max(self.nprocs, original_nprocs)
-        if self.max_mem_per_job_mb:
-            affordable = max(1, self.max_mem_per_job_mb // (target_maxcore + 50))
-            if affordable < target_nprocs:
-                target_nprocs = max(affordable, original_nprocs)
+            if target_maxcore == base_maxcore:
                 logger.warning(
-                    "Escalation to %d ranks x %d MB exceeds max_mem_per_job_mb %d; "
-                    "using %d ranks instead",
-                    self.nprocs, target_maxcore, self.max_mem_per_job_mb, target_nprocs,
+                    "Memory failure at %%maxcore %d x %d ranks: the %d MB job ceiling "
+                    "leaves no room to raise it; retrying unchanged",
+                    base_maxcore, original_nprocs, ceiling,
                 )
+
+        # Reduce the *core count* to fit the ceiling rather than the per-rank
+        # memory: clamping --mem alone would leave ORCA free to allocate more
+        # per rank than SLURM granted. Never below the job's own core count.
+        target_nprocs = max(self.nprocs, original_nprocs)
+        affordable = max(1, ceiling // (target_maxcore + 50))
+        if affordable < target_nprocs:
+            logger.warning(
+                "Escalation to %d ranks x %d MB exceeds the %d MB job ceiling; "
+                "using %d ranks instead",
+                target_nprocs, target_maxcore, ceiling, max(affordable, original_nprocs),
+            )
+            target_nprocs = max(affordable, original_nprocs)
 
         # Rewrite %maxcore only when a token exists and a memory escalation raised it.
         if current_match is not None and target_maxcore != base_maxcore:
@@ -260,13 +267,13 @@ class IncreaseResources(RetryStrategy):
         # Size the SLURM allocation from the %maxcore and rank count ORCA
         # actually got, so the two can never contradict each other.
         total_mem = target_nprocs * (target_maxcore + 50)
-        if self.max_mem_per_job_mb and total_mem > self.max_mem_per_job_mb:
+        if total_mem > ceiling:
             # Only reachable when the header's own request already exceeds
             # the ceiling; honouring it beats silently starving the job.
             logger.warning(
-                "Header requests %d MB, above max_mem_per_job_mb %d; honouring "
+                "Header requests %d MB, above the %d MB job ceiling; honouring "
                 "the header -- check that a node this large exists",
-                total_mem, self.max_mem_per_job_mb,
+                total_mem, ceiling,
             )
         submit_content = re.sub(
             r"#SBATCH --ntasks-per-node=\d+",
