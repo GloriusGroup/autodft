@@ -1404,6 +1404,8 @@ class RetryWouldRepeat(Exception):
 class _RenderedJob(NamedTuple):
     input_text: str
     submit_text: str
+    # The %maxcore --mem was sized from: the header's, else the stage's.
+    mem_per_core: int
     # A rate job's inputs_json record and Hessians (file name -> source); None otherwise.
     rate_record: Optional[dict] = None
     hessians: Optional[dict[str, Path]] = None
@@ -1506,7 +1508,7 @@ def _render_job(
         keep_esd_files=task.task_type.value.startswith("esd_"),
         extra_inputs=list(hessians) if hessians is not None else None,
     )
-    return _RenderedJob(input_text, submit_text, record, hessians)
+    return _RenderedJob(input_text, submit_text, mem_per_core, record, hessians)
 
 
 def _generate_job_files(
@@ -1574,7 +1576,7 @@ def _generate_job_files(
     if attempt > 1 and previous_failed_job is not None:
         _apply_retry_modifications(
             session, job_path, task, previous_failed_job, attempt,
-            charge, multiplicity, settings,
+            charge, multiplicity, settings, default_maxcore=rendered.mem_per_core,
         )
 
 
@@ -1723,8 +1725,12 @@ def _apply_retry_modifications(
     charge: int,
     multiplicity: int,
     settings: Settings,
+    default_maxcore: int = 1000,
 ) -> None:
-    """Read the generated input/submit files and apply retry strategies."""
+    """Read the generated input/submit files and apply retry strategies.
+
+    *default_maxcore* is the %maxcore that sized --mem for an input without one.
+    """
     from autodft.qm.orca.retry import (
         FailureInfo,
         PerturbImaginaryMode,
@@ -1787,6 +1793,7 @@ def _apply_retry_modifications(
             attempt=attempt - (task.retry_base or 0),
             charge=charge,
             multiplicity=multiplicity,
+            default_maxcore=default_maxcore,
         )
         input_content, submit_content = apply_retry_strategies(
             task_type=task.task_type.value,
@@ -1814,6 +1821,7 @@ def _apply_retry_modifications(
                 attempt=attempt - (task.retry_base or 0),
                 charge=charge,
                 multiplicity=multiplicity,
+                default_maxcore=default_maxcore,
             ),
             input_content=input_content,
             submit_content=submit_content,

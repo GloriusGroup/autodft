@@ -217,3 +217,12 @@ def test_without_the_failed_jobs_files_the_replay_decides(session, tmp_path):
     (Path(first.job_path) / "input.inp").unlink()
     _, record = _retry(session, task)
     assert task.status == TaskStatus.failed and record.fail_reason == "MP2 response memory cap reached"
+
+
+def test_an_mp2_retry_without_a_maxcore_token_starts_from_the_stage_default(tmp_path):
+    failure = FailureInfo(fail_reason=str([MP2_RESPONSE_MEMORY]), attempt=1, default_maxcore=6000,
+                          previous_job_path=str(_failed_nmr_job(tmp_path)))
+    inp, submit = IncreaseMP2ResponseMemory().modify(DH_INPUT.replace("%maxcore 4000\n", ""),
+                                                     "#SBATCH --ntasks-per-node=12\n#SBATCH --mem=72600\n", failure)
+    # 6000 + 1783.4 / 0.8 = 8229 -> 8500
+    assert "%maxcore 8500" in inp and "#SBATCH --mem=102600" in submit

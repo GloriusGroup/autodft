@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import pytest
 
@@ -189,6 +190,11 @@ def test_an_orca_memory_message_alone_keeps_the_cores(tmp_path):
     assert _resources(out, sub) == (12, 2500, 12, 12 * 2550)
 
 
+
+def test_an_oom_retry_without_a_pal_token_keeps_the_submit_cores():
+    _, sub = IncreaseResources().modify("!M062X\n%maxcore 1000\n" + XYZ, _submit(16, 1000), OOM)
+    assert "--ntasks-per-node=16" in sub and f"--mem={16 * 2550 * 5 // 4}\n" in sub
+
 @pytest.mark.parametrize("reasons", [
     ["['Termination']", "['Termination', 'OUT_OF_MEMORY']"],
     ["['Termination', 'OUT_OF_MEMORY']", "['Termination']"],
@@ -343,3 +349,28 @@ def test_add_keyword_leaves_a_comment_after_a_blank_line_alone():
 def test_tighten_ignores_a_stronger_keyword_in_a_comment():
     out = _tighten("! B3LYP def2-SVP # was VeryTightSCF\n" + XYZ)
     assert out.startswith("! B3LYP def2-SVP TightSCF # was VeryTightSCF\n")
+
+
+def test_without_a_maxcore_token_the_margin_is_taken_over_the_stage_default():
+    oom = FailureInfo(fail_reason="['Termination', 'OUT_OF_MEMORY']", previous_job_path="", attempt=2,
+                      default_maxcore=3000)
+    _, sub = IncreaseResources().modify("!M062X\n%pal nprocs 8 end\n" + XYZ, _submit(8, 3000), oom)
+    # 3000 -> 4500 on the job's 8 cores, then the first OOM margin only
+    assert f"--mem={8 * 4550 * 5 // 4}\n" in sub and "--ntasks-per-node=8" in sub
+
+
+def test_a_retry_takes_the_stages_maxcore_for_a_header_without_one(session, sample_task, tmp_path):
+    from autodft.engine.state_machine import _create_job_for_task
+    from autodft.qm.orca.parser import OrcaParser
+
+    settings = Settings()
+    settings.pipeline.optimization.default_mem_per_core = 3000
+    sample_task.task_path = str(tmp_path)
+    first = _create_job_for_task(session, sample_task, 1, settings, qm_engine=OrcaParser())
+    first.success, first.fail_reason = False, "['Termination', 'OUT_OF_MEMORY']"
+    session.add(first)
+    session.commit()
+    retry = _create_job_for_task(session, sample_task, 2, settings, qm_engine=OrcaParser(),
+                                 previous_failed_job=first)
+    sub = (Path(retry.job_path) / "submit.cmd").read_text()
+    assert f"--mem={16 * 4550 * 5 // 4}\n" in sub and "--ntasks-per-node=16" in sub

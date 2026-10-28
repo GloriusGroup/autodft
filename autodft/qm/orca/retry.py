@@ -82,6 +82,7 @@ class FailureInfo:
         attempt: The **current** (new) attempt number.
         charge: Molecular charge (needed for geometry perturbation).
         multiplicity: Spin multiplicity (needed for geometry perturbation).
+        default_maxcore: The stage's %maxcore (MB), which sized --mem for an input without one.
     """
 
     fail_reason: str
@@ -89,6 +90,7 @@ class FailureInfo:
     attempt: int
     charge: int = 0
     multiplicity: int = 1
+    default_maxcore: int = 1000
 
 
 # ---------------------------------------------------------------------------
@@ -231,10 +233,13 @@ class IncreaseResources(RetryStrategy):
         # else x1.5. The job ceiling (max_mem_per_job_mb, else MAX_JOB_MEM_MB)
         # bounds the rise on the job's own ranks, then the extra ranks.
         current_match = re.search(r"%maxcore\s+(\d+)", input_content, re.IGNORECASE)
-        base_maxcore = int(current_match.group(1)) if current_match else 1000
+        base_maxcore = int(current_match.group(1)) if current_match else failure.default_maxcore
         current_nprocs = re.search(
             r"%pal\s+nprocs\s+(\d+)\s+end", input_content, re.IGNORECASE,
         )
+        if current_nprocs is None:
+            # No %pal token: the cores SLURM gave the job.
+            current_nprocs = re.search(r"#SBATCH --ntasks-per-node=(\d+)", submit_content)
         original_nprocs = int(current_nprocs.group(1)) if current_nprocs else 1
         ceiling = self.max_mem_per_job_mb or MAX_JOB_MEM_MB
         target_maxcore = base_maxcore
@@ -670,7 +675,7 @@ class IncreaseMP2ResponseMemory(RetryStrategy):
         failure: FailureInfo,
     ) -> tuple[str, str]:
         match = re.search(r"%maxcore\s+(\d+)", input_content, re.IGNORECASE)
-        base = int(match.group(1)) if match else 1000
+        base = int(match.group(1)) if match else failure.default_maxcore
         short = mp2_response_memory_short(Path(failure.previous_job_path)) if failure.previous_job_path else None
         wanted = base + short / MP2_RESPONSE_USABLE if short is not None else base * 1.5
         ntasks = re.search(r"#SBATCH --ntasks-per-node=(\d+)", submit_content)
