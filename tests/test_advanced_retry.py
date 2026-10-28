@@ -374,3 +374,16 @@ def test_a_retry_takes_the_stages_maxcore_for_a_header_without_one(session, samp
                                  previous_failed_job=first)
     sub = (Path(retry.job_path) / "submit.cmd").read_text()
     assert f"--mem={16 * 4550 * 5 // 4}\n" in sub and "--ntasks-per-node=16" in sub
+
+
+def test_an_oom_at_the_ceiling_says_only_maxcore_is_kept_when_mem_grows(tmp_path, caplog):
+    inp = "!M062X\n%maxcore 33283\n%pal nprocs 12 end\n" + XYZ
+    _, sub = IncreaseResources().modify(inp, _submit(12, 33283), OOM)
+    assert "--mem=400000\n" in sub
+    assert "keeping %maxcore 33283, --mem 399996 -> 400000 MB" in caplog.text
+    assert "retrying unchanged" not in caplog.text
+    caplog.clear()
+    (tmp_path / "output.out").write_text("ORCA aborting: insufficient memory\n", encoding="utf-8")
+    orca_oom = FailureInfo(fail_reason="['Termination']", previous_job_path=str(tmp_path), attempt=2)
+    _, sub = IncreaseResources().modify(inp, _submit(12, 33283), orca_oom)
+    assert "--mem=399996\n" in sub and "retrying unchanged" in caplog.text

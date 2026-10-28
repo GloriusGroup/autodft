@@ -170,8 +170,7 @@ class IncreaseResources(RetryStrategy):
         nprocs: int = 24,
         mem_per_core: int = MAX_MAXCORE_MB,
         time_limit: str = INCREASED_TIME,
-        # 0 = no ceiling. Set from [pipeline.retry] in the config; see
-        # RetryConfig.max_mem_per_job_mb for why it defaults to off.
+        # 0 = MAX_JOB_MEM_MB. Set from [pipeline.retry] in the config.
         max_mem_per_job_mb: int = 0,
     ):
         self.nprocs = nprocs
@@ -249,12 +248,6 @@ class IncreaseResources(RetryStrategy):
                 escalated = math.ceil(base_maxcore * 1.5 / 500) * 500
             escalated = min(escalated, ceiling // original_nprocs - 50)
             target_maxcore = max(base_maxcore, escalated)
-            if target_maxcore == base_maxcore:
-                logger.warning(
-                    "Memory failure at %%maxcore %d x %d ranks: the %d MB job ceiling "
-                    "leaves no room to raise it; retrying unchanged",
-                    base_maxcore, original_nprocs, ceiling,
-                )
 
         # More ranks don't relieve a per-rank shortage: a memory failure keeps the job's own.
         # Reduce the *core count* to fit the ceiling rather than the per-rank
@@ -299,6 +292,15 @@ class IncreaseResources(RetryStrategy):
                 total_mem, ceiling,
             )
         total_mem = max(total_mem, min(math.ceil(total_mem * margin), ceiling))
+        if memory_failure and target_maxcore == base_maxcore:
+            previous = re.search(r"#SBATCH --mem=(\d+)", submit_content)
+            grown = f"keeping %maxcore {base_maxcore}, --mem {previous.group(1)} -> {total_mem} MB" \
+                if previous and total_mem > int(previous.group(1)) else "retrying unchanged"
+            logger.warning(
+                "Memory failure at %%maxcore %d x %d ranks: the %d MB job ceiling "
+                "leaves no room to raise it; %s",
+                base_maxcore, original_nprocs, ceiling, grown,
+            )
         submit_content = re.sub(
             r"#SBATCH --ntasks-per-node=\d+",
             f"#SBATCH --ntasks-per-node={target_nprocs}",
