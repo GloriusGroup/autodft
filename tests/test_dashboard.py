@@ -1148,8 +1148,12 @@ def test_rdkit_is_absent_at_start_and_loads_pinned_on_the_first_structure():
 
 _PROJECTS_STUB = r"""
 var hits = [];
+// Per-URL replies a test sets: {status, body}.
+var replies = {};
 globalThis.fetch = function (url, opts) {
     hits.push(((opts && opts.method) || 'GET') + ' ' + url);
+    if (replies[url]) return Promise.resolve(new Response(JSON.stringify(replies[url].body),
+                                                          { status: replies[url].status }));
     var body = url === '/api/projects' ? [{name: 'nho/p', molecules: 1, tasks_successful: 0, tasks_total: 1}]
         : /wipe-preview$/.test(url) ? {rows: {molecules: 1}, files: {measured_completely: true,
                                        comp_data_human: '1 GB', comp_data_dirs: 1}}
@@ -1183,7 +1187,7 @@ def _projects_code() -> str:
     overview = html[start:html.index("        // Defensive: read the response body", start)]
     return (_functions("projectPath", "escHtml", "adminEscape", "adminJSON", "adminRowsLine", "atLeast",
                        "projectWipeSummary", "removalLine", "adminPrepareProjectWipe")
-            + routing + overview + _PROJECTS_STUB)
+            + routing + overview + _functions("submitExtend") + _PROJECTS_STUB)
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -1224,3 +1228,55 @@ def test_a_project_wipe_reloads_the_project_list_and_summary():
     """, _projects_code())
     assert out["wiped"] == 1
     assert out["list"] == 2 and out["detail"] == 2
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_cached_project_list_and_summary_expire_after_30_s():
+    out = _run_overlay("""
+        var now = 1000000, realNow = Date.now;
+        Date.now = function () { return now; };
+        var steps = [['projects.summary', 0], ['projects.molecules', 10000],
+                     ['projects.summary', 20000], ['projects.summary', 31000]];
+        out.counts = [];
+        for (var s of steps) {
+            now = 1000000 + s[1];
+            activateRoute(s[0]);
+            await idle();
+            out.counts.push([count('GET /api/projects'), count('GET /api/projects/nho%3Ap')]);
+        }
+    """, _projects_code())
+    assert out["counts"] == [[1, 1], [1, 1], [1, 1], [2, 2]]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_failed_summary_is_not_cached():
+    out = _run_overlay("""
+        console.warn = function () {};
+        // A body that renders without throwing: only the status says it failed.
+        replies['/api/projects/nho%3Ap'] = {status: 500, body: {detail: 'boom', molecules: []}};
+        activateRoute('projects.summary');
+        await idle();
+        delete replies['/api/projects/nho%3Ap'];
+        activateRoute('projects.summary');
+        await idle();
+        out.detail = count('GET /api/projects/nho%3Ap');
+    """, _projects_code())
+    assert out["detail"] == 2
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+@pytest.mark.parametrize("route, reloads", [("projects.summary", 1), ("submit", 0)])
+def test_an_extend_reloads_the_summary_on_screen(route, reloads):
+    out = _run_overlay("""
+        globalThis.extendMode = {project: 'nho/p'};
+        globalThis.exitExtendMode = function () {};
+        globalThis.currentRoute = function () { return %s; };
+        activateRoute('projects.summary');
+        await idle();
+        replies['/api/projects/nho%%3Ap/extend'] = {status: 200, body: {queued: [{id: 1}]}};
+        var before = count('GET /api/projects/nho%%3Ap');
+        await submitExtend({}, new El('btn'), new El('fb'));
+        await idle();
+        out.reloads = count('GET /api/projects/nho%%3Ap') - before;
+    """ % json.dumps(route), _projects_code())
+    assert out["reloads"] == reloads
