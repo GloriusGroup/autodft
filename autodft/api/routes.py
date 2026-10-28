@@ -41,6 +41,7 @@ from autodft.models import (
     TaskStatus,
     TaskType,
 )
+from autodft.models.enums import SLURM_STATUS_GROUPS
 
 router = APIRouter()
 
@@ -333,6 +334,10 @@ def api_overview(identity: Identity = Depends(current_identity)):
         ).all()
         for slurm_status, count in rows:
             job_counts[slurm_status or "unknown"] = count
+        job_groups = {
+            group: sum(job_counts.get(state, 0) for state in states)
+            for group, states in SLURM_STATUS_GROUPS.items()
+        }
 
         queued = session.exec(
             select(CalculationEntrypoint)
@@ -344,6 +349,7 @@ def api_overview(identity: Identity = Depends(current_identity)):
         "molecules": molecule_count,
         "tasks": task_counts,
         "jobs": job_counts,
+        "job_groups": job_groups,
         "queue_length": queue_length,
     }
 
@@ -487,17 +493,19 @@ def api_tasks(
 
 @router.get("/api/jobs")
 def api_jobs(
+    response: Response,
     status: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=500),
     identity: Identity = Depends(current_identity),
 ):
-    """The newest ``limit`` jobs, optionally of one SLURM status, and how many match in all."""
+    """Newest jobs of a SLURM state or a SLURM_STATUS_GROUPS name; X-Total-Count counts all matches."""
     with get_session() as session:
         stmt = scope_jobs(select(ComputationJob), session, identity)
         counted = scope_jobs(select(func.count()).select_from(ComputationJob), session, identity)
         if status:
-            stmt = stmt.where(ComputationJob.slurm_status == status)
-            counted = counted.where(ComputationJob.slurm_status == status)
+            match = col(ComputationJob.slurm_status).in_(SLURM_STATUS_GROUPS.get(status, {status}))
+            stmt = stmt.where(match)
+            counted = counted.where(match)
         jobs = session.exec(stmt.order_by(col(ComputationJob.id).desc()).limit(limit)).all()
         total = session.exec(counted).one()
 
@@ -516,7 +524,8 @@ def api_jobs(
                     "time_end": job.time_end.isoformat() if job.time_end else None,
                 }
             )
-    return {"jobs": results, "total": total}
+    response.headers["X-Total-Count"] = str(total)
+    return results
 
 
 @router.get("/api/queue")

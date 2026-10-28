@@ -368,9 +368,12 @@ data, see `GET /api/cluster` in §0.
   "molecules": 4,
   "tasks":   {"created": 0, "pending": 16, "successful": 0, "failed": 0},
   "jobs":    {"RUNNING": 14, "PENDING": 2, "COMPLETED": 0},
+  "job_groups": {"running": 14, "pending": 2},
   "queue_length": 0
 }
 ```
+
+`job_groups` counts the groups `/api/jobs?status=` takes.
 
 ### `GET /api/queue`
 
@@ -410,9 +413,11 @@ singlepoint_vert_red | singlepoint_vert_spin_change`.
 ### `GET /api/jobs` `?status=&limit=`
 
 `status` matches SLURM (`RUNNING | PENDING | COMPLETED | FAILED |
-TIMEOUT | CANCELLED | UNKNOWN`). `limit` defaults to 50, at most 500.
-Returns the newest `limit` matching jobs and how many match in all:
-`{"jobs": [...], "total": 150}`.
+TIMEOUT | CANCELLED | UNKNOWN`), or names a group: `running` (RUNNING,
+COMPLETING) or `pending` (PENDING, CONFIGURING, SUBMITTING), the
+dashboard's Running and Pending. `limit` defaults to 50, at most 500.
+The body is the newest `limit` matching jobs; the `X-Total-Count`
+header says how many match in all.
 
 ---
 

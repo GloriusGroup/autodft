@@ -81,6 +81,12 @@ TRANSIENT_SLURM_STATES = frozenset({
     "STAGE_OUT", "STOPPED", "UNKNOWN", SlurmStatus.SUBMITTING.value,
 })
 
+# The dashboard's Running and Pending: its cards and its job tables both count these.
+SLURM_STATUS_GROUPS = {
+    "running": frozenset({"RUNNING", "COMPLETING"}),
+    "pending": frozenset({"PENDING", "CONFIGURING", SlurmStatus.SUBMITTING.value}),
+}
+
 # Terminal: the job is over, one way or another, and its output can be read.
 TERMINAL_SLURM_STATES = frozenset({
     "COMPLETED", "FAILED", "TIMEOUT", "CANCELLED", "OUT_OF_MEMORY",

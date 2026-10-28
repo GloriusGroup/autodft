@@ -142,7 +142,7 @@ def test_the_caller_still_sees_their_own(two_users, path):
         assert response.json()["molecules"] == 1
     elif path == "/api/jobs":
         # Job rows carry neither SMILES nor project name.
-        assert len(response.json()["jobs"]) == 1
+        assert len(response.json()) == 1
     else:
         assert "ALICEMOL" in response.text or "secret_project" in response.text
 
@@ -166,16 +166,44 @@ def test_a_status_filtered_job_list_counts_what_the_overview_card_counts(two_use
     with get_session() as session:
         alice_task, bob_task = session.exec(select(ComputationTask.id).order_by(ComputationTask.id)).all()
         for i in range(300):
-            status = "RUNNING" if i < 150 else "COMPLETED"
+            status = ("RUNNING" if i < 149 else "COMPLETING") if i < 150 else "COMPLETED"
             session.add(ComputationJob(task_id=alice_task, attempt=1, job_path="/x", slurm_status=status))
         session.add(ComputationJob(task_id=bob_task, attempt=1, job_path="/x", slurm_status="RUNNING"))
         session.commit()
 
-    card = client.get("/api/overview", headers=keys["alice"]).json()["jobs"]["RUNNING"]
-    listed = client.get("/api/jobs?status=RUNNING&limit=200", headers=keys["alice"]).json()
-    assert card == listed["total"] == len(listed["jobs"]) == 150
-    assert {j["slurm_status"] for j in listed["jobs"]} == {"RUNNING"}
+    def get(url):
+        response = client.get(url, headers=keys["alice"])
+        assert response.status_code == 200, response.text
+        return response.json(), int(response.headers.get("X-Total-Count", -1))
 
-    capped = client.get("/api/jobs?status=RUNNING&limit=100", headers=keys["alice"]).json()
-    assert len(capped["jobs"]) == 100 and capped["total"] == 150
-    assert client.get("/api/jobs?status=PENDING", headers=keys["alice"]).json() == {"jobs": [], "total": 0}
+    card = get("/api/overview")[0]["job_groups"]["running"]
+    rows, total = get("/api/jobs?status=running&limit=200")
+    assert card == total == len(rows) == 150
+    assert {j["slurm_status"] for j in rows} == {"RUNNING", "COMPLETING"}
+
+    rows, total = get("/api/jobs?status=running&limit=100")
+    assert len(rows) == 100 and total == 150
+    # An exact SLURM state still matches only itself.
+    rows, total = get("/api/jobs?status=RUNNING&limit=10")
+    assert len(rows) == 10 and total == 149
+    assert get("/api/jobs?status=pending") == ([], 0)
+    assert get("/api/jobs")[1] == 301  # the fixture's job too; not bob's
+
+
+@pytest.mark.parametrize("status,group", [("COMPLETING", "running"), ("RUNNING", "running"),
+                                          ("SUBMITTING", "pending"), ("CONFIGURING", "pending"),
+                                          ("PENDING", "pending")])
+def test_a_job_counts_in_its_groups_card_and_table(two_users, status, group):
+    client, keys = two_users
+    with get_session() as session:
+        job = session.exec(select(ComputationJob).order_by(ComputationJob.id)).first()
+        job.slurm_status = status
+        session.add(job)
+        session.commit()
+        job_id = job.id
+    other = {"running": "pending", "pending": "running"}[group]
+    overview = client.get("/api/overview", headers=keys["alice"]).json()["job_groups"]
+    assert overview == {group: 1, other: 0}
+    listed = client.get(f"/api/jobs?status={group}", headers=keys["alice"])
+    assert [j["id"] for j in listed.json()] == [job_id] and listed.headers["X-Total-Count"] == "1"
+    assert client.get(f"/api/jobs?status={other}", headers=keys["alice"]).json() == []

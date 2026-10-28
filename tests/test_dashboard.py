@@ -631,13 +631,13 @@ function field(id, type, value, more) {
 }
 document.getElementById('submitForm').elements = [];
 var extendMode = null;
-// url -> {status, body}; a string body is sent as is; hang: never answers until released.
+// url -> {status, body, headers}; a string body is sent as is; hang: never answers until released.
 var replies = {}, hits = [], hung = [];
 globalThis.fetch = function (url, opts) {
     hits.push(url);
     var r = replies[url] || { status: 200, body: [] };
     var resp = function () { return new Response(typeof r.body === 'string' ? r.body : JSON.stringify(r.body),
-                                                 { status: r.status }); };
+                                                 { status: r.status, headers: r.headers }); };
     if (r.hang) return new Promise(function (resolve) { hung.push(function () { resolve(resp()); }); });
     return Promise.resolve(resp());
 };
@@ -662,16 +662,16 @@ def _submit_form_key() -> str:
 
 def _good_poll():
     return {
-        "/api/overview": {"status": 200, "body": {"molecules": 9, "jobs": {"RUNNING": 3, "PENDING": 2},
+        "/api/overview": {"status": 200, "body": {"molecules": 9, "job_groups": {"running": 3, "pending": 2},
                                                    "tasks": {"failed": 1}, "queue_length": 4}},
         "/api/queue": {"status": 200, "body": [{"id": 11, "smiles": "CCO", "priority": 1}]},
-        _RUNNING: {"status": 200, "body": {"jobs": [], "total": 0}},
-        _PENDING: {"status": 200, "body": {"jobs": [], "total": 0}},
+        _RUNNING: {"status": 200, "body": [], "headers": {"X-Total-Count": "0"}},
+        _PENDING: {"status": 200, "body": [], "headers": {"X-Total-Count": "0"}},
     }
 
 
-_RUNNING = "/api/jobs?status=RUNNING&limit=200"
-_PENDING = "/api/jobs?status=PENDING&limit=200"
+_RUNNING = "/api/jobs?status=running&limit=200"
+_PENDING = "/api/jobs?status=pending&limit=200"
 _POLLED = ["/api/overview", "/api/queue", _PENDING, _RUNNING, "/api/entrypoints/failed"]
 
 
@@ -803,9 +803,9 @@ def test_the_job_tables_ask_for_their_status_and_say_how_many_more():
         return [{"id": i, "task_id": i, "attempt": 1, "slurm_jobid": str(9000 + i), "slurm_status": status}
                 for i in ids]
     replies = _good_poll()
-    replies["/api/overview"]["body"]["jobs"] = {"RUNNING": 150, "PENDING": 260}
-    replies[_RUNNING] = {"status": 200, "body": {"jobs": jobs("RUNNING", range(150, 0, -1)), "total": 150}}
-    replies[_PENDING] = {"status": 200, "body": {"jobs": jobs("PENDING", range(500, 300, -1)), "total": 260}}
+    replies["/api/overview"]["body"]["job_groups"] = {"running": 150, "pending": 260}
+    replies[_RUNNING] = {"status": 200, "body": jobs("COMPLETING", range(150, 0, -1)), "headers": {"X-Total-Count": "150"}}
+    replies[_PENDING] = {"status": 200, "body": jobs("SUBMITTING", range(500, 300, -1)), "headers": {"X-Total-Count": "260"}}
     out = _run_overlay("""
         var $ = function (id) { return document.getElementById(id); };
         replies = GOOD;
@@ -815,7 +815,7 @@ def test_the_job_tables_ask_for_their_status_and_say_how_many_more():
         out.running = $('runningJobsBody').innerHTML;
         out.pending = $('pendingJobsBody').innerHTML;
         replies = Object.assign({}, GOOD);
-        replies[RUNNING] = { status: 200, body: { jobs: [], total: 0 } };
+        replies[RUNNING] = { status: 200, body: [], headers: { 'X-Total-Count': '0' } };
         await refreshAll();
         out.none = $('runningJobsBody').innerHTML;
     """, _polling_code(), "var GOOD = %s, RUNNING = %s;" % (json.dumps(replies), json.dumps(_RUNNING)))
@@ -1157,7 +1157,7 @@ function flush() { while (timers.length) timers.shift()(); }
 
 def _run_molecules(body: str) -> dict:
     html = (TEMPLATE / "dashboard.html").read_text()
-    code = _functions("escHtml", "isAbort", "errHtml", "checkSession", "uiFetch", "apiError", "apiJSON",
+    code = _functions("escHtml", "isAbort", "errHtml", "checkSession", "uiFetch", "apiError", "apiJSON", "apiReply",
                       "fmtFixed", "brokenBadge", "statusCell", "spExtraSlot",
                       "spExtraHtml", "fetchSpTasks", "spTasksPromise", "applySpExtras", "loadMoleculesPage",
                       "appendMolChunks")
