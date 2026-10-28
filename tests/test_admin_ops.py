@@ -718,3 +718,56 @@ class TestReassign:
         monkeypatch.undo()
 
         self._unmoved(archived)
+
+    def test_a_job_started_mid_reassign_runs_under_the_name_its_row_carries(
+        self, archived, admin_identity, monkeypatch,
+    ):
+        from autodft import accounts
+        from autodft.api import project_jobs
+        from autodft.db import get_session
+        from autodft.models import ProjectJob, ProjectJobKind
+
+        ran: list[str] = []
+        monkeypatch.setattr(project_jobs, "_execute", lambda kind, name, params, settings: ran.append(name) or {})
+        rewrite = accounts._rewrite_project_name
+        starter: list[threading.Thread] = []
+
+        def racing_rewrite(session, old, new):
+            # After the active-job check, before the job rows are relabelled.
+            thread = threading.Thread(target=project_jobs.start_job, kwargs=dict(
+                owner_id=None, qualified_name="nho/p", kind=ProjectJobKind.export_csv,
+                params={}, settings=archived["settings"],
+            ))
+            thread.start()
+            thread.join(1.0)
+            starter.append(thread)
+            return rewrite(session, old, new)
+
+        monkeypatch.setattr(accounts, "_rewrite_project_name", racing_rewrite)
+        response = self._reassign(admin_identity)
+        starter[0].join(5.0)
+        project_jobs.join_all(5.0)
+
+        with get_session() as session:
+            row = session.exec(select(ProjectJob).where(ProjectJob.kind == ProjectJobKind.export_csv)).one()
+        assert getattr(response, "status_code", 200) == 409 or ran == [row.qualified_name]
+
+    def test_the_new_owner_downloads_a_moved_export(self, archived, admin_identity):
+        from autodft import accounts
+        from autodft.api.identity import Identity
+        from autodft.api.routes import api_job_download
+        from autodft.db import get_session
+        from autodft.models import ProjectJob, ProjectJobKind
+
+        self._reassign(admin_identity)
+        with get_session() as session:
+            job_id = session.exec(select(ProjectJob).where(ProjectJob.kind == ProjectJobKind.export_xlsx)).one().id
+            lab = accounts.get_user_by_username(session, "lab")
+            nho = accounts.get_user_by_username(session, "nho")
+            as_lab = Identity(username="lab", is_admin=False, user_id=lab.id)
+            as_nho = Identity(username="nho", is_admin=False, user_id=nho.id)
+
+        response = api_job_download(job_id, as_lab)
+        assert response.status_code == 200
+        assert str(response.path) == str(archived["export_root"] / "lab" / "p" / "p_state_analysis.xlsx")
+        assert api_job_download(job_id, as_nho).status_code == 404

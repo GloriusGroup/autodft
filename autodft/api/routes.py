@@ -2118,11 +2118,7 @@ def api_reassign_project(
     name: str, body: ReassignRequest,
     identity: Identity = Depends(current_identity),
 ):
-    """Move a project to another owner, with its job rows and export directory.
-
-    Refused (409) while the project has a background job running, or when the
-    new owner already has that project name or its export directory.
-    """
+    """Move a project to another owner, with its job rows and export directory."""
     require_admin(identity)
     bad = _reject_bad_project(name)
     if bad is not None:
@@ -2130,7 +2126,8 @@ def api_reassign_project(
     from autodft import accounts
     from autodft.api import project_jobs
 
-    with get_session() as session:
+    # Lock before session, as start_job does: no job starts between the check and the move.
+    with project_jobs.creation_lock(), get_session() as session:
         name = resolve_project(session, identity, name)
         from autodft.engine import nmr_references
 

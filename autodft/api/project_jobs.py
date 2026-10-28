@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from time import monotonic, sleep
 from typing import Optional
@@ -119,6 +120,13 @@ def assert_no_active_job(session: Session, qualified_name: str) -> None:
             f"progress. Wait for it to finish before starting another "
             f"operation on this project."
         )
+
+
+@contextmanager
+def creation_lock():
+    """Hold off :func:`start_job` while the caller checks and changes a project."""
+    with _CREATE_LOCK:
+        yield
 
 
 def get_job(session: Session, job_id: int) -> Optional[ProjectJob]:
