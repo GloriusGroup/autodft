@@ -314,7 +314,9 @@ def test_stored_records_build_the_same_rate_job_input(session, esd, tmp_path):
 
     for job in session.exec(select(ComputationJob).where(ComputationJob.success == True)).all():  # noqa: E712
         job_task = session.get(ComputationTask, job.task_id)
-        results.store(session, job_task, job, Path(job.job_path))
+        record = results.parse(session, job_task, Path(job.job_path))
+        if record is not None:
+            results.save(session, job_task, job, record)
     session.commit()
 
     for name in ("S0", "S1", "T1"):

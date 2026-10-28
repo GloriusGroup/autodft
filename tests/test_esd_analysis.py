@@ -277,7 +277,9 @@ def _store_every_successful_job(session):
     jobs = session.exec(select(ComputationJob).where(ComputationJob.success == True)).all()  # noqa: E712
     for job in jobs:
         task = session.get(ComputationTask, job.task_id)
-        results.store(session, task, job, Path(job.job_path))
+        record = results.parse(session, task, Path(job.job_path))
+        if record is not None:
+            results.save(session, task, job, record)
     session.commit()
 
 

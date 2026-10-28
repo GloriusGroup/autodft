@@ -174,7 +174,7 @@ class TestExtractNbo:
         job = _make_job(session, task, path)
 
         before = results.for_job(session, job, "singlepoint")
-        results.store(session, task, job, path)
+        _store(session, task, job, path)
         session.commit()
         (path / "output.out").unlink()
 
@@ -227,13 +227,21 @@ class TestExtractRates:
         assert results.rates(record) == esd_parser.rates(RATE_OUTPUT)
 
 
+def _store(session, task, job, path) -> bool:
+    """parse then save, as judging a job does; False when there is no record to keep."""
+    record = results.parse(session, task, path)
+    if record is not None:
+        results.save(session, task, job, record)
+    return record is not None
+
+
 class TestStore:
     def test_writes_one_row_with_parser_version(self, session, tmp_path):
         task = _setup(session)
         path = _job_dir(tmp_path, "job1", output=OPT_OUTPUT)
         job = _make_job(session, task, path)
 
-        assert results.store(session, task, job, path) is True
+        assert _store(session, task, job, path) is True
         session.commit()
         row = session.exec(select(JobResult).where(JobResult.job_id == job.id)).one()
         assert row.parser_version == results.PARSER_VERSION
@@ -243,11 +251,11 @@ class TestStore:
         task = _setup(session)
         path = _job_dir(tmp_path, "job2", output="FINAL SINGLE POINT ENERGY      -1.000000000\n")
         job = _make_job(session, task, path)
-        results.store(session, task, job, path)
+        _store(session, task, job, path)
         session.commit()
 
         (path / "output.out").write_text("FINAL SINGLE POINT ENERGY      -2.000000000\n")
-        results.store(session, task, job, path)
+        _store(session, task, job, path)
         session.commit()
 
         rows = session.exec(select(JobResult).where(JobResult.job_id == job.id)).all()
@@ -259,7 +267,7 @@ class TestStore:
         path = _job_dir(tmp_path, "ir_yes", output=OPT_IR)
         job = _make_job(session, task, path)
 
-        results.store(session, task, job, path)
+        _store(session, task, job, path)
         row = session.exec(select(JobResult).where(JobResult.job_id == job.id)).one()
         assert "ir_modes" in json.loads(row.data_json)
 
@@ -268,7 +276,7 @@ class TestStore:
         path = _job_dir(tmp_path, "ir_no", output=OPT_IR)
         job = _make_job(session, task, path)
 
-        results.store(session, task, job, path)
+        _store(session, task, job, path)
         row = session.exec(select(JobResult).where(JobResult.job_id == job.id)).one()
         assert "ir_modes" not in json.loads(row.data_json)
 
@@ -278,7 +286,7 @@ class TestStore:
         path.mkdir()
         job = _make_job(session, task, path)
 
-        assert results.store(session, task, job, path) is False
+        assert _store(session, task, job, path) is False
         assert session.exec(select(JobResult).where(JobResult.job_id == job.id)).first() is None
 
     def test_a_confsearch_job_stores_nothing(self, session, tmp_path):
@@ -287,7 +295,7 @@ class TestStore:
         path = _job_dir(tmp_path, "goat", output="FINAL SINGLE POINT ENERGY      -1.0\n")
         job = _make_job(session, task, path)
 
-        assert results.store(session, task, job, path) is False
+        assert _store(session, task, job, path) is False
         assert session.exec(select(JobResult).where(JobResult.job_id == job.id)).first() is None
 
 
@@ -296,7 +304,7 @@ class TestForJob:
         task = _setup(session)
         path = _job_dir(tmp_path, "j1", output="FINAL SINGLE POINT ENERGY      -3.0\n")
         job = _make_job(session, task, path)
-        results.store(session, task, job, path)
+        _store(session, task, job, path)
         session.commit()
         (path / "output.out").unlink()
 
@@ -373,7 +381,7 @@ class TestForJob:
         task = _setup(session, task_type=TaskType.optimization)
         path = _job_dir(tmp_path, "stale1", output="FINAL SINGLE POINT ENERGY      -1.5\n")
         job = _make_job(session, task, path)
-        results.store(session, task, job, path)
+        _store(session, task, job, path)
         session.commit()
         row = session.exec(select(JobResult).where(JobResult.job_id == job.id)).one()
         row.parser_version = results.PARSER_VERSION - 1  # an older parser's record
@@ -434,7 +442,7 @@ class TestJobIdentity:
         task = _setup(session, task_type=TaskType.singlepoint)
         sp_path = _job_dir(tmp_path, "sp", output="FINAL SINGLE POINT ENERGY      -100.0\n")
         sp_job = _make_job(session, task, sp_path)
-        results.store(session, task, sp_job, sp_path)
+        _store(session, task, sp_job, sp_path)
         session.commit()
         old_id = sp_job.id
 
@@ -460,7 +468,7 @@ class TestJobIdentity:
         for i in range(3):
             path = _job_dir(tmp_path, f"sp{i}", output="FINAL SINGLE POINT ENERGY      -1.0\n")
             job = _make_job(session, task, path)
-            results.store(session, task, job, path)
+            _store(session, task, job, path)
         session.commit()
 
         for table in ("computation_jobs", "computation_tasks", "molecule_states", "molecules"):
@@ -502,7 +510,7 @@ class TestJobIdentity:
                               time_end=finished)
         session.add(job)
         session.commit()
-        results.store(session, task, job, path)
+        _store(session, task, job, path)
         session.commit()
         (path / "output.out").unlink()  # only the row can satisfy this call now
 
@@ -781,7 +789,7 @@ class TestExtractorAndStateAnalysisParity:
             )).one()
             job = results.latest_successful_job(session, opt.id)
             (Path(job.job_path) / "input.xyz").write_text(split)
-            results.store(session, opt, job, Path(job.job_path))
+            _store(session, opt, job, Path(job.job_path))
             session.commit()
 
         payload = state_analysis.analyze_project("nho/p", use_cache=False)
@@ -936,7 +944,7 @@ class TestConnectivity:
 
     def test_a_new_optimisation_stores_its_check(self, session, tmp_path):
         task, path, job = self._opt(session, tmp_path)
-        results.store(session, task, job, path)
+        _store(session, task, job, path)
         session.commit()
 
         expected = {"ok": False, "lost": True, "fragments": 2,
@@ -947,7 +955,7 @@ class TestConnectivity:
 
     def test_an_intact_geometry_is_not_broken(self, session, tmp_path):
         task, path, job = self._opt(session, tmp_path, geometry="fluorobutane_s0")
-        results.store(session, task, job, path)
+        _store(session, task, job, path)
         session.commit()
 
         assert results.connectivity_by_task(session, [task.id])[task.id]["ok"] is True
@@ -955,7 +963,7 @@ class TestConnectivity:
 
     def test_no_geometry_no_check(self, session, tmp_path):
         task, path, job = self._opt(session, tmp_path, geometry=None)
-        results.store(session, task, job, path)
+        _store(session, task, job, path)
         session.commit()
 
         assert "connectivity" not in results.for_task(session, task)
@@ -978,7 +986,7 @@ class TestConnectivity:
 
     def test_a_record_of_another_job_is_not_served(self, session, tmp_path):
         task, path, job = self._opt(session, tmp_path)
-        results.store(session, task, job, path)
+        _store(session, task, job, path)
         job.job_path = str(tmp_path / "elsewhere")
         session.add(job)
         session.commit()
@@ -994,7 +1002,7 @@ class TestConnectivity:
         monkeypatch.setattr(connectivity, "check", boom)
         task, path, job = self._opt(session, tmp_path)
         with caplog.at_level(logging.WARNING):
-            assert results.store(session, task, job, path) is True
+            assert _store(session, task, job, path) is True
         session.commit()
         row = session.exec(select(JobResult).where(JobResult.job_id == job.id)).one()
         assert "connectivity" not in json.loads(row.data_json)
@@ -1008,7 +1016,7 @@ class TestConnectivity:
         try:
             with get_session() as session:
                 task, path, job = self._opt(session, tmp_path)
-                results.store(session, task, job, path)
+                _store(session, task, job, path)
                 row = session.exec(select(JobResult).where(JobResult.job_id == job.id)).one()
                 row.parser_version = results.PARSER_VERSION - 1  # an older parser's record
                 session.add(row)
@@ -1024,7 +1032,7 @@ class TestConnectivity:
 
     def test_another_jobs_check_is_not_carried_over(self, session, tmp_path):
         task, path, job = self._opt(session, tmp_path)
-        results.store(session, task, job, path)
+        _store(session, task, job, path)
         session.commit()
         job.job_path = str(tmp_path / "recycled")
         results._upsert(session, job.id, task.id, job.job_path, job.time_end, {"energy": None})
@@ -1034,13 +1042,13 @@ class TestConnectivity:
 
     def test_the_latest_successful_job_counts(self, session, tmp_path):
         task, path, job = self._opt(session, tmp_path)
-        results.store(session, task, job, path)
+        _store(session, task, job, path)
         retry_path = _job_dir(tmp_path, "retry", output=OPT_OUTPUT)
         (retry_path / "input.xyz").write_text((FIXTURES_CONNECTIVITY / "fluorobutane_s0.xyz").read_text())
         retry = ComputationJob(task_id=task.id, attempt=2, job_path=str(retry_path), success=True)
         session.add(retry)
         session.commit()
-        results.store(session, task, retry, retry_path)
+        _store(session, task, retry, retry_path)
         session.commit()
 
         assert results.broken_bonds(session, task) is None
@@ -1167,7 +1175,7 @@ def test_init_db_purges_orphaned_job_results_and_keeps_live_rows(tmp_path):
             task = _setup(session)
             path = _job_dir(tmp_path, "live", output="FINAL SINGLE POINT ENERGY      -1.0\n")
             job = _make_job(session, task, path)
-            results.store(session, task, job, path)
+            _store(session, task, job, path)
             session.commit()
             live_job_id = job.id
             session.add(JobResult(
@@ -1230,7 +1238,7 @@ def test_extract_output_is_pinned():
     cases["singlepoint_vert_ox (reactivity)"] = _reactivity_digest(results.extract(
         "singlepoint_vert_ox", (FIXTURES_ORCA / "reactivity_vert_open.out").read_text(),
     ))
-    # Pin the stored shape (as store() persists it), not the raw Python
+    # Pin the stored shape (as save() persists it), not the raw Python
     # objects -- extract() returns tuples (e.g. SOC's sorted roots) that
     # json round-trips into lists, same as a real row's data_json does.
     cases = json.loads(json.dumps(cases))

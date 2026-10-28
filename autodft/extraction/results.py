@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 # Pinned by tests/test_stored_results.py::test_extract_output_is_pinned.
 PARSER_VERSION = 2
 
-# The task types a reader ever asks for. store() stores nothing else, and the
+# The task types a reader ever asks for. parse() keeps nothing else, and the
 # backfill's query skips them outright.
 STORED_TYPES = frozenset(
     t.value for t in TaskType
@@ -153,17 +153,8 @@ def _upsert(
     session.add(row)
 
 
-def store(session: Session, task: ComputationTask, job: ComputationJob, job_path: Path) -> bool:
-    """Parse *job*'s output once and keep the record; False without an output or a stored type."""
-    record = parse(session, task, job_path)
-    if record is None:
-        return False
-    save(session, task, job, record)
-    return True
-
-
 def parse(session: Session, task: ComputationTask, job_path: Path) -> Optional[dict]:
-    """The record :func:`store` keeps for a job of *task*; only reads, so it runs before the write lock."""
+    """The record :func:`save` keeps for a job of *task*; only reads, so it runs before the write lock."""
     task_type = task.task_type.value
     if task_type not in STORED_TYPES:
         return None
