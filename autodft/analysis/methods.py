@@ -35,8 +35,8 @@ _PIPELINE_STAGES = ("confsearch", "optimization", "singlepoint", "excited_optimi
 _TYPE_ORDER = {t: i for i, t in enumerate(TaskType)}
 _RETRY_EFFECTS = {
     "IncreaseResources": lambda s: (
-        f"abnormal termination or timeout: at least {s.nprocs} cores and {s.time_limit}; on a memory "
-        f"failure only, %maxcore up to {s.mem_per_core} MB, or 1.5x a job's own if already as high; "
+        f"abnormal termination or timeout: at least {s.nprocs} cores and {s.time_limit}; a memory failure "
+        f"instead keeps the job's cores and time, %maxcore up to {s.mem_per_core} MB, or 1.5x its own if already as high; "
         f"never fewer cores or less memory; each SLURM OOM adds 25 % to --mem, compounding; "
         f"--mem capped at {s.max_mem_per_job_mb or MAX_JOB_MEM_MB} MB"),
     "IncreaseMaxIter": lambda s: f"optimisation not converged: %geom MaxIter {s.max_iter}",

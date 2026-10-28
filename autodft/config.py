@@ -71,9 +71,10 @@ class RetryConfig:
     # Per-core memory (%maxcore, MB) an escalated retry targets -- but ONLY
     # for an explicit memory failure (SLURM OUT_OF_MEMORY or an ORCA
     # out-of-memory message), and clamped to MAX_MAXCORE_MB (2500). A job
-    # already at or above it gets 1.5x its own instead. A retry for any other
-    # failure (timeout, SCF, convergence) gets more cores and time but keeps
-    # the job's own %maxcore. No retry lowers cores or %maxcore.
+    # already at or above it gets 1.5x its own instead, on the job's own cores
+    # and time. A retry for any other failure (timeout, SCF, convergence) gets
+    # more cores and time but keeps the job's own %maxcore. No retry lowers
+    # cores or %maxcore.
     increased_mem_per_core: int = 2500
     # Ceiling on the SLURM --mem of an escalated job, in MB. 0 means the
     # built-in MAX_JOB_MEM_MB (400 GB).

@@ -943,8 +943,10 @@ class TestRetryStrategies:
             attempt=2, charge=0, multiplicity=1,
         )
         new_input, _ = strategy.modify(inp, "", failure)
-        assert "nprocs 32" in new_input.lower()
+        assert "%pal nprocs 8 end" in new_input  # an OOM keeps the cores
         assert "2500" in new_input  # raised to the ceiling, not left at 1500
+        failure.fail_reason = "['Termination']"
+        assert "%pal nprocs 32 end" in strategy.modify(inp, "", failure)[0]
 
     def test_oom_above_the_ceiling_raises_the_headers_maxcore(self):
         """A header above MAX_MAXCORE_MB is never clamped down to it; an OOM gets 1.5x."""
@@ -958,9 +960,9 @@ class TestRetryStrategies:
             attempt=2, charge=0, multiplicity=1,
         )
         new_input, new_submit = strategy.modify(inp, submit, failure)
-        assert "%maxcore 12000" in new_input and "--ntasks-per-node=16" in new_submit
+        assert "%maxcore 12000" in new_input and "--ntasks-per-node=8" in new_submit
         # cores x (maxcore + 50), plus the OOM margin, below the 400 GB ceiling
-        assert f"--mem={16 * (12000 + 50) * 5 // 4}" in new_submit
+        assert f"--mem={8 * (12000 + 50) * 5 // 4}" in new_submit
 
     def test_non_memory_failure_keeps_maxcore(self):
         """A timeout / SCF failure gets more cores and time, NOT more memory --
@@ -998,24 +1000,24 @@ class TestRetryStrategies:
         assert "%maxcore 2500" in new_input
 
     def test_memory_ceiling_reduces_ranks_not_per_rank_memory(self):
-        """With %maxcore hard-capped at 2500, 32 ranks is 32 x 2550 = 81.6 GB;
-        a smaller max_mem ceiling reduces the *rank count* to fit rather than
-        the per-rank memory (clamping --mem alone would let ORCA allocate more
+        """At %maxcore 2500, 32 ranks is 32 x 2550 = 81.6 GB; a smaller
+        max_mem ceiling reduces the *rank count* to fit rather than the
+        per-rank memory (clamping --mem alone would let ORCA allocate more
         per rank than SLURM granted)."""
         from autodft.qm.orca.retry import FailureInfo, IncreaseResources
 
         strategy = IncreaseResources(nprocs=32, max_mem_per_job_mb=64000)
-        inp = "!M062X\n%maxcore 1500\n%pal nprocs 8 end\n"
-        submit = "#SBATCH --ntasks-per-node=8\n#SBATCH --mem=12400\n#SBATCH --time=1-00:00:00\n"
+        inp = "!M062X\n%maxcore 2500\n%pal nprocs 8 end\n"
+        submit = "#SBATCH --ntasks-per-node=8\n#SBATCH --mem=20400\n#SBATCH --time=1-00:00:00\n"
         failure = FailureInfo(
-            fail_reason="['Termination', 'OUT_OF_MEMORY']", previous_job_path="",
+            fail_reason="['Termination']", previous_job_path="",
             attempt=2, charge=0, multiplicity=1,
         )
         new_input, new_submit = strategy.modify(inp, submit, failure)
 
         ranks = int(re.search(r"nprocs (\d+)", new_input).group(1))
         assert ranks == 64000 // (2500 + 50)   # reduced to fit the ceiling
-        assert "%maxcore 2500" in new_input    # per-rank memory at the cap
+        assert "%maxcore 2500" in new_input    # per-rank memory kept
         assert f"--ntasks-per-node={ranks}" in new_submit
         assert int(re.search(r"--mem=(\d+)", new_submit).group(1)) <= 64000
 

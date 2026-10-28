@@ -149,14 +149,14 @@ def _mem_margin(submit_content: str, maxcore: int, nprocs: int, failure: Failure
 
 
 class IncreaseResources(RetryStrategy):
-    """Increase CPU cores and wall-time, and -- only for an explicit memory
-    failure -- per-rank memory.
+    """Increase CPU cores and wall-time, or -- for an explicit memory
+    failure -- per-rank memory only.
 
     Triggered when the previous job terminated abnormally. Cores and time are
-    raised for any such failure, never below the job's own; ``%maxcore`` is
-    raised *only* on an out-of-memory failure and never lowered.
+    raised for a non-memory failure, never below the job's own; an
+    out-of-memory failure keeps both and raises ``%maxcore``, never lowered.
 
-    Default target: at least 24 cores, extended time limit, and on a memory
+    Default target: at least 24 cores and an extended time limit, or on a memory
     failure ``mem_per_core`` (at most :data:`MAX_MAXCORE_MB`) per rank, or
     1.5x the job's own if that is already as high; the job stays within
     ``max_mem_per_job_mb``, else :data:`MAX_JOB_MEM_MB`. A SLURM OOM kill also
@@ -251,10 +251,11 @@ class IncreaseResources(RetryStrategy):
                     base_maxcore, original_nprocs, ceiling,
                 )
 
+        # More ranks don't relieve a per-rank shortage: a memory failure keeps the job's own.
         # Reduce the *core count* to fit the ceiling rather than the per-rank
         # memory: clamping --mem alone would leave ORCA free to allocate more
         # per rank than SLURM granted. Never below the job's own core count.
-        target_nprocs = max(self.nprocs, original_nprocs)
+        target_nprocs = original_nprocs if memory_failure else max(self.nprocs, original_nprocs)
         affordable = max(1, ceiling // (target_maxcore + 50))
         if affordable < target_nprocs:
             logger.warning(
@@ -303,9 +304,10 @@ class IncreaseResources(RetryStrategy):
             f"#SBATCH --mem={total_mem}",
             submit_content,
         )
-        # Never shorten a stage whose own limit is already longer.
+        # Never shorten a stage whose own limit is already longer; a memory failure keeps it.
         current = re.search(r"#SBATCH --time=(\S+)", submit_content)
-        if current is None or _slurm_seconds(self.time_limit) > _slurm_seconds(current.group(1)):
+        if not memory_failure and (
+                current is None or _slurm_seconds(self.time_limit) > _slurm_seconds(current.group(1))):
             submit_content = re.sub(
                 r"#SBATCH --time=\S+",
                 f"#SBATCH --time={self.time_limit}",

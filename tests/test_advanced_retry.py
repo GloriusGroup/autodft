@@ -175,8 +175,37 @@ def test_default_escalation():
     inp = "!M062X\n%maxcore 1000\n%pal nprocs 12 end\n" + XYZ
     out, sub = IncreaseResources().modify(inp, _submit(12, 1000), TIMEOUT)
     assert _resources(out, sub) == (24, 1000, 24, 24 * 1050)
+    assert "--time=4-00:00:00" in sub
     out, sub = IncreaseResources().modify(inp, _submit(12, 1000), OOM)
-    assert _resources(out, sub) == (24, 2500, 24, 24 * 2550 * 5 // 4)
+    assert _resources(out, sub) == (12, 2500, 12, 12 * 2550 * 5 // 4)
+    assert "--time=1-00:00:00" in sub
+
+
+def test_an_orca_memory_message_alone_keeps_the_cores(tmp_path):
+    (tmp_path / "output.out").write_text("ORCA aborting: insufficient memory\n", encoding="utf-8")
+    orca_oom = FailureInfo(fail_reason="['Termination']", previous_job_path=str(tmp_path), attempt=2)
+    out, sub = IncreaseResources().modify(
+        "!M062X\n%maxcore 1000\n%pal nprocs 12 end\n" + XYZ, _submit(12, 1000), orca_oom)
+    assert _resources(out, sub) == (12, 2500, 12, 12 * 2550)
+
+
+@pytest.mark.parametrize("reasons", [
+    ["['Termination']", "['Termination', 'OUT_OF_MEMORY']"],
+    ["['Termination', 'OUT_OF_MEMORY']", "['Termination']"],
+])
+def test_an_oom_and_a_timeout_raise_the_cores(session, sample_task, tmp_path, reasons):
+    from autodft.engine import state_machine as sm
+    from autodft.models import ComputationJob
+
+    (tmp_path / "input.inp").write_text("!M062X\n%maxcore 1000\n%pal nprocs 12 end\n" + XYZ)
+    (tmp_path / "submit.cmd").write_text(_submit(12, 1000))
+    for attempt, reason in enumerate(reasons, 1):
+        session.add(ComputationJob(task_id=sample_task.id, attempt=attempt, success=False, fail_reason=reason))
+    session.commit()
+    last = ComputationJob(task_id=sample_task.id, attempt=2, success=False)
+    sm._apply_retry_modifications(session, tmp_path, sample_task, last, 3, 0, 1, Settings())
+    n, m, ntasks, _ = _resources((tmp_path / "input.inp").read_text(), (tmp_path / "submit.cmd").read_text())
+    assert (n, m, ntasks) == (24, 2500, 24)
 
 
 def _chain(strategy: IncreaseResources, nprocs: int, maxcore: int, times: int = 4) -> list[tuple[int, int, int, int]]:
@@ -207,8 +236,8 @@ def test_repeated_ooms_never_exceed_max_job_mem():
 
 
 def test_repeated_ooms_stay_within_max_mem_per_job(caplog):
-    seen = _chain(IncreaseResources(max_mem_per_job_mb=200000), 8, 6000)
-    assert all(n >= 8 and n * (m + 50) <= mem <= 200000 for n, m, _, mem in seen)
+    seen = _chain(IncreaseResources(max_mem_per_job_mb=200000), 8, 6000, times=5)
+    assert all(n == 8 and n * (m + 50) <= mem <= 200000 for n, m, _, mem in seen)
     assert seen[-1] == seen[-2]
     assert "leaves no room to raise it" in caplog.text
 

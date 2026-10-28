@@ -58,8 +58,9 @@ default_mem_per_core = 1000
 increased_time_limit = "4-00:00:00"
 increased_nprocs = 24
 # Per-rank memory an OOM retry targets, capped at MAX_MAXCORE_MB (2500) in
-# code; a job already at or above it gets 1.5x its own. No non-memory retry
-# raises %maxcore, and no retry lowers it or the cores.
+# code; a job already at or above it gets 1.5x its own. An OOM retry keeps
+# the job's cores and time; no non-memory retry raises %maxcore, and no retry
+# lowers it or the cores.
 increased_mem_per_core = 2500
 
 [slurm]

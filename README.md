@@ -946,11 +946,11 @@ The pipeline is built to **fail loudly**, not silently:
 A retry after an abnormal termination, timeout or SLURM kill runs on
 `pipeline.retry.increased_nprocs` cores or the job's own, whichever is more,
 and `increased_time_limit` unless the stage's is longer. It keeps the job's
-`%maxcore`, except after a memory failure (`OUT_OF_MEMORY` or an ORCA
-out-of-memory message): then `increased_mem_per_core` (at most 2500 MB), or
-1.5× the job's own when that is already as high. `max_mem_per_job_mb`
-(unset: 400 GB) bounds that rise and then the extra cores, never below the
-job's own.
+`%maxcore`. A memory failure (`OUT_OF_MEMORY` or an ORCA out-of-memory
+message) instead keeps the job's cores and time limit and raises `%maxcore`
+to `increased_mem_per_core` (at most 2500 MB), or 1.5× the job's own when
+that is already as high. `max_mem_per_job_mb` (unset: 400 GB) bounds that
+rise, and the extra cores of other retries, never below the job's own.
 No retry lowers a job's cores or `%maxcore`.
 SLURM's `--mem` is cores × (`%maxcore` + 50 MB) on a first attempt. Every
 retry keeps the previous job's margin over that (its `--mem` ÷ its cores ×
