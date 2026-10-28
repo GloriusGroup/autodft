@@ -6147,7 +6147,7 @@
         var ME = { username: '', is_admin: false, projects: [] };
 
         async function loadIdentity() {
-            var out = await adminJSON('GET', '/api/whoami');
+            var out = await adminJSON('GET', '/api/whoami', undefined, 'Connecting…');
             if (!out.ok) { return; }
             ME = out.data;
             var name = document.getElementById('identityName');
@@ -6184,7 +6184,21 @@
 
         // Initial load
         // Routed once, after whoami (the Admin page depends on it); the overlay covers the wait.
-        withLoading('Connecting…', loadIdentity).catch(function () {}).then(function () { activateRoute(currentRoute()); });
+        // Cancel aborts whoami and leaves a link that starts over instead of a blank page.
+        function startUp() {
+            withLoading('Connecting…', loadIdentity).then(function () { activateRoute(currentRoute()); }, function (err) {
+                if (!isAbort(err)) { activateRoute(currentRoute()); return; }
+                document.querySelector('.container').insertAdjacentHTML('afterbegin', '<div class="empty-state cancelled-note">'
+                    + '<a href="#" class="retry-link" data-startup="1">Cancelled — click to retry.</a></div>');
+            });
+        }
+        document.addEventListener('click', function (e) {
+            if (!e.target.closest || !e.target.closest('[data-startup]')) return;
+            e.preventDefault();
+            e.target.closest('.cancelled-note').remove();
+            startUp();
+        });
+        startUp();
         Promise.all([fetchHeaders(), fetchAdvancedDefaults()]).then(restoreSubmitForm).catch(function () {});
         refreshAll();
 
