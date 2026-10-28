@@ -135,3 +135,31 @@ def test_export_of_an_archived_project_keeps_its_file(db, tmp_path, fmt):
     assert result.exit_code == 1
     assert "archived" in result.output
     assert out.read_text(encoding="utf-8") == "kept\n"
+
+
+@pytest.mark.parametrize("kind", ["archive", "export_files"])
+def test_exports_wait_for_a_running_project_job(db, tmp_path, kind):
+    from autodft.cli.admin import app as admin_app
+    from autodft.models import Molecule, ProjectJob, ProjectJobKind, ProjectJobStatus
+
+    with get_session() as session:
+        session.add(Molecule(smiles="CCO", project_name="nho/busy"))
+        job = ProjectJob(qualified_name="nho/busy", kind=ProjectJobKind(kind), status=ProjectJobStatus.running)
+        session.add(job)
+        session.commit()
+        job_id = job.id
+    out = tmp_path / "kept.csv"
+    out.write_text("kept\n", encoding="utf-8")
+    commands = [["export", "--project", "nho/busy", "-o", str(out)],
+                ["export-files", "--project", "nho/busy", "-o", str(tmp_path / "tree")]]
+    for args in commands:
+        result = runner.invoke(admin_app, args)
+        assert result.exit_code == 1, result.output
+        assert ("Export and Delete is running" if kind == "archive" else "export_files job") in result.output
+    assert out.read_text(encoding="utf-8") == "kept\n" and not (tmp_path / "tree").exists()
+
+    with get_session() as session:
+        session.get(ProjectJob, job_id).status = ProjectJobStatus.failed
+        session.commit()
+    for args in commands:
+        assert runner.invoke(admin_app, args).exit_code == 0

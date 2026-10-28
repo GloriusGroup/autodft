@@ -81,8 +81,8 @@ class Scheduler(ABC):
         """
         return {jid: self.get_status(jid) for jid in job_ids}
 
-    def cancel_many(self, job_ids: list[str]) -> int:
-        """Cancel many jobs, returning how many were cancelled."""
+    def cancel_many(self, job_ids: list[str], timeout: Optional[float] = None) -> int:
+        """Cancel many jobs, returning how many were cancelled; *timeout* bounds a remote call."""
         return sum(1 for jid in job_ids if self.cancel(jid))
 
     def find_submitted(self, script_path: Path) -> Optional[str]:
@@ -445,19 +445,22 @@ class SlurmScheduler(Scheduler):
             logger.error("scancel failed for job %s: %s", job_id, exc.stderr)
             return False
 
-    def cancel_many(self, job_ids: list[str]) -> int:
+    def cancel_many(self, job_ids: list[str], timeout: Optional[float] = None) -> int:
         """Cancel many jobs in one ``scancel`` call.
 
         Used by the destructive admin operations: wiping a project whose
         jobs are still queued left them running against directories that no
         longer exist, writing output into a deleted tree.
+
+        Raises:
+            subprocess.TimeoutExpired: if scancel has not returned after *timeout* seconds.
         """
         if not job_ids:
             return 0
         env = os.environ.copy()
         cmd = ["scancel", *(str(j) for j in job_ids)]
         try:
-            subprocess.run(cmd, capture_output=True, text=True, check=True, env=env)
+            subprocess.run(cmd, capture_output=True, text=True, check=True, env=env, timeout=timeout)
             logger.warning("Cancelled %d SLURM job(s)", len(job_ids))
             return len(job_ids)
         except subprocess.CalledProcessError as exc:

@@ -7,10 +7,10 @@ import logging
 import math
 import re
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlmodel import col, func, select
@@ -953,17 +953,20 @@ def api_project_density_cube(
     bad = _reject_bad_project(name)
     if bad is not None:
         return bad
-    from fastapi.responses import FileResponse
-
     from autodft.analysis import densities
-    from autodft.extraction import results as stored
 
     if kind not in densities.KINDS:
         return JSONResponse(status_code=400, content={"detail": f"kind must be one of {', '.join(densities.KINDS)}."})
     with get_session() as session:
         name = resolve_project(session, identity, name)
-        if (busy := _archive_conflict(session, name)) is not None:
-            return busy
+    return _while_reading(name, lambda: _density_cube(name, task_id, kind))
+
+
+def _density_cube(name: str, task_id: int, kind: str):
+    from autodft.analysis import densities
+    from autodft.extraction import results as stored
+
+    with get_session() as session:
         task = next(iter(_project_tasks(session, name, densities.SP_TYPES, ComputationTask.id == task_id)), None)
         if task is None:
             return JSONResponse(status_code=404, content={"detail": f"No successful singlepoint {task_id} in {name}."})
@@ -991,16 +994,40 @@ def api_project_density_cube(
         return JSONResponse(status_code=500, content={"detail": str(exc)})
     if path.resolve().parent != job_dir.resolve():
         return JSONResponse(status_code=404, content={"detail": "The cube is not inside the job folder."})
-    return FileResponse(path, media_type="text/plain", filename=f"{task_id}_{kind}.cube")
+    return _ReadResponse(path, media_type="text/plain", filename=f"{task_id}_{kind}.cube")
 
 
-def _archive_conflict(session, name: str) -> Optional[JSONResponse]:
-    """409 while *name*'s Export and Delete runs, else None."""
+class _ReadResponse(FileResponse):
+    """A file from a job folder; ends its read once sent or abandoned (see :func:`_while_reading`)."""
+
+    release: Optional[Callable[[], None]] = None
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            if self.release is not None:
+                self.release()
+
+
+def _while_reading(name: str, read: Callable[[], Response]) -> Response:
+    """Run *read* as a read the project's archive waits for; 409 while the archive runs."""
     from autodft.api import project_jobs
 
-    if project_jobs.archive_running(session, name):
-        return JSONResponse(status_code=409, content={"detail": project_jobs.ARCHIVE_RUNNING})
-    return None
+    try:
+        project_jobs.begin_read(name)
+    except project_jobs.JobInProgress as exc:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+    try:
+        response = read()
+    except BaseException:
+        project_jobs.end_read(name)
+        raise
+    if isinstance(response, _ReadResponse):
+        response.release = lambda: project_jobs.end_read(name)
+    else:
+        project_jobs.end_read(name)
+    return response
 
 
 # What a task offers for download: its output, and an optimisation also its final geometry.
@@ -1018,18 +1045,19 @@ def api_project_task_file(
     bad = _reject_bad_project(name)
     if bad is not None:
         return bad
-    from fastapi.responses import FileResponse
-
-    from autodft.analysis import densities
-    from autodft.extraction import results as stored
-    from autodft.extraction.extractor import _TREE_STEMS
-
     if kind not in _TASK_FILES:
         return JSONResponse(status_code=400, content={"detail": f"kind must be one of {', '.join(_TASK_FILES)}."})
     with get_session() as session:
         name = resolve_project(session, identity, name)
-        if (busy := _archive_conflict(session, name)) is not None:
-            return busy
+    return _while_reading(name, lambda: _task_file(name, task_id, kind))
+
+
+def _task_file(name: str, task_id: int, kind: str):
+    from autodft.analysis import densities
+    from autodft.extraction import results as stored
+    from autodft.extraction.extractor import _TREE_STEMS
+
+    with get_session() as session:
         task = next(iter(_project_tasks(
             session, name, densities.SP_TYPES | {TaskType.optimization}, ComputationTask.id == task_id,
         )), None)
@@ -1060,7 +1088,7 @@ def api_project_task_file(
     path = job_dir / _TASK_FILES[kind] if job_dir is not None else None
     if path is None or not path.is_file() or path.resolve().parent != job_dir.resolve():
         return JSONResponse(status_code=404, content={"detail": f"The {kind} file is no longer on disk."})
-    return FileResponse(path, media_type="text/plain", filename=filename)
+    return _ReadResponse(path, media_type="text/plain", filename=filename)
 
 
 @router.get("/api/projects/{name}/state-analysis")
@@ -1432,8 +1460,6 @@ def api_job_download(job_id: int, identity: Identity = Depends(current_identity)
     (csv / json / xlsx). ``files`` exports and archives produce a directory
     tree on the server and answer 400 here.
     """
-    from fastapi.responses import FileResponse
-
     from autodft.api import project_jobs
 
     with get_session() as session:

@@ -296,6 +296,18 @@ def cleanup(
     logger.info("Cleaned up %d completed entrypoints older than %d days", count, days)
 
 
+def _refuse_while_a_job_runs(project: str) -> None:
+    """Exit 1 while *project* has an archive or export job running; both write its export tree."""
+    from autodft.api.project_jobs import JobInProgress, assert_no_active_job
+
+    with get_session() as session:
+        try:
+            assert_no_active_job(session, project)
+        except JobInProgress as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1)
+
+
 @app.command()
 def export(
     project: str = typer.Option(..., "--project", help="Project name to export"),
@@ -330,6 +342,7 @@ def export(
     if format not in ("csv", "json"):
         console.print(f"[red]Unknown format:[/red] {format}. Use 'csv' or 'json'.")
         raise typer.Exit(code=1)
+    _refuse_while_a_job_runs(project)
 
     # The archive's kept CSV/JSON is the only copy; a re-export must not replace it.
     with get_session() as session:
@@ -370,6 +383,7 @@ def export_files(
     settings = load_settings(config)
     settings.ensure_directories()
     get_engine(settings)  # bind the session to --config before the first query
+    _refuse_while_a_job_runs(project)
 
     try:
         summary = PipelineExtractor(project).export_tree(

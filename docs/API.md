@@ -514,7 +514,7 @@ the job folder. At most two builds run at once; `503` while none is free.
 `404` when densities were not requested, the kind was off at submission, a
 closed-shell job is asked for SpinDens, or the job folder is gone. `409`
 (`Export and Delete is running for this project.`) while the project's
-archive runs.
+archive runs. An archive that starts during a build waits for it.
 
 ### `GET /api/projects/{name}/tasks/{task_id}/files/{kind}`
 
@@ -525,7 +525,8 @@ from the task's latest successful job. Named
 `<state>__state<state_id>` for one of two states of one name). `400` for
 another kind, `404` for a task that is not a successful opt/SP of the
 project, for `xyz` on a singlepoint, and when the file is no longer on disk.
-`409`, as for the cube, while the project's archive runs.
+`409`, as for the cube, while the project's archive runs; an archive that
+starts during a download waits until the file is sent or the client leaves.
 
 ### `GET /api/projects/{name}/state-analysis`
 
@@ -1016,7 +1017,8 @@ the moment the job starts, the controller creates and submits no job for
 the project, not even later in a tick already under way. The archive job
 then waits up to 300 s until every job the project sent to SLURM has
 finished and been judged and its task marked, so a job that finishes
-during the wait is exported. A job whose `sbatch` reported failure may
+during the wait is exported, and until no cube build or task-file download
+of the project is still open. A job whose `sbatch` reported failure may
 still have been accepted: the controller looks it up in SLURM (it sends
 no new `sbatch`), and the archive waits for it if found, or treats it as
 never sent if not. If any are still running, unjudged or not looked up
@@ -1175,14 +1177,18 @@ Five properties worth knowing:
   against 9.8 s to delete**, and only the staging is inside the request.
   The response's `file_removal` object reports progress, and
   `GET /api/wipe-status` follows it to completion.
-* **SLURM is stopped first.** Jobs the scheduler still has queued or
-  running are `scancel`ed before their directories disappear; the count
-  comes back as `jobs_cancelled`. A job SLURM may have but with no job id
-  to cancel yet (claimed for `sbatch` this moment, or sent by an `sbatch`
-  that reported failure) makes the wipe or reset answer **409** and delete
-  nothing; retry once the controller has recorded it. The check and the
-  row deletes run under one database write lock, so no `sbatch` claim
-  lands between them.
+* **SLURM is stopped before the files go.** Jobs the scheduler still has
+  queued or running are `scancel`ed after the rows are committed and before
+  their directories disappear; the count comes back as `jobs_cancelled`.
+  A `scancel` that has not answered after 60 s, or that fails, is given up:
+  the files are deleted anyway and `scancel_warning` names the SLURM ids
+  that may still run (`null` otherwise). A job SLURM may have but with no
+  job id to cancel yet (claimed for `sbatch` this moment, or sent by an
+  `sbatch` that reported failure) makes the wipe or reset answer **409**
+  and delete nothing; retry once the controller has run again and recorded
+  it, which a crash-left claim also waits for. The checks and the row
+  deletes run under one database write lock, so no `sbatch` claim lands
+  between them; `scancel` runs after it is released.
 * **Not beside a project job.** A project or molecule wipe answers
   **409** while the project has an archive or export running (detail
   `Export and Delete is running for this project.` for the archive), and

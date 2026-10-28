@@ -36,6 +36,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -153,15 +154,15 @@ def current_operation() -> Optional[str]:
     return _current_operation
 
 
-def _cancel_scheduled_jobs(session: Session, job_ids: list[int], scheduler) -> int:
-    """scancel any of these jobs that SLURM still has.
+# How long a wipe waits for scancel before deleting the files anyway.
+SCANCEL_TIMEOUT_S = 60.0
 
-    Without this, wiping a project left its queued and running jobs alive,
-    writing ORCA output into directories that had just been deleted.
-    """
-    if not job_ids or scheduler is None:
-        return 0
-    live = [
+
+def _live_slurm_ids(session: Session, job_ids: list[int]) -> list[str]:
+    """SLURM ids of these jobs that SLURM may still have queued or running."""
+    if not job_ids:
+        return []
+    return [
         str(j.slurm_jobid)
         for j in session.exec(
             select(ComputationJob).where(
@@ -172,13 +173,26 @@ def _cancel_scheduled_jobs(session: Session, job_ids: list[int], scheduler) -> i
         ).all()
         if j.slurm_jobid is not None
     ]
-    if not live:
-        return 0
+
+
+def _cancel_scheduled_jobs(slurm_ids: list[str], scheduler) -> tuple[int, Optional[str]]:
+    """scancel *slurm_ids*, with no transaction open; returns (cancelled, warning or None).
+
+    Without this, wiping a project left its queued and running jobs alive,
+    writing ORCA output into directories that had just been deleted.
+    """
+    if not slurm_ids or scheduler is None:
+        return 0, None
     try:
-        return scheduler.cancel_many(live)
+        return scheduler.cancel_many(slurm_ids, timeout=SCANCEL_TIMEOUT_S), None
+    except subprocess.TimeoutExpired:
+        logger.error("scancel of %d job(s) gave no answer within %.0f s; deleting their files anyway",
+                     len(slurm_ids), SCANCEL_TIMEOUT_S)
+        problem = f"scancel gave no answer within {SCANCEL_TIMEOUT_S:.0f} s"
     except Exception:  # noqa: BLE001 - a failed scancel must not abort the wipe
-        logger.exception("Failed to cancel %d job(s) before wiping", len(live))
-        return 0
+        logger.exception("Failed to cancel %d job(s) before wiping", len(slurm_ids))
+        problem = "scancel failed"
+    return 0, f"{problem}; SLURM may still run job(s) {', '.join(slurm_ids)}: scancel them by hand."
 
 
 def _refuse_mid_sbatch(session: Session, task_ids: Optional[list[int]] = None) -> None:
@@ -871,7 +885,8 @@ def wipe_project(
     the directories are renamed out of the way first, so by the time this
     returns the project is gone as far as anything else can tell.
 
-    Checks and row deletes run under one write lock (:func:`begin_write`).
+    Checks and row deletes run under one write lock (:func:`begin_write`); scancel
+    runs after the commit, before any file is removed.
 
     Raises:
         ValueError: if the project is protected, has nothing to delete, or has a job
@@ -892,8 +907,7 @@ def wipe_project(
 
     _, task_ids, _, job_ids = _descendants(session, molecule_ids)
     _refuse_mid_sbatch(session, task_ids)
-    # Stop the cluster writing into trees that are about to disappear.
-    cancelled = _cancel_scheduled_jobs(session, job_ids, scheduler)
+    live = _live_slurm_ids(session, job_ids)
 
     counts = _delete_molecule_rows(session, molecule_ids)
     if entrypoint_ids:
@@ -902,6 +916,9 @@ def wipe_project(
         )
     counts["queued_entrypoints"] = len(entrypoint_ids)
     session.commit()
+
+    # Stop the cluster writing into trees that are about to disappear.
+    cancelled, scancel_warning = _cancel_scheduled_jobs(live, scheduler)
 
     # Everything below runs with no transaction open. The project has already
     # left the database, so a failure here leaves orphaned directories that
@@ -931,6 +948,7 @@ def wipe_project(
         "comp_data_dirs_removed": comp_dirs_staged,
         "export_removed": export_staged,
         "jobs_cancelled": cancelled,
+        "scancel_warning": scancel_warning,
         "orphaned_dirs": removal.orphaned,
         "bytes_freed": removal.bytes_freed,
         "freed_human": human_bytes(removal.bytes_freed),
@@ -1003,10 +1021,12 @@ def wipe_molecule(
 
     _, task_ids, _, job_ids = _descendants(session, [molecule_id])
     _refuse_mid_sbatch(session, task_ids)
-    cancelled = _cancel_scheduled_jobs(session, job_ids, scheduler)
+    live = _live_slurm_ids(session, job_ids)
 
     counts = _delete_molecule_rows(session, [molecule_id])
     session.commit()
+
+    cancelled, scancel_warning = _cancel_scheduled_jobs(live, scheduler)
 
     removed, freed = _remove_tree(comp_root / f"mol_{molecule_id}")
     _reset_disk_usage()  # the cached total no longer describes the tree
@@ -1022,6 +1042,7 @@ def wipe_molecule(
         "rows": counts,
         "comp_data_removed": removed,
         "jobs_cancelled": cancelled,
+        "scancel_warning": scancel_warning,
         "bytes_freed": freed,
         "freed_human": human_bytes(freed),
     }
@@ -1308,11 +1329,8 @@ def reset_database(
         "job_results": len(session.exec(select(JobResult.id)).all()),
     }
 
-    # Stop the cluster before the directories it is writing into disappear.
-    cancelled = _cancel_scheduled_jobs(
-        session,
-        [j for j in session.exec(select(ComputationJob.id)).all() if j is not None],
-        scheduler,
+    live = _live_slurm_ids(
+        session, [j for j in session.exec(select(ComputationJob.id)).all() if j is not None],
     )
 
     # Same cycle-breaking order as the per-project wipe.
@@ -1334,6 +1352,9 @@ def reset_database(
         session.exec(delete(ComputationHeader))
 
     session.commit()
+
+    # Stop the cluster before the directories it is writing into disappear.
+    cancelled, scancel_warning = _cancel_scheduled_jobs(live, scheduler)
 
     targets: list[Path] = []
     if delete_files:
@@ -1370,6 +1391,7 @@ def reset_database(
         "headers_dropped": headers_dropped,
         "files_deleted": delete_files,
         "jobs_cancelled": cancelled,
+        "scancel_warning": scancel_warning,
         "bytes_freed": removal.bytes_freed,
         "freed_human": human_bytes(removal.bytes_freed),
         "file_removal": removal.status(),

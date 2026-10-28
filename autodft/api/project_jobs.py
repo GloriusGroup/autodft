@@ -92,6 +92,10 @@ _CREATE_LOCK = threading.Lock()
 # Projects a wipe is deleting; None: a database reset. start_job refuses them.
 _wiping: list[Optional[str]] = []
 
+# Cube builds and task-file downloads in flight per project; the archive waits for them.
+_reads: dict[str, int] = {}
+_READS_LOCK = threading.Lock()
+
 # Live worker threads, for join_all() in tests and shutdown.
 _threads: dict[int, threading.Thread] = {}
 
@@ -144,6 +148,34 @@ def archive_running(session: Session, qualified_name: str) -> bool:
     """Whether *qualified_name*'s Export and Delete is running."""
     existing = active_job(session, qualified_name)
     return existing is not None and existing.kind == ProjectJobKind.archive
+
+
+def begin_read(qualified_name: str) -> None:
+    """Count a read of *qualified_name*'s job folders until :func:`end_read`.
+
+    Raises:
+        JobInProgress: while its archive runs.
+    """
+    with _CREATE_LOCK:  # an archive starting now waits for this read
+        with get_session() as session:
+            if archive_running(session, qualified_name):
+                raise JobInProgress(ARCHIVE_RUNNING)
+        with _READS_LOCK:
+            _reads[qualified_name] = _reads.get(qualified_name, 0) + 1
+
+
+def end_read(qualified_name: str) -> None:
+    with _READS_LOCK:
+        left = _reads.get(qualified_name, 0) - 1
+        if left > 0:
+            _reads[qualified_name] = left
+        else:
+            _reads.pop(qualified_name, None)
+
+
+def reads_in_flight(qualified_name: str) -> int:
+    with _READS_LOCK:
+        return _reads.get(qualified_name, 0)
 
 
 @contextmanager
@@ -400,8 +432,8 @@ def _execute(
         return {"format": "reactivity", "path": str(target), "json_path": str(data), "downloadable": True}
 
     if kind == ProjectJobKind.archive:
-        # Do not rmtree under a job still writing files, nor before its result is
-        # judged and exportable. The pause has already stopped new jobs for this project.
+        # Do not rmtree under a job still writing files or a read holding them open, nor
+        # before a result is judged and exportable. The pause has stopped new jobs and reads.
         _wait_for_quiescence(qualified_name)
         fail_open_tasks(qualified_name)
 
@@ -504,7 +536,8 @@ def _wait_for_quiescence(
     timeout: float = ARCHIVE_QUIESCENCE_TIMEOUT,
     poll: float = _QUIESCENCE_POLL_SECONDS,
 ) -> None:
-    """Block until every sent job of the project is judged and its task marked, or raise.
+    """Block until every sent job of the project is judged and its task marked, and no
+    cube build or task-file download is open, or raise.
 
     Raises:
         RuntimeError: if some are still unsettled after *timeout*.
@@ -512,15 +545,17 @@ def _wait_for_quiescence(
     deadline = monotonic() + timeout
     while True:
         remaining = _unsettled_count(qualified_name)
-        if remaining == 0:
+        reads = reads_in_flight(qualified_name)
+        if remaining == 0 and reads == 0:
             return
         if monotonic() >= deadline:
             raise RuntimeError(
-                f"{remaining} computation job(s) for {qualified_name!r} are still "
-                f"running or awaiting their results after {timeout:.0f}s; the archive "
-                f"was aborted so it would not delete files a job is still writing or "
+                f"{remaining} computation job(s) and {reads} cube build(s) or download(s) "
+                f"for {qualified_name!r} are still running or awaiting their results "
+                f"after {timeout:.0f}s; the archive "
+                f"was aborted so it would not delete files still in use or "
                 f"results not yet exported. Retry once the project's calculations "
-                f"have finished."
+                f"and downloads have finished."
             )
         sleep(poll)
 

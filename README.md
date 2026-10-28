@@ -417,13 +417,15 @@ already archived; the dialog asks for the project name to be typed back. From it
 it waits until every job the project sent to SLURM has finished and been
 judged, so a result that lands during the wait is exported, not deleted; a job
 whose `sbatch` reported failure is first looked up in SLURM and, if found,
-waited for too. An archive cut short (a restart, an NFS error) can be re-run:
-it keeps the export folders of the molecules already archived, deletes the raw
-folders they have left, and exports and deletes the rest. A plain Export
-Project of such a project keeps those folders too. While it runs, a molecule
-wipe, Delete Project, density cube builds, `.out`/`.xyz` downloads and
-another export or archive of the project answer 409 ("Export and Delete is
-running for this project."); they work again once it ends, failed or not.
+waited for too, and so is a cube build or `.out`/`.xyz` download of the
+project already under way. An archive cut short (a restart, an NFS error)
+can be re-run: it keeps the export folders of the molecules already
+archived, deletes the raw folders they have left, and exports and deletes
+the rest. A plain Export Project of such a project keeps those folders
+too. While it runs, a molecule wipe, Delete Project, density cube builds,
+`.out`/`.xyz` downloads and another export or archive of the project answer
+409 ("Export and Delete is running for this project."); they work again once
+it ends, failed or not.
 **Delete Project** is the project wipe (below) offered to the owner and
 admin: a preview, the project name typed back, refused for a protected
 project and with 409 while another wipe runs or the project has an export
@@ -786,10 +788,14 @@ Every wipe and the database reset require an exact confirmation string
 DATABASE`), refuse to run while another one is in flight (409), while
 the project (any project, for the reset) has an export or archive running
 (409), or while one of its jobs is mid-`sbatch` with no SLURM id to cancel
-yet (409; retry in a moment), and delete the rows before the files. The
-files themselves are renamed aside and unlinked on a background thread, so
-the request returns in well under
-a second while a project-sized deletion runs for minutes — poll
+yet (409). That clears within a tick, but a claim a crash left `SUBMITTING`,
+or a job whose `sbatch` reported failure, blocks every wipe of its project
+and the reset until the controller has run again and resolved it. The rows
+go first; the jobs SLURM still has are then `scancel`ed (given up after
+60 s, which the response's `scancel_warning` names), and only then the files
+are renamed aside and unlinked on a background thread, so the request
+returns in well under a second while a project-sized deletion runs for
+minutes — poll
 `GET /api/wipe-status` for that. `POST /api/projects/{name}/archive` takes the
 same `confirm` (the qualified project name; 400 without it), and the Export
 and Delete dialog asks for the name to be typed back.
@@ -863,7 +869,8 @@ autodft admin export \
 A CSV or JSON export with no results to write prints "Nothing to export" and
 removes the old file at the target path; the API job answers the same, with no
 download. The command refuses an archived project, whose kept files are the
-only copy.
+only copy. It and `export-files` exit 1 while the project has an archive or
+export job running: both write its export directory.
 
 The export tree (summary files and `molecules/<id>/<state>/conf<N>/…`, as
 "Export Project" writes it):

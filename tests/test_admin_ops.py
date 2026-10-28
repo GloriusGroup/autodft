@@ -41,7 +41,7 @@ class _StubScheduler:
         self.cancelled.append(str(job_id))
         return True
 
-    def cancel_many(self, job_ids):
+    def cancel_many(self, job_ids, timeout=None):
         self.cancelled.extend(str(j) for j in job_ids)
         return len(job_ids)
 
@@ -279,26 +279,73 @@ class TestWriteLock:
         yield eng
         eng.dispose()
 
-    @pytest.mark.parametrize("op", ["project", "molecule", "reset"])
-    def test_a_claim_waits_for_the_wipe(self, session, project, tmp_path, op):
+    @staticmethod
+    def _write(tmp_path) -> str:
+        """What a claim from another connection meets: 'written' or SQLite's error."""
         import sqlite3
 
+        other = sqlite3.connect(tmp_path / "lock.db", timeout=0)
+        try:
+            other.execute("UPDATE computation_jobs SET slurm_status = 'SUBMITTING'")
+            return "written"
+        except sqlite3.OperationalError as exc:
+            return str(exc)
+        finally:
+            other.close()
+
+    @pytest.mark.parametrize("op", ["project", "molecule", "reset"])
+    def test_a_claim_waits_between_the_check_and_the_delete(self, session, project, tmp_path, op,
+                                                            monkeypatch):
+        seen, real = [], admin_ops._live_slurm_ids
+
+        def probe(*args):
+            seen.append(self._write(tmp_path))
+            return real(*args)
+
+        monkeypatch.setattr(admin_ops, "_live_slurm_ids", probe)
+        _wipe(op, session, project, _StubScheduler())
+        assert seen == ["database is locked"]
+
+    @pytest.mark.parametrize("op", ["project", "molecule", "reset"])
+    def test_scancel_runs_after_the_commit_and_before_the_files_go(self, session, project, tmp_path, op):
         seen = []
+        test = self
 
         class _Probe(_StubScheduler):
-            def cancel_many(self, job_ids):
-                other = sqlite3.connect(tmp_path / "lock.db", timeout=0)
-                try:
-                    other.execute("UPDATE computation_jobs SET slurm_status = 'SUBMITTING'")
-                    seen.append("claimed")
-                except sqlite3.OperationalError as exc:
-                    seen.append(str(exc))
-                finally:
-                    other.close()
-                return super().cancel_many(job_ids)
+            def cancel_many(self, job_ids, timeout=None):
+                seen.append((test._write(tmp_path), timeout,
+                             (project["comp_root"] / f"mol_{project['victim'][0]}").exists()))
+                return super().cancel_many(job_ids, timeout)
 
         _wipe(op, session, project, _Probe())
-        assert seen == ["database is locked"]
+        assert seen == [("written", admin_ops.SCANCEL_TIMEOUT_S, True)]
+        assert not (project["comp_root"] / f"mol_{project['victim'][0]}").exists()
+
+    @pytest.mark.parametrize("op", ["project", "molecule", "reset"])
+    def test_a_hung_scancel_is_given_up_and_said(self, session, project, op):
+        import subprocess
+
+        class _Hung(_StubScheduler):
+            def cancel_many(self, job_ids, timeout=None):
+                raise subprocess.TimeoutExpired(["scancel", *job_ids], timeout)
+
+        result = _wipe(op, session, project, _Hung())
+        assert result["jobs_cancelled"] == 0
+        assert result["scancel_warning"].startswith("scancel gave no answer within 60 s; SLURM may still run")
+        assert not (project["comp_root"] / f"mol_{project['victim'][0]}").exists()
+
+
+def test_slurm_scancel_is_bounded_by_its_timeout(monkeypatch):
+    import subprocess
+
+    from autodft.engine import scheduler
+
+    def run(cmd, **kwargs):
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr(scheduler.subprocess, "run", run)
+    with pytest.raises(subprocess.TimeoutExpired):
+        scheduler.SlurmScheduler().cancel_many(["1", "2"], timeout=60.0)
 
 
 class TestMeasuringFiles:

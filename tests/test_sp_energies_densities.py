@@ -526,6 +526,70 @@ class TestBuild:
         assert sorted(p.name for p in tmp_path.iterdir()) == ["input.densities", "input.densitiesinfo", "input.gbw"]
 
 
+class TestReadsHoldOffTheArchive:
+    """A cube build or download that started first is waited for, not deleted under."""
+
+    def test_an_archive_waits_for_a_cube_build(self, env, monkeypatch):
+        from autodft.api import project_jobs, routes
+
+        monkeypatch.setattr(project_jobs, "sleep", lambda _: time.sleep(0.01))
+        gate, calls = threading.Event(), []
+        building = _fake_orca_plot(calls)
+
+        def run(*args, **kwargs):
+            gate.wait(timeout=10)
+            return building(*args, **kwargs)
+
+        monkeypatch.setattr(densities.subprocess, "run", run)
+        click = threading.Thread(target=lambda: calls.append(_cube(env, "ox").status_code))
+        click.start()
+        deadline = time.monotonic() + 5
+        while project_jobs.reads_in_flight("owner/p") == 0 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert project_jobs.reads_in_flight("owner/p") == 1
+
+        archive = project_jobs.start_job(owner_id=None, qualified_name="owner/p", kind=ProjectJobKind.archive,
+                                         params={}, settings=routes.get_active_settings())["id"]
+        time.sleep(0.2)
+        with get_session() as session:
+            assert session.get(ProjectJob, archive).status == ProjectJobStatus.running
+        gate.set()
+        click.join(timeout=10)
+        project_jobs.join_all(timeout=10)
+        assert calls[-1] == 200 and project_jobs.reads_in_flight("owner/p") == 0
+        with get_session() as session:
+            assert session.get(ProjectJob, archive).status == ProjectJobStatus.successful
+
+    def test_a_download_ends_its_read_when_sent_abandoned_or_failed(self, env, tmp_path):
+        import asyncio
+
+        from autodft.api import project_jobs, routes
+
+        assert _file(env, "opt").status_code == 200
+        assert project_jobs.reads_in_flight("owner/p") == 0
+
+        (tmp_path / "f.out").write_text("x\n" * 1000)
+        response = routes._while_reading("owner/p", lambda: routes._ReadResponse(tmp_path / "f.out"))
+        assert project_jobs.reads_in_flight("owner/p") == 1
+
+        async def receive():
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            raise OSError("client went away")
+
+        with pytest.raises(OSError):
+            asyncio.run(response({"type": "http", "method": "GET", "headers": []}, receive, send))
+        assert project_jobs.reads_in_flight("owner/p") == 0
+
+        def broken():
+            raise RuntimeError("lookup failed")
+
+        with pytest.raises(RuntimeError):
+            routes._while_reading("owner/p", broken)
+        assert project_jobs.reads_in_flight("owner/p") == 0
+
+
 def test_orca_plot_sits_next_to_orca():
     assert densities.orca_plot_binary("/mnt/share/public/software/orca-6.1.1-gxtb/orca") == \
         "/mnt/share/public/software/orca-6.1.1-gxtb/orca_plot"
