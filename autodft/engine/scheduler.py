@@ -352,7 +352,7 @@ class SlurmScheduler(Scheduler):
     # Pending reasons that only a change to the request or the cluster's configuration can clear.
     _UNSATISFIABLE_REASONS = frozenset({
         "PartitionConfig", "PartitionTimeLimit", "MaxMemPerLimit",
-        "InvalidAccount", "InvalidQOS", "BadConstraints", "DependencyNeverSatisfied",
+        "BadConstraints", "DependencyNeverSatisfied",
     })
 
     def get_unsatisfiable(self, job_ids: list[str]) -> dict[str, str]:

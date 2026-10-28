@@ -258,7 +258,7 @@ class TestUnsatisfiable:
     @pytest.mark.parametrize("reason", [
         "Resources", "Priority", "None", "Dependency", "JobHeldUser", "BeginTime",
         "AssocMaxJobsLimit", "QOSMaxJobsPerUserLimit", "ReqNodeNotAvail, UnavailableNodes:worker.additive_3",
-        "PartitionNodeLimit",
+        "PartitionNodeLimit", "InvalidAccount", "InvalidQOS",
     ])
     def test_a_job_that_waits_is_left_alone(self, session, submitted_job, fake_sacct, reason):
         fake = fake_sacct({"123": "PENDING"}, queue={"123": ("PENDING", reason)})
@@ -300,3 +300,48 @@ class TestUnsatisfiable:
         fake = fake_sacct({"123": "RUNNING"}, queue={"123": ("RUNNING", "None")})
         update_running_jobs(session, SlurmScheduler())
         assert [c[0] for c in fake.calls] == ["sacct"]
+
+
+def _pending_jobs(session, task, count):
+    jobs = [
+        ComputationJob(task_id=task.id, attempt=1, slurm_jobid=500 + i, slurm_status=SlurmStatus.PENDING)
+        for i in range(count)
+    ]
+    session.add_all(jobs)
+    session.commit()
+    return jobs
+
+
+class TestUnsatisfiableGuard:
+    def _run(self, session, fake_sacct, jobs, reasons, caplog):
+        queue = {str(j.slurm_jobid): ("PENDING", reasons.get(j.slurm_jobid, "Priority")) for j in jobs}
+        fake = fake_sacct({jid: "PENDING" for jid in queue}, queue=queue)
+        with caplog.at_level(logging.WARNING, logger="autodft.engine.state_machine"):
+            update_running_jobs(session, SlurmScheduler())
+        for job in jobs:
+            session.refresh(job)
+        return fake
+
+    def test_more_than_ten_with_one_reason_cancel_nothing(self, session, sample_task, fake_sacct, caplog):
+        jobs = _pending_jobs(session, sample_task, 30)
+        reasons = {j.slurm_jobid: "PartitionConfig" for j in jobs[:11]}
+        reasons[jobs[11].slurm_jobid] = "PartitionTimeLimit"
+        fake = self._run(session, fake_sacct, jobs, reasons, caplog)
+        assert not any(c[0] == "scancel" for c in fake.calls)
+        assert all(j.success is None and j.slurm_status == "PENDING" for j in jobs)
+        critical = [r for r in caplog.records if r.levelno == logging.CRITICAL]
+        assert len(critical) == 1 and "PartitionConfig" in critical[0].getMessage()
+
+    def test_more_than_half_with_one_reason_cancel_nothing(self, session, sample_task, fake_sacct, caplog):
+        jobs = _pending_jobs(session, sample_task, 3)
+        fake = self._run(session, fake_sacct, jobs, {j.slurm_jobid: "MaxMemPerLimit" for j in jobs[:2]}, caplog)
+        assert not any(c[0] == "scancel" for c in fake.calls)
+        assert all(j.success is None for j in jobs)
+        assert any(r.levelno == logging.CRITICAL for r in caplog.records)
+
+    def test_ten_of_many_are_still_cancelled(self, session, sample_task, fake_sacct, caplog):
+        jobs = _pending_jobs(session, sample_task, 30)
+        fake = self._run(session, fake_sacct, jobs, {j.slurm_jobid: "PartitionConfig" for j in jobs[:10]}, caplog)
+        assert sum(c[0] == "scancel" for c in fake.calls) == 10
+        assert [j.success for j in jobs[:10]] == [False] * 10
+        assert not any(r.levelno == logging.CRITICAL for r in caplog.records)

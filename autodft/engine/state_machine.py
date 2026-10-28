@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import shutil
+from collections import Counter
 from datetime import datetime, timezone
 from time import monotonic
 from pathlib import Path
@@ -63,6 +64,9 @@ MAX_BUILD_FAILURES = 10
 
 # fail_reason prefix of a job SLURM can never run; its task fails without a retry.
 UNSATISFIABLE = "unsatisfiable: "
+
+# One unsatisfiable Reason on more pending jobs than this (or over half of them, two at least) is a cluster change: nothing is cancelled.
+MAX_UNSATISFIABLE_PER_TICK = 10
 
 # Consecutive sbatch rejections of a job after which it fails as an attempt.
 MAX_SBATCH_REJECTIONS = 3
@@ -127,6 +131,12 @@ def update_running_jobs(session: Session, scheduler: Scheduler) -> None:
 
     pending = [j for j in jobs if j.slurm_status == SlurmStatus.PENDING and j.success is None]
     unsatisfiable = scheduler.get_unsatisfiable([str(j.slurm_jobid) for j in pending]) if pending else {}
+    for reason, count in Counter(unsatisfiable.values()).items():
+        if count > MAX_UNSATISFIABLE_PER_TICK or (count > 1 and 2 * count > len(pending)):
+            logger.critical("%d of %d pending jobs turned unsatisfiable (%s) in one tick; "
+                            "taken as a cluster-side change, nothing cancelled", count, len(pending), reason)
+            unsatisfiable = {}
+            break
     for job in pending:
         reason = unsatisfiable.get(str(job.slurm_jobid))
         if reason is None or not scheduler.cancel(str(job.slurm_jobid)):
