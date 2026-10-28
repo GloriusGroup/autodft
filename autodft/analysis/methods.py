@@ -37,7 +37,8 @@ _RETRY_EFFECTS = {
     "IncreaseResources": lambda s: (
         f"abnormal termination or timeout: at least {s.nprocs} cores and {s.time_limit}; on a memory "
         f"failure only, %maxcore up to {s.mem_per_core} MB, or 1.5x a job's own if already as high; "
-        f"never fewer cores or less memory; --mem capped at {s.max_mem_per_job_mb or MAX_JOB_MEM_MB} MB"),
+        f"never fewer cores or less memory; each SLURM OOM adds 25 % to --mem, compounding; "
+        f"--mem capped at {s.max_mem_per_job_mb or MAX_JOB_MEM_MB} MB"),
     "IncreaseMaxIter": lambda s: f"optimisation not converged: %geom MaxIter {s.max_iter}",
     "TightenConvergence": lambda s: "imaginary frequencies: TightSCF and %geom Convergence Tight, never loosened",
     "PerturbImaginaryMode": lambda s: (

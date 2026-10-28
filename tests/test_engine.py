@@ -959,7 +959,8 @@ class TestRetryStrategies:
         )
         new_input, new_submit = strategy.modify(inp, submit, failure)
         assert "%maxcore 12000" in new_input
-        assert f"--mem={32 * (12000 + 50)}" in new_submit
+        # 1.25 x 32 x 12050 MB, capped at the 400 GB default ceiling
+        assert "--mem=400000" in new_submit
 
     def test_non_memory_failure_keeps_maxcore(self):
         """A timeout / SCF failure gets more cores and time, NOT more memory --

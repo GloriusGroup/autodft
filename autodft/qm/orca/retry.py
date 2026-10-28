@@ -49,6 +49,8 @@ MAX_MAXCORE_MB: int = 2500
 MP2_RESPONSE_USABLE: float = 0.8
 MP2_RESPONSE_MAX_MAXCORE_MB: int = 16000
 MAX_JOB_MEM_MB: int = 400000
+# A SLURM OUT_OF_MEMORY retry grows --mem's share above ranks x (%maxcore + 50) by this, compounding.
+OOM_MEM_MARGIN: float = 1.25
 
 # Substrings (lower-cased) that identify an explicit ORCA out-of-memory
 # failure in output.out. A SLURM OUT_OF_MEMORY kill is detected separately,
@@ -144,7 +146,8 @@ class IncreaseResources(RetryStrategy):
     Default target: at least 24 cores, extended time limit, and on a memory
     failure ``mem_per_core`` (at most :data:`MAX_MAXCORE_MB`) per rank, or
     1.5x the job's own if that is already as high; the job stays within
-    ``max_mem_per_job_mb``, else :data:`MAX_JOB_MEM_MB`.
+    ``max_mem_per_job_mb``, else :data:`MAX_JOB_MEM_MB`. A SLURM OOM kill also
+    grows ``--mem`` by :data:`OOM_MEM_MARGIN`, compounding.
     """
 
     def __init__(
@@ -267,6 +270,13 @@ class IncreaseResources(RetryStrategy):
         # Size the SLURM allocation from the %maxcore and rank count ORCA
         # actually got, so the two can never contradict each other.
         total_mem = target_nprocs * (target_maxcore + 50)
+        # Keep the previous job's margin over that; a SLURM OOM kill grows it, within the ceiling.
+        ntasks = re.search(r"#SBATCH --ntasks-per-node=(\d+)", submit_content)
+        prev_mem = re.search(r"#SBATCH --mem=(\d+)", submit_content)
+        prev_base = (int(ntasks.group(1)) if ntasks else original_nprocs) * (base_maxcore + 50)
+        margin = max(1.0, int(prev_mem.group(1)) / prev_base) if prev_mem else 1.0
+        if "OUT_OF_MEMORY" in (failure.fail_reason or ""):
+            margin *= OOM_MEM_MARGIN
         if total_mem > ceiling:
             # Only reachable when the header's own request already exceeds
             # the ceiling; honouring it beats silently starving the job.
@@ -275,6 +285,7 @@ class IncreaseResources(RetryStrategy):
                 "the header -- check that a node this large exists",
                 total_mem, ceiling,
             )
+        total_mem = max(total_mem, min(math.ceil(total_mem * margin), ceiling))
         submit_content = re.sub(
             r"#SBATCH --ntasks-per-node=\d+",
             f"#SBATCH --ntasks-per-node={target_nprocs}",

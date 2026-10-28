@@ -174,7 +174,7 @@ def test_default_escalation_is_unchanged():
     out, sub = IncreaseResources().modify(inp, _submit(12, 1000), TIMEOUT)
     assert _resources(out, sub) == (24, 1000, 24, 24 * 1050)
     out, sub = IncreaseResources().modify(inp, _submit(12, 1000), OOM)
-    assert _resources(out, sub) == (24, 2500, 24, 24 * 2550)
+    assert _resources(out, sub) == (24, 2500, 24, 24 * 2550 * 5 // 4)
 
 
 def _chain(strategy: IncreaseResources, nprocs: int, maxcore: int, times: int = 4) -> list[tuple[int, int, int, int]]:
@@ -209,3 +209,64 @@ def test_repeated_ooms_stay_within_max_mem_per_job(caplog):
     assert all(n >= 8 and n * (m + 50) <= mem <= 200000 for n, m, _, mem in seen)
     assert seen[-1] == seen[-2]
     assert "leaves no room to raise it" in caplog.text
+
+
+def test_a_first_attempt_keeps_the_base_margin(tmp_path):
+    from autodft.qm.orca.input_generator import render_submit_script
+
+    assert f"--mem={12 * 2050}\n" in render_submit_script(tmp_path, "j", 12, 2000, "1-00:00:00", "CPU")
+
+
+def test_each_oom_retry_adds_a_quarter_to_the_previous_mem():
+    first = 24 * 2550
+    (n1, m1, _, mem1), (n2, m2, _, mem2) = _chain(IncreaseResources(), 24, 2500, times=2)
+    assert mem1 >= 1.25 * first and mem1 >= 1.25 * n1 * (m1 + 50)
+    assert mem2 >= 1.25 * mem1 and mem2 >= 1.5625 * n2 * (m2 + 50)
+
+
+def test_the_oom_margin_stays_within_max_mem_per_job():
+    ceiling = 24 * 2550 + 1000
+    seen = _chain(IncreaseResources(max_mem_per_job_mb=ceiling), 24, 2500, times=3)
+    assert all(n * (m + 50) <= mem <= ceiling for n, m, _, mem in seen)
+    assert seen[-1][3] == ceiling
+
+
+def test_the_oom_margin_stays_within_max_job_mem_by_default():
+    from autodft.qm.orca.retry import MAX_JOB_MEM_MB
+
+    seen = _chain(IncreaseResources(), 24, 2500, times=6)
+    assert all(n * (m + 50) <= mem <= MAX_JOB_MEM_MB for n, m, _, mem in seen)
+    assert seen[-1][3] == MAX_JOB_MEM_MB
+
+
+def test_a_timeout_after_an_oom_keeps_the_grown_margin():
+    inp = "!M062X\n%maxcore 2500\n%pal nprocs 24 end\n" + XYZ
+    inp, sub = IncreaseResources().modify(inp, _submit(24, 2500), OOM)
+    inp, sub = IncreaseResources().modify(inp, sub, TIMEOUT)
+    n, m, _, mem = _resources(inp, sub)
+    assert mem >= 1.25 * n * (m + 50)
+
+
+def test_an_orca_memory_message_alone_keeps_the_base_margin(tmp_path):
+    (tmp_path / "output.out").write_text("ORCA aborting: insufficient memory\n", encoding="utf-8")
+    orca_oom = FailureInfo(fail_reason="['Termination']", previous_job_path=str(tmp_path), attempt=2)
+    out, sub = IncreaseResources().modify(
+        "!M062X\n%maxcore 1000\n%pal nprocs 24 end\n" + XYZ, _submit(24, 1000), orca_oom)
+    assert _resources(out, sub) == (24, 2500, 24, 24 * 2550)
+
+
+def test_replayed_oom_failures_compound_on_the_rendered_mem(session, sample_task, tmp_path):
+    from autodft.engine import state_machine as sm
+    from autodft.models import ComputationJob
+
+    (tmp_path / "input.inp").write_text("!M062X\n%maxcore 2500\n%pal nprocs 24 end\n" + XYZ)
+    (tmp_path / "submit.cmd").write_text(_submit(24, 2500))
+    for attempt in (1, 2):
+        session.add(ComputationJob(task_id=sample_task.id, attempt=attempt, success=False,
+                                   fail_reason="['Termination', 'OUT_OF_MEMORY']"))
+    session.commit()
+    last = ComputationJob(task_id=sample_task.id, attempt=2, success=False)
+    sm._apply_retry_modifications(session, tmp_path, sample_task, last, 3, 0, 1, Settings())
+    out, sub = (tmp_path / "input.inp").read_text(), (tmp_path / "submit.cmd").read_text()
+    n, m, _, mem = _resources(out, sub)
+    assert mem >= 1.5625 * n * (m + 50) and mem >= 1.5625 * 24 * 2550

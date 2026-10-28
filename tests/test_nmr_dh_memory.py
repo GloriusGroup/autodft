@@ -64,14 +64,14 @@ def test_the_retry_never_lowers_memory_and_stays_within_a_node(tmp_path):
 
 
 def test_an_escalated_dh_nmr_retry_keeps_its_memory():
-    inp, submit = ESCALATE.modify(DH_INPUT.replace("4000", "6000"), "#SBATCH --mem=73200\n", TERMINATION)
+    inp, submit = ESCALATE.modify(DH_INPUT.replace("4000", "6000"), "#SBATCH --mem=72600\n", TERMINATION)
     assert "%maxcore 6000" in inp and "%pal nprocs 24 end" in inp
     assert f"--mem={24 * 6050}" in submit
 
 
 def test_a_dh_nmr_retry_after_an_scf_recovery_keeps_its_memory():
     relaxed = DH_INPUT.replace("4000", "6000").replace("TightSCF", "NormalSCF")
-    inp, _ = ESCALATE.modify(relaxed, "#SBATCH --mem=73200\n", TERMINATION)
+    inp, _ = ESCALATE.modify(relaxed, "#SBATCH --mem=72600\n", TERMINATION)
     assert "%maxcore 6000" in inp
 
 
