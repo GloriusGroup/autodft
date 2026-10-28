@@ -2456,6 +2456,16 @@ def _header_access_error(session, identity: Identity, body: SubmitRequest) -> Op
     return None
 
 
+def _priority_error(identity: Identity, body: SubmitRequest) -> Optional[JSONResponse]:
+    """A 400 for a non-admin sending a non-default priority, or an admin priority outside 1..1000, else None."""
+    if identity.is_admin:
+        if not 1 <= body.priority <= 1000:
+            return JSONResponse(status_code=400, content={"detail": "priority must be between 1 and 1000."})
+    elif body.priority != SubmitRequest.model_fields["priority"].default:
+        return JSONResponse(status_code=400, content={"detail": "Only admin can set priority."})
+    return None
+
+
 def _tolerance_error(body: SubmitRequest) -> Optional[JSONResponse]:
     """A 400 when *body*'s imag_freq_tolerance is out of range or it sends strict_convergence, else None."""
     from autodft.qm.orca.parser import IMAG_FREQ_TOLERANCE_MIN
@@ -2552,7 +2562,7 @@ def api_submit(
     from autodft import categories
     from autodft.api import project_jobs
 
-    bad = _tolerance_error(body)
+    bad = _priority_error(identity, body) or _tolerance_error(body)
     if bad is not None:
         return bad
     with get_session() as session:
@@ -2713,7 +2723,7 @@ def api_extend(name: str, body: SubmitBatchRequest, identity: Identity = Depends
     from autodft import categories
     from autodft.api import project_jobs
 
-    bad = _reject_bad_project(name) or _tolerance_error(body)
+    bad = _reject_bad_project(name) or _priority_error(identity, body) or _tolerance_error(body)
     if bad is not None:
         return bad
     if body.advanced is not None:
@@ -2788,7 +2798,7 @@ def api_submit_batch(
             status_code=400,
             content={"detail": "smiles_list is empty; nothing to queue."},
         )
-    bad = _tolerance_error(body)
+    bad = _priority_error(identity, body) or _tolerance_error(body)
     if bad is not None:
         return bad
 

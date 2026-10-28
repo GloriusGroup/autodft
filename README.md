@@ -543,6 +543,10 @@ A molecule inherits its priority from the entrypoint that created it.
 Resubmitting the same molecule at a higher priority raises it; a lower one
 never demotes work already in flight.
 
+Only the admin account sets a priority (1 to 1000); the API answers 400 to any
+other account that sends one other than the default 10, and the dashboard hides
+the field.
+
 ### CLI
 
 The CLI writes to the database directly, so it has no API key to

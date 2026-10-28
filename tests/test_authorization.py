@@ -717,3 +717,51 @@ def test_create_app_binds_the_database_to_its_settings(tmp_path):
 
     assert str(tmp_path) in str(get_engine().url)
     reset_engine()
+
+
+class TestPriority:
+    PATHS = [
+        ("/api/submit", {"smiles": "CCO"}),
+        ("/api/submit-batch", {"smiles_list": ["CCO"]}),
+        ("/api/projects/screening/extend", {"smiles_list": ["CCO"]}),
+    ]
+
+    @staticmethod
+    def _priorities() -> list[int]:
+        from sqlmodel import select
+
+        from autodft.models import CalculationEntrypoint
+        with get_session() as session:
+            return [e.priority for e in session.exec(select(CalculationEntrypoint)).all()]
+
+    @pytest.mark.parametrize("path,body", PATHS[:2])
+    def test_a_user_with_the_default_priority_is_queued_at_it(self, app_env, path, body):
+        response = app_env["client"].post(path, headers=app_env["owner"], json={
+            **body, "project": "screening", "priority": 10})
+        assert response.status_code == 200, response.text
+        assert self._priorities() == [10]
+
+    @pytest.mark.parametrize("path,body", PATHS)
+    @pytest.mark.parametrize("priority", [1, 11, 1000])
+    def test_a_user_cannot_set_another_priority(self, app_env, path, body, priority):
+        response = app_env["client"].post(path, headers=app_env["owner"], json={
+            **body, "project": "screening", "priority": priority})
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Only admin can set priority."
+        assert self._priorities() == []
+
+    @pytest.mark.parametrize("path,body", PATHS)
+    @pytest.mark.parametrize("priority", [0, -3, 1001, 2**63])
+    def test_admin_priority_is_bounded(self, app_env, path, body, priority):
+        response = app_env["client"].post(path, headers=app_env["admin"], json={
+            **body, "project": "screening", "priority": priority})
+        assert response.status_code == 400
+        assert "1 and 1000" in response.json()["detail"]
+        assert self._priorities() == []
+
+    @pytest.mark.parametrize("path,body", PATHS[:2])
+    def test_admin_may_set_a_priority(self, app_env, path, body):
+        response = app_env["client"].post(path, headers=app_env["admin"], json={
+            **body, "project": "screening", "priority": 5})
+        assert response.status_code == 200, response.text
+        assert self._priorities() == [5]

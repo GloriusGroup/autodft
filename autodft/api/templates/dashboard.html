@@ -1231,9 +1231,9 @@
                             <input type="text" id="author" name="author" value="web"
                                    title="Recorded as the provenance of every molecule you submit">
                         </div>
-                        <div class="form-group" style="flex: 0; min-width: 90px;">
+                        <div class="form-group" style="flex: 0; min-width: 90px;" id="priorityGroup">
                             <label for="priority">Priority</label>
-                            <input type="number" id="priority" name="priority" value="10" min="1" max="100" style="width: 90px;">
+                            <input type="number" id="priority" name="priority" value="10" min="1" max="1000" style="width: 90px;">
                         </div>
                     </div>
 
@@ -3938,7 +3938,7 @@
             var commonBody = {
                 project: document.getElementById('project').value.trim() || 'default',
                 author: document.getElementById('author').value.trim() || 'web',
-                priority: parseInt(document.getElementById('priority').value, 10) || 10,
+                priority: ME.is_admin ? (parseInt(document.getElementById('priority').value, 10) || 10) : 10,
                 skip_confsearch: document.getElementById('skipConfsearch').checked,
                 request_t1:  document.getElementById('requestT1').checked,
                 request_ox:  document.getElementById('requestOx').checked,
@@ -5927,7 +5927,7 @@
             // on everyone's data are removed -- the server refuses them
             // regardless, this stops the page offering them.
             if (!ME.is_admin) {
-                ['adminUsersSection', 'adminResetSection', 'adminBreakerSection', 'newHeaderBtn', 'headerEditor']
+                ['adminUsersSection', 'adminResetSection', 'adminBreakerSection', 'newHeaderBtn', 'headerEditor', 'priorityGroup']
                     .forEach(function (id) {
                         var el = document.getElementById(id);
                         if (el) { el.remove(); }
