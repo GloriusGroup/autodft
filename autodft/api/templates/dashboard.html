@@ -2790,10 +2790,12 @@
                     var row = btn.closest('.admin-row');
                     var name = row.getAttribute('data-user');
                     var activate = btn.textContent.trim() === 'Reactivate';
+                    if (!activate && !confirm('Deactivate ' + name + '? Their key stops working '
+                                              + 'and they are signed out at once.')) { return; }
                     var out = await adminJSON('POST', '/api/admin/users/'
                         + encodeURIComponent(name) + '?active=' + activate, undefined,
                         activate ? 'Reactivating user…' : 'Deactivating user…');
-                    if (out.status === 0) { row.querySelector('.adm-userkey').textContent = out.data.detail; return; }
+                    if (!out.ok) { row.querySelector('.adm-userkey').textContent = out.data.detail || ('HTTP ' + out.status); return; }
                     loadUsers(true);
                 });
             });

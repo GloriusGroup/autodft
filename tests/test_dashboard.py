@@ -1373,6 +1373,43 @@ def test_the_admin_page_lists_a_users_projects_and_fetches_no_admin_data(is_admi
         assert out["urls"] == ["/api/projects"]
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+@pytest.mark.parametrize("button, confirmed, reply, posted, shown, reloads", [
+    ("Deactivate", False, None, False, "", 1),
+    ("Deactivate", True, {"ok": False, "status": 400, "data": {"detail": "The admin account cannot be deactivated."}},
+     True, "The admin account cannot be deactivated.", 1),
+    ("Deactivate", True, {"ok": True, "status": 200, "data": {}}, True, "", 2),
+    ("Reactivate", None, {"ok": True, "status": 200, "data": {}}, True, "", 2),
+])
+def test_deactivating_a_user_asks_first_and_shows_a_refusal(button, confirmed, reply, posted, shown, reloads):
+    script = ("var key = {textContent: ''};\n"
+              "var row = {getAttribute: function () { return 'bob'; }, querySelector: function () { return key; }};\n"
+              f"var btn = {{textContent: {json.dumps(button)}, on: {{}}, closest: function () {{ return row; }},\n"
+              "           addEventListener: function (t, f) { this.on[t] = f; }};\n"
+              "var list = {innerHTML: '', querySelectorAll: function (s) { return s === '.adm-toggle' ? [btn] : []; }};\n"
+              "var document = {getElementById: function () { return list; }};\n"
+              "var urls = [], asked = [];\n"
+              f"function confirm(m) {{ asked.push(m); return {json.dumps(confirmed)}; }}\n"
+              "function escHtml(s) { return String(s); }\n"
+              "function ignoreAbort() {}\n"
+              "async function adminJSON(method, url) {\n"
+              "    urls.push(method + ' ' + url);\n"
+              "    if (method === 'GET') return {ok: true, status: 200, data: [{username: 'bob', role: 'user',\n"
+              "        active: true, api_key_prefix: 'k', projects: [], molecules: 0}]};\n"
+              f"    return {json.dumps(reply)};\n"
+              "}\n"
+              + _functions("loadUsers")
+              + "\nloadUsers().then(function () { return btn.on.click(); }).then(function () {\n"
+              "    process.stdout.write(JSON.stringify({urls: urls, asked: asked, key: key.textContent})); });\n")
+    out = json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
+    assert len(out["asked"]) == (button == "Deactivate")
+    if out["asked"]:
+        assert "bob" in out["asked"][0] and "signed out" in out["asked"][0]
+    assert any(u.startswith("POST ") for u in out["urls"]) is posted
+    assert out["key"] == shown
+    assert sum(u.startswith("GET ") for u in out["urls"]) == reloads
+
+
 def test_a_user_gets_no_hold_section():
     identity = _functions("loadIdentity")
     user_branch = identity[identity.index("if (!ME.is_admin) {"):]
