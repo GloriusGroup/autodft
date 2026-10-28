@@ -6,12 +6,20 @@ import logging
 import subprocess
 
 import pytest
+from sqlmodel import select
 
+from autodft.config import Settings
 from autodft.engine import scheduler as scheduler_mod
 from autodft.engine.scheduler import NOT_IN_SLURM, SlurmScheduler
-from autodft.engine.state_machine import process_finished_jobs, update_running_jobs
-from autodft.models import ComputationJob, SlurmStatus
+from autodft.engine.state_machine import (
+    create_retry_jobs,
+    process_finished_jobs,
+    update_running_jobs,
+    update_task_statuses,
+)
+from autodft.models import ComputationJob, SlurmStatus, TaskStatus
 from autodft.qm.base import QMResult
+from autodft.qm.orca.parser import OrcaParser
 
 
 def _fake_sacct(
@@ -98,10 +106,28 @@ class TestSacctParsing:
             "104": "SOME_NEW_STATE", "105": "RUNNING", "106": "PENDING",
         }
 
-    def test_a_job_neither_sacct_nor_squeue_knows_is_not_in_slurm(self, fake_sacct):
+    def test_a_job_neither_sacct_nor_squeue_knows_on_two_polls_is_not_in_slurm(self, fake_sacct):
         fake_sacct({"101": "RUNNING"})
-        assert SlurmScheduler().get_statuses(["101", "106"]) == {"101": "RUNNING", "106": NOT_IN_SLURM}
-        assert SlurmScheduler().get_statuses(["106", "107"]) == {"106": NOT_IN_SLURM, "107": NOT_IN_SLURM}
+        scheduler = SlurmScheduler()
+        assert scheduler.get_statuses(["101", "106", "107"]) == {"101": "RUNNING", "106": "UNKNOWN", "107": "UNKNOWN"}
+        assert scheduler.get_statuses(["101", "106", "107"]) == {
+            "101": "RUNNING", "106": NOT_IN_SLURM, "107": NOT_IN_SLURM,
+        }
+
+    def test_a_lone_id_squeue_does_not_hold_counts_as_a_miss(self, fake_sacct):
+        fake_sacct({})
+        scheduler = SlurmScheduler()
+        assert scheduler.get_statuses(["106"]) == {"106": "UNKNOWN"}
+        assert scheduler.get_statuses(["106"]) == {"106": NOT_IN_SLURM}
+
+    def test_a_miss_between_finds_starts_the_count_again(self, fake_sacct):
+        scheduler = SlurmScheduler()
+        fake_sacct({})
+        assert scheduler.get_statuses(["106"]) == {"106": "UNKNOWN"}
+        fake_sacct({}, queue={"106": ("PENDING", "None")})
+        assert scheduler.get_statuses(["106"]) == {"106": "PENDING"}
+        fake_sacct({})
+        assert scheduler.get_statuses(["106"]) == {"106": "UNKNOWN"}
 
     def test_a_failed_query_leaves_the_job_unknown(self, fake_sacct):
         fake_sacct({}, squeue_fails=True)
@@ -190,9 +216,15 @@ class TestPolling:
         session.refresh(submitted_job)
         assert submitted_job.slurm_status == "COMPLETED"
 
-    def test_a_job_slurm_has_no_record_of_fails(self, session, submitted_job, fake_sacct):
+    def test_a_job_slurm_has_no_record_of_fails_on_the_second_miss(self, session, submitted_job, fake_sacct):
         fake_sacct({})
-        update_running_jobs(session, SlurmScheduler())
+        scheduler = SlurmScheduler()
+        update_running_jobs(session, scheduler)
+        session.refresh(submitted_job)
+        assert submitted_job.slurm_status == "UNKNOWN"
+        assert submitted_job.success is None
+
+        update_running_jobs(session, scheduler)
         session.refresh(submitted_job)
         assert submitted_job.slurm_status == NOT_IN_SLURM
         assert submitted_job.success is False
@@ -210,7 +242,7 @@ class TestPolling:
 
 
 class TestUnsatisfiable:
-    @pytest.mark.parametrize("reason", ["PartitionConfig", "PartitionTimeLimit", "MaxMemPerLimit"])
+    @pytest.mark.parametrize("reason", sorted(SlurmScheduler._UNSATISFIABLE_REASONS))
     def test_a_job_that_can_never_run_is_cancelled_and_failed(
         self, session, submitted_job, fake_sacct, reason,
     ):
@@ -226,6 +258,7 @@ class TestUnsatisfiable:
     @pytest.mark.parametrize("reason", [
         "Resources", "Priority", "None", "Dependency", "JobHeldUser", "BeginTime",
         "AssocMaxJobsLimit", "QOSMaxJobsPerUserLimit", "ReqNodeNotAvail, UnavailableNodes:worker.additive_3",
+        "PartitionNodeLimit",
     ])
     def test_a_job_that_waits_is_left_alone(self, session, submitted_job, fake_sacct, reason):
         fake = fake_sacct({"123": "PENDING"}, queue={"123": ("PENDING", reason)})
@@ -234,6 +267,27 @@ class TestUnsatisfiable:
         assert not any(c[0] == "scancel" for c in fake.calls)
         assert submitted_job.slurm_status == "PENDING"
         assert submitted_job.success is None
+
+    def test_the_task_fails_at_once_without_a_retry(
+        self, session, sample_task, submitted_job, fake_sacct, tmp_path,
+    ):
+        settings = Settings()
+        settings.storage.comp_data_path = str(tmp_path)
+        sample_task.status = TaskStatus.pending
+        sample_task.task_path = str(tmp_path / "task")
+        session.add(sample_task)
+        session.commit()
+
+        fake_sacct({"123": "PENDING"}, queue={"123": ("PENDING", "PartitionConfig")})
+        update_running_jobs(session, SlurmScheduler())
+        update_task_statuses(session, settings.pipeline.max_attempts)
+        create_retry_jobs(session, settings, OrcaParser())
+        session.commit()
+
+        jobs = session.exec(select(ComputationJob).where(ComputationJob.task_id == sample_task.id)).all()
+        assert [j.fail_reason for j in jobs] == ["unsatisfiable: PartitionConfig"]
+        session.refresh(sample_task)
+        assert sample_task.status == TaskStatus.failed
 
     def test_a_failed_scancel_leaves_the_job_for_the_next_tick(self, session, submitted_job, fake_sacct):
         fake_sacct({"123": "PENDING"}, queue={"123": ("PENDING", "PartitionConfig")}, scancel_fails=True)

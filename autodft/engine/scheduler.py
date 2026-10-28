@@ -18,7 +18,7 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Status of a job that neither sacct nor squeue knows.
+# Status of a job that neither sacct nor squeue knew on two polls running.
 NOT_IN_SLURM = "NOT_IN_SLURM"
 
 
@@ -114,6 +114,8 @@ class SlurmScheduler(Scheduler):
     def __init__(self, partition: str = "CPU", nice: int = 1000) -> None:
         self.partition = partition
         self.nice = nice
+        # Ids neither sacct nor squeue knew on the last get_statuses (in memory: a restart only delays).
+        self._missed: set[str] = set()
 
     @staticmethod
     def _command(argv: list[str]) -> list[str]:
@@ -302,9 +304,16 @@ class SlurmScheduler(Scheduler):
 
         # Not in slurmdbd yet (just submitted), or unknown to SLURM altogether.
         queue = self._squeue(absent) if absent else None
+        missed: set[str] = set()
         if queue is not None:
             for job_id in absent:
-                out[job_id] = queue[job_id][0] if job_id in queue else NOT_IN_SLURM
+                if job_id in queue:
+                    out[job_id] = queue[job_id][0]
+                elif job_id in self._missed:
+                    out[job_id] = NOT_IN_SLURM
+                else:
+                    missed.add(job_id)  # one miss may be slurmdbd lag; stays UNKNOWN
+        self._missed = missed
 
         missing = [j for j in job_ids if str(j) not in out]
         if missing:
@@ -339,7 +348,7 @@ class SlurmScheduler(Scheduler):
 
     # Pending reasons that only a change to the request or the cluster's configuration can clear.
     _UNSATISFIABLE_REASONS = frozenset({
-        "PartitionConfig", "PartitionNodeLimit", "PartitionTimeLimit", "MaxMemPerLimit",
+        "PartitionConfig", "PartitionTimeLimit", "MaxMemPerLimit",
         "InvalidAccount", "InvalidQOS", "BadConstraints", "DependencyNeverSatisfied",
     })
 

@@ -60,6 +60,9 @@ DETERMINISTIC_CHECKS = ("LibXC Needed", "S1 Stays Bound")
 # Consecutive raising job builds after which the task fails.
 MAX_BUILD_FAILURES = 10
 
+# fail_reason prefix of a job SLURM can never run; its task fails without a retry.
+UNSATISFIABLE = "unsatisfiable: "
+
 # Consecutive sbatch rejections of a job after which it fails as an attempt.
 MAX_SBATCH_REJECTIONS = 3
 _SBATCH_FAILED = "sbatch failed"
@@ -130,7 +133,7 @@ def update_running_jobs(session: Session, scheduler: Scheduler) -> None:
         logger.warning("Job %d (slurm %s) can never run (%s); cancelled", job.id, job.slurm_jobid, reason)
         job.slurm_status = SlurmStatus.CANCELLED
         job.success = False
-        job.fail_reason = f"unsatisfiable: {reason}"[:500]
+        job.fail_reason = f"{UNSATISFIABLE}{reason}"[:500]
         job.time_end = datetime.now(timezone.utc)
         session.add(job)
 
@@ -715,9 +718,12 @@ def create_retry_jobs(
         )
 
         reason = (last_failed.fail_reason or "") if last_failed is not None else ""
-        # A functional without third derivatives, or an S1 that collapses or
-        # dissociates, fails identically every time.
-        if reason == "['Excited Root']" or any(f"'{c}'" in reason for c in DETERMINISTIC_CHECKS):
+        # A functional without third derivatives, an S1 that collapses or
+        # dissociates, or a request SLURM can never run fails identically every time.
+        if (
+            reason == "['Excited Root']" or reason.startswith(UNSATISFIABLE)
+            or any(f"'{c}'" in reason for c in DETERMINISTIC_CHECKS)
+        ):
             task.status = TaskStatus.failed
             task.updated_at = datetime.now(timezone.utc)
             session.add(task)
