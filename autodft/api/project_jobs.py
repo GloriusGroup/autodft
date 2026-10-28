@@ -13,7 +13,8 @@ Three things this module guarantees:
   terminates the row (``successful`` or ``failed``) even if the body raises.
 * **One operation per project, and computation paused meanwhile.** The
   ``running`` row is the lock. :func:`assert_no_active_job` refuses a second
-  archive/export, a wipe, or a new submission on the same project, and the
+  archive/export, a wipe, or a new submission on the same project (and
+  :func:`start_job` a project a wipe is deleting, see :func:`wiping`), and the
   controller tick skips advancing that project's tasks (it reads
   :func:`active_job_project_names`). The destructive archive additionally
   waits until every job the project sent to SLURM is finished and judged and
@@ -70,6 +71,7 @@ class ProjectGone(LookupError):
 
 
 NOTHING_TO_EXPORT = "Nothing to export"
+ARCHIVE_RUNNING = "Export and Delete is running for this project."
 _ARCHIVE_RERUN = ("Re-running it is safe: it resumes, keeping the molecules already "
                   "archived and exporting and deleting only the rest.")
 
@@ -86,6 +88,9 @@ _QUIESCENCE_POLL_SECONDS = 3.0
 # and controller share one process on one host (the SQLite-on-NFS single-host
 # rule), so there is never a second writer.
 _CREATE_LOCK = threading.Lock()
+
+# Projects a wipe is deleting; None: a database reset. start_job refuses them.
+_wiping: list[Optional[str]] = []
 
 # Live worker threads, for join_all() in tests and shutdown.
 _threads: dict[int, threading.Thread] = {}
@@ -125,6 +130,8 @@ def active_job_project_names(session: Session) -> set[str]:
 def assert_no_active_job(session: Session, qualified_name: str) -> None:
     """Raise :class:`JobInProgress` if *qualified_name* has a running job."""
     existing = active_job(session, qualified_name)
+    if existing is not None and existing.kind == ProjectJobKind.archive:
+        raise JobInProgress(ARCHIVE_RUNNING)
     if existing is not None:
         raise JobInProgress(
             f"Project {qualified_name!r} has a {existing.kind.value} job in "
@@ -133,11 +140,42 @@ def assert_no_active_job(session: Session, qualified_name: str) -> None:
         )
 
 
+def archive_running(session: Session, qualified_name: str) -> bool:
+    """Whether *qualified_name*'s Export and Delete is running."""
+    existing = active_job(session, qualified_name)
+    return existing is not None and existing.kind == ProjectJobKind.archive
+
+
 @contextmanager
 def creation_lock():
     """Hold off :func:`start_job` while the caller checks and changes a project."""
     with _CREATE_LOCK:
         yield
+
+
+@contextmanager
+def wiping(qualified_name: Optional[str]):
+    """Refuse while *qualified_name* (None: any project) has a running job; until the
+    block exits, :func:`start_job` refuses it.
+
+    Raises:
+        JobInProgress: if a job is running.
+    """
+    with _CREATE_LOCK:
+        with get_session() as session:
+            if qualified_name is not None:
+                assert_no_active_job(session, qualified_name)
+            elif busy := active_job_project_names(session):
+                raise JobInProgress(
+                    f"A background archive/export job is running for {', '.join(sorted(busy))}. "
+                    f"Wait for it to finish before resetting the database."
+                )
+        _wiping.append(qualified_name)
+    try:
+        yield
+    finally:
+        with _CREATE_LOCK:
+            _wiping.remove(qualified_name)
 
 
 def get_job(session: Session, job_id: int) -> Optional[ProjectJob]:
@@ -202,13 +240,21 @@ def start_job(
     """Record a job, spawn its worker thread, and return the row snapshot.
 
     Raises:
-        JobInProgress: if the project already has a running job.
-        ProjectGone: if *qualified_name* has no project row (legacy bare names excepted).
+        JobInProgress: if the project already has a running job or is being wiped.
+        ProjectGone: if *qualified_name* has no project row (legacy bare names excepted)
+            or no molecules.
     """
     with _CREATE_LOCK:
         with get_session(settings) as session:
             if "/" in qualified_name and accounts.get_project(session, qualified_name) is None:
                 raise ProjectGone(f"No project named {qualified_name!r}.")
+            if None in _wiping:
+                raise JobInProgress("The database is being reset.")
+            if qualified_name in _wiping:
+                raise JobInProgress(f"Project {qualified_name!r} is being wiped.")
+            # A wipe may have emptied it since the caller looked.
+            if session.exec(select(Molecule.id).where(Molecule.project_name == qualified_name)).first() is None:
+                raise ProjectGone(f"Project {qualified_name!r} has no molecules.")
             assert_no_active_job(session, qualified_name)
             job = ProjectJob(
                 qualified_name=qualified_name,

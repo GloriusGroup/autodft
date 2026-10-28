@@ -181,6 +181,27 @@ def _cancel_scheduled_jobs(session: Session, job_ids: list[int], scheduler) -> i
         return 0
 
 
+def _refuse_mid_sbatch(session: Session, task_ids: Optional[list[int]] = None) -> None:
+    """Raise ValueError if SLURM may have a job of *task_ids* (None: any) with no id to scancel.
+
+    Claimed for sbatch, or sent by an sbatch that reported failure: deleting its row
+    would leave SLURM running a job nothing tracks. Call under :func:`begin_write`.
+    """
+    if task_ids == []:
+        return
+    query = select(ComputationJob).where(
+        col(ComputationJob.slurm_jobid).is_(None), col(ComputationJob.success).is_(None),
+    )
+    if task_ids is not None:
+        query = query.where(col(ComputationJob.task_id).in_(task_ids))
+    jobs = [j for j in session.exec(query).all() if not _never_sent(j)]
+    if jobs:
+        raise ValueError(
+            f"{len(jobs)} job(s) may be in SLURM with no SLURM job id to cancel yet: "
+            f"{describe_jobs(jobs)}. Retry once the controller has recorded them."
+        )
+
+
 # ----------------------------------------------------------------------
 # Disk helpers
 # ----------------------------------------------------------------------
@@ -850,8 +871,11 @@ def wipe_project(
     the directories are renamed out of the way first, so by the time this
     returns the project is gone as far as anything else can tell.
 
+    Checks and row deletes run under one write lock (:func:`begin_write`).
+
     Raises:
-        ValueError: if the project is protected or has nothing to delete.
+        ValueError: if the project is protected, has nothing to delete, or has a job
+            mid-sbatch (:func:`_refuse_mid_sbatch`).
     """
     if is_protected(name):
         raise ValueError(f"Project {name!r} is protected and cannot be wiped.")
@@ -860,13 +884,15 @@ def wipe_project(
     # must fail here, not halfway through an rmtree.
     export_dir = safe_subdirectory(export_root, name) if delete_exports else None
 
+    begin_write(session)
     molecule_ids = _project_molecule_ids(session, name)
     entrypoint_ids = _queued_entrypoint_ids(session, name)
     if not molecule_ids and not entrypoint_ids:
         raise ValueError(f"Project {name!r} has no molecules and no queued entrypoints.")
 
+    _, task_ids, _, job_ids = _descendants(session, molecule_ids)
+    _refuse_mid_sbatch(session, task_ids)
     # Stop the cluster writing into trees that are about to disappear.
-    _, _, _, job_ids = _descendants(session, molecule_ids)
     cancelled = _cancel_scheduled_jobs(session, job_ids, scheduler)
 
     counts = _delete_molecule_rows(session, molecule_ids)
@@ -958,8 +984,10 @@ def wipe_molecule(
     molecules. Re-export after wiping to refresh it.
 
     Rows go first and are committed before the files are removed, for the
-    reasons given on :func:`wipe_project`.
+    reasons given on :func:`wipe_project`; checks and row deletes run under one
+    write lock (:func:`begin_write`).
     """
+    begin_write(session)
     mol = session.get(Molecule, molecule_id)
     if mol is None:
         raise ValueError(f"Molecule {molecule_id} does not exist.")
@@ -973,7 +1001,8 @@ def wipe_molecule(
             "NMR reference molecules are managed by the pipeline and cannot be wiped."
         )
 
-    _, _, _, job_ids = _descendants(session, [molecule_id])
+    _, task_ids, _, job_ids = _descendants(session, [molecule_id])
+    _refuse_mid_sbatch(session, task_ids)
     cancelled = _cancel_scheduled_jobs(session, job_ids, scheduler)
 
     counts = _delete_molecule_rows(session, [molecule_id])
@@ -1261,7 +1290,14 @@ def reset_database(
     is what makes that safe here: molecule ids restart at 1 after a reset, so
     a worker resuming while the old tree was still being walked would create
     ``mol_1`` straight into it.
+
+    Checks and deletes run under one write lock (:func:`begin_write`).
+
+    Raises:
+        ValueError: if a job is mid-sbatch (:func:`_refuse_mid_sbatch`).
     """
+    begin_write(session)
+    _refuse_mid_sbatch(session)
     counts = {
         "jobs": len(session.exec(select(ComputationJob.id)).all()),
         "tasks": len(session.exec(select(ComputationTask.id)).all()),

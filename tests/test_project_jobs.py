@@ -806,3 +806,136 @@ def test_an_empty_export_reports_nothing_and_drops_the_stale_file(env, kind, ext
     assert not stale.exists()
     assert result["message"] == "Nothing to export"
     assert result["downloadable"] is False and "path" not in result
+
+
+# ----------------------------------------------------------------------
+# Nothing else touches a project during Export and Delete; wipes and jobs exclude each other
+# ----------------------------------------------------------------------
+
+ARCHIVE_RUNNING = "Export and Delete is running for this project."
+
+
+def _park(owner_id, kind=ProjectJobKind.archive) -> int:
+    with get_session() as session:
+        job = ProjectJob(qualified_name=PROJECT, owner_id=owner_id, kind=kind,
+                         status=ProjectJobStatus.running)
+        session.add(job)
+        session.commit()
+        return job.id
+
+
+def _end(job_id, status):
+    with get_session() as session:
+        session.get(ProjectJob, job_id).status = status
+        session.commit()
+
+
+def _cco():
+    from sqlmodel import select
+
+    with get_session() as session:
+        return session.exec(select(Molecule.id).where(Molecule.smiles == "CCO")).one()
+
+
+class TestArchiveGuards:
+    def _attempts(self, c, headers, mol_id):
+        url = "/api/projects/owner:screening"
+        return {
+            "molecule wipe": lambda: c.post(f"/api/molecules/{mol_id}/wipe", headers=headers,
+                                            json={"confirm": "CCO"}),
+            "export": lambda: c.post(f"{url}/export?format=csv", headers=headers),
+            "state-analysis export": lambda: c.post(f"{url}/state-analysis/export", headers=headers),
+            "archive": lambda: c.post(f"{url}/archive", headers=headers, json={"confirm": PROJECT}),
+            "project wipe": lambda: c.post(f"{url}/wipe", headers=headers, json={"confirm": PROJECT}),
+        }
+
+    @pytest.mark.parametrize("ends", [ProjectJobStatus.failed, ProjectJobStatus.successful])
+    def test_each_answers_409_until_the_archive_ends(self, client, ends):
+        c, headers, env = client
+        mol_id = _cco()
+        with get_session() as session:
+            session.add(Molecule(smiles="CCC", project_name=PROJECT))
+            session.commit()
+        attempts = self._attempts(c, headers, mol_id)
+
+        archive = _park(env["owner_id"])
+        for name, attempt in attempts.items():
+            r = attempt()
+            assert (r.status_code, r.json()["detail"]) == (409, ARCHIVE_RUNNING), name
+        with get_session() as session:
+            assert session.get(Molecule, mol_id) is not None
+
+        _end(archive, ends)
+        expected = {"molecule wipe": 200, "export": 202, "state-analysis export": 202,
+                    "archive": 202, "project wipe": 200}
+        for name, attempt in attempts.items():
+            assert attempt().status_code == expected[name], name
+            project_jobs.join_all(timeout=10)
+
+    def test_the_archive_message_wins_over_already_archived(self, client):
+        c, headers, env = client
+        with get_session() as session:
+            session.get(Molecule, _cco()).archived = True
+            session.commit()
+        _park(env["owner_id"])
+        for path, body in (("export?format=csv", None), ("archive", {"confirm": PROJECT})):
+            r = c.post(f"/api/projects/owner:screening/{path}", headers=headers, json=body)
+            assert (r.status_code, r.json()["detail"]) == (409, ARCHIVE_RUNNING), path
+
+
+class TestWipesAndJobsExcludeEachOther:
+    def test_a_running_export_refuses_both_wipes(self, client):
+        c, headers, env = client
+        mol_id = _cco()
+        _park(env["owner_id"], ProjectJobKind.export_csv)
+        for r in (c.post(f"/api/molecules/{mol_id}/wipe", headers=headers, json={"confirm": "CCO"}),
+                  c.post("/api/projects/owner:screening/wipe", headers=headers,
+                         json={"confirm": PROJECT})):
+            assert r.status_code == 409 and "export_csv job in progress" in r.json()["detail"]
+        with get_session() as session:
+            assert session.get(Molecule, mol_id) is not None
+
+    @pytest.mark.parametrize("route", ["project", "molecule", "reset"])
+    def test_no_job_starts_while_a_wipe_runs(self, client, monkeypatch, route):
+        from autodft.api import admin_ops
+
+        c, headers, env = client
+        mol_id = _cco()
+        name = {"project": "wipe_project", "molecule": "wipe_molecule", "reset": "reset_database"}[route]
+        real, refused = getattr(admin_ops, name), []
+
+        def wipe(*args, **kwargs):
+            for kind in (ProjectJobKind.export_csv, ProjectJobKind.archive):
+                try:
+                    project_jobs.start_job(owner_id=env["owner_id"], qualified_name=PROJECT,
+                                           kind=kind, params={}, settings=env["settings"])
+                except project_jobs.JobInProgress as exc:
+                    refused.append(str(exc))
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(admin_ops, name, wipe)
+        if route == "project":
+            r = c.post("/api/projects/owner:screening/wipe", headers=headers, json={"confirm": PROJECT})
+        elif route == "molecule":
+            r = c.post(f"/api/molecules/{mol_id}/wipe", headers=headers, json={"confirm": "CCO"})
+        else:
+            with get_session() as session:
+                admin = accounts.get_user_by_username(session, "admin")
+                headers = {"X-AutoDFT-API-Key": accounts.rotate_api_key(session, admin)}
+            r = c.post("/api/admin/reset-database", headers=headers,
+                       json={"confirm": "RESET THE DATABASE", "delete_files": False})
+        assert r.status_code == 200, r.text
+        reason = "The database is being reset." if route == "reset" else f"Project {PROJECT!r} is being wiped."
+        assert refused == [reason, reason]
+        with get_session() as session:
+            assert project_jobs.list_jobs(session, PROJECT) == []
+
+    def test_a_job_checked_before_the_wipe_does_not_start_after_it(self, env):
+        from sqlmodel import delete
+
+        with get_session() as session:
+            session.exec(delete(Molecule).where(Molecule.project_name == PROJECT))
+            session.commit()
+        with pytest.raises(project_jobs.ProjectGone, match="no molecules"):
+            project_jobs.start_job(owner_id=env["owner_id"], qualified_name=PROJECT,
+                                   kind=ProjectJobKind.export_csv, params={}, settings=env["settings"])

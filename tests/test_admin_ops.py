@@ -233,6 +233,74 @@ class TestWipeMolecule:
             admin_ops.wipe_molecule(session, 9999, project["comp_root"])
 
 
+def _wipe(op, session, project, scheduler=None):
+    roots = project["comp_root"], project["export_root"]
+    if op == "project":
+        return admin_ops.wipe_project(session, "victim", *roots, scheduler=scheduler, background=False)
+    if op == "molecule":
+        return admin_ops.wipe_molecule(session, project["victim"][0], roots[0], scheduler=scheduler)
+    return admin_ops.reset_database(session, *roots, scheduler=scheduler, background=False)
+
+
+class TestMidSbatch:
+    """A job SLURM may have but no job id to scancel: the wipe waits, or SLURM runs an orphan."""
+
+    @pytest.mark.parametrize("op", ["project", "molecule", "reset"])
+    @pytest.mark.parametrize("fields", [
+        {"slurm_status": SlurmStatus.SUBMITTING},
+        {"slurm_status": None, "fail_reason": "sbatch failed (retrying): Socket timed out"},
+    ])
+    def test_refused_and_nothing_deleted(self, session, project, op, fields):
+        job = session.exec(select(ComputationJob)).first()
+        job.slurm_jobid = None
+        for key, value in fields.items():
+            setattr(job, key, value)
+        session.add(job)
+        session.commit()
+        scheduler = _StubScheduler()
+
+        with pytest.raises(ValueError, match="no SLURM job id"):
+            _wipe(op, session, project, scheduler)
+        session.rollback()
+        assert len(session.exec(select(Molecule)).all()) == 3
+        assert scheduler.cancelled == []
+        assert all((project["comp_root"] / f"mol_{m}").exists() for m in project["victim"])
+
+
+class TestWriteLock:
+    """The check and the delete run under one write lock, so no sbatch claim lands between them."""
+
+    @pytest.fixture()
+    def engine(self, tmp_path):
+        from sqlmodel import SQLModel, create_engine
+
+        eng = create_engine(f"sqlite:///{tmp_path / 'lock.db'}", connect_args={"check_same_thread": False})
+        SQLModel.metadata.create_all(eng)
+        yield eng
+        eng.dispose()
+
+    @pytest.mark.parametrize("op", ["project", "molecule", "reset"])
+    def test_a_claim_waits_for_the_wipe(self, session, project, tmp_path, op):
+        import sqlite3
+
+        seen = []
+
+        class _Probe(_StubScheduler):
+            def cancel_many(self, job_ids):
+                other = sqlite3.connect(tmp_path / "lock.db", timeout=0)
+                try:
+                    other.execute("UPDATE computation_jobs SET slurm_status = 'SUBMITTING'")
+                    seen.append("claimed")
+                except sqlite3.OperationalError as exc:
+                    seen.append(str(exc))
+                finally:
+                    other.close()
+                return super().cancel_many(job_ids)
+
+        _wipe(op, session, project, _Probe())
+        assert seen == ["database is locked"]
+
+
 class TestMeasuringFiles:
     """Sizing the data directory must never be able to hang the dashboard.
 

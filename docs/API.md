@@ -512,7 +512,9 @@ only for an open-shell job. `build` says which kinds orca_plot must make first.
 `<task_id>_<kind>.cube`), building it with orca_plot first and caching it in
 the job folder. At most two builds run at once; `503` while none is free.
 `404` when densities were not requested, the kind was off at submission, a
-closed-shell job is asked for SpinDens, or the job folder is gone.
+closed-shell job is asked for SpinDens, or the job folder is gone. `409`
+(`Export and Delete is running for this project.`) while the project's
+archive runs.
 
 ### `GET /api/projects/{name}/tasks/{task_id}/files/{kind}`
 
@@ -523,6 +525,7 @@ from the task's latest successful job. Named
 `<state>__state<state_id>` for one of two states of one name). `400` for
 another kind, `404` for a task that is not a successful opt/SP of the
 project, for `xyz` on a singlepoint, and when the file is no longer on disk.
+`409`, as for the cube, while the project's archive runs.
 
 ### `GET /api/projects/{name}/state-analysis`
 
@@ -918,8 +921,11 @@ Poll `GET /api/projects/{name}/jobs` for the job's `status` and, once
 write removes the stale file at its target and answers
 `{"format": "csv", "message": "Nothing to export", "downloadable": false}`.
 
-`404` when the project holds no molecules; `409` when a job is already
-in flight for the project. `csv` / `json` / `files` also answer `409`
+`404` when the project holds no molecules, also when a wipe has emptied it
+since the request looked; `409` when a job is already in flight for the
+project (detail `Export and Delete is running for this project.` while its
+archive runs) or while a wipe of it, or a database reset, is under way.
+`csv` / `json` / `files` also answer `409`
 for an archived project — their source files are no longer on disk —
 and so does `reactivity` (the archive's tree already holds its workbook).
 `xlsx` and `photophysics` are allowed on an archived project: `xlsx` is
@@ -1000,7 +1006,8 @@ NBO payload was frozen for later serving (see
 count is greater than 0.
 
 Refused with `409` for the protected `admin/default` project, for one
-that is already archived, and for one with a flagged NMR molecule whose
+that is already archived, while a job or a wipe of the project is under
+way (as for the exports), and for one with a flagged NMR molecule whose
 reference compound is still `pending` — a frozen molecule is never
 re-analysed, so the shift would stay `null` forever (a `failed`
 reference does not block it: the frozen detail keeps the shieldings, the
@@ -1150,7 +1157,7 @@ running: the label names the project, which may not be theirs.
 Saved headers are never touched by a project or molecule wipe. A wipe body
 with any field besides `confirm` and `delete_exports` answers **422**.
 
-Four properties worth knowing:
+Five properties worth knowing:
 
 * **One at a time.** A destructive operation started while another is
   running is refused with **409**, not queued.
@@ -1170,7 +1177,18 @@ Four properties worth knowing:
   `GET /api/wipe-status` follows it to completion.
 * **SLURM is stopped first.** Jobs the scheduler still has queued or
   running are `scancel`ed before their directories disappear; the count
-  comes back as `jobs_cancelled`.
+  comes back as `jobs_cancelled`. A job SLURM may have but with no job id
+  to cancel yet (claimed for `sbatch` this moment, or sent by an `sbatch`
+  that reported failure) makes the wipe or reset answer **409** and delete
+  nothing; retry once the controller has recorded it. The check and the
+  row deletes run under one database write lock, so no `sbatch` claim
+  lands between them.
+* **Not beside a project job.** A project or molecule wipe answers
+  **409** while the project has an archive or export running (detail
+  `Export and Delete is running for this project.` for the archive), and
+  a reset while any project has one. Until the wipe's rows are gone, an
+  export or archive of that project (any project, for a reset) answers
+  **409**.
 
 ### Sizes, and why they are not free
 

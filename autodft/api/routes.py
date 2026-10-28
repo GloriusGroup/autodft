@@ -962,6 +962,8 @@ def api_project_density_cube(
         return JSONResponse(status_code=400, content={"detail": f"kind must be one of {', '.join(densities.KINDS)}."})
     with get_session() as session:
         name = resolve_project(session, identity, name)
+        if (busy := _archive_conflict(session, name)) is not None:
+            return busy
         task = next(iter(_project_tasks(session, name, densities.SP_TYPES, ComputationTask.id == task_id)), None)
         if task is None:
             return JSONResponse(status_code=404, content={"detail": f"No successful singlepoint {task_id} in {name}."})
@@ -992,6 +994,15 @@ def api_project_density_cube(
     return FileResponse(path, media_type="text/plain", filename=f"{task_id}_{kind}.cube")
 
 
+def _archive_conflict(session, name: str) -> Optional[JSONResponse]:
+    """409 while *name*'s Export and Delete runs, else None."""
+    from autodft.api import project_jobs
+
+    if project_jobs.archive_running(session, name):
+        return JSONResponse(status_code=409, content={"detail": project_jobs.ARCHIVE_RUNNING})
+    return None
+
+
 # What a task offers for download: its output, and an optimisation also its final geometry.
 _TASK_FILES = {"out": "output.out", "xyz": "input.xyz"}
 
@@ -1017,6 +1028,8 @@ def api_project_task_file(
         return JSONResponse(status_code=400, content={"detail": f"kind must be one of {', '.join(_TASK_FILES)}."})
     with get_session() as session:
         name = resolve_project(session, identity, name)
+        if (busy := _archive_conflict(session, name)) is not None:
+            return busy
         task = next(iter(_project_tasks(
             session, name, densities.SP_TYPES | {TaskType.optimization}, ComputationTask.id == task_id,
         )), None)
@@ -1254,12 +1267,12 @@ def api_project_archive(
         settings = get_active_settings()
 
         with get_session() as session:
+            project_jobs.assert_no_active_job(session, name)
             state = _project_is_archived(session, name)
             if state is None:
                 return JSONResponse(status_code=404, content={"detail": f"Project {name!r} has no molecules"})
             if state is True:
                 return JSONResponse(status_code=409, content={"detail": f"Project {name!r} is already archived."})
-            project_jobs.assert_no_active_job(session, name)
 
         from autodft.analysis import spectroscopy
 
@@ -1349,6 +1362,7 @@ def api_project_export(
         settings = get_active_settings()
 
         with get_session() as session:
+            project_jobs.assert_no_active_job(session, name)
             state = _project_is_archived(session, name)
             if state is None:
                 return JSONResponse(status_code=404, content={"detail": f"Project {name!r} has no molecules"})
@@ -1357,7 +1371,6 @@ def api_project_export(
                     status_code=409,
                     content={"detail": f"Project {name!r} is archived — source files are no longer on disk."},
                 )
-            project_jobs.assert_no_active_job(session, name)
 
         job = project_jobs.start_job(
             owner_id=identity.user_id,
@@ -1848,22 +1861,16 @@ def api_project_wipe(
     if body.confirm != name:
         return _confirmation_error(name, body.confirm)
 
-    with get_session() as session:
-        try:
-            project_jobs.assert_no_active_job(session, name)
-        except project_jobs.JobInProgress as exc:
-            return JSONResponse(status_code=409, content={"detail": str(exc)})
-
     settings = get_active_settings()
     try:
-        with admin_ops.exclusive(f"wipe of project {name!r}"):
+        with admin_ops.exclusive(f"wipe of project {name!r}"), project_jobs.wiping(name):
             with get_session() as session:
                 return admin_ops.wipe_project(
                     session, name, settings.comp_data_path, settings.export_data_path,
                     delete_exports=body.delete_exports,
                     scheduler=_admin_scheduler(settings),
                 )
-    except admin_ops.WipeInProgress as exc:
+    except (admin_ops.WipeInProgress, project_jobs.JobInProgress) as exc:
         return JSONResponse(status_code=409, content={"detail": str(exc)})
     except ValueError as exc:
         return JSONResponse(status_code=409, content={"detail": str(exc)})
@@ -1903,7 +1910,7 @@ def api_molecule_wipe(
     Requires ``confirm`` to equal the molecule's SMILES exactly. A user
     may wipe their own molecules; someone else's answers 404.
     """
-    from autodft.api import admin_ops
+    from autodft.api import admin_ops, project_jobs
 
     settings = get_active_settings()
     try:
@@ -1912,11 +1919,13 @@ def api_molecule_wipe(
                 mol = require_molecule(session, identity, molecule_id)
                 if body.confirm != mol.smiles:
                     return _confirmation_error(mol.smiles, body.confirm)
+                project = mol.project_name
+            with project_jobs.wiping(project), get_session() as session:
                 return admin_ops.wipe_molecule(
                     session, molecule_id, settings.comp_data_path,
                     scheduler=_admin_scheduler(settings),
                 )
-    except admin_ops.WipeInProgress as exc:
+    except (admin_ops.WipeInProgress, project_jobs.JobInProgress) as exc:
         return JSONResponse(status_code=409, content={"detail": str(exc)})
     except ValueError as exc:
         return JSONResponse(status_code=409, content={"detail": str(exc)})
@@ -2322,30 +2331,17 @@ def api_reset_database(
     if body.confirm != admin_ops.RESET_CONFIRMATION:
         return _confirmation_error(admin_ops.RESET_CONFIRMATION, body.confirm)
 
-    # A reset empties every project, so refuse while any project has a
-    # background archive/export in flight.
-    with get_session() as session:
-        busy = project_jobs.active_job_project_names(session)
-    if busy:
-        return JSONResponse(
-            status_code=409,
-            content={"detail": (
-                "A background archive/export job is running for "
-                + ", ".join(sorted(busy))
-                + ". Wait for it to finish before resetting the database."
-            )},
-        )
-
     settings = get_active_settings()
     try:
-        with admin_ops.exclusive("database reset"):
+        # A reset empties every project: refused while any has an archive/export running.
+        with admin_ops.exclusive("database reset"), project_jobs.wiping(None):
             with get_session() as session:
                 return admin_ops.reset_database(
                     session, settings.comp_data_path, settings.export_data_path,
                     delete_files=body.delete_files, keep_headers=body.keep_headers,
                     scheduler=_admin_scheduler(settings),
                 )
-    except admin_ops.WipeInProgress as exc:
+    except (admin_ops.WipeInProgress, project_jobs.JobInProgress, ValueError) as exc:
         return JSONResponse(status_code=409, content={"detail": str(exc)})
     except Exception as exc:
         logging.getLogger(__name__).exception("Database reset failed")

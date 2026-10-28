@@ -420,11 +420,16 @@ whose `sbatch` reported failure is first looked up in SLURM and, if found,
 waited for too. An archive cut short (a restart, an NFS error) can be re-run:
 it keeps the export folders of the molecules already archived, deletes the raw
 folders they have left, and exports and deletes the rest. A plain Export
-Project of such a project keeps those folders too.
+Project of such a project keeps those folders too. While it runs, a molecule
+wipe, Delete Project, density cube builds, `.out`/`.xyz` downloads and
+another export or archive of the project answer 409 ("Export and Delete is
+running for this project."); they work again once it ends, failed or not.
 **Delete Project** is the project wipe (below) offered to the owner and
 admin: a preview, the project name typed back, refused for a protected
-project and with 409 while another wipe runs; "Also delete exported data"
-starts unticked. The Admin page keeps its own wipe.
+project and with 409 while another wipe runs or the project has an export
+or archive running; until its rows are gone, an export or archive of the
+project answers 409. "Also delete exported data" starts unticked. The Admin
+page keeps its own wipe.
 
 **"Add calculations…" (Extend)** — on the project page, before the project
 is archived. It opens the submission form with the project's molecules and
@@ -778,9 +783,12 @@ curl -s -X POST -H "$K" \
 
 Every wipe and the database reset require an exact confirmation string
 (the qualified project name, the molecule's SMILES, or `RESET THE
-DATABASE`), refuse to run while another one is in flight (409), and
-delete the rows before the files. The files themselves are renamed aside
-and unlinked on a background thread, so the request returns in well under
+DATABASE`), refuse to run while another one is in flight (409), while
+the project (any project, for the reset) has an export or archive running
+(409), or while one of its jobs is mid-`sbatch` with no SLURM id to cancel
+yet (409; retry in a moment), and delete the rows before the files. The
+files themselves are renamed aside and unlinked on a background thread, so
+the request returns in well under
 a second while a project-sized deletion runs for minutes — poll
 `GET /api/wipe-status` for that. `POST /api/projects/{name}/archive` takes the
 same `confirm` (the qualified project name; 400 without it), and the Export

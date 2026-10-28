@@ -20,7 +20,8 @@ from autodft.config import Settings
 from autodft.db import get_session, init_db, reset_engine
 from autodft.extraction import results
 from autodft.models import (
-    ComputationHeader, ComputationJob, ComputationTask, Molecule, MoleculeState, TaskStatus, TaskType,
+    ComputationHeader, ComputationJob, ComputationTask, Molecule, MoleculeState, ProjectJob, ProjectJobKind,
+    ProjectJobStatus, TaskStatus, TaskType,
 )
 from autodft.models.result import JobResult
 
@@ -375,6 +376,34 @@ class TestTaskFiles:
         out.symlink_to(tmp_path / "secret.txt")
         response = _file(env, "sp")
         assert response.status_code == 404 and "secret" not in response.text
+
+
+class TestDuringAnArchive:
+    @pytest.mark.parametrize("ends", [ProjectJobStatus.failed, ProjectJobStatus.successful])
+    def test_cubes_and_files_answer_409_until_it_ends(self, env, ends):
+        with get_session() as session:
+            archive = ProjectJob(qualified_name="owner/p", kind=ProjectJobKind.archive,
+                                 status=ProjectJobStatus.running)
+            # Another project's archive blocks nothing here.
+            other = ProjectJob(qualified_name="stranger/p", kind=ProjectJobKind.archive,
+                               status=ProjectJobStatus.running)
+            session.add_all([archive, other])
+            session.commit()
+            archive_id = archive.id
+        for response in (_cube(env, "sp"), _file(env, "opt")):
+            assert response.status_code == 409
+            assert response.json()["detail"] == "Export and Delete is running for this project."
+        with get_session() as session:
+            session.get(ProjectJob, archive_id).status = ends
+            session.commit()
+        assert _cube(env, "sp").status_code == 200 and _file(env, "opt").status_code == 200
+
+    def test_an_export_does_not_block_them(self, env):
+        with get_session() as session:
+            session.add(ProjectJob(qualified_name="owner/p", kind=ProjectJobKind.export_files,
+                                   status=ProjectJobStatus.running))
+            session.commit()
+        assert _cube(env, "sp").status_code == 200 and _file(env, "opt").status_code == 200
 
 
 def _fake_orca_plot(calls, returncode=0, write=True, delay=0.0):
