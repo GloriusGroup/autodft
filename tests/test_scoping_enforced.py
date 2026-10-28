@@ -17,6 +17,7 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlmodel import select
 
 from autodft import accounts
 from autodft.api.app import create_app
@@ -141,7 +142,7 @@ def test_the_caller_still_sees_their_own(two_users, path):
         assert response.json()["molecules"] == 1
     elif path == "/api/jobs":
         # Job rows carry neither SMILES nor project name.
-        assert len(response.json()) == 1
+        assert len(response.json()["jobs"]) == 1
     else:
         assert "ALICEMOL" in response.text or "secret_project" in response.text
 
@@ -156,3 +157,25 @@ def test_the_overview_counts_only_the_callers_work(two_users):
     assert sum(alice["jobs"].values()) == 1
     # Alice queued two entrypoints: one pending, one that failed to parse.
     assert alice["queue_length"] == 2
+
+
+def test_a_status_filtered_job_list_counts_what_the_overview_card_counts(two_users):
+    """150 running jobs among 300, under 150 newer finished ones: the list
+    once took the newest 100 and filtered, so it showed none of them."""
+    client, keys = two_users
+    with get_session() as session:
+        alice_task, bob_task = session.exec(select(ComputationTask.id).order_by(ComputationTask.id)).all()
+        for i in range(300):
+            status = "RUNNING" if i < 150 else "COMPLETED"
+            session.add(ComputationJob(task_id=alice_task, attempt=1, job_path="/x", slurm_status=status))
+        session.add(ComputationJob(task_id=bob_task, attempt=1, job_path="/x", slurm_status="RUNNING"))
+        session.commit()
+
+    card = client.get("/api/overview", headers=keys["alice"]).json()["jobs"]["RUNNING"]
+    listed = client.get("/api/jobs?status=RUNNING&limit=200", headers=keys["alice"]).json()
+    assert card == listed["total"] == len(listed["jobs"]) == 150
+    assert {j["slurm_status"] for j in listed["jobs"]} == {"RUNNING"}
+
+    capped = client.get("/api/jobs?status=RUNNING&limit=100", headers=keys["alice"]).json()
+    assert len(capped["jobs"]) == 100 and capped["total"] == 150
+    assert client.get("/api/jobs?status=PENDING", headers=keys["alice"]).json() == {"jobs": [], "total": 0}

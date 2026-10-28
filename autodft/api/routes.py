@@ -491,14 +491,15 @@ def api_jobs(
     limit: int = Query(50, ge=1, le=500),
     identity: Identity = Depends(current_identity),
 ):
-    """List jobs with optional SLURM status filter."""
+    """The newest ``limit`` jobs, optionally of one SLURM status, and how many match in all."""
     with get_session() as session:
-        stmt = select(ComputationJob).order_by(col(ComputationJob.id).desc())
-        stmt = scope_jobs(stmt, session, identity)
+        stmt = scope_jobs(select(ComputationJob), session, identity)
+        counted = scope_jobs(select(func.count()).select_from(ComputationJob), session, identity)
         if status:
             stmt = stmt.where(ComputationJob.slurm_status == status)
-        stmt = stmt.limit(limit)
-        jobs = session.exec(stmt).all()
+            counted = counted.where(ComputationJob.slurm_status == status)
+        jobs = session.exec(stmt.order_by(col(ComputationJob.id).desc()).limit(limit)).all()
+        total = session.exec(counted).one()
 
         results = []
         for job in jobs:
@@ -515,7 +516,7 @@ def api_jobs(
                     "time_end": job.time_end.isoformat() if job.time_end else None,
                 }
             )
-    return results
+    return {"jobs": results, "total": total}
 
 
 @router.get("/api/queue")

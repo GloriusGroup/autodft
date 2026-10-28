@@ -604,7 +604,7 @@ def test_the_polling_paths_call_plain_fetch():
     html = (TEMPLATE / "dashboard.html").read_text()
     assert "setInterval(pollTick, POLL_INTERVAL);" in html
     assert "await Promise.allSettled([fetchOverview(), fetchQueue(), fetchJobs(), fetchFailed()])" in html
-    for name in ("fetchOverview", "fetchQueue", "fetchJobs", "pollProjectJob", "adminPollUsage",
+    for name in ("fetchOverview", "fetchQueue", "fetchJobs", "fetchJobTable", "pollProjectJob", "adminPollUsage",
                  "refreshRemovalBanner", "pollOnce", "refreshAll", "pollTick"):
         body = _functions(name)
         assert "loadingFetch" not in body and "withLoading" not in body, name
@@ -665,10 +665,14 @@ def _good_poll():
         "/api/overview": {"status": 200, "body": {"molecules": 9, "jobs": {"RUNNING": 3, "PENDING": 2},
                                                    "tasks": {"failed": 1}, "queue_length": 4}},
         "/api/queue": {"status": 200, "body": [{"id": 11, "smiles": "CCO", "priority": 1}]},
+        _RUNNING: {"status": 200, "body": {"jobs": [], "total": 0}},
+        _PENDING: {"status": 200, "body": {"jobs": [], "total": 0}},
     }
 
 
-_POLLED = ["/api/overview", "/api/queue", "/api/jobs?limit=100", "/api/entrypoints/failed"]
+_RUNNING = "/api/jobs?status=RUNNING&limit=200"
+_PENDING = "/api/jobs?status=PENDING&limit=200"
+_POLLED = ["/api/overview", "/api/queue", _PENDING, _RUNNING, "/api/entrypoints/failed"]
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -788,8 +792,38 @@ def test_a_hanging_poll_shows_disconnected_after_three_missed_ticks():
     """, _polling_code(), "var GOOD = %s;" % json.dumps(_good_poll()))
     # The first tick starts the poll; the next three miss it.
     assert out["dots"] == [False, False, False, True]
-    assert out["requests"] == 4
+    assert out["requests"] == len(_POLLED)
     assert out["after"] == "Connected"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_the_job_tables_ask_for_their_status_and_say_how_many_more():
+    """150 running jobs among 300: the tables once filtered the newest 100 jobs and missed most."""
+    def jobs(status, ids):
+        return [{"id": i, "task_id": i, "attempt": 1, "slurm_jobid": str(9000 + i), "slurm_status": status}
+                for i in ids]
+    replies = _good_poll()
+    replies["/api/overview"]["body"]["jobs"] = {"RUNNING": 150, "PENDING": 260}
+    replies[_RUNNING] = {"status": 200, "body": {"jobs": jobs("RUNNING", range(150, 0, -1)), "total": 150}}
+    replies[_PENDING] = {"status": 200, "body": {"jobs": jobs("PENDING", range(500, 300, -1)), "total": 260}}
+    out = _run_overlay("""
+        var $ = function (id) { return document.getElementById(id); };
+        replies = GOOD;
+        await refreshAll();
+        out.text = $('statusText').textContent;
+        out.card = [String($('cardRunning').textContent), String($('cardPending').textContent)];
+        out.running = $('runningJobsBody').innerHTML;
+        out.pending = $('pendingJobsBody').innerHTML;
+        replies = Object.assign({}, GOOD);
+        replies[RUNNING] = { status: 200, body: { jobs: [], total: 0 } };
+        await refreshAll();
+        out.none = $('runningJobsBody').innerHTML;
+    """, _polling_code(), "var GOOD = %s, RUNNING = %s;" % (json.dumps(replies), json.dumps(_RUNNING)))
+    assert out["text"] == "Connected" and out["card"] == ["150", "260"]
+    assert out["running"].count("<tr>") == 150 and "more" not in out["running"]
+    assert "<td>9001</td>" in out["running"] and "<td>9150</td>" in out["running"]
+    assert out["pending"].count("<tr>") == 201 and out["pending"].endswith("+60 more</td></tr>")
+    assert "No running jobs" in out["none"]
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")

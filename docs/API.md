@@ -410,7 +410,9 @@ singlepoint_vert_red | singlepoint_vert_spin_change`.
 ### `GET /api/jobs` `?status=&limit=`
 
 `status` matches SLURM (`RUNNING | PENDING | COMPLETED | FAILED |
-TIMEOUT | CANCELLED | UNKNOWN`).
+TIMEOUT | CANCELLED | UNKNOWN`). `limit` defaults to 50, at most 500.
+Returns the newest `limit` matching jobs and how many match in all:
+`{"jobs": [...], "total": 150}`.
 
 ---
 

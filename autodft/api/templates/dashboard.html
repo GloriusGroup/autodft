@@ -4234,41 +4234,31 @@
             }).join('');
         }
 
+        // Each table shows the newest JOBS_SHOWN jobs of its status, then how many more there are.
+        var JOBS_SHOWN = 200;
+
+        async function fetchJobTable(status, bodyId, emptyText) {
+            var data = await pollRead([bodyId], null, '/api/jobs?status=' + status + '&limit=' + JOBS_SHOWN);
+            var tbody = document.getElementById(bodyId);
+            if (data.jobs.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="empty-state">' + emptyText + '</td></tr>';
+                return;
+            }
+            var more = data.total - data.jobs.length;
+            tbody.innerHTML = data.jobs.map(function (j) {
+                return '<tr>' +
+                    '<td>' + escHtml(j.id) + '</td>' +
+                    '<td>' + escHtml(j.slurm_jobid || '-') + '</td>' +
+                    '<td>' + escHtml(j.task_id) + '</td>' +
+                    '<td>' + escHtml(j.attempt) + '</td>' +
+                    '<td>' + fmtTime(j.time_start) + '</td>' +
+                    '</tr>';
+            }).join('') + (more > 0 ? '<tr><td colspan="5" class="empty-state">+' + escHtml(more) + ' more</td></tr>' : '');
+        }
+
         async function fetchJobs() {
-            var jobs = await pollRead(['pendingJobsBody', 'runningJobsBody'], null, '/api/jobs?limit=100');
-
-            var pending = jobs.filter(function (j) { return j.slurm_status === 'PENDING'; });
-            var running = jobs.filter(function (j) { return j.slurm_status === 'RUNNING'; });
-
-            var pBody = document.getElementById('pendingJobsBody');
-            if (pending.length === 0) {
-                pBody.innerHTML = '<tr><td colspan="5" class="empty-state">No pending jobs</td></tr>';
-            } else {
-                pBody.innerHTML = pending.map(function (j) {
-                    return '<tr>' +
-                        '<td>' + escHtml(j.id) + '</td>' +
-                        '<td>' + escHtml(j.slurm_jobid || '-') + '</td>' +
-                        '<td>' + escHtml(j.task_id) + '</td>' +
-                        '<td>' + escHtml(j.attempt) + '</td>' +
-                        '<td>' + fmtTime(j.time_start) + '</td>' +
-                        '</tr>';
-                }).join('');
-            }
-
-            var rBody = document.getElementById('runningJobsBody');
-            if (running.length === 0) {
-                rBody.innerHTML = '<tr><td colspan="5" class="empty-state">No running jobs</td></tr>';
-            } else {
-                rBody.innerHTML = running.map(function (j) {
-                    return '<tr>' +
-                        '<td>' + escHtml(j.id) + '</td>' +
-                        '<td>' + escHtml(j.slurm_jobid || '-') + '</td>' +
-                        '<td>' + escHtml(j.task_id) + '</td>' +
-                        '<td>' + escHtml(j.attempt) + '</td>' +
-                        '<td>' + fmtTime(j.time_start) + '</td>' +
-                        '</tr>';
-                }).join('');
-            }
+            await Promise.all([fetchJobTable('PENDING', 'pendingJobsBody', 'No pending jobs'),
+                               fetchJobTable('RUNNING', 'runningJobsBody', 'No running jobs')]);
         }
 
         // ── Failed entrypoints (surfaced on the Current Status page) ───
