@@ -23,6 +23,8 @@ from autodft.models import (
     ComputationHeader, ComputationJob, ComputationTask, Molecule, MoleculeGeometry, MoleculeState,
     TaskStatus, TaskType,
 )
+from autodft.models.enums import ProjectJobKind, ProjectJobStatus
+from autodft.models.project_job import ProjectJob
 from autodft.models.result import JobResult
 
 
@@ -501,3 +503,86 @@ def test_begin_write_holds_off_a_claim_until_the_commit(tmp_path):
         assert _claim(controller, job_id)
         assert [j.id for j in admin_ops.in_flight_jobs(cli, [task_id])] == [job_id]
     engine.dispose()
+
+
+# ---------------------------------------------------------------- blocked projects
+
+
+def _archive(session, molecule) -> None:
+    molecule.archived = True
+    session.add(molecule)
+    session.commit()
+
+
+def _start_export(session, molecule) -> None:
+    session.add(ProjectJob(qualified_name=molecule.project_name, kind=ProjectJobKind.export_files,
+                           status=ProjectJobStatus.running))
+    session.commit()
+
+
+@pytest.mark.parametrize("block", [_archive, _start_export])
+def test_force_refuses_a_task_of_an_archived_or_exporting_project(session, opt, sample_molecule, block):
+    block(session, sample_molecule)
+    before = (_ids(session, ComputationTask), _ids(session, ComputationJob), _ids(session, MoleculeGeometry))
+    with pytest.raises(typer.Exit):
+        _reset(opt["opt"].id, force=True)
+    after = (_ids(session, ComputationTask), _ids(session, ComputationJob), _ids(session, MoleculeGeometry))
+    assert after == before
+    assert Path(opt["job"].job_path).is_dir()
+    session.refresh(opt["opt"])
+    assert opt["opt"].status == TaskStatus.successful
+
+
+def test_rerun_task_names_an_archived_project(session, settings, opt, sample_molecule):
+    from autodft.api import admin_ops
+
+    _archive(session, sample_molecule)
+    with pytest.raises(ValueError, match="project archived; nothing can re-run"):
+        admin_ops.rerun_task(session, opt["opt"], settings.comp_data_path)
+
+
+@pytest.mark.parametrize("block", [_archive, _start_export])
+def test_a_plain_reset_refuses_a_task_of_an_archived_or_exporting_project(
+    session, settings, sample_task, sample_molecule, block, capsys,
+):
+    sample_task.status = TaskStatus.failed
+    session.add(sample_task)
+    session.commit()
+    block(session, sample_molecule)
+    with pytest.raises(typer.Exit):
+        _reset(sample_task.id)
+    session.refresh(sample_task)
+    assert (sample_task.status, sample_task.retry_base) == (TaskStatus.failed, None)
+    assert "not reset" in capsys.readouterr().out
+
+
+def test_requeue_failed_skips_and_counts_tasks_of_archived_or_exporting_projects(
+    session, settings, sample_header, capsys,
+):
+    tasks = {}
+    for name in ("live", "archived", "exporting"):
+        molecule = Molecule(smiles="C", project_name=f"alice/{name}", archived=name == "archived")
+        session.add(molecule)
+        session.commit()
+        state = MoleculeState(molecule_id=molecule.id, description="S0", charge=0, multiplicity=1,
+                              singlepoint_header_id=sample_header.id)
+        session.add(state)
+        session.commit()
+        task = ComputationTask(task_type=TaskType.singlepoint, status=TaskStatus.failed,
+                               state_id=state.id, header_id=sample_header.id)
+        session.add(task)
+        session.commit()
+        tasks[name] = task
+        if name == "exporting":
+            _start_export(session, molecule)
+
+    cli_admin.requeue_failed(project=None)
+
+    for task in tasks.values():
+        session.refresh(task)
+    assert {n: t.status for n, t in tasks.items()} == {
+        "live": TaskStatus.created, "archived": TaskStatus.failed, "exporting": TaskStatus.failed,
+    }
+    out = capsys.readouterr().out
+    assert "Requeued 1 failed task(s)" in out
+    assert "Skipped 2" in out

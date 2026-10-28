@@ -46,6 +46,7 @@ from typing import Optional
 from sqlmodel import Session, col, delete, func, select, update
 
 from autodft.models.enums import TERMINAL_SLURM_STATES, TRANSIENT_SLURM_STATES, TaskStatus, TaskType
+from autodft.api import project_jobs
 from autodft.engine.state_machine import SBATCH_FAILED
 from autodft.paths import safe_subdirectory
 from autodft.models.entrypoint import CalculationEntrypoint
@@ -1046,6 +1047,21 @@ def in_flight_jobs(session: Session, task_ids: list[int]) -> list[ComputationJob
     ]
 
 
+def rerun_blocker(session: Session, task: ComputationTask) -> Optional[str]:
+    """Why *task* may not re-run: its project is archived or has an archive/export job running."""
+    state = session.get(MoleculeState, task.state_id)
+    molecule = session.get(Molecule, state.molecule_id) if state is not None else None
+    if molecule is None:
+        return None
+    if molecule.archived:
+        return "project archived; nothing can re-run"
+    try:
+        project_jobs.assert_no_active_job(session, molecule.project_name)
+    except project_jobs.JobInProgress as exc:
+        return str(exc)
+    return None
+
+
 def describe_jobs(jobs: list[ComputationJob]) -> str:
     """Job ids with their SLURM id or state, for a refusal message."""
     return ", ".join(
@@ -1132,10 +1148,13 @@ def rerun_task(session: Session, task: ComputationTask, comp_root: Path) -> dict
     Checks and writes run under one write lock (:func:`begin_write`).
 
     Raises:
-        ValueError: if SLURM may be running any of these jobs.
+        ValueError: if SLURM may be running any of these jobs, or :func:`rerun_blocker` objects.
     """
     begin_write(session)
     session.refresh(task)
+    blocker = rerun_blocker(session, task)
+    if blocker:
+        raise ValueError(blocker)
     dependents, geometry_ids = task_dependents(session, task)
     task_ids = [task.id, *(t.id for t in dependents)]
     live = in_flight_jobs(session, task_ids)

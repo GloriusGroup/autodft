@@ -124,7 +124,8 @@ def reset_task(
     ),
     config: Optional[str] = typer.Option(None, "--config", help="Path to config TOML file"),
 ) -> None:
-    """Reset a failed task to 'created'. Refused while one of its jobs is in SLURM."""
+    """Reset a failed task to 'created'. Refused while one of its jobs is in SLURM, or
+    its project is archived or has an archive/export job running."""
     from autodft.api import admin_ops
     from autodft.config import load_settings
 
@@ -157,6 +158,10 @@ def reset_task(
             for folder in summary["orphaned_dirs"]:
                 console.print(f"  [yellow]could not delete {folder}[/yellow]")
         else:
+            blocker = admin_ops.rerun_blocker(session, task)
+            if blocker:
+                console.print(f"[red]Task #{task_id} not reset:[/red] {blocker}")
+                raise typer.Exit(code=1)
             unsettled = admin_ops.unsettled_jobs(session, [task_id])
             if unsettled:
                 console.print(
@@ -182,8 +187,8 @@ def requeue_failed(
     project: Optional[str] = typer.Option(None, "--project", help="Filter by project name"),
 ) -> None:
     """Requeue all failed tasks back to 'created' status, except those with a job in SLURM
-    or not yet judged."""
-    from autodft.api.admin_ops import begin_write, unsettled_jobs
+    or not yet judged, or of an archived project or one with an archive/export job running."""
+    from autodft.api.admin_ops import begin_write, rerun_blocker, unsettled_jobs
 
     with get_session() as session:
         begin_write(session)
@@ -204,10 +209,14 @@ def requeue_failed(
             return
 
         busy = {j.task_id for j in unsettled_jobs(session, [t.id for t in failed_tasks])}
+        blocked = 0
         count = 0
         now = datetime.now(timezone.utc)
         for task in failed_tasks:
             if task.id in busy:
+                continue
+            if rerun_blocker(session, task):
+                blocked += 1
                 continue
             _set_retry_base(session, task)
             task.status = TaskStatus.created
@@ -221,6 +230,9 @@ def requeue_failed(
     console.print(f"[green]Requeued {count} failed task(s){project_msg}.[/green]")
     if busy:
         console.print(f"[yellow]Skipped {len(busy)} with a job in SLURM or not yet judged.[/yellow]")
+    if blocked:
+        console.print(f"[yellow]Skipped {blocked} of an archived project or one with an "
+                      "archive/export job running.[/yellow]")
     logger.info("Requeued %d failed tasks%s", count, project_msg)
 
 
