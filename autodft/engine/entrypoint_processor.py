@@ -42,6 +42,10 @@ ESD_S1_METADATA = {
 ESD_T1_METADATA = {"esd_role": "T1"}
 # On S0 when Extend added ESD: its optimisations keep the header's Opt level.
 ESD_ADDED_LATER = "esd_added_later"
+EXTEND_DELETED_HEADER = (
+    "A header of this project was deleted by admin; a user cannot extend it. "
+    "Submit the molecules into a new project with a live header."
+)
 # Beside a requested T1, ESD's own triplet only needs what the rates read.
 ESD_OWN_T1_DESCRIPTION = "T1_esd"
 ESD_OWN_T1_METADATA = {
@@ -155,8 +159,9 @@ def _process_entrypoint_body(
             raise ValueError(f"{reason} Nothing was submitted for this molecule.")
         metadata["advanced"] = resolved
 
-    # A header admin deleted is revoked for users; Extend keeps the project's own.
-    for_user = not metadata.get("extend") and _submitted_by_user(session, metadata)
+    # A header admin deleted is revoked for users; Extend checks the project's own rows below.
+    by_user = _submitted_by_user(session, metadata)
+    for_user = by_user and not metadata.get("extend")
     if for_user:
         reason = _deleted_header_error(session, headers)
         if reason:
@@ -223,6 +228,8 @@ def _process_entrypoint_body(
 
     base_path = settings.comp_data_path
     s0 = _check_extension(session, molecule, header_ids, added) if metadata.get("extend") else None
+    if s0 is not None and by_user and any(h is not None and h.deleted for h in (cs_header, opt_header, sp_header)):
+        raise ValueError(f"{EXTEND_DELETED_HEADER} Nothing was submitted for this molecule.")
     if s0 is not None:
         initial_xyz = _initial_geometry(session, s0) or _generate_initial_xyz(smiles)
         metadata = _with_s0_settings(metadata, s0)

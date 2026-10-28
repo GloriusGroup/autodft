@@ -190,3 +190,26 @@ def test_extend_must_use_the_projects_headers(engine, tmp_path, monkeypatch):
         session.commit()
         _expand(session, tmp_path, monkeypatch)
         assert "project's headers" in (_error(session, entry) or "")
+
+
+@pytest.mark.parametrize("role", ["user", "admin"])
+def test_a_user_cannot_extend_with_a_header_admin_deleted(engine, tmp_path, monkeypatch, role):
+    from autodft import accounts
+    from autodft.models import ComputationHeader
+    from autodft.models.user import UserRole
+
+    with Session(engine) as session:
+        accounts.create_user(session, "nho", role=UserRole(role))
+        _queue(session, project_author="nho")
+        _expand(session, tmp_path, monkeypatch)
+        s0 = session.exec(select(MoleculeState)).one()
+        session.get(ComputationHeader, s0.singlepoint_header_id).deleted = True
+        session.commit()
+        entry = _queue(session, project_author="nho", extend=True, request_ox=True)
+        _expand(session, tmp_path, monkeypatch)
+        if role == "user":
+            assert "deleted by admin" in (_error(session, entry) or "")
+            assert _states(session) == ["S0"]
+        else:
+            assert _error(session, entry) is None
+            assert _states(session) == ["S0", "ox"]

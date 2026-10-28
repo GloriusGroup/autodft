@@ -366,7 +366,8 @@ sees the whole database:
   may use a header; creating, editing or deleting one answers 403 to
   anyone but admin, and headers users made earlier stay usable. A
   deleted header is revoked for users: a new submission naming it (by
-  ID or text) answers 400; what already runs on it keeps running.
+  ID or text) answers 400, and so does Extend of a project that uses it;
+  what already runs on it keeps running.
   Editing the text or kind of a header any state or task uses saves a
   new header ("In use; saved as new header #N") and leaves the old one
   as it ran; a description edit stays in place.

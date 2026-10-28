@@ -112,3 +112,23 @@ def test_someone_elses_project_is_invisible(api, tmp_path):
     with get_session() as session:
         _, other_key = accounts.create_user(session, "zmy")
     assert client.get("/api/projects/nho/p/extend-info", headers={"X-AutoDFT-API-Key": other_key}).status_code == 404
+
+
+@pytest.mark.parametrize("who", ["owner", "admin"])
+def test_a_user_cannot_extend_a_project_whose_header_admin_deleted(api, who):
+    client, key = api
+    with get_session() as session:
+        s0 = session.exec(select(MoleculeState).where(MoleculeState.description == "S0")).first()
+        session.get(ComputationHeader, s0.optimization_header_id).deleted = True
+        session.commit()
+        if who == "admin":
+            key = {"X-AutoDFT-API-Key": accounts.rotate_api_key(session, accounts.get_user_by_username(session, "admin"))}
+    r = client.post("/api/projects/p/extend", headers=key, json={"request_ox": True})
+    with get_session() as session:
+        entries = session.exec(select(CalculationEntrypoint)).all()
+    if who == "owner":
+        assert r.status_code == 400 and "deleted by admin" in r.json()["detail"]
+        assert entries == []
+    else:
+        assert r.status_code == 200, r.text
+        assert len(r.json()["queued"]) == 2 and len(entries) == 2

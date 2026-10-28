@@ -131,7 +131,8 @@ headers users created earlier stay usable. For the same reason a raw
 `header_*` text in a submission from anyone but admin must equal a stored
 header's or a package default's text. A deleted header is revoked for
 everyone but admin: a submission naming it by id or by text answers
-**400**, while states and tasks that already use it keep running. A header
+**400**, and so does Extend of a project whose S0 states use it, while
+states and tasks that already use it keep running. A header
 any state or task uses keeps its text and kind for good: an edit of
 either is saved as a new header (see `PUT /api/headers/{id}`).
 
@@ -191,7 +192,8 @@ default's text; any other text answers **403** (only admin adds header
 text), and a soft-deleted header, by `header_*_id` or by its text, answers
 **400**; on `POST /api/submit-batch` too. The controller refuses a deleted
 header's text again when it expands the entrypoint of a non-admin author
-(Extend excepted, package defaults excepted).
+(package defaults excepted), and a non-admin Extend whose project headers
+include a deleted one.
 
 **Body — every option:**
 
@@ -836,8 +838,9 @@ energy singlepoints: first submission only); one with nothing to add is
 `input.hess` since 2026-09-28, and a lowest S0 conformer without one stops
 the molecule's ESD before S1 and T1 start, with that reason. Answers
 `{project, queued: [{id, smiles}], rejected: [{smiles, detail}], skipped:
-[smiles]}`; 400 when the project is not extendable, 409 while an archive or
-export job runs. The dashboard's project page opens it as
+[smiles]}`; 400 when the project is not extendable, or, for anyone but
+admin, when a header of its S0 states was deleted ("A header of this project
+was deleted by admin; …"); 409 while an archive or export job runs. The dashboard's project page opens it as
 "Add calculations…": the submission form with the project's molecules and
 headers, present items greyed out. Owner or admin.
 

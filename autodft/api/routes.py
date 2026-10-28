@@ -2730,6 +2730,7 @@ def api_extend(name: str, body: SubmitBatchRequest, identity: Identity = Depends
     """
     from autodft import categories
     from autodft.api import project_jobs
+    from autodft.engine.entrypoint_processor import EXTEND_DELETED_HEADER
 
     bad = _reject_bad_project(name) or _priority_error(identity, body) or _tolerance_error(body)
     if bad is not None:
@@ -2742,6 +2743,10 @@ def api_extend(name: str, body: SubmitBatchRequest, identity: Identity = Depends
         scope = _extend_scope(session, name)
         if not scope["extendable"]:
             return JSONResponse(status_code=400, content={"detail": scope["reason"]})
+        if not identity.is_admin and any(
+            h and session.get(ComputationHeader, h["id"]).deleted for h in scope["headers"].values()
+        ):
+            return JSONResponse(status_code=400, content={"detail": EXTEND_DELETED_HEADER})
         try:
             project_jobs.assert_no_active_job(session, name)
         except project_jobs.JobInProgress as exc:
