@@ -148,8 +148,8 @@ tmp_dir    = "/tmp"
 # Stall watchdog: kill ORCA once nothing in its scratch dir changed for
 # this many minutes; the job fails as "Stalled" and is resubmitted with
 # the same resources. 0 (the default) runs ORCA without a watchdog.
-# (A job that segfaulted without ORCA terminating normally fails as "Crashed" and is
-# resubmitted unchanged the same way, watchdog or not.)
+# (A job that segfaulted without ORCA terminating normally fails as
+# "Crashed" and is resubmitted unchanged the same way, watchdog or not.)
 stall_minutes       = 240
 # Copy output.out back from scratch this often while ORCA runs (needs
 # the watchdog), so running jobs show progress. 0 disables.
@@ -266,6 +266,9 @@ For local testing without SLURM:
 autodft run --scheduler local --once   # single tick, then exit
 ```
 
+Never run `--once` against the live controller's database: two submitters
+defeat the `SUBMITTING` claim.
+
 ---
 
 ## Authentication
@@ -339,25 +342,23 @@ sees the whole database:
   Entrypoints** widget for SMILES the controller couldn't expand into
   tasks.
 * **Project Overview** — pick a project from the dropdown to see its
-  molecules, submission progress, success rate, and per-row task
-  counts. Subpages: **Summary**, **Molecules** (per-conformer
-  status, conformers numbered as in the exports with an unsuccessful
-  optimisation shown as "—", with a rendered structure, drawn by RDKit.js 2026.9.1 from
-  unpkg, pinned with SRI and fetched on the first structure shown; the
-  SMILES text stays if it cannot load; three tickboxes, unticked on every
-  project load: **Show energies** puts E (Eh) under every successful
-  singlepoint but NMR/UV-Vis and G = E + G−E(el) of the parent opt (raw,
-  no quasi-RRHO) under the relaxed one, **Show densities** adds
-  ElDens/SpinDens buttons that open a 3Dmol pop-up, **Show downloads** adds
-  `.out` buttons to successful opts and singlepoints and `.xyz` to opts),
-  **State Analysis** (triplet /
-  redox energies, E vs SCE only when the opt and singlepoint of both
-  states ran in MeCN, otherwise ΔG and a note; downloadable as XLSX),
-  **Photophysics** and **Methods**
-  (read-only: headers, every setting and its source, cutoffs, the full
-  ORCA input of every job type and the pipeline settings). The Export
-  panel has three buttons: **Export Project**, **Export and Delete** and
-  **Delete Project** (see below).
+  molecules, submission progress, success rate, and per-row task counts.
+  Subpages: **Summary**, **Molecules** (per-conformer status, conformers
+  numbered as in the exports with an unsuccessful optimisation shown as "—",
+  with a rendered structure, drawn by RDKit.js 2026.9.1 from unpkg, pinned
+  with SRI and fetched on the first structure shown; the SMILES text stays
+  if it cannot load; three tickboxes, unticked on every project load: **Show
+  energies** puts E (Eh) under every successful singlepoint but NMR/UV-Vis
+  and G = E + G−E(el) of the parent opt (raw, no quasi-RRHO) under the
+  relaxed one, **Show densities** adds ElDens/SpinDens buttons that open a
+  3Dmol pop-up, **Show downloads** adds `.out` buttons to successful opts
+  and singlepoints and `.xyz` to opts), **State Analysis** (triplet / redox
+  energies, E vs SCE only when the opt and singlepoint of both states ran in
+  MeCN, otherwise ΔG and a note; downloadable as XLSX), **Photophysics** and
+  **Methods** (read-only: headers, every setting and its source, cutoffs,
+  the full ORCA input of every job type and the pipeline settings). The
+  Export panel has three buttons: **Export Project**, **Export and Delete**
+  and **Delete Project** (see below).
 * **Headers** — list computation headers; admin creates, edits and
   soft-deletes them (other users see the page read-only). Each
   has a `kind` (confsearch / optimization / singlepoint / any), a
@@ -407,15 +408,15 @@ per NMR method) writes them to `<state>__state<state_id>/`, and then both
 CSVs add `state_id` and the three header ids to every row. The state analysis
 has one row per method family (a molecule's states at one header set). Only
 the final files of successful tasks are copied; a conformer with an imaginary
-mode gets no folder and is named in the all-conformers CSV. **Export and Delete** then
-deletes every `<comp_data>/mol_*/` of the project — everything not in the
-tree is gone — and flags the molecules `archived`; the project stays
-browsable in Project Overview but can no longer be exported (409). Refused for
-a protected project and for one that is already archived. **Delete Project**
-is the project wipe (below) offered to the owner and admin: a preview, the
-project name typed back, refused for a protected project and with 409 while
-another wipe runs; "Also delete exported data" starts unticked. The Admin
-page keeps its own wipe.
+mode gets no folder and is named in the all-conformers CSV. **Export and
+Delete** then deletes every `<comp_data>/mol_*/` of the project — everything
+not in the tree is gone — and flags the molecules `archived`; the project
+stays browsable in Project Overview but can no longer be exported (409).
+Refused for a protected project and for one that is already archived.
+**Delete Project** is the project wipe (below) offered to the owner and
+admin: a preview, the project name typed back, refused for a protected
+project and with 409 while another wipe runs; "Also delete exported data"
+starts unticked. The Admin page keeps its own wipe.
 
 **"Add calculations…" (Extend)** — on the project page, before the project
 is archived. It opens the submission form with the project's molecules and
@@ -845,7 +846,8 @@ autodft admin export \
 
 A CSV or JSON export with no results to write prints "Nothing to export" and
 removes the old file at the target path; the API job answers the same, with no
-download. The command refuses an archived project, whose kept files are the only copy.
+download. The command refuses an archived project, whose kept files are the
+only copy.
 
 The export tree (summary files and `molecules/<id>/<state>/conf<N>/…`, as
 "Export Project" writes it):
@@ -922,8 +924,8 @@ The pipeline is built to **fail loudly**, not silently:
 Recovering:
 
 ```bash
-autodft admin reset-task 17                          # one failed task back to 'created'
-autodft admin reset-task 17 --force                  # re-run a task in any status
+autodft admin reset-task 17                          # failed task to 'created'
+autodft admin reset-task 17 --force                  # re-run in any status
 autodft admin requeue-failed --project admin/phenols # bulk requeue
 autodft admin cleanup --days 30                      # purge old completed entrypoints
 ```
@@ -948,8 +950,15 @@ SLURM may be running: pending or running, claimed for sbatch (`SUBMITTING`),
 or left by an sbatch that reported failure but may have been accepted. Both
 also wait for a job that finished in SLURM but has not been judged yet
 (next tick). `--force` deletes such a finished job, but refuses when SLURM
-may be running a job of any task it would delete. The check and the changes run under one database write
-lock, so the controller cannot submit a job in between.
+may be running a job of any task it would delete. The check and the changes
+run under one database write lock, so the controller cannot submit a job in
+between. A `SUBMITTING` claim left by a crash blocks a reset or requeue of
+its task, and an archive of its project, until the controller runs again and
+releases it.
+
+`reset-task` (with or without `--force`) refuses, and `requeue-failed` skips
+and counts, a task of an archived project, which nothing can re-run, and of a
+project with an archive or export job running.
 
 For an entrypoint that failed before being expanded (e.g. bad SMILES),
 fix the SMILES and resubmit; the original `processing_error` row stays
