@@ -36,8 +36,8 @@ _TYPE_ORDER = {t: i for i, t in enumerate(TaskType)}
 _RETRY_EFFECTS = {
     "IncreaseResources": lambda s: (
         f"abnormal termination or timeout: at least {s.nprocs} cores and {s.time_limit}; a memory failure "
-        f"instead keeps the job's cores and time, %maxcore up to {s.mem_per_core} MB, or 1.5x its own if already as high; "
-        f"never fewer cores or less memory; each SLURM OOM adds 25 % to --mem, compounding; "
+        f"instead keeps the job's cores and time, %maxcore up to {s.mem_per_core} MB, or 1.5x its own "
+        f"if already as high; never fewer cores or less memory; each SLURM OOM adds 25 % to --mem, compounding; "
         f"--mem capped at {s.max_mem_per_job_mb or MAX_JOB_MEM_MB} MB"),
     "IncreaseMaxIter": lambda s: f"optimisation not converged: %geom MaxIter {s.max_iter}",
     "TightenConvergence": lambda s: "imaginary frequencies: TightSCF and %geom Convergence Tight, never loosened",
@@ -47,7 +47,8 @@ _RETRY_EFFECTS = {
     "RecoverSinglepointSCF": lambda s: (
         "singlepoint SCF failure: MaxIter 500 and a level shift; from attempt 3 also Normal SCF and SlowConv"),
     "IncreaseMP2ResponseMemory": lambda s: (
-        "NMR MP2 response short of memory: %maxcore raised by what it lacked (1.5x without a number)"),
+        "NMR MP2 response short of memory: %maxcore raised by what it lacked (1.5x without a number); "
+        "--mem keeps the previous job's margin, 25 % more after a SLURM OOM"),
 }
 
 

@@ -279,6 +279,8 @@ def test_pipeline_reports_the_current_config(seeded):
         "RecoverSinglepointSCF", "IncreaseMP2ResponseMemory",
     ]
     assert all(isinstance(v, str) and v for v in pipeline["retry"].values())
+    assert "memory failure instead keeps the job's cores and time" in pipeline["retry"]["IncreaseResources"]
+    assert "--mem keeps the previous job's margin" in pipeline["retry"]["IncreaseMP2ResponseMemory"]
     assert pipeline["stages"]["optimization"] == {"time_limit": "1-00:00:00", "default_nprocs": 16,
                                                   "default_mem_per_core": 1000}
     assert pipeline["slurm"] == {"partition": "CPU", "nice": 1000}
