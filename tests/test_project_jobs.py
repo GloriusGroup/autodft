@@ -40,6 +40,7 @@ from autodft.models import (
     TaskType,
 )
 from autodft.engine import state_machine
+from tests.test_export_paths import _seed_result
 
 PROJECT = "owner/screening"
 
@@ -333,11 +334,21 @@ class TestHttp:
 
     def test_download_streams_a_successful_csv(self, client):
         c, headers, env = client
+        _seed_result(env["tmp_path"])
         r = c.post("/api/projects/owner:screening/export?format=csv", headers=headers)
         job_id = r.json()["job"]["id"]
         project_jobs.join_all(timeout=10)
         dl = c.get(f"/api/jobs/{job_id}/download", headers=headers)
-        # The empty project writes no CSV: the job offers no download.
+        assert dl.status_code == 200
+        expected = env["tmp_path"] / "export_data" / "owner" / "screening" / "screening.csv"
+        assert dl.content == expected.read_bytes()
+
+    def test_an_empty_export_offers_no_download(self, client):
+        c, headers, env = client
+        r = c.post("/api/projects/owner:screening/export?format=csv", headers=headers)
+        job_id = r.json()["job"]["id"]
+        project_jobs.join_all(timeout=10)
+        dl = c.get(f"/api/jobs/{job_id}/download", headers=headers)
         assert dl.status_code == 400
 
     def test_a_running_job_blocks_a_second_export_and_a_submission(self, client):

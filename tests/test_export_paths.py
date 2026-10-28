@@ -9,17 +9,19 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlmodel import select
 
 from autodft import accounts
 from autodft.api.app import create_app
 from autodft.config import Settings
 from autodft.db import get_session, init_db, reset_engine
-from autodft.models import Molecule
+from autodft.models import Molecule, MoleculeState
 from autodft.paths import (
     InvalidProjectName,
     project_file_stem,
     safe_subdirectory,
 )
+from tests.test_export_exclusion import _conformer
 
 
 class TestFileStem:
@@ -87,21 +89,45 @@ def _run_export_job(c, headers, response):
     return detail["result"]
 
 
+def _seed_result(tmp_path) -> None:
+    """One successful S0 conformer in owner/screening, so a csv/json export has a row."""
+    with get_session() as session:
+        mol = session.exec(select(Molecule).where(Molecule.project_name == "owner/screening")).one()
+        state = MoleculeState(molecule_id=mol.id, description="S0", multiplicity=1, charge=0,
+                              metadata_json="{}")
+        session.add(state)
+        session.commit()
+        _conformer(session, tmp_path, state, "a", [], -1.0)
+
+
 class TestExportRoute:
     @pytest.mark.parametrize("fmt,suffix", [("csv", ".csv"), ("json", ".json")])
     def test_the_file_lands_beside_the_project_not_below_it(
         self, client, fmt, suffix,
     ):
         c, headers, tmp_path = client
+        _seed_result(tmp_path)
         response = c.post(
             f"/api/projects/owner:screening/export?format={fmt}", headers=headers,
         )
         result = _run_export_job(c, headers, response)
         expected = tmp_path / "export_data" / "owner" / "screening" / f"screening{suffix}"
-        # The empty project has nothing to write: no path, no download.
+        assert result["path"] == str(expected)
+        assert expected.is_file()
+        job_id = response.json()["job"]["id"]
+        download = c.get(f"/api/jobs/{job_id}/download", headers=headers)
+        assert download.status_code == 200
+        assert download.content == expected.read_bytes()
+
+    @pytest.mark.parametrize("fmt", ["csv", "json"])
+    def test_an_empty_project_has_nothing_to_export(self, client, fmt):
+        c, headers, tmp_path = client
+        response = c.post(
+            f"/api/projects/owner:screening/export?format={fmt}", headers=headers,
+        )
+        result = _run_export_job(c, headers, response)
         assert "path" not in result and result["downloadable"] is False
-        # The parent must be the directory that was actually created.
-        assert expected.parent.is_dir()
+        assert result["message"] == "Nothing to export"
 
     def test_the_export_tree_is_the_project_directory(self, client):
         c, headers, tmp_path = client
