@@ -950,9 +950,12 @@ out-of-memory message): then `increased_mem_per_core` (at most 2500 MB), or
 (unset: 400 GB) bounds that rise and then the extra cores, never below the
 job's own.
 No retry lowers a job's cores or `%maxcore`.
-SLURM's `--mem` is cores × (`%maxcore` + 50 MB) on a first attempt. Each
-`OUT_OF_MEMORY` retry raises it 25 % above that, compounding (1.25×, 1.5625×,
-…) and kept by later retries, within the same ceiling.
+SLURM's `--mem` is cores × (`%maxcore` + 50 MB) on a first attempt. Every
+retry keeps the previous job's margin over that (its `--mem` ÷ its cores ×
+(`%maxcore` + 50)) and applies it to the new cores × (`%maxcore` + 50); an
+`OUT_OF_MEMORY` retry multiplies the margin by 1.25 first (1.25×, 1.5625×, …).
+NMR MP2-memory retries keep it too. `--mem` stays within the same ceiling
+(400 GB for an MP2-memory retry).
 
 Recovering:
 

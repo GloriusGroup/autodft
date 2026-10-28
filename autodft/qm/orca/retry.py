@@ -135,6 +135,19 @@ def _fc_rate_job(job_path: str) -> bool:
         and re.search(r"%tddft\b", text, re.IGNORECASE) is None
 
 
+def _mem_margin(submit_content: str, maxcore: int, nprocs: int, failure: FailureInfo) -> float:
+    """The previous job's --mem over ranks x (%maxcore + 50), grown by OOM_MEM_MARGIN after a SLURM OOM kill."""
+    ntasks = re.search(r"#SBATCH --ntasks-per-node=(\d+)", submit_content)
+    mem = re.search(r"#SBATCH --mem=(\d+)", submit_content)
+    base = (int(ntasks.group(1)) if ntasks else nprocs) * (maxcore + 50)
+    margin = max(1.0, int(mem.group(1)) / base) if mem else 1.0
+    if "OUT_OF_MEMORY" in (failure.fail_reason or ""):
+        return margin * OOM_MEM_MARGIN
+    if margin > 1.0:
+        logger.debug("Keeping the previous job's --mem margin %.4f over %d MB", margin, base)
+    return margin
+
+
 class IncreaseResources(RetryStrategy):
     """Increase CPU cores and wall-time, and -- only for an explicit memory
     failure -- per-rank memory.
@@ -270,13 +283,7 @@ class IncreaseResources(RetryStrategy):
         # Size the SLURM allocation from the %maxcore and rank count ORCA
         # actually got, so the two can never contradict each other.
         total_mem = target_nprocs * (target_maxcore + 50)
-        # Keep the previous job's margin over that; a SLURM OOM kill grows it, within the ceiling.
-        ntasks = re.search(r"#SBATCH --ntasks-per-node=(\d+)", submit_content)
-        prev_mem = re.search(r"#SBATCH --mem=(\d+)", submit_content)
-        prev_base = (int(ntasks.group(1)) if ntasks else original_nprocs) * (base_maxcore + 50)
-        margin = max(1.0, int(prev_mem.group(1)) / prev_base) if prev_mem else 1.0
-        if "OUT_OF_MEMORY" in (failure.fail_reason or ""):
-            margin *= OOM_MEM_MARGIN
+        margin = _mem_margin(submit_content, base_maxcore, original_nprocs, failure)
         if total_mem > ceiling:
             # Only reachable when the header's own request already exceeds
             # the ceiling; honouring it beats silently starving the job.
@@ -643,7 +650,7 @@ class IncreaseMP2ResponseMemory(RetryStrategy):
 
     ORCA states it in the response log ("not enough memory to treat a single
     MO (need N MB more)"); the retry gets N / 0.8 more, rounded up to 500 MB
-    and capped, and SLURM's --mem to match. Without the number: 1.5x.
+    and capped, and SLURM's --mem to match, keeping its margin. Without the number: 1.5x.
     """
 
     def applies(self, failure: FailureInfo, task_type: str) -> bool:
@@ -661,6 +668,7 @@ class IncreaseMP2ResponseMemory(RetryStrategy):
         wanted = base + short / MP2_RESPONSE_USABLE if short is not None else base * 1.5
         ntasks = re.search(r"#SBATCH --ntasks-per-node=(\d+)", submit_content)
         nprocs = int(ntasks.group(1)) if ntasks else 1
+        margin = _mem_margin(submit_content, base, nprocs, failure)
         cap = min(MP2_RESPONSE_MAX_MAXCORE_MB, MAX_JOB_MEM_MB // nprocs - 50)
         # Never below what the job already had.
         target = max(base, min(math.ceil(wanted / 500) * 500, cap))
@@ -669,9 +677,9 @@ class IncreaseMP2ResponseMemory(RetryStrategy):
         else:
             input_content = re.sub(r"^(!.*\n)", rf"\g<1>%maxcore {target}\n", input_content,
                                    count=1, flags=re.MULTILINE)
-        submit_content = re.sub(
-            r"#SBATCH --mem=\d+", f"#SBATCH --mem={nprocs * (target + 50)}", submit_content,
-        )
+        total_mem = nprocs * (target + 50)
+        total_mem = max(total_mem, min(math.ceil(total_mem * margin), MAX_JOB_MEM_MB))
+        submit_content = re.sub(r"#SBATCH --mem=\d+", f"#SBATCH --mem={total_mem}", submit_content)
         logger.info("IncreaseMP2ResponseMemory: %%maxcore %d -> %d (short by %s MB)", base, target, short)
         return input_content, submit_content
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from autodft import categories
 from autodft.qm.orca.blocks import NMR_DH_ROUTE
 from autodft.qm.orca.input_generator import render_submit_script
@@ -61,6 +63,27 @@ def test_the_retry_never_lowers_memory_and_stays_within_a_node(tmp_path):
     wide = SUBMIT.replace("ntasks-per-node=12", "ntasks-per-node=64")
     inp, submit = IncreaseMP2ResponseMemory().modify(DH_INPUT, wide, failure)
     assert "%maxcore 6200" in inp and "#SBATCH --mem=400000" in submit
+
+
+def test_an_mp2_retry_after_an_oom_retry_keeps_the_grown_margin(tmp_path):
+    inp = "!PBE0 def2-TZVP NMR\n%maxcore 2500\n%pal nprocs 24 end\n"
+    oom = FailureInfo(fail_reason="['Termination', 'OUT_OF_MEMORY']", attempt=2, previous_job_path="")
+    inp, submit = ESCALATE.modify(inp, "#SBATCH --ntasks-per-node=24\n#SBATCH --mem=61200\n", oom)
+    previous = int(re.search(r"--mem=(\d+)", submit).group(1))
+    log = SHORT_LOG.replace("1783.4", "100.0")
+    failure = FailureInfo(fail_reason=str([MP2_RESPONSE_MEMORY]), attempt=3,
+                          previous_job_path=str(_failed_nmr_job(tmp_path, log=log)))
+    inp, submit = IncreaseMP2ResponseMemory().modify(inp, submit, failure)
+    target = int(re.search(r"%maxcore (\d+)", inp).group(1))
+    mem = int(re.search(r"--mem=(\d+)", submit).group(1))
+    assert target == 4500 and mem >= previous and mem >= 1.25 * 24 * (target + 50)
+
+
+def test_an_mp2_failure_with_a_slurm_oom_grows_the_margin(tmp_path):
+    failure = FailureInfo(fail_reason=str([MP2_RESPONSE_MEMORY, "OUT_OF_MEMORY"]), attempt=1,
+                          previous_job_path=str(_failed_nmr_job(tmp_path)))
+    inp, submit = IncreaseMP2ResponseMemory().modify(DH_INPUT, SUBMIT, failure)
+    assert "%maxcore 6500" in inp and f"#SBATCH --mem={12 * 6550 * 5 // 4}\n" in submit
 
 
 def test_an_escalated_dh_nmr_retry_keeps_its_memory():

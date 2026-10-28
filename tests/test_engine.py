@@ -950,7 +950,7 @@ class TestRetryStrategies:
         """A header above MAX_MAXCORE_MB is never clamped down to it; an OOM gets 1.5x."""
         from autodft.qm.orca.retry import FailureInfo, IncreaseResources
 
-        strategy = IncreaseResources(nprocs=32)
+        strategy = IncreaseResources(nprocs=16)
         inp = "!M062X\n%maxcore 8000\n%pal nprocs 8 end\n"
         submit = "#SBATCH --ntasks-per-node=8\n#SBATCH --mem=64400\n#SBATCH --time=1-00:00:00\n"
         failure = FailureInfo(
@@ -958,9 +958,9 @@ class TestRetryStrategies:
             attempt=2, charge=0, multiplicity=1,
         )
         new_input, new_submit = strategy.modify(inp, submit, failure)
-        assert "%maxcore 12000" in new_input
-        # 1.25 x 32 x 12050 MB, capped at the 400 GB default ceiling
-        assert "--mem=400000" in new_submit
+        assert "%maxcore 12000" in new_input and "--ntasks-per-node=16" in new_submit
+        # cores x (maxcore + 50), plus the OOM margin, below the 400 GB ceiling
+        assert f"--mem={16 * (12000 + 50) * 5 // 4}" in new_submit
 
     def test_non_memory_failure_keeps_maxcore(self):
         """A timeout / SCF failure gets more cores and time, NOT more memory --

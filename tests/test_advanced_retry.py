@@ -169,7 +169,7 @@ def test_max_mem_per_job_never_cuts_below_the_jobs_own_memory(caplog):
     assert "Escalation to 32 ranks x 6000 MB" in caplog.text
 
 
-def test_default_escalation_is_unchanged():
+def test_default_escalation():
     inp = "!M062X\n%maxcore 1000\n%pal nprocs 12 end\n" + XYZ
     out, sub = IncreaseResources().modify(inp, _submit(12, 1000), TIMEOUT)
     assert _resources(out, sub) == (24, 1000, 24, 24 * 1050)
@@ -239,12 +239,14 @@ def test_the_oom_margin_stays_within_max_job_mem_by_default():
     assert seen[-1][3] == MAX_JOB_MEM_MB
 
 
-def test_a_timeout_after_an_oom_keeps_the_grown_margin():
+def test_a_timeout_after_an_oom_keeps_the_grown_margin(caplog):
     inp = "!M062X\n%maxcore 2500\n%pal nprocs 24 end\n" + XYZ
     inp, sub = IncreaseResources().modify(inp, _submit(24, 2500), OOM)
-    inp, sub = IncreaseResources().modify(inp, sub, TIMEOUT)
+    with caplog.at_level("DEBUG", logger="autodft.qm.orca.retry"):
+        inp, sub = IncreaseResources().modify(inp, sub, TIMEOUT)
     n, m, _, mem = _resources(inp, sub)
     assert mem >= 1.25 * n * (m + 50)
+    assert "Keeping the previous job's --mem margin 1.2500" in caplog.text
 
 
 def test_an_orca_memory_message_alone_keeps_the_base_margin(tmp_path):
