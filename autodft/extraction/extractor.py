@@ -414,7 +414,8 @@ class PipelineExtractor:
     ) -> dict[str, Any]:
         """Write the summary files and ``molecules/`` tree into ``<export_root>/<project>/``.
 
-        Replaces a previous export there; archived molecules keep their folders.
+        Replaces a previous export there; archived molecules, and those an interrupted
+        archive was deleting, keep their folders.
         Raises ValueError, touching nothing, when every molecule is archived.
         Returns ``{molecules, files_copied, root}``.
         """
@@ -422,8 +423,8 @@ class PipelineExtractor:
 
     def _export_tree(
         self, export_root: str | Path, all_conformers: bool, keep_gbw: bool,
-    ) -> tuple[dict[str, Any], list[int]]:
-        """:meth:`export_tree`, plus the ids of the molecules it exported."""
+    ) -> tuple[dict[str, Any], list[tuple[int, Path]]]:
+        """:meth:`export_tree`, plus the molecules to archive: exported or mid-archive, with their folders."""
         from autodft.paths import project_file_stem, safe_subdirectory
 
         root = safe_subdirectory(Path(export_root), self.project_name)
@@ -441,7 +442,10 @@ class PipelineExtractor:
             plans = [self._plan_molecule(session, m, all_conformers, keep_gbw)
                      for m in molecules if not m.archived]
         root.mkdir(parents=True, exist_ok=True)
-        exported = [manifest["molecule_id"] for manifest, _ in plans]
+        # Its raw folder may be partly deleted: the export folder is the only full copy.
+        pending = {manifest["molecule_id"]: folder for manifest, _ in plans
+                   if ((folder := _molecule_folder(root, manifest)) / _ARCHIVING_MARKER).is_file()}
+        plans = [plan for plan in plans if plan[0]["molecule_id"] not in pending]
 
         folders = _clear_export(root, stem, [manifest for manifest, _ in plans])
         self.export_summary_csv(root / f"{stem}.csv")
@@ -471,7 +475,8 @@ class PipelineExtractor:
             copied += len(files)
 
         logger.info("Exported %d files of %d molecules to %s", copied, len(plans), root)
-        return {"molecules": len(plans), "files_copied": copied, "root": str(root)}, exported
+        targets = sorted([*pending.items(), *((m["molecule_id"], f) for (m, _), f in zip(plans, folders))])
+        return {"molecules": len(plans), "files_copied": copied, "root": str(root)}, targets
 
     def _plan_molecule(
         self, session: Session, mol: Molecule, all_conformers: bool, keep_gbw: bool,
@@ -567,21 +572,25 @@ class PipelineExtractor:
         all_conformers: bool = False,
         keep_gbw: bool = False,
     ) -> dict[str, Any]:
-        """Destructive: :meth:`export_tree`, then delete every ``<comp_root>/mol_<id>/`` and flag archived.
+        """Destructive: :meth:`export_tree`, then delete each ``<comp_root>/mol_<id>/`` and flag it archived.
 
-        The caller is responsible for the user confirmation.
+        Resumable: a re-run keeps the molecules already archived or mid-deletion
+        and exports only the rest. The caller is responsible for the user confirmation.
         """
-        # The export first: if it fails, nothing is deleted. Then exactly what it exported.
-        summary, molecule_ids = self._export_tree(export_root, all_conformers, keep_gbw)
-        for mol_id in molecule_ids:
+        # The export first: if it fails, nothing is deleted. Then what it exported or found mid-archive.
+        summary, targets = self._export_tree(export_root, all_conformers, keep_gbw)
+        for mol_id, folder in targets:
+            # Before the delete, so a re-run after a kill keeps this folder.
+            marker = folder / _ARCHIVING_MARKER
+            marker.touch()
             mol_dir = Path(comp_root) / f"mol_{mol_id}"
             if mol_dir.is_dir():
                 shutil.rmtree(mol_dir)
-
-        # Every DB row is kept: the project stays browsable as read-only history.
-        self._mark_archived(molecule_ids)
+            # Every DB row is kept: the project stays browsable as read-only history.
+            self._mark_archived([mol_id])
+            marker.unlink(missing_ok=True)
         logger.info("Archived project %r: %d molecules, %d files kept",
-                    self.project_name, len(molecule_ids), summary["files_copied"])
+                    self.project_name, len(targets), summary["files_copied"])
         return summary
 
     @staticmethod
@@ -791,6 +800,8 @@ OPTIONAL_WRITERS: list[tuple[tuple[str, ...], Callable[[str, Path, str, bool], l
     (("_reactivity.xlsx", "_reactivity.json"), write_reactivity),
 ]
 _SUMMARY_SUFFIXES = (".csv", "_all_conformers.csv", "_state_analysis.xlsx")
+# In a molecule's export folder while the archive deletes its raw folder.
+_ARCHIVING_MARKER = ".autodft_archiving"
 
 
 def _clear_export(root: Path, stem: str, manifests: list[dict]) -> list[Path]:

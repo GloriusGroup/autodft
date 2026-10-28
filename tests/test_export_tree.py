@@ -421,6 +421,69 @@ def test_an_archived_molecule_keeps_its_folder_on_a_later_export(db):
     assert "S0/conf1/sp.out" in _tree(db, new_id)
 
 
+def _snapshot(settings, mol_id) -> dict:
+    base = _root(settings) / "molecules" / str(mol_id)
+    return {p.relative_to(base).as_posix(): (p.read_bytes(), p.stat().st_mtime_ns)
+            for p in base.rglob("*") if p.is_file() and p.name != ".autodft_archiving"}
+
+
+def _interrupt_archive(settings, monkeypatch, victim: int, where: str) -> None:
+    """Archive, killed at *where* in *victim*'s deletion (the molecules before it are done)."""
+    real_rmtree, real_mark = shutil.rmtree, PipelineExtractor._mark_archived
+
+    def rmtree(path, *args, **kwargs):
+        if Path(path) == settings.comp_data_path / f"mol_{victim}":
+            if where == "before delete":
+                raise OSError("killed")
+            if where == "mid delete":
+                next(Path(path).rglob("output.out")).unlink()
+                raise OSError("Directory not empty: .nfs0001")
+        return real_rmtree(path, *args, **kwargs)
+
+    def mark(ids):
+        if victim in ids:
+            raise OSError("killed")
+        real_mark(ids)
+    with monkeypatch.context() as m:
+        m.setattr(shutil, "rmtree", rmtree)
+        if where == "before flag":
+            m.setattr(PipelineExtractor, "_mark_archived", staticmethod(mark))
+        with pytest.raises(OSError):
+            PipelineExtractor(PROJECT).archive_project(settings.export_data_path, settings.comp_data_path)
+
+
+@pytest.mark.parametrize("where", ["before delete", "mid delete", "before flag"])
+def test_a_rerun_archive_resumes(db, monkeypatch, where):
+    ids = [_standard(db)[0] for _ in range(3)]
+    full = {"molecule.json", "S0/confsearch.out", *CONF1}
+    _interrupt_archive(db, monkeypatch, ids[1], where)
+    with get_session() as session:
+        assert [session.get(Molecule, i).archived for i in ids] == [True, False, False]
+    assert not (db.comp_data_path / f"mol_{ids[0]}").exists()
+    assert (db.comp_data_path / f"mol_{ids[2]}").is_dir()
+    kept = {i: _snapshot(db, i) for i in ids[:2]}
+
+    summary = PipelineExtractor(PROJECT).archive_project(db.export_data_path, db.comp_data_path)
+    assert summary["molecules"] == 1
+    assert {i: _snapshot(db, i) for i in ids[:2]} == kept
+    for i in ids:
+        assert _tree(db, i) == full
+        assert not (db.comp_data_path / f"mol_{i}").exists()
+    with get_session() as session:
+        assert all(session.get(Molecule, i).archived for i in ids)
+
+
+def test_a_plain_export_keeps_a_partly_archived_projects_folders(db, monkeypatch):
+    ids = [_standard(db)[0] for _ in range(3)]
+    _interrupt_archive(db, monkeypatch, ids[1], "mid delete")
+    kept = {i: _snapshot(db, i) for i in ids[:2]}
+    (db.comp_data_path / f"mol_{ids[2]}" / "opt_a" / "job_1" / "output.out").write_text("newer")
+    summary = _export(db)
+    assert summary["molecules"] == 1
+    assert {i: _snapshot(db, i) for i in ids[:2]} == kept
+    assert (_root(db) / "molecules" / str(ids[2]) / "S0" / "conf1" / "opt.out").read_text() == "newer"
+
+
 def test_archived_state_analysis_reads_every_conformer(db):
     from autodft.analysis.state_analysis import analyze_project
 
@@ -478,6 +541,18 @@ def test_archive_job_takes_the_dialog_options(db, monkeypatch):
     assert "extensions" not in result
     assert "S0/conf2/sp.out" in _tree(db, mol_id)
     assert not (db.comp_data_path / f"mol_{mol_id}").exists()
+
+
+def test_a_rerun_archive_job_resumes(db, monkeypatch):
+    monkeypatch.setattr(project_jobs, "_wait_for_quiescence", lambda name: None)
+    ids = [_standard(db)[0] for _ in range(2)]
+    _interrupt_archive(db, monkeypatch, ids[1], "mid delete")
+    kept = _snapshot(db, ids[1])
+    result = project_jobs._execute(ProjectJobKind.archive, PROJECT, {}, db)
+    assert result["molecules"] == 0
+    assert _snapshot(db, ids[1]) == kept
+    with get_session() as session:
+        assert all(session.get(Molecule, i).archived for i in ids)
 
 
 @pytest.fixture()

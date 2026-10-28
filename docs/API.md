@@ -928,8 +928,9 @@ from the payload archiving froze — see [`docs/PHOTOPHYSICS.md`](PHOTOPHYSICS.m
 
 **The export tree** (`files` and the archive), replacing a previous one in
 the same directory (only the folders of the molecules exported now are replaced;
-archived or wiped molecules keep theirs, and a molecule whose id is still held by
-a wiped one's folder is written to `molecules/<mol_id>_2/`):
+archived or wiped molecules, and those an interrupted archive was deleting, keep
+theirs, and a molecule whose id is still held by a wiped one's folder is written
+to `molecules/<mol_id>_2/`):
 
 ```
 <export_data>/<owner>/<project>/
@@ -958,8 +959,12 @@ and is named, with its note, in `<project>_all_conformers.csv` and
 ### `POST /api/projects/{name}/archive`
 
 **Destructive** — the dashboard's "Export and Delete". Writes the export
-tree (above), then wipes `<comp_data>/mol_*/` for the project and flags
-every molecule `archived = true`. The database rows are **kept**, so the
+tree (above), then deletes the project's `<comp_data>/mol_<id>/` one
+molecule at a time, flagging each `archived = true` as soon as its folder
+is gone. An archive interrupted by a restart or an error leaves the project
+partly archived, and re-running it is safe: it keeps the export folders of
+the molecules already archived or mid-deletion and exports and deletes only
+the rest. The database rows are **kept**, so the
 project stays listed and browsable as read-only history — what is gone is
 the raw tree on disk, which is why an archived project can no longer be
 exported. Everything not in the tree (other conformers when only the

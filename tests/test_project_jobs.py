@@ -208,6 +208,18 @@ class TestReconcile:
         assert failed[0].status == ProjectJobStatus.failed
         assert "restart" in failed[0].error.lower()
 
+    def test_an_interrupted_archive_may_be_re_run(self, env):
+        with get_session() as session:
+            session.add(ProjectJob(
+                qualified_name=PROJECT, owner_id=env["owner_id"],
+                kind=ProjectJobKind.archive, status=ProjectJobStatus.running,
+            ))
+            session.commit()
+        project_jobs.reconcile_orphaned_jobs(env["settings"])
+        with get_session() as session:
+            row = session.exec(__import__("sqlmodel").select(ProjectJob)).one()
+        assert "safe" in row.error and "resumes" in row.error
+
     def test_a_finished_row_is_left_alone(self, env):
         with get_session() as session:
             session.add(ProjectJob(

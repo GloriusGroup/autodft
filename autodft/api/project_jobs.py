@@ -69,6 +69,8 @@ class ProjectGone(LookupError):
 
 
 NOTHING_TO_EXPORT = "Nothing to export"
+_ARCHIVE_RERUN = ("Re-running it is safe: it resumes, keeping the molecules already "
+                  "archived and exporting and deleting only the rest.")
 
 
 # How long the destructive archive waits for the project's in-flight SLURM
@@ -468,8 +470,8 @@ def reconcile_orphaned_jobs(settings: Optional[Settings] = None) -> int:
     """Fail any job left ``running`` by a controller restart. Returns the count.
 
     Called once at controller startup. The worker threads do not survive a
-    restart and the destructive archive cannot be resumed blindly, so an
-    orphan is marked failed (and its project unblocked) rather than retried.
+    restart, so an orphan is marked failed (and its project unblocked) rather
+    than retried; the user re-runs it.
     """
     with get_session(settings) as session:
         orphans = session.exec(
@@ -477,8 +479,8 @@ def reconcile_orphaned_jobs(settings: Optional[Settings] = None) -> int:
         ).all()
         for job in orphans:
             job.status = ProjectJobStatus.failed
-            job.error = (
-                "Interrupted by a controller restart; the job did not finish. Re-run it."
+            job.error = "Interrupted by a controller restart; the job did not finish. " + (
+                _ARCHIVE_RERUN if job.kind == ProjectJobKind.archive else "Re-run it."
             )
             job.finished_at = datetime.now(timezone.utc)
             session.add(job)

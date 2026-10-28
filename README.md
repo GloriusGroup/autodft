@@ -410,9 +410,12 @@ has one row per method family (a molecule's states at one header set). Only
 the final files of successful tasks are copied; a conformer with an imaginary
 mode gets no folder and is named in the all-conformers CSV. **Export and
 Delete** then deletes every `<comp_data>/mol_*/` of the project — everything
-not in the tree is gone — and flags the molecules `archived`; the project
-stays browsable in Project Overview but can no longer be exported (409).
-Refused for a protected project and for one that is already archived.
+not in the tree is gone — flagging each molecule `archived` once its folder is
+gone; the project stays browsable in Project Overview but can no longer be
+exported (409). Refused for a protected project and for one that is already
+archived. An archive cut short (a restart, an NFS error) can be re-run: it keeps
+the folders of the molecules already archived and exports and deletes the rest;
+a plain Export Project of such a project keeps them too.
 **Delete Project** is the project wipe (below) offered to the owner and
 admin: a preview, the project name typed back, refused for a protected
 project and with 409 while another wipe runs; "Also delete exported data"
