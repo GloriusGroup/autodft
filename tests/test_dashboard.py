@@ -1246,17 +1246,23 @@ def test_navigation_retires_the_old_pages_reads_but_not_actions():
     assert out["post"] == "queued" and not out["end"]["blocked"]
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-def test_start_up_waits_for_whoami_under_the_overlay_and_cancel_leaves_a_retry_link():
+def _start_up_code() -> str:
     html = (TEMPLATE / "dashboard.html").read_text()
+    start = html.index("        // Initial load")
     assert html.count("\n        startUp();\n") == 1
+    return (_functions("adminJSON", "loadIdentity") + html[start:html.index("        Promise.all([fetchHeaders()", start)]
+            + "var routed = [];\n"
+            # As the real one: navigation retires the open reads.
+            + "function activateRoute(r) { loadingRetireReads(); routed.push(r); }\n"
+            + "var route = 'projects.molecules';\n"
+            + "function currentRoute() { return route; }\n"
+            + "function renderHeadersList() {}\n")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_start_up_cancel_leaves_a_retry_link_and_navigation_asks_for_whoami_again():
     out = _run_overlay("""
-        var routed = [];
-        globalThis.activateRoute = function (r) { routed.push(r); };
-        globalThis.currentRoute = function () { return 'projects.molecules'; };
-        globalThis.renderHeadersList = function () {};
-        startUp();
-        await sleep(60);
+        await sleep(300);  // startUp ran before the harness shortened the show delay
         out.waiting = seen();
         els.loadingCancel.on.click();
         await sleep(5);
@@ -1264,22 +1270,47 @@ def test_start_up_waits_for_whoami_under_the_overlay_and_cancel_leaves_a_retry_l
         out.aborted = calls[0].opts.signal.aborted;
         out.note = document.querySelector('.container').inserted;
         out.routedAfterCancel = routed.slice();
-        startUp();
+        route = 'admin';
+        navigate();  // a sidebar click
         await sleep(60);
         out.retrying = seen();
+        out.calls = calls.map(function (c) { return c.url; });
         calls[1].resolve(JSON.stringify({ username: 'nho', is_admin: true }));
         await idle();
         out.routed = routed;
         out.name = els.identityName.textContent;
         out.end = seen();
-    """, _functions("adminJSON", "loadIdentity", "startUp"))
+    """, _start_up_code())
     assert out["waiting"]["visible"] and out["waiting"]["label"] == "Connecting…"
     assert out["aborted"] and not out["cancelled"]["blocked"]
     assert out["routedAfterCancel"] == []
-    assert "cancelled-note" in out["note"] and "data-startup" in out["note"] and "retry" in out["note"]
+    assert "cancelled-note" in out["note"] and "data-retry" in out["note"]
     assert out["retrying"]["visible"] and out["retrying"]["label"] == "Connecting…"
-    assert out["routed"] == ["projects.molecules"] and out["name"] == "nho (admin)"
+    assert out["calls"] == ["/api/whoami", "/api/whoami"]
+    assert out["routed"] == ["admin"] and out["name"] == "nho (admin)"
     assert not out["end"]["blocked"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_navigation_during_start_up_waits_for_whoami_and_routes_once_to_the_new_page():
+    out = _run_overlay("""
+        await sleep(10);
+        route = 'status';
+        navigate();  // Back/Forward while whoami runs
+        await sleep(10);
+        out.aborted = calls[0].opts.signal.aborted;
+        out.routedDuring = routed.slice();
+        calls[0].resolve(JSON.stringify({ username: 'nho', is_admin: false }));
+        await idle();
+        out.calls = calls.length;
+        out.routed = routed;
+        out.name = els.identityName.textContent;
+        out.note = document.querySelector('.container').inserted || null;
+        out.end = seen();
+    """, _start_up_code())
+    assert not out["aborted"] and out["routedDuring"] == [] and out["calls"] == 1
+    assert out["routed"] == ["status"] and out["name"] == "nho"
+    assert out["note"] is None and not out["end"]["blocked"]
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")

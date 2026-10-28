@@ -2593,7 +2593,7 @@
         document.addEventListener('click', function (e) {
             if (!e.target.closest || !e.target.closest('[data-retry]')) return;
             e.preventDefault();
-            activateRoute(currentRoute());
+            navigate();
         });
 
         // ── Sidebar hash routing ────────────────────────────────────────
@@ -2659,7 +2659,7 @@
             }).catch(ignoreAbort);
         }
 
-        window.addEventListener('hashchange', function () { activateRoute(currentRoute()); });
+        window.addEventListener('hashchange', navigate);
 
         // ── Admin page ───────────────────────────────────────────────────
         // Every destructive action is two steps: fetch a preview of exactly
@@ -6124,7 +6124,7 @@
                 await Promise.all([
                     refreshAll(),
                     fetchHeaders(),
-                    Promise.resolve(activateRoute(currentRoute())),
+                    Promise.resolve(navigate()),
                 ]);
             } finally {
                 fab.classList.remove('spinning');
@@ -6198,20 +6198,30 @@
 
         // Initial load
         // Routed once, after whoami (the Admin page depends on it); the overlay covers the wait.
-        // Cancel aborts whoami and leaves a link that starts over instead of a blank page.
+        // 'pending' while whoami runs, 'cancelled' after Cancel, then 'done'.
+        var identityState = 'pending';
+
+        // Navigation and retry: waits for a running whoami (it routes to the hash when it ends), asks again after a Cancel.
+        function navigate() {
+            if (identityState === 'pending') return;
+            if (identityState === 'cancelled') return startUp();
+            activateRoute(currentRoute());
+        }
+
+        // Cancel aborts whoami and leaves a retry link instead of a blank page.
         function startUp() {
-            withLoading('Connecting…', loadIdentity).then(function () { activateRoute(currentRoute()); }, function (err) {
-                if (!isAbort(err)) { activateRoute(currentRoute()); return; }
-                document.querySelector('.container').insertAdjacentHTML('afterbegin', '<div class="empty-state cancelled-note">'
-                    + '<a href="#" class="retry-link" data-startup="1">Cancelled — click to retry.</a></div>');
+            identityState = 'pending';
+            document.querySelectorAll('.cancelled-note').forEach(function (el) { el.remove(); });
+            withLoading('Connecting…', loadIdentity).then(function () {
+                identityState = 'done';
+                activateRoute(currentRoute());
+            }, function (err) {
+                identityState = isAbort(err) ? 'cancelled' : 'done';
+                if (identityState === 'done') { activateRoute(currentRoute()); return; }
+                document.querySelector('.container').insertAdjacentHTML('afterbegin',
+                    '<div class="empty-state cancelled-note">' + CANCELLED_HTML + '</div>');
             });
         }
-        document.addEventListener('click', function (e) {
-            if (!e.target.closest || !e.target.closest('[data-startup]')) return;
-            e.preventDefault();
-            e.target.closest('.cancelled-note').remove();
-            startUp();
-        });
         startUp();
         Promise.all([fetchHeaders(), fetchAdvancedDefaults()]).then(restoreSubmitForm).catch(function () {});
         refreshAll();
