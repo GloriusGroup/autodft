@@ -8,6 +8,7 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse
+from starlette.concurrency import run_in_threadpool
 
 from autodft import __version__
 from autodft.api.routes import public_router, router, set_active_settings
@@ -78,10 +79,16 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
         from autodft.db import get_session
 
         settings = get_active_settings()
+
+        def _resolve():
+            with get_session() as session:
+                return resolve_identity(request, settings, session)
+
         identity = None
         try:
-            with get_session() as session:
-                identity = resolve_identity(request, settings, session)
+            # Off the event loop: a slow or locked database must stall
+            # this request only, not the whole dashboard.
+            identity = await run_in_threadpool(_resolve)
         except Exception:  # noqa: BLE001 - never let auth 500 the whole app
             logger.exception("Could not resolve the caller's identity")
 

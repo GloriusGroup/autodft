@@ -30,11 +30,14 @@ from dataclasses import dataclass
 from typing import Optional
 
 from fastapi import HTTPException, Request
+from sqlalchemy import update
+from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, col, select
 
 from autodft import accounts
 from autodft.api.auth import COOKIE_NAME, verify_token
 from autodft.config import Settings
+from autodft.db import BUSY_TIMEOUT_MS
 from autodft.models.job import ComputationJob
 from autodft.models.molecule import Molecule
 from autodft.models.state import MoleculeState
@@ -44,6 +47,9 @@ from autodft.models.user import Project, User
 logger = logging.getLogger(__name__)
 
 API_KEY_HEADER = "X-AutoDFT-API-Key"
+
+# How long a "last seen" write may wait for the write lock before it is skipped.
+TOUCH_BUSY_TIMEOUT_MS = 1000
 
 
 @dataclass(frozen=True)
@@ -73,13 +79,14 @@ def resolve_identity(
     key = request.headers.get(API_KEY_HEADER) or _bearer_key(request)
     if key:
         user = accounts.resolve_api_key(session, key)
-        if user is not None:
-            # Commit only when the timestamp actually moved: a write per
-            # request would put every API call behind the SQLite writer.
-            if accounts.touch(session, user):
-                session.commit()
-            return _from_user(user)
-        return None
+        if user is None:
+            return None
+        identity = _from_user(user)
+        # Only when the timestamp actually moved: a write per request
+        # would put every API call behind the SQLite writer.
+        if accounts.touch(session, user):
+            _record_seen(session, user)
+        return identity
 
     cookie = request.cookies.get(COOKIE_NAME)
     if cookie:
@@ -102,6 +109,22 @@ def resolve_identity(
 
 def _from_user(user: User) -> Identity:
     return Identity(username=user.username, is_admin=user.is_admin, user_id=user.id)
+
+
+def _record_seen(session: Session, user: User) -> None:
+    """Best-effort ``last_seen_at`` write; skipped if the lock stays busy ~1 s."""
+    user_id, seen = user.id, user.last_seen_at
+    session.rollback()  # drop the pending write; it goes out on its own connection
+    try:
+        with session.get_bind().connect() as conn:
+            conn.exec_driver_sql(f"PRAGMA busy_timeout={TOUCH_BUSY_TIMEOUT_MS}")
+            try:
+                conn.execute(update(User).where(User.id == user_id).values(last_seen_at=seen))
+                conn.commit()
+            finally:
+                conn.exec_driver_sql(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
+    except OperationalError as exc:
+        logger.info("Skipped the last-seen update for user %s: %s", user_id, exc)
 
 
 # ----------------------------------------------------------------------

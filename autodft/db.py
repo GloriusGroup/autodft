@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 
 _engine = None
 
+# How long a connection waits for the SQLite write lock.
+BUSY_TIMEOUT_MS = 60000
+
 
 def get_engine(settings: Settings | None = None):
     """Return (and lazily create) the singleton engine."""
@@ -68,7 +71,7 @@ def get_engine(settings: Settings | None = None):
                 # default, every concurrent write -- dashboard submissions,
                 # header edits -- failed with "database is locked" for the
                 # whole window. Wait instead of failing.
-                cursor.execute("PRAGMA busy_timeout=60000")
+                cursor.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
                 cursor.close()
 
     return _engine

@@ -385,3 +385,99 @@ class TestUnbootstrappedSubmissionOwner:
                 )
         assert exc.value.status_code == 400
         reset_engine()
+
+
+class TestAuthUnderWriteLock:
+    """API-5: the auth middleware resolved the caller on the event loop and
+    committed ``last_seen_at`` under the 60 s busy timeout, so a controller
+    holding the write lock stalled the whole dashboard."""
+
+    @pytest.fixture()
+    def app_env(self, tmp_path):
+        from fastapi.testclient import TestClient
+
+        from autodft import accounts
+        from autodft.api.app import create_app
+        from autodft.db import get_session, init_db, reset_engine
+
+        settings = Settings()
+        settings.storage.data_path = str(tmp_path)
+        reset_engine()
+        init_db(settings)
+        with get_session(settings) as session:
+            _, key = accounts.create_user(session, "mhoffmann")
+        with TestClient(create_app(settings)) as client:
+            yield client, {"X-AutoDFT-API-Key": key}, tmp_path / "autodft.db"
+        reset_engine()
+
+    @staticmethod
+    def _last_seen(db_file):
+        import sqlite3
+
+        with sqlite3.connect(db_file) as conn:
+            return conn.execute(
+                "SELECT last_seen_at FROM users WHERE username = 'mhoffmann'"
+            ).fetchone()[0]
+
+    def test_a_held_write_lock_does_not_stall_the_request(self, app_env):
+        import sqlite3
+        import threading
+        import time
+
+        client, headers, db_file = app_env
+        holder = sqlite3.connect(db_file, check_same_thread=False, isolation_level=None)
+        holder.execute("BEGIN IMMEDIATE")
+        # Safety cap so a regression fails in seconds rather than after 60 s.
+        release = threading.Timer(8, holder.rollback)
+        release.start()
+        try:
+            started = time.monotonic()
+            response = client.get("/api/projects", headers=headers)
+            elapsed = time.monotonic() - started
+        finally:
+            release.cancel()
+            holder.rollback()
+            holder.close()
+
+        assert response.status_code == 200
+        assert elapsed < 3
+        assert self._last_seen(db_file) is None
+
+        # The short timeout must not leak into pooled connections.
+        from contextlib import ExitStack
+
+        from autodft.db import BUSY_TIMEOUT_MS, get_engine
+
+        engine = get_engine()
+        with ExitStack() as stack:
+            conns = [stack.enter_context(engine.connect())
+                     for _ in range(engine.pool.checkedin())]
+            assert conns
+            for conn in conns:
+                assert conn.exec_driver_sql("PRAGMA busy_timeout").scalar() == BUSY_TIMEOUT_MS
+
+    def test_last_seen_is_recorded_when_the_lock_is_free(self, app_env):
+        client, headers, db_file = app_env
+        assert client.get("/api/projects", headers=headers).status_code == 200
+        assert self._last_seen(db_file) is not None
+
+    def test_identity_resolves_off_the_event_loop(self, app_env, monkeypatch):
+        import asyncio
+
+        from autodft.api import identity as identity_module
+
+        client, headers, _ = app_env
+        on_loop = []
+        real = identity_module.resolve_identity
+
+        def spy(*args, **kwargs):
+            try:
+                asyncio.get_running_loop()
+                on_loop.append(True)
+            except RuntimeError:
+                on_loop.append(False)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(identity_module, "resolve_identity", spy)
+        assert client.get("/api/projects", headers=headers).status_code == 200
+        assert on_loop == [False]
