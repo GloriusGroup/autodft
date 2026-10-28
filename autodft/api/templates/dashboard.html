@@ -3270,6 +3270,7 @@
             // Text of the header chosen in a slot; headerCache is filled by
             // fetchHeaders, which calls refreshCategoryDetails when done.
             function chosenHeaderText(selectId, kind) {
+                if (extendMode) return extendMode.info.headers[kind] ? extendMode.info.headers[kind].text : '';
                 if (typeof headerCache === 'undefined' || !headerCache) return '';
                 var v = document.getElementById(selectId).value;
                 if (v.indexOf('id:') === 0) {
@@ -3619,6 +3620,7 @@
                 populateHeaderSelect(document.getElementById('headerConfsearch'),    'confsearch',    headerCache.defaults, headerCache.custom);
                 populateHeaderSelect(document.getElementById('headerOptimization'),  'optimization',  headerCache.defaults, headerCache.custom);
                 populateHeaderSelect(document.getElementById('headerSinglepoint'),   'singlepoint',   headerCache.defaults, headerCache.custom);
+                if (extendMode) selectExtendHeaders(extendMode.info.headers);
                 if (window.refreshCategoryDetails) window.refreshCategoryDetails();
                 renderHeadersList();
             } catch (err) {
@@ -3821,6 +3823,31 @@
             request_esd: 'requestEsd', request_densities: 'requestDensities', request_singlepoint_nbo: 'requestNbo', request_sp_reactivity: 'requestReactivity'
         };
         var EXTEND_STATES = { T1: ['requestT1', 'maxConfT1'], ox: ['requestOx', 'maxConfOx'], red: ['requestRed', 'maxConfRed'] };
+        var EXTEND_HEADERS = { confsearch: 'headerConfsearch', optimization: 'headerOptimization', singlepoint: 'headerSinglepoint' };
+        var extendHeaderOptions = [];   // added for project headers the dropdowns lack
+
+        // Each dropdown shows the project's header, added when it lacks it (legacy, deleted or another user's).
+        function selectExtendHeaders(headers) {
+            dropExtendHeaderOptions();
+            Object.keys(EXTEND_HEADERS).forEach(function (kind) {
+                var sel = document.getElementById(EXTEND_HEADERS[kind]);
+                var h = headers[kind];
+                var opt = h ? [].filter.call(sel.options, function (o) { return o.value === 'id:' + h.id; })[0] : null;
+                if (!opt) {
+                    opt = document.createElement('option');
+                    opt.value = h ? 'id:' + h.id : '';
+                    opt.textContent = h ? 'Header #' + h.id + ' (this project)' : 'None';
+                    sel.appendChild(opt);
+                    extendHeaderOptions.push(opt);
+                }
+                sel.selectedIndex = [].indexOf.call(sel.options, opt);
+            });
+        }
+
+        function dropExtendHeaderOptions() {
+            extendHeaderOptions.forEach(function (o) { if (o.parentNode) o.parentNode.removeChild(o); });
+            extendHeaderOptions = [];
+        }
 
         function setField(id, value, locked) {
             var el = document.getElementById(id);
@@ -3897,7 +3924,10 @@
             setField('skipConfsearch', !info.settings.request_confsearch, true);
             setField('requestVertEx', info.settings.request_singlepoint_vertical_excitations, true);
             setField('maxConfS0', info.max_conformers.S0, true);
+            selectExtendHeaders(info.headers);
             ['headerConfsearch', 'headerOptimization', 'headerSinglepoint'].forEach(function (id) { setField(id, null, true); });
+            var tolerance = info.imag_freq_tolerance;
+            setField('imagFreqTolerance', tolerance == null ? '' : tolerance, true);
             document.querySelectorAll('#submitAdvanced [id^="adv-"]').forEach(function (el) {
                 var parts = el.id.split('-');
                 setField(el.id, info.advanced ? info.advanced[parts[1]][parts[2]] : null, true);
@@ -3931,7 +3961,9 @@
             document.getElementById('extendHeaders').textContent = 'Headers of ' + info.project + ' (used for every added job):\n'
                 + ['confsearch', 'optimization', 'singlepoint'].map(function (k) {
                     return k + ': ' + (h[k] ? h[k].text.trim().split('\n')[0] + (h[k].text.trim().indexOf('\n') !== -1 ? ' …' : '') : '—');
-                }).join('\n');
+                }).join('\n')
+                + '\nImaginary-frequency tolerance: ' + (tolerance == null
+                    ? 'differs between molecules; each keeps its own' : tolerance + ' cm⁻¹');
             document.getElementById('extendHeaders').style.display = 'block';
             document.getElementById('extendBannerText').innerHTML = '<strong>Extending ' + escHtml(info.project) + '</strong> — '
                 + info.molecules + ' molecule(s)' + (info.archived ? ' (' + info.archived + ' archived, skipped)' : '')
@@ -3943,6 +3975,8 @@
 
         function exitExtendMode() {
             if (!extendSnapshot) return;
+            extendMode = null;
+            dropExtendHeaderOptions();
             extendSnapshot.forEach(function (s) {
                 s.el.checked = s.checked;
                 s.el.value = s.value;
@@ -3954,7 +3988,6 @@
             var smiles = document.getElementById('smiles');
             smiles.placeholder = extendSnapshot.placeholder || '';
             extendSnapshot = null;
-            extendMode = null;
             smiles.dispatchEvent(new Event('input'));
             document.getElementById('extendBanner').style.display = 'none';
             document.getElementById('extendHeaders').style.display = 'none';
@@ -4120,6 +4153,7 @@
             // Extend inherits the S0's settings server-side.
             if (!extendMode) commonBody.advanced = advancedSettings();
             if (extendMode) {
+                delete commonBody.imag_freq_tolerance;  // S0's applies; the field only shows it
                 await submitExtend(commonBody, btn, feedback);
                 return;
             }

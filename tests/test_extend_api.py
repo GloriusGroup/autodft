@@ -60,6 +60,24 @@ def test_extend_info_reports_what_is_there(api):
     assert sorted(info["smiles"]) == ["CC=O", "CCO"]
 
 
+def _set_s0_tolerances(*values):
+    with get_session() as session:
+        for st, value in zip(session.exec(select(MoleculeState).where(MoleculeState.description == "S0")).all(), values):
+            st.metadata_json = json.dumps({**json.loads(st.metadata_json), "imag_freq_tolerance": value})
+            session.add(st)
+        session.commit()
+
+
+def test_extend_info_reports_the_s0_imaginary_frequency_tolerance(api):
+    client, key = api
+    info = client.get("/api/projects/p/extend-info", headers=key).json()
+    assert info["imag_freq_tolerance"] == -50.0  # legacy states: the old rule
+    _set_s0_tolerances(-10.0, -10.0)
+    assert client.get("/api/projects/p/extend-info", headers=key).json()["imag_freq_tolerance"] == -10.0
+    _set_s0_tolerances(-10.0, -20.0)
+    assert client.get("/api/projects/p/extend-info", headers=key).json()["imag_freq_tolerance"] is None
+
+
 def test_extend_queues_one_extend_entrypoint_per_molecule(api):
     client, key = api
     r = client.post("/api/projects/p/extend", headers=key, json={

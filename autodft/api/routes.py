@@ -2687,6 +2687,7 @@ class SubmitBatchRequest(SubmitRequest):
 def _extend_scope(session, name: str) -> dict:
     """What a project's molecules already have, for Extend: headers, Advanced settings, categories, states, options."""
     from autodft import categories
+    from autodft.extraction.results import imaginary_cutoff
     from autodft.qm.orca.advanced import stored_method_settings
 
     molecules = session.exec(select(Molecule).where(Molecule.project_name == name)).all()
@@ -2700,6 +2701,7 @@ def _extend_scope(session, name: str) -> dict:
         rows = [session.get(ComputationHeader, hid) if hid is not None else None for hid in next(iter(header_sets))]
         headers = dict(zip(("confsearch", "optimization", "singlepoint"),
                            ({"id": r.id, "text": r.header_text} if r else None for r in rows)))
+    tolerances = {imaginary_cutoff(st) for st in s0}
     have: dict[str, int] = {}
     options: dict = {}
     first: dict = {}
@@ -2748,6 +2750,8 @@ def _extend_scope(session, name: str) -> dict:
         "headers": headers,
         # Each extension takes its own S0's; None for a legacy project.
         "advanced": first.get("advanced"),
+        # S0's cutoff, which each extension keeps; None when the molecules differ.
+        "imag_freq_tolerance": next(iter(tolerances)) if len(tolerances) == 1 else None,
         "categories": {key: share(have.get(key, 0)) for key in categories.CATEGORIES},
         "options": options,
         "states": {d: share(counts.get(d, 0)) for d in ("T1", "ox", "red")},

@@ -1783,3 +1783,118 @@ def test_late_photophysics_replies_for_the_last_project_are_dropped():
     """ % (json.dumps(_PP_A), json.dumps(_B_FAILS), json.dumps(_PP_A)), _analysis_code())
     assert "database is locked" in out["html"] and "CCO" not in out["html"]
     assert out["started"] == []
+
+
+# ── Extend shows the project's setup ───────────────────────────────────
+
+_EXTEND_STUB = r"""
+var window = globalThis;
+El.prototype.value = '';
+var ME = { is_admin: false };
+var currentProject = null;
+function invalidateProjects() {}
+function currentRoute() { return 'submit'; }
+function refreshAll() {}
+function renderHeadersList() {}
+function advancedSettings() { return {}; }
+document.createElement = function (tag) { var o = new El(); o.tagName = tag.toUpperCase(); return o; };
+// A <select> whose value is its selected option's.
+function select(id, values, value) {
+    var el = field(id, 'select-one', '');
+    el.tagName = 'SELECT';
+    el.options = [];
+    el.appendChild = function (o) { o.parentNode = el; el.options.push(o); };
+    el.removeChild = function (o) {
+        var v = el.value;
+        el.options.splice(el.options.indexOf(o), 1);
+        o.parentNode = null;
+        el.value = v;
+    };
+    Object.defineProperty(el, 'innerHTML', { configurable: true, set: function () {
+        el.options.forEach(function (o) { o.parentNode = null; });
+        el.options = [];
+        el.selectedIndex = -1;
+    } });
+    Object.defineProperty(el, 'value', { configurable: true,
+        get: function () { var o = el.options[el.selectedIndex]; return o ? o.value : ''; },
+        set: function (v) { el.selectedIndex = el.options.map(function (o) { return o.value; }).indexOf(v); } });
+    values.forEach(function (v) { var o = document.createElement('option'); o.value = v; el.appendChild(o); });
+    el.value = value;
+    return el;
+}
+var headerCache = { defaults: [], custom: [
+    { id: 5, kind: 'confsearch', text: '!GOAT XTB2' }, { id: 7, kind: 'optimization', text: '!wB97X-D3 def2-SVP' },
+    { id: 8, kind: 'optimization', text: '!PBE0 def2-SVP' }, { id: 3, kind: 'singlepoint', text: '!PBE0 def2-TZVP' }] };
+var sent = {};
+var plainFetch = globalThis.fetch;
+globalThis.fetch = function (url, opts) { if (opts && opts.body) sent[url] = JSON.parse(opts.body); return plainFetch(url, opts); };
+"""
+
+
+def _extend_code() -> str:
+    html = (TEMPLATE / "dashboard.html").read_text()
+    start = html.index("        // ── Show/hide the settings of ticked categories")
+    notes = html[start:html.index("        // ── Live SMILES validation", start)]
+    start = html.index("        // ── Extend: add calculations")
+    extend = html[start:html.index("        // ── Data fetching", start)]
+    return (_REPLIES_STUB + _EXTEND_STUB
+            + _functions("escHtml", "projectPath", "normalizeHeaderText", "populateHeaderSelect", "fetchHeaders")
+            + notes + extend)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+@pytest.mark.parametrize("tolerance", [-10, None])
+def test_extend_shows_the_projects_headers_and_tolerance_and_sends_no_tolerance(tolerance):
+    none = {"request_spec_uvvis": "none", "request_spec_ir": "none", "request_spec_nmr": "none", "request_esd": "none",
+            "request_densities": "none", "request_singlepoint_nbo": "none", "request_sp_reactivity": "none"}
+    info = {"project": "nho/p", "molecules": 2, "archived": 0, "extendable": True, "reason": None,
+            # Header 9 (UV/Vis would be refused) is in no dropdown: legacy, deleted or another user's.
+            "headers": {"confsearch": None, "optimization": {"id": 7, "text": "!wB97X-D3 def2-SVP"},
+                        "singlepoint": {"id": 9, "text": "!wB97X-D3 def2-TZVP\n%tddft nroots 5 end\n"}},
+            "advanced": None, "imag_freq_tolerance": tolerance, "categories": none, "options": {},
+            "states": {"T1": "none", "ox": "none", "red": "none"}, "max_conformers": {"S0": 1},
+            "settings": {"request_singlepoint_vertical_excitations": True, "request_confsearch": False},
+            "submit_only": [], "smiles": ["CCO", "CC=O"]}
+    out = _run_overlay("""
+        var $ = function (id) { return document.getElementById(id); };
+        var slots = ['headerConfsearch', 'headerOptimization', 'headerSinglepoint'];
+        function snap() {
+            return { values: slots.map(function (id) { return $(id).value; }),
+                     options: slots.map(function (id) { return $(id).options.length; }),
+                     locked: slots.concat(['imagFreqTolerance']).map(function (id) { return !!$(id).disabled; }),
+                     tolerance: String($('imagFreqTolerance').value), uvvisNote: $('uvvisHeaderNote').textContent };
+        }
+        $('submitForm').elements = [
+            field('smiles', 'textarea', ''), field('project', 'text', 'mine'), field('skipConfsearch', 'checkbox', 'on'),
+            select('headerConfsearch', ['id:5'], 'id:5'), select('headerOptimization', ['id:7', 'id:8'], 'id:8'),
+            select('headerSinglepoint', ['id:3'], 'id:3'), field('imagFreqTolerance', 'number', '0'),
+            field('requestUvvis', 'checkbox', 'on')];
+        window.refreshCategoryDetails();
+        out.before = snap();
+        replies['/api/projects/nho%3Ap/extend-info'] = { status: 200, body: INFO };
+        await enterExtendMode('nho/p');
+        out.extending = snap();
+        out.note = $('extendHeaders').textContent;
+        // A header reload while extending keeps the project's headers.
+        replies['/api/headers'] = { status: 200, body: headerCache };
+        await fetchHeaders();
+        out.reloaded = snap();
+        replies['/api/projects/nho%3Ap/extend'] = { status: 200, body: { queued: [], rejected: [], skipped: [] } };
+        await $('submitForm').on.submit({ preventDefault: function () {} });
+        await idle();
+        out.body = sent['/api/projects/nho%3Ap/extend'];
+        exitExtendMode();
+        out.after = snap();
+    """.replace("INFO", json.dumps(info)), _extend_code())
+    assert out["before"] == {"values": ["id:5", "id:8", "id:3"], "options": [1, 2, 1],
+                             "locked": [False] * 4, "tolerance": "0", "uvvisNote": ""}
+    shown = {"values": ["", "id:7", "id:9"], "options": [2, 2, 2], "locked": [True] * 4,
+             "tolerance": "" if tolerance is None else str(tolerance)}
+    assert {k: out["extending"][k] for k in shown} == shown
+    assert "UV/Vis will be refused" in out["extending"]["uvvisNote"]
+    assert out["reloaded"] == out["extending"]
+    assert ("-10 cm" in out["note"]) is (tolerance is not None)
+    assert ("differs between molecules" in out["note"]) is (tolerance is None)
+    assert "imag_freq_tolerance" not in out["body"]
+    assert [out["body"][f"header_{k}_id"] for k in ("confsearch", "optimization", "singlepoint")] == [None, 7, 9]
+    assert out["after"] == out["before"]
