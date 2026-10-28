@@ -24,6 +24,7 @@ from autodft.engine.entrypoint_processor import (
     get_charge_and_multiplicity,
     validate_smiles,
 )
+from autodft.engine.scheduler import SubmitResult
 from autodft.engine.state_machine import (
     _followups_were_expected,
     _get_job_charge_multiplicity,
@@ -465,11 +466,9 @@ class _StubScheduler:
     def submit(self, script, nice=0):
         self.submitted += 1
 
-        class _Result:
-            success = self.succeed
-            job_id = "4242" if self.succeed else None
-            error = None if self.succeed else "sbatch: command not found"
-        return _Result()
+        if self.succeed:
+            return SubmitResult(success=True, job_id="4242")
+        return SubmitResult(success=False, error="sbatch: command not found")
 
 
 @pytest.fixture()

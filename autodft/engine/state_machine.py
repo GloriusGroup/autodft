@@ -846,12 +846,6 @@ def _pending_breakdown(scheduler: Scheduler) -> tuple[int, int]:
     return getter()
 
 
-def _find_submitted(scheduler: Scheduler, submit_script: Path) -> Optional[str]:
-    """*scheduler*'s job already submitted from *submit_script*; None for schedulers without a lookup."""
-    finder = getattr(scheduler, "find_submitted", None)
-    return finder(submit_script) if finder is not None else None
-
-
 def submit_pending_jobs(
     session: Session, scheduler: Scheduler, settings: Settings,
     blocked_owners: Collection[str] = (),
@@ -999,7 +993,7 @@ def submit_pending_jobs(
         # Any failed sbatch may still have been accepted.
         if (job.fail_reason or "").startswith(_SBATCH_FAILED):
             try:
-                adopted = _find_submitted(scheduler, submit_script)
+                adopted = scheduler.find_submitted(submit_script)
             except Exception:  # noqa: BLE001 - resubmitting blind could run the job twice
                 logger.exception("Job %d: SLURM lookup of an earlier sbatch failed; "
                                  "deferring to the next tick", job.id)
@@ -1028,7 +1022,7 @@ def submit_pending_jobs(
             queue_len += 1
             since_poll += 1
             logger.info("Job %d submitted (slurm_jobid=%s)", job.id, result.job_id)
-        elif getattr(result, "rejected", False):
+        elif result.rejected:
             rejected.append((job, result.error or ""))
         else:
             # sbatch failures are usually transient -- slurmctld restarting,
