@@ -971,7 +971,10 @@ it flags the molecule `archived = true` and then deletes its
 leaves the project partly archived, and re-running it is safe. It keeps
 the export folders (and frozen photophysics payloads) of the molecules
 already archived, deletes any raw folder they have left, and exports and
-deletes only the rest. The database rows are **kept**, so the
+deletes only the rest. The controller also deletes, when it next starts,
+any raw folder an archived molecule has left, which covers an archive killed
+on its last molecule (the project is then archived and cannot be re-run),
+unless that project has a job running. The database rows are **kept**, so the
 project stays listed and browsable as read-only history — what is gone is
 the raw tree on disk, which is why an archived project can no longer be
 exported. Everything not in the tree (other conformers when only the
@@ -1238,7 +1241,10 @@ wipe stays refused with 409 until the last file is gone. `wipe-status`
 answers `{"running": ..., "operation": ..., "file_removal": {...}}`; the
 dashboard shows a banner while one is in flight. A controller killed
 mid-deletion leaves its batch under `.wipe-trash/`, which the next wipe or
-reset sweeps.
+reset sweeps. A project wipe stages its export folder under
+`<export_data>/<owner>/.wipe-trash/<pid>-<n>/`, which no wipe sweeps; the
+controller removes those batches (only ones whose process is gone) on a
+background thread when it starts, logging each.
 
 ---
 

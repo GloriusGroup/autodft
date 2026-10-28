@@ -892,3 +892,138 @@ class TestReassign:
         assert response.status_code == 200
         assert str(response.path) == str(archived["export_root"] / "lab" / "p" / "p_state_analysis.xlsx")
         assert api_job_download(job_id, as_nho).status_code == 404
+
+
+class TestStartupCleanup:
+    """``clean_up_at_start``: dead processes' export trash and archived molecules' raw folders."""
+
+    @pytest.fixture()
+    def live(self, tmp_path):
+        from autodft.config import Settings
+        from autodft.db import init_db, reset_engine
+
+        settings = Settings()
+        settings.storage.data_path = str(tmp_path)
+        settings.api.enabled = False
+        reset_engine()
+        init_db(settings)
+        yield settings
+        reset_engine()
+
+    @staticmethod
+    def _dead_pid() -> int:
+        import subprocess
+        import sys
+
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait()
+        return proc.pid
+
+    def _trash_layout(self, export_root):
+        import os
+
+        trash = export_root / "alice" / admin_ops._TRASH_DIRNAME
+        dead = trash / f"{self._dead_pid()}-3"
+        (dead / "screening" / "mol_1").mkdir(parents=True)
+        (dead / "screening" / "mol_1" / "opt.out").write_text("x" * 100)
+        kept = {
+            "export": export_root / "alice" / "screening" / "results.csv",
+            "lookalike": export_root / "alice" / "wipe-trash" / f"{self._dead_pid()}-1" / "f",
+            "sibling": export_root / "alice" / ".wipe-trash-old" / f"{self._dead_pid()}-1" / "f",
+            "not_a_batch": trash / "keep-me" / "f",
+            "live_batch": trash / f"{os.getpid()}-1" / "f",
+        }
+        for path in kept.values():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("keep")
+        return dead, kept
+
+    def test_dead_wipe_trash_under_an_owner_is_removed(self, live, caplog):
+        dead, kept = self._trash_layout(live.export_data_path)
+
+        with caplog.at_level("INFO", logger="autodft.api.admin_ops"):
+            admin_ops.clean_up_at_start(live).join(10)
+
+        assert not dead.exists()
+        assert all(p.read_text() == "keep" for p in kept.values())
+        assert any(str(dead) in r.getMessage() for r in caplog.records)
+
+    def test_an_emptied_trash_directory_is_pruned(self, live):
+        trash = live.export_data_path / "bob" / admin_ops._TRASH_DIRNAME
+        (trash / f"{self._dead_pid()}-1" / "p").mkdir(parents=True)
+
+        admin_ops.clean_up_at_start(live).join(10)
+
+        assert not trash.exists()
+        assert (live.export_data_path / "bob").is_dir()
+
+    def test_archived_molecules_raw_folders_go_and_nothing_else(self, live, caplog):
+        from autodft.db import get_session
+
+        with get_session(live) as session:
+            gone = Molecule(smiles="CCO", project_name="alice/p", archived=True)
+            no_dir = Molecule(smiles="CCN", project_name="alice/p", archived=True)
+            alive = Molecule(smiles="CCC", project_name="alice/p")
+            session.add_all([gone, no_dir, alive])
+            session.commit()
+            ids = gone.id, alive.id
+        comp = live.comp_data_path
+        for mid in ids:
+            (comp / f"mol_{mid}" / "tasks").mkdir(parents=True)
+            (comp / f"mol_{mid}" / "tasks" / "o.out").write_text("x")
+        stranger = comp / "mol_999"
+        stranger.mkdir()
+
+        with caplog.at_level("INFO", logger="autodft.api.admin_ops"):
+            admin_ops.clean_up_at_start(live).join(10)
+
+        assert not (comp / f"mol_{ids[0]}").exists()
+        assert (comp / f"mol_{ids[1]}" / "tasks" / "o.out").exists()
+        assert stranger.is_dir()
+        assert any(f"mol_{ids[0]}" in r.getMessage() for r in caplog.records)
+
+    def test_a_project_with_a_running_job_is_left_alone(self, live):
+        from autodft.db import get_session
+        from autodft.models import ProjectJob, ProjectJobKind, ProjectJobStatus
+
+        with get_session(live) as session:
+            mol = Molecule(smiles="CCO", project_name="alice/p", archived=True)
+            session.add(mol)
+            session.add(ProjectJob(
+                qualified_name="alice/p", kind=ProjectJobKind.archive,
+                status=ProjectJobStatus.running,
+            ))
+            session.commit()
+            leftover = live.comp_data_path / f"mol_{mol.id}"
+        leftover.mkdir(parents=True)
+
+        admin_ops.clean_up_at_start(live).join(10)
+
+        assert leftover.is_dir()
+
+    def test_the_run_command_starts_it(self, live, monkeypatch):
+        from autodft import config
+        from autodft.cli import run as run_cmd
+        from autodft.engine import pipeline
+
+        dead, _ = self._trash_layout(live.export_data_path)
+        threads = []
+        real = admin_ops.clean_up_at_start
+
+        class _Worker:
+            def __init__(self, **_):
+                pass
+
+            def tick(self):
+                pass
+
+        monkeypatch.setattr(config, "load_settings", lambda _path=None: live)
+        monkeypatch.setattr(run_cmd, "_log_to_file", lambda _s: None)
+        monkeypatch.setattr(pipeline, "PipelineWorker", _Worker)
+        monkeypatch.setattr(admin_ops, "clean_up_at_start", lambda s: threads.append(real(s)) or threads[-1])
+
+        run_cmd.run(config=None, scheduler="local", once=True)
+
+        assert len(threads) == 1
+        threads[0].join(10)
+        assert not dead.exists()

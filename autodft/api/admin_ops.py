@@ -35,6 +35,7 @@ import itertools
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -48,6 +49,8 @@ from sqlmodel import Session, col, delete, func, select, update
 
 from autodft.models.enums import TERMINAL_SLURM_STATES, TRANSIENT_SLURM_STATES, TaskStatus, TaskType
 from autodft.api import project_jobs
+from autodft.config import Settings
+from autodft.db import get_session
 from autodft.engine.state_machine import SBATCH_FAILED
 from autodft.paths import safe_subdirectory
 from autodft.models.entrypoint import CalculationEntrypoint
@@ -531,6 +534,89 @@ def _remove_in_background(
 def removal_status() -> Optional[dict]:
     """Status of the most recent file removal, or None if there has been none."""
     return _removal.status() if _removal is not None else None
+
+
+# ----------------------------------------------------------------------
+# Start-up cleanup
+# ----------------------------------------------------------------------
+
+# What ``_batch_name`` produces: ``<pid>-<n>``.
+_BATCH_RE = re.compile(r"^(\d+)-\d+$")
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:  # EPERM: alive, someone else's
+        return True
+    return True
+
+
+def _dead_export_trash(export_root: Path) -> list[Path]:
+    """``<export_root>/<owner>/.wipe-trash/<pid>-<n>`` batches whose process is gone.
+
+    A project wipe stages its export folder there, and no wipe sweeps it.
+    """
+    out: list[Path] = []
+    if not export_root.is_dir():
+        return out
+    for owner in sorted(export_root.iterdir()):
+        trash = owner / _TRASH_DIRNAME
+        if not trash.is_dir() or trash.is_symlink():
+            continue
+        for batch in sorted(trash.iterdir()):
+            match = _BATCH_RE.match(batch.name)
+            if match and batch.is_dir() and not _pid_alive(int(match.group(1))):
+                out.append(batch)
+    return out
+
+
+def _clean_up(settings: Settings) -> None:
+    for batch in _dead_export_trash(settings.export_data_path):
+        try:
+            _, freed = _remove_tree(batch)
+            logger.warning("Start-up cleanup: removed wipe trash %s (%s)", batch, human_bytes(freed))
+            if not any(batch.parent.iterdir()):
+                batch.parent.rmdir()
+        except OSError:
+            logger.exception("Start-up cleanup: could not remove %s", batch)
+
+    # An archive killed during a molecule's delete leaves it flagged with its folder.
+    with get_session(settings) as session:
+        archived = session.exec(
+            select(Molecule.id, Molecule.project_name).where(Molecule.archived == True)  # noqa: E712
+        ).all()
+    for mol_id, project in archived:
+        mol_dir = settings.comp_data_path / f"mol_{mol_id}"
+        if not mol_dir.is_dir():
+            continue
+        try:
+            with project_jobs.wiping(project):
+                _, freed = _remove_tree(mol_dir)
+            logger.warning(
+                "Start-up cleanup: removed archived molecule %d's %s (%s)",
+                mol_id, mol_dir, human_bytes(freed),
+            )
+        except project_jobs.JobInProgress:
+            logger.info("Start-up cleanup: %r has a job running; left %s", project, mol_dir)
+        except OSError:
+            logger.exception("Start-up cleanup: could not remove %s", mol_dir)
+
+
+def clean_up_at_start(settings: Settings) -> threading.Thread:
+    """Delete what killed wipes and archives left behind, on a daemon thread."""
+
+    def run() -> None:
+        try:
+            _clean_up(settings)
+        except Exception:  # noqa: BLE001 - never takes the controller down
+            logger.exception("Start-up cleanup failed")
+
+    thread = threading.Thread(target=run, name="autodft-startup-cleanup", daemon=True)
+    thread.start()
+    return thread
 
 
 # ----------------------------------------------------------------------

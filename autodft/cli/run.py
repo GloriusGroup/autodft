@@ -70,6 +70,10 @@ def run(
     from autodft.api.project_jobs import reconcile_orphaned_jobs
     reconcile_orphaned_jobs(settings)
 
+    # After the reconcile, so a killed archive's row no longer blocks its leftovers.
+    from autodft.api.admin_ops import clean_up_at_start
+    clean_up_at_start(settings)
+
     # Optionally start the FastAPI dashboard in a background thread
     if settings.api.enabled:
         _start_api_server(settings)
