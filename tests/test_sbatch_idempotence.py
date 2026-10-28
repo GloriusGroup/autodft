@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
 
@@ -23,7 +24,7 @@ from autodft.qm.orca.parser import OrcaParser
 
 TIMEOUT = "sbatch: error: Batch job submission failed: Socket timed out on send/recv operation"
 REJECT = "sbatch: error: Batch job submission failed: Invalid partition name specified"
-GARBLED = "sbatch: error: slurm_receive_msg: Zero Bytes were transmitted or received"
+GARBLED = "sbatch: error: Batch job submission failed: Unexpected message received"
 
 
 class _FakeSlurm:
@@ -90,9 +91,8 @@ def slurm(monkeypatch):
     return install
 
 
-@pytest.fixture()
-def ready_job(session, sample_task, tmp_path):
-    job = ComputationJob(task_id=sample_task.id, attempt=1)
+def _ready(session, task, tmp_path):
+    job = ComputationJob(task_id=task.id, attempt=1)
     session.add(job)
     session.commit()
     job_dir = tmp_path / f"job_{job.id}"
@@ -107,6 +107,11 @@ def ready_job(session, sample_task, tmp_path):
     return job
 
 
+@pytest.fixture()
+def ready_job(session, sample_task, tmp_path):
+    return _ready(session, sample_task, tmp_path)
+
+
 def _tick(session, job):
     submit_pending_jobs(session, SlurmScheduler(), Settings())
     session.refresh(job)
@@ -119,6 +124,12 @@ class TestSubmitClassification:
         ("sbatch: error: Slurm temporarily unable to accept job, sleeping and retrying", False),
         ("sbatch: error: QOSMaxSubmitJobPerUserLimit\nsbatch: error: Batch job submission failed: "
          "Job violates accounting/QOS policy", False),
+        ("sbatch: error: slurm_receive_msg: Zero Bytes were transmitted or received", False),
+        ("sbatch: error: Batch job submission failed: Communication connection failure", False),
+        ("sbatch: error: slurm_send_recv_msgs: Socket error", False),
+        ("sbatch: error: Batch job submission failed: Invalid authentication credential", False),
+        ("sbatch: error: Batch job submission failed: Protocol authentication error", False),
+        ("sbatch: error: Munge decode failed: Expired credential", False),
         (REJECT, True),
         ("sbatch: error: Memory specification can not be satisfied", True),
     ])
@@ -256,3 +267,42 @@ class TestRejections:
         session.refresh(sample_task)
         assert sample_task.status == TaskStatus.failed
         assert len(fake.sbatch_calls()) == MAX_SBATCH_REJECTIONS * max_attempts
+
+
+class TestOutageGuard:
+    def test_a_tick_in_which_every_sbatch_fails_advances_no_rejection_count(
+        self, session, sample_task, slurm, tmp_path, caplog,
+    ):
+        jobs = [_ready(session, sample_task, tmp_path) for _ in range(2)]
+        slurm([("reject", None)] * (2 * MAX_SBATCH_REJECTIONS))
+        with caplog.at_level(logging.WARNING, logger="autodft.engine.state_machine"):
+            for _ in range(MAX_SBATCH_REJECTIONS):
+                submit_pending_jobs(session, SlurmScheduler(), Settings())
+        for job in jobs:
+            session.refresh(job)
+            assert job.success is None
+            assert job.fail_reason.startswith("sbatch failed")
+            assert "rejected" not in job.fail_reason.split(":")[0]
+        outage = [r for r in caplog.records if "every sbatch" in r.getMessage()]
+        assert len(outage) == MAX_SBATCH_REJECTIONS  # once per tick
+
+    def test_a_count_held_by_an_outage_is_kept(self, session, sample_task, slurm, tmp_path):
+        first, second = (_ready(session, sample_task, tmp_path) for _ in range(2))
+        first.fail_reason = "sbatch failed (rejected 2/3, retrying): earlier"
+        session.add(first)
+        session.commit()
+        slurm([("reject", None), ("reject", None)])
+        submit_pending_jobs(session, SlurmScheduler(), Settings())
+        session.refresh(first)
+        assert first.success is None
+        assert first.fail_reason.startswith("sbatch failed (rejected 2/3")
+        assert "Invalid partition" in first.fail_reason
+
+    def test_one_success_in_the_tick_lets_rejections_count(self, session, sample_task, slurm, tmp_path):
+        rejected, accepted = (_ready(session, sample_task, tmp_path) for _ in range(2))
+        slurm([("reject", None), ("ok", "790")])
+        submit_pending_jobs(session, SlurmScheduler(), Settings())
+        session.refresh(rejected)
+        session.refresh(accepted)
+        assert accepted.slurm_jobid == 790
+        assert rejected.fail_reason.startswith("sbatch failed (rejected 1/3")

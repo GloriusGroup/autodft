@@ -949,6 +949,8 @@ def submit_pending_jobs(
     # One squeue per _QUEUE_RECHECK_EVERY submissions, not per submission:
     # the optimistic increment bounds the overshoot in between.
     since_poll = 0
+    sbatch_calls = sbatch_failures = 0
+    rejected: list[tuple[ComputationJob, str]] = []
 
     for index, (job, priority) in enumerate(rows):
         if monotonic() >= deadline:
@@ -999,6 +1001,8 @@ def submit_pending_jobs(
             result = SubmitResult(success=True, job_id=adopted)
         else:
             result = scheduler.submit(submit_script, nice=settings.slurm.nice)
+            sbatch_calls += 1
+            sbatch_failures += not result.success
         if result.success:
             job.slurm_jobid = int(result.job_id)  # type: ignore[arg-type]
             job.slurm_status = SlurmStatus.PENDING
@@ -1015,19 +1019,7 @@ def submit_pending_jobs(
             since_poll += 1
             logger.info("Job %d submitted (slurm_jobid=%s)", job.id, result.job_id)
         elif getattr(result, "rejected", False):
-            # A rejection repeats on the same script, so a few cost an attempt.
-            previous = _SBATCH_REJECTED.match(job.fail_reason or "")
-            rejections = (int(previous.group(1)) if previous else 0) + 1
-            if rejections >= MAX_SBATCH_REJECTIONS:
-                _fail(job, f"sbatch rejected {rejections} times: {result.error}")
-            else:
-                logger.error("Job %d: sbatch rejected (%d/%d, will retry): %s",
-                             job.id, rejections, MAX_SBATCH_REJECTIONS, result.error)
-                job.fail_reason = (
-                    f"{_SBATCH_FAILED} (rejected {rejections}/{MAX_SBATCH_REJECTIONS}, "
-                    f"retrying): {result.error}"
-                )[:500]
-                session.add(job)
+            rejected.append((job, result.error or ""))
         else:
             # sbatch failures are usually transient -- slurmctld restarting,
             # a socket timeout, a QOS submit limit that clears. Failing the
@@ -1038,6 +1030,29 @@ def submit_pending_jobs(
             logger.error("Job %d: sbatch failed (will retry): %s", job.id, result.error)
             job.fail_reason = f"{_SBATCH_RETRYING}: {result.error}"[:500]
             session.add(job)
+
+    # Every sbatch of the tick failing points at the cluster, not at the scripts.
+    outage = sbatch_calls >= 2 and sbatch_failures == sbatch_calls
+    if outage:
+        logger.warning("All %d sbatch calls failed this tick (every sbatch); "
+                       "taken as a SLURM outage, no rejection is counted", sbatch_calls)
+    for job, error in rejected:
+        # A rejection repeats on the same script, so a few cost an attempt.
+        previous = _SBATCH_REJECTED.match(job.fail_reason or "")
+        rejections = (int(previous.group(1)) if previous else 0) + (not outage)
+        if rejections >= MAX_SBATCH_REJECTIONS:
+            _fail(job, f"sbatch rejected {rejections} times: {error}")
+            continue
+        if rejections:
+            logger.error("Job %d: sbatch rejected (%d/%d, will retry): %s",
+                         job.id, rejections, MAX_SBATCH_REJECTIONS, error)
+            job.fail_reason = (
+                f"{_SBATCH_FAILED} (rejected {rejections}/{MAX_SBATCH_REJECTIONS}, "
+                f"retrying): {error}"
+            )[:500]
+        else:
+            job.fail_reason = f"{_SBATCH_RETRYING}: {error}"[:500]
+        session.add(job)
 
     session.flush()
 

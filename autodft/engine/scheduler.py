@@ -133,6 +133,9 @@ class SlurmScheduler(Scheduler):
     _TRANSIENT_SBATCH_ERRORS = (
         "timed out", "unable to contact slurm controller", "temporarily unable",
         "temporarily unavailable", "connection refused", "maxsubmit",
+        # slurmctld comms and munge outages
+        "zero bytes were transmitted or received", "communication connection failure",
+        "socket error", "authentication", "munge",
     )
 
     def submit(self, script_path: Path, nice: int | None = None) -> SubmitResult:
