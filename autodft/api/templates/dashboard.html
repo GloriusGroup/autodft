@@ -4348,6 +4348,8 @@
         // What navigation reuses for up to PROJECTS_MAX_AGE_MS: the list, and the project the Summary shows.
         var PROJECTS_MAX_AGE_MS = 30000;
         var projectsCached = { gen: 0, listAt: null, summary: null, summaryAt: null };
+        // The project whose Summary is on screen; a cancelled refresh of it leaves it there.
+        var projectShown = null;
 
         // After an action that changes projects, and on an explicit reload.
         function invalidateProjects() {
@@ -4387,7 +4389,7 @@
                 note.style.display = 'none';
                 note.textContent = '';
                 if (!projectCache || projectCache.length === 0) {
-                    currentProject = null;
+                    currentProject = projectShown = null;
                     var empty = '<option value="">(no projects yet)</option>';
                     sel.innerHTML = empty;
                     if (selMols) selMols.innerHTML = empty;
@@ -4542,17 +4544,20 @@
                             '</tr>';
                     }).join('');
                 }
+                projectShown = name;
                 if (gen === projectsCached.gen) {
                     projectsCached.summary = name;
                     projectsCached.summaryAt = Date.now();
                 }
             } catch (err) {
-                if (currentProject === name) showProjectError(errHtml('Could not load ' + name + ': ', err));
+                if (currentProject !== name || (isAbort(err) && projectShown === name)) return;
+                showProjectError(errHtml('Could not load ' + name + ': ', err));
             }
         }
 
         // A failed load: nothing of the last project stays, and its actions wait for a good load.
         function showProjectError(html) {
+            projectShown = null;
             ['projectCards', 'projectExtendSection', 'projectMoleculesSection'].forEach(function (id) {
                 document.getElementById(id).style.display = 'none';
             });

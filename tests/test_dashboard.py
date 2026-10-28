@@ -1863,6 +1863,46 @@ def test_a_failed_project_load_shows_the_error_and_nothing_of_the_last_project()
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_cancel_during_a_refresh_of_the_shown_project_keeps_its_summary():
+    out = _run_overlay("""
+        var $ = function (id) { return document.getElementById(id); };
+        var BTNS = ['exportProjectBtn', 'exportDeleteBtn', 'deleteProjectBtn'];
+        function shown() {
+            return [$('projectCards').style.display, String($('pcMolecules').textContent), $('psbText').innerHTML,
+                    BTNS.map(function (id) { return $(id).disabled; })];
+        }
+        replies['/api/projects/nho%3Ap'] = {status: 200, body: {status: 'complete', total_molecules: 1,
+            molecules: [{id: 7, smiles: 'CCO', states: 1, tasks: 2, successful: 2, failed: 0}]}};
+        activateRoute('projects.summary');
+        await idle();
+        out.good = shown();
+        // Later replies hang until aborted.
+        globalThis.fetch = function (url, opts) {
+            hits.push('GET ' + url);
+            return new Promise(function (_, reject) {
+                opts.signal.addEventListener('abort', function () { reject(new DOMException('aborted', 'AbortError')); });
+            });
+        };
+        invalidateProjects();  // the Refresh button
+        var refresh = loadProjectDetail('nho/p', true);
+        await sleep(10);
+        loadingCancel();
+        await refresh;
+        await idle();
+        out.kept = shown();
+        // Cancelling a switch to another project still leaves the retry link.
+        var other = loadProjectDetail('nho/q', true);
+        await sleep(10);
+        loadingCancel();
+        await other;
+        out.other = shown();
+    """, _projects_code(), _functions("fmtTime"))
+    assert out["good"][0] == "grid" and out["good"][1] == "1" and out["good"][3] == [False] * 3
+    assert out["kept"] == out["good"]
+    assert out["other"][0] == "none" and out["other"][3] == [True] * 3 and "data-retry" in out["other"][2]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_a_failed_molecules_load_shows_the_error_not_an_empty_project():
     out = _run_molecules("""
         var a = loadMoleculesPage();
