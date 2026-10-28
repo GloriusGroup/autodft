@@ -805,3 +805,14 @@ def test_cli_export_files_writes_the_tree(db, monkeypatch):
     mol_id, _, _ = _standard(db)
     admin.export_files(project=PROJECT, output_dir=None, config=None, all_conformers=True, keep_gbw=True)
     assert {"S0/conf2/sp.gbw", "S0/conf1/opt.xyz"} <= _tree(db, mol_id)
+
+
+def test_admin_has_no_cleanup_files_command():
+    from typer.testing import CliRunner
+
+    from autodft.cli import admin
+
+    result = CliRunner().invoke(admin.app, ["--help"])
+    assert result.exit_code == 0
+    assert "cleanup-files" not in result.output
+    assert CliRunner().invoke(admin.app, ["cleanup-files"]).exit_code != 0

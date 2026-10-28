@@ -1,4 +1,4 @@
-"""The reactivity workbook: Export Project's hook, the export_reactivity job, and cleanup's kept .gbw."""
+"""The reactivity workbook: Export Project's hook, the export_reactivity job."""
 
 from __future__ import annotations
 
@@ -238,24 +238,3 @@ def test_export_reactivity_refused_when_archived(api, db):  # noqa: F811
         session.commit()
     r = client.post("/api/projects/nho:p/export?format=reactivity", headers=headers)
     assert r.status_code == 409, r.text
-
-
-def test_cleanup_keeps_gbw_of_reactivity_singlepoints(db):
-    with get_session() as session:
-        state = _state(session)
-        _conformer(session, db, state, "a")
-        _conformer(session, db, _state(session, flagged=False), "p")
-        paths = {
-            job.job_path: (task.task_type, task.state_id == state.id)
-            for job, task in session.exec(
-                select(ComputationJob, ComputationTask)
-                .join(ComputationTask, ComputationJob.task_id == ComputationTask.id)
-            ).all()
-        }
-    assert len(paths) == 10
-    PipelineExtractor("__all__").cleanup_large_files()
-    for path, (task_type, flagged) in paths.items():
-        names = sorted(p.name for p in Path(path).iterdir())
-        keeps_gbw = flagged and task_type.value in categories.REACTIVITY_TYPES
-        assert ("input.gbw" in names) is keeps_gbw, (path, names)
-        assert "input.tmp" not in names

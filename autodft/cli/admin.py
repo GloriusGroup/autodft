@@ -426,21 +426,3 @@ def progress(
     table.add_row("Molecules fully successful", f"{succ_mol}/{total_mol} ({spct})")
 
     console.print(table)
-
-
-@app.command("cleanup-files")
-def cleanup_files(
-    keep: Optional[str] = typer.Option(None, "--keep", help="Extra extensions to keep (comma-separated, e.g. '.cube,.gbw')"),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Preview without deleting"),
-) -> None:
-    """Delete large temporary files from successful job directories."""
-    from autodft.extraction.extractor import PipelineExtractor
-
-    # We need any project extractor just to reach the cleanup method
-    extractor = PipelineExtractor("__all__")
-    extra = [e.strip() for e in keep.split(",")] if keep else None
-    deleted = extractor.cleanup_large_files(keep_extensions=extra, dry_run=dry_run)
-    if dry_run:
-        console.print(f"[yellow]Dry run: would delete {deleted} files.[/yellow]")
-    else:
-        console.print(f"[green]Deleted {deleted} temporary files.[/green]")

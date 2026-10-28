@@ -1,4 +1,4 @@
-"""Pipeline extraction: energy extraction, Excel/CSV export, file export, cleanup.
+"""Pipeline extraction: energy extraction, Excel/CSV export, file export.
 
 Ported from the old ``dft_pipeline_extraction`` package.  All database access
 goes through SQLModel sessions; ORCA output parsing goes through
@@ -603,93 +603,6 @@ class PipelineExtractor:
                 m.archived = True
                 session.add(m)
             session.commit()
-
-    # ------------------------------------------------------------------
-    # Cleanup
-    # ------------------------------------------------------------------
-
-    def cleanup_large_files(
-        self,
-        keep_extensions: Optional[list[str]] = None,
-        dry_run: bool = False,
-    ) -> int:
-        """Delete large temporary files from successful job directories.
-
-        Keeps only files with the specified extensions, plus optimisations' ``.hess``,
-        Densities singlepoints' ``.cube`` and Reactivity singlepoints' ``.gbw``.
-
-        Returns:
-            Number of files deleted.
-        """
-        extensions = {".out", ".xyz", ".inp"}
-        if keep_extensions:
-            extensions.update(keep_extensions)
-
-        deleted = 0
-        with get_session() as session:
-            # Every optimisation's Hessian: rate jobs copy them, and Extend may add ESD later.
-            optimisations = set(session.exec(
-                select(ComputationTask.id).where(ComputationTask.task_type == TaskType.optimization)
-            ).all())
-            density_sps = self._densities_singlepoints(session)
-            reactivity_sps = self._reactivity_singlepoints(session)
-
-            jobs = session.exec(
-                select(ComputationJob).where(ComputationJob.success == True)  # noqa: E712
-            ).all()
-
-            for job in jobs:
-                if not job.job_path:
-                    continue
-                job_dir = Path(job.job_path)
-                if not job_dir.is_dir():
-                    continue
-                keep = extensions | {".hess"} if job.task_id in optimisations else extensions
-                if job.task_id in density_sps:
-                    keep = keep | {".cube"}
-                if job.task_id in reactivity_sps:
-                    keep = keep | {".gbw"}
-                for f in job_dir.iterdir():
-                    if f.is_file() and f.suffix not in keep:
-                        if dry_run:
-                            logger.info("Would delete: %s", f)
-                        else:
-                            f.unlink()
-                        deleted += 1
-
-        logger.info("Cleanup: deleted %d files (dry_run=%s)", deleted, dry_run)
-        return deleted
-
-    @staticmethod
-    def _densities_singlepoints(session: Session) -> set[int]:
-        """Energy singlepoint tasks of densities-flagged states."""
-        return _flagged_tasks(session, categories.DENSITIES, ("singlepoint",))
-
-    @staticmethod
-    def _reactivity_singlepoints(session: Session) -> set[int]:
-        """Relaxed and vertical singlepoint tasks of Reactivity states."""
-        return _flagged_tasks(session, categories.REACTIVITY, categories.REACTIVITY_TYPES)
-
-
-def _flagged_tasks(session: Session, flag: str, task_types: tuple[str, ...]) -> set[int]:
-    """Tasks of *task_types* in states whose metadata sets *flag* true."""
-    candidates = session.exec(
-        select(MoleculeState.id, MoleculeState.metadata_json).where(
-            col(MoleculeState.metadata_json).contains(flag)
-        )
-    ).all()
-    states = [
-        state_id for state_id, raw in candidates
-        if (json.loads(raw) if raw else {}).get(flag) is True
-    ]
-    if not states:
-        return set()
-    return set(session.exec(
-        select(ComputationTask.id).where(
-            col(ComputationTask.task_type).in_([TaskType(t) for t in task_types]),
-            col(ComputationTask.state_id).in_(states),
-        )
-    ).all())
 
 
 _SUMMARY_FIELDS = [

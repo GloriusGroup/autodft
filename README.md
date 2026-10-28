@@ -502,8 +502,7 @@ Every submission path (CLI, REST, Python) ends up writing the same
   open-shell verticals (~350–450 GB of `.gbw` per 1,000 molecules). Needs
   `[orca].nbo_exe` and a singlepoint header without Hirshfeld, NBO,
   `%elprop`, `%nbo` or `STABPerform`; submission only, not Extend.
-  Export Project writes the reactivity workbook; `cleanup-files` keeps
-  these singlepoints' `.gbw`.
+  Export Project writes the reactivity workbook.
 * `imag_freq_tolerance` (CLI `--imag-freq-tolerance`, default **0**,
   −300 to 0) — every optimisation, ESD's S1 included, fails on any
   imaginary mode below it (cm⁻¹) and is retried; exports leave such
@@ -884,13 +883,6 @@ autodft admin export-files \
 Or click **Project Overview → Export Project** in the dashboard, which calls
 `POST /api/projects/{name}/export?format=files` and writes into the same
 `<export_data>/<owner>/<project>/`.
-
-Strip large temporaries from successful job directories:
-
-```bash
-autodft admin cleanup-files --dry-run
-autodft admin cleanup-files --keep ".gbw,.cube"
-```
 
 Programmatically (see `examples/04_export_results.py`):
 

@@ -420,14 +420,12 @@ first; every state also carries its own `state_id`. See
 [`docs/API.md`](API.md#get-apiprojectsnamephotophysics-molecule_id) for
 the payload shape.
 
-**Files, cleanup and archive.** `export files` copies each conformer's
+**Files and archive.** `export files` copies each conformer's
 cubes as `conf<N>_sp_<name>` (e.g. `conf1_sp_ElDens.cube`), alongside the
-singlepoint's usual input, geometry and output. `cleanup-files` keeps
-`.cube` (with `.out`/`.xyz`/`.inp`) in the job directory of a
-Densities-flagged state's **singlepoint** task only, not its optimisation.
-Archiving a project with any Densities-flagged molecule adds `.cube` to
-the kept extensions automatically, but only when the request body left
-`extensions` unset; an explicit list is kept exactly as given.
+singlepoint's usual input, geometry and output. Archiving a project with
+any Densities-flagged molecule adds `.cube` to the kept extensions
+automatically, but only when the request body left `extensions` unset; an
+explicit list is kept exactly as given.
 
 **Photophysics page and export.** Densities has no summary or detail of
 its own anywhere in this payload: it never gets a molecule into the
@@ -506,7 +504,7 @@ A conformer whose data is in but whose energy is not yet (or never will
 be) is left out of the weights and counted as `pending` (or
 `unweighted`).
 
-## Exports, archive and cleanup
+## Exports and archive
 
 **Files.** `export files` (`POST /api/projects/{name}/export?format=files`,
 or `autodft admin export-files`) also copies the UV/Vis and SOC
@@ -558,16 +556,6 @@ while a flagged NMR molecule's reference compound is still `pending` —
 otherwise the shift would stay `null` forever. A `failed` reference does
 not block the archive: the frozen detail keeps every signal's
 `shielding_ppm`, but `shift_ppm` stays `null`.
-
-**Cleanup.** `cleanup-files` (`autodft admin cleanup-files`) keeps
-`.hess` alongside `.out`/`.xyz`/`.inp` in the optimisation directories of
-ESD states — S0 with `request_esd`, and every state carrying `esd_role`
-(S1, T1) — since the rate jobs read that Hessian back whenever they
-(re)run. Rate jobs copy ESD's by-products back from scratch
-(`*.FS.hess`, `*.GS.hess`, `*.ES.hess`, `*.spectrum*`, `*.corrfunc`);
-nothing reads them back, so `cleanup-files` deletes them from successful
-rate jobs like any other large file. `--dry-run` counts every file it
-would delete.
 
 ## Roll back
 
