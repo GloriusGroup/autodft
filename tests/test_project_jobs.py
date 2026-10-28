@@ -114,7 +114,7 @@ class TestLifecycle:
             assert row.finished_at is not None
             result = json.loads(row.result_json)
         assert result["format"] == "csv"
-        assert result["downloadable"] is True
+        assert result["downloadable"] is False
 
     def test_a_raising_body_is_recorded_as_failed(self, env, monkeypatch):
         from autodft.extraction.extractor import PipelineExtractor
@@ -337,10 +337,8 @@ class TestHttp:
         job_id = r.json()["job"]["id"]
         project_jobs.join_all(timeout=10)
         dl = c.get(f"/api/jobs/{job_id}/download", headers=headers)
-        # The empty project writes no CSV file; the endpoint reports that
-        # rather than 200. A populated project is covered by the extractor
-        # tests. Either way it must not 500.
-        assert dl.status_code in (200, 404)
+        # The empty project writes no CSV: the job offers no download.
+        assert dl.status_code == 400
 
     def test_a_running_job_blocks_a_second_export_and_a_submission(self, client):
         c, headers, env = client
@@ -499,3 +497,27 @@ class TestArchivedLeftovers:
             session.add(ComputationJob(task_id=live.id, attempt=1))
             session.commit()
             assert PipelineWorker._unsubmitted_job_count(session) == 2
+
+
+def test_an_empty_csv_export_reports_nothing_and_drops_the_stale_file(env):
+    from autodft.paths import project_file_stem, safe_subdirectory
+
+    settings = env["settings"]
+    out = safe_subdirectory(settings.export_data_path, PROJECT)
+    out.mkdir(parents=True, exist_ok=True)
+    stale = out / f"{project_file_stem(PROJECT)}.csv"
+    stale.write_text("old\n", encoding="utf-8")
+
+    job = project_jobs.start_job(
+        owner_id=env["owner_id"], qualified_name=PROJECT,
+        kind=ProjectJobKind.export_csv, params={}, settings=settings,
+    )
+    project_jobs.join_all(timeout=10)
+
+    with get_session() as session:
+        row = project_jobs.get_job(session, job["id"])
+        result = json.loads(row.result_json)
+        assert row.status == ProjectJobStatus.successful
+    assert not stale.exists()
+    assert result["message"] == "Nothing to export"
+    assert result["downloadable"] is False and "path" not in result

@@ -98,7 +98,8 @@ class TestExportRoute:
         )
         result = _run_export_job(c, headers, response)
         expected = tmp_path / "export_data" / "owner" / "screening" / f"screening{suffix}"
-        assert result["path"] == str(expected)
+        # The empty project has nothing to put in a CSV, so that job reports no path.
+        assert result.get("path") == (None if fmt == "csv" else str(expected))
         # The parent must be the directory that was actually created.
         assert expected.parent.is_dir()
 

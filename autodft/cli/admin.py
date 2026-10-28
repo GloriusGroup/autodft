@@ -316,7 +316,9 @@ def export(
     extractor = PipelineExtractor(project)
 
     if format == "csv":
-        extractor.export_summary_csv(output, all_conformers=all_conformers)
+        if not extractor.export_summary_csv(output, all_conformers=all_conformers):
+            console.print("[yellow]Nothing to export[/yellow]")
+            return
     elif format == "json":
         extractor.export_summary_json(output, all_conformers=all_conformers)
     else:

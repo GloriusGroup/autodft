@@ -341,19 +341,21 @@ class PipelineExtractor:
 
     def export_summary_csv(
         self, output_path: str | Path, all_conformers: bool = False,
-    ) -> None:
-        """Export an energy summary to CSV."""
+    ) -> bool:
+        """Export an energy summary to CSV; with nothing to write, remove a stale file and return False."""
         fields, rows = self._summary_rows(all_conformers)
+        path = Path(output_path)
         if not rows:
             logger.warning("No results to export for project '%s'", self.project_name)
-            return
+            path.unlink(missing_ok=True)
+            return False
 
-        path = Path(output_path)
         with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fields)
             writer.writeheader()
             writer.writerows(rows)
         logger.info("Exported %d rows to %s", len(rows), path)
+        return True
 
     def export_summary_json(
         self, output_path: str | Path, all_conformers: bool = False,

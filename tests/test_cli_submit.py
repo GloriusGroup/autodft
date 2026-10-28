@@ -107,3 +107,14 @@ def test_submit_batch_densities_and_nbo_flags(db, tmp_path):
         meta = json.loads(entry.request_metadata)
         assert meta["request_densities"] is True
         assert meta["request_singlepoint_nbo"] is True
+
+
+def test_export_of_an_empty_project_says_nothing_to_export(db, tmp_path):
+    from autodft.cli.admin import app as admin_app
+
+    out = tmp_path / "old.csv"
+    out.write_text("old\n", encoding="utf-8")
+    result = runner.invoke(admin_app, ["export", "--project", "nho/none", "-o", str(out)])
+    assert result.exit_code == 0, result.output
+    assert "Nothing to export" in result.output and "Exported to" not in result.output
+    assert not out.exists()

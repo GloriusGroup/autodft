@@ -68,6 +68,9 @@ class ProjectGone(LookupError):
     """Raised when a job is started for a project that no longer exists (e.g. reassigned meanwhile)."""
 
 
+NOTHING_TO_EXPORT = "Nothing to export"
+
+
 # How long the destructive archive waits for the project's in-flight SLURM
 # jobs to finish before giving up. The pause stops *new* jobs, so the set only
 # shrinks; if it is still non-empty after this, real long-running calculations
@@ -308,7 +311,8 @@ def _execute(
 
     if kind == ProjectJobKind.export_csv:
         target = out_root / f"{stem}.csv"
-        extractor.export_summary_csv(target, all_conformers=all_conformers)
+        if not extractor.export_summary_csv(target, all_conformers=all_conformers):
+            return {"format": "csv", "message": NOTHING_TO_EXPORT, "downloadable": False}
         return {"format": "csv", "path": str(target), "downloadable": True}
 
     if kind == ProjectJobKind.export_json:

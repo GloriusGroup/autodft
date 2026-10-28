@@ -266,3 +266,11 @@ def test_the_csv_reads_the_record_exclusion_reads(db):
         assert results.exclusion(session, opt, state) == "unchecked"
     [reported] = _reported()
     assert (reported.e_correction, reported.note) == (None, "unchecked")
+
+
+def test_an_empty_csv_export_removes_the_stale_file_and_says_so(db):
+    stale, other = db / "p.csv", db / "p_all.csv"
+    stale.write_text("old\n", encoding="utf-8")
+    other.write_text("keep\n", encoding="utf-8")
+    assert PipelineExtractor(PROJECT).export_summary_csv(stale) is False
+    assert not stale.exists() and other.exists()
