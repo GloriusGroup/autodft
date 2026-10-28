@@ -2570,7 +2570,7 @@
                 var match = (r === route) || (r === 'projects' && route.indexOf('projects.') === 0);
                 el.classList.toggle('active', match);
             });
-            if (route === 'projects.summary')        withLoading('Loading projects…', function () { return fetchProjects(true); });
+            if (route === 'projects.summary')        withLoading('Loading projects…', function () { return ensureProjects(true, true); });
             if (route === 'projects.molecules')      loadProjectPage('Loading molecules…', loadMoleculesPage);
             if (route === 'projects.state-analysis') loadProjectPage('Computing state analysis…', loadStateAnalysisPage);
             if (route === 'projects.photophysics')   loadProjectPage('Reading spectra…', loadPhotophysicsPage);
@@ -2581,7 +2581,7 @@
 
         function loadProjectPage(label, loader) {
             return withLoading(label, function (live) {
-                return fetchProjects(true).then(function () { if (live()) return loader(); });
+                return ensureProjects(true, false).then(function () { if (live()) return loader(); });
             }).catch(ignoreAbort);
         }
 
@@ -2976,6 +2976,7 @@
                     confirm: typed,
                     delete_exports: box.querySelector('.adm-exports').checked,
                 }, 'Wiping ' + name + '…');
+                invalidateProjects();
                 if (!out.ok) {
                     feedback.textContent = out.data.detail || ('HTTP ' + out.status);
                     feedback.className = 'submit-feedback error adm-feedback';
@@ -3090,6 +3091,7 @@
                 this.disabled = true;
                 var out = await adminJSON('POST', '/api/molecules/' + p.molecule_id + '/wipe',
                                           { confirm: typed }, 'Wiping molecule #' + p.molecule_id + '…');
+                invalidateProjects();
                 if (!out.ok) {
                     feedback.textContent = out.data.detail || ('HTTP ' + out.status);
                     feedback.className = 'submit-feedback error';
@@ -3119,6 +3121,7 @@
                 delete_files: document.getElementById('adminResetFiles').checked,
                 keep_headers: document.getElementById('adminKeepHeaders').checked,
             }, 'Resetting the database…');
+            invalidateProjects();
             this.disabled = false;
             if (!out.ok) {
                 feedback.textContent = out.data.detail || ('HTTP ' + out.status);
@@ -3854,7 +3857,7 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(body)
-                });
+                }).finally(invalidateProjects);
                 var text = await resp.text();
                 var data; try { data = JSON.parse(text); } catch (_) { data = { detail: text.slice(0, 200) }; }
                 if (!resp.ok) {
@@ -4021,7 +4024,7 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(Object.assign({}, commonBody, { smiles_list: lines }))
-                });
+                }).finally(invalidateProjects);
                 // Defensive parse — server may emit non-JSON on a 500.
                 var text = await resp.text();
                 var data; try { data = JSON.parse(text); } catch (_) { data = { detail: text.slice(0, 200) }; }
@@ -4181,12 +4184,29 @@
 
         var projectCache = [];
         var currentProject = null;
+        // What navigation reuses: the list, and the project the Summary shows.
+        var projectsCached = { gen: 0, list: false, summary: null };
+
+        // After an action that changes projects, and on an explicit reload.
+        function invalidateProjects() {
+            projectsCached = { gen: projectsCached.gen + 1, list: false, summary: null };
+        }
+
+        // Navigation: fetches only what is not cached; subpages need just the list.
+        function ensureProjects(ui, summary) {
+            if (!projectsCached.list) return fetchProjects(ui);
+            var name = document.getElementById('projectSelect').value;
+            if (summary && name && projectsCached.summary !== name) return loadProjectDetail(name, ui);
+            return Promise.resolve();
+        }
 
         // ui: under the loading overlay (navigation, not timers).
         async function fetchProjects(ui) {
+            var gen = projectsCached.gen;
             try {
                 var resp = await uiFetch(ui ? 'Loading projects…' : null, '/api/projects');
                 projectCache = await resp.json();
+                if (resp.ok && gen === projectsCached.gen) projectsCached.list = true;
                 var sel       = document.getElementById('projectSelect');
                 var selMols   = document.getElementById('projectSelectMols');
                 var selSA     = document.getElementById('projectSelectSA');
@@ -4256,6 +4276,7 @@
         async function loadProjectDetail(name, ui) {
             if (!name) return;
             currentProject = name;
+            var gen = projectsCached.gen;
             try {
                 var resp = await uiFetch(ui ? 'Loading project…' : null, '/api/projects/' + projectPath(name));
                 var data = await resp.json();
@@ -4344,6 +4365,7 @@
                             '</tr>';
                     }).join('');
                 }
+                if (gen === projectsCached.gen) projectsCached.summary = name;
             } catch (err) {
                 if (!isAbort(err)) console.warn('Failed to load project detail:', err);
             }
@@ -4478,6 +4500,7 @@
                     fb.className = 'submit-feedback';
                 },
                 onSuccess: function (job) {
+                    invalidateProjects();
                     var r = job.result || {};
                     // A resumed archive exports only the rest; r.archived counts them all.
                     var count = r.archived == null ? escHtml(r.molecules) + ' molecules'
@@ -4495,6 +4518,7 @@
                     }
                 },
                 onError: function (e) {
+                    invalidateProjects();
                     fb.textContent = 'Failed: ' + e;
                     fb.className = 'submit-feedback error';
                     btn.disabled = false;
@@ -5879,6 +5903,7 @@
             if (fab.classList.contains('spinning')) return;  // already in flight
             fab.classList.add('spinning');
             try {
+                invalidateProjects();
                 await Promise.all([
                     refreshAll(),
                     fetchHeaders(),

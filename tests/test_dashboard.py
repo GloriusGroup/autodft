@@ -449,6 +449,7 @@ def test_a_resumed_archive_reports_every_archived_molecule(molecules, archived, 
               "var currentProject = 'nho/p', exportDeletes = true;\n"
               "function projectPath(n) { return n; }\n"
               "function setTimeout() {}\n"
+              "function invalidateProjects() {}\n"
               "async function startProjectJob() { return {ok: true, project: 'nho/p', job: {id: 1}}; }\n"
               "async function pollProjectJob(p, id, h) { h.onSuccess({result: " + json.dumps(result) + "}); }\n"
               + _functions("escHtml", "runExport")
@@ -1141,3 +1142,85 @@ def test_rdkit_is_absent_at_start_and_loads_pinned_on_the_first_structure():
     assert out["retry"] == 2
     assert out["drawn"] == "<svg>CCN</svg>"
     assert out["wasm"] == "https://unpkg.com/@rdkit/rdkit@2026.9.1/dist/RDKit_minimal.wasm"
+
+
+# ── Project list cache ──────────────────────────────────────────────────
+
+_PROJECTS_STUB = r"""
+var hits = [];
+globalThis.fetch = function (url, opts) {
+    hits.push(((opts && opts.method) || 'GET') + ' ' + url);
+    var body = url === '/api/projects' ? [{name: 'nho/p', molecules: 1, tasks_successful: 0, tasks_total: 1}]
+        : /wipe-preview$/.test(url) ? {rows: {molecules: 1}, files: {measured_completely: true,
+                                       comp_data_human: '1 GB', comp_data_dirs: 1}}
+        : /\/wipe$/.test(url) ? {rows: {molecules: 1}, freed_human: '1 GB'}
+        : {molecules: [], status: 'empty'};
+    return Promise.resolve(new Response(JSON.stringify(body)));
+};
+function count(what) { return hits.filter(function (h) { return h === what; }).length; }
+var pages = [];
+['loadMoleculesPage', 'loadStateAnalysisPage', 'loadPhotophysicsPage', 'loadMethodsPage'].forEach(function (n) {
+    globalThis[n] = async function () { pages.push(n); };
+});
+function fetchFailed() {}
+function reloadAdminPage() {}
+// A browser selects the first option once the list is filled.
+document.getElementById('projectSelect').value = 'nho/p';
+document.createElement = function () {
+    var box = new El('box'), parts = {};
+    box.querySelector = function (s) { return parts[s] || (parts[s] = new El(s)); };
+    box.remove = function () {};
+    return box;
+};
+"""
+
+
+def _projects_code() -> str:
+    html = (TEMPLATE / "dashboard.html").read_text()
+    start = html.index("        // ── Sidebar hash routing")
+    routing = html[start:html.index("        window.addEventListener('hashchange'", start)]
+    start = html.index("        // ── Project Overview ──")
+    overview = html[start:html.index("        // Defensive: read the response body", start)]
+    return (_functions("projectPath", "escHtml", "adminEscape", "adminJSON", "adminRowsLine", "atLeast",
+                       "projectWipeSummary", "removalLine", "adminPrepareProjectWipe")
+            + routing + overview + _PROJECTS_STUB)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_project_subpages_reuse_the_project_list_and_summary():
+    out = _run_overlay("""
+        for (var r of ['projects.summary', 'projects.molecules', 'projects.methods', 'projects.summary']) {
+            activateRoute(r);
+            await idle();
+        }
+        out.list = count('GET /api/projects');
+        out.detail = count('GET /api/projects/nho%3Ap');
+        out.pages = pages;
+    """, _projects_code())
+    assert out["list"] == 1 and out["detail"] == 1
+    assert out["pages"] == ["loadMoleculesPage", "loadMethodsPage"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_project_wipe_reloads_the_project_list_and_summary():
+    out = _run_overlay("""
+        activateRoute('projects.summary');
+        await idle();
+        activateRoute('projects.molecules');
+        await idle();
+        var row = new El('row'), box = null;
+        row.parentNode = { querySelector: function () { return null; },
+                           insertBefore: function (b) { box = b; } };
+        await adminPrepareProjectWipe('nho/p', row, fetchProjects);
+        box.querySelector('.adm-confirm').value = 'nho/p';
+        var go = box.querySelector('.adm-go');
+        await go.on.click.call(go);
+        out.wiped = count('POST /api/projects/nho%3Ap/wipe');
+        // Before the delayed reload: the next page still refetches.
+        activateRoute('projects.methods');
+        await idle();
+        out.list = count('GET /api/projects');
+        out.detail = count('GET /api/projects/nho%3Ap');
+    """, _projects_code())
+    assert out["wiped"] == 1
+    assert out["list"] == 2 and out["detail"] == 2

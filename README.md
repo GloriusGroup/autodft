@@ -450,6 +450,10 @@ S0 Hessians, which every optimisation keeps.
 
 Refresh poll is every 5 s; the sidebar footer shows connectivity and
 last-refresh time.
+The project pages keep the project list and Summary they loaded: switching
+between them refetches neither. The refresh button and an action that changes
+projects (submit, extend, export, Export and Delete, a wipe, a database reset)
+load both afresh; choosing another project loads its Summary.
 
 A page load or user action that takes longer than 250 ms runs under a
 page-blocking loading overlay with real progress; Cancel appears after 60 s.
