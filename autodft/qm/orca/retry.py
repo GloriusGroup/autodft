@@ -476,9 +476,8 @@ class PerturbImaginaryMode(RetryStrategy):
             [[float(x) for x in line.split()[1:4]] for line in xyz_lines[2 : 2 + n_atoms]]
         )
 
-        assert coords.shape == mode.shape, (
-            f"Shape mismatch: coords {coords.shape}, mode {mode.shape}"
-        )
+        if coords.shape != mode.shape:
+            raise ValueError(f"Shape mismatch: coords {coords.shape}, mode {mode.shape}")
 
         perturbed = coords + self.displacement * mode
         atom_lines = [

@@ -30,6 +30,8 @@ class ComputationTask(SQLModel, table=True):
     inputs_json: Optional[str] = None
     # Jobs up to this attempt ran before the last requeue and no longer count.
     retry_base: Optional[int] = None
+    # Consecutive job builds that raised (NFS errors and the like); reset on a build.
+    build_failures: int = Field(default=0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

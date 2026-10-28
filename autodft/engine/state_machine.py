@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from datetime import datetime, timezone
 from time import monotonic
 from pathlib import Path
@@ -54,6 +55,9 @@ _COMMIT_BATCH = 25
 
 # Failed checks that recur identically on every attempt, whatever else failed.
 DETERMINISTIC_CHECKS = ("LibXC Needed", "S1 Stays Bound")
+
+# Consecutive raising job builds after which the task fails.
+MAX_BUILD_FAILURES = 10
 
 
 def _commit_batch(session: Session, index: int) -> None:
@@ -700,13 +704,7 @@ def create_retry_jobs(
         # Per task: retry-strategy application reads files from previous job
         # directories, which archive/cleanup may have removed. One raising
         # task must not discard every other task's retry job for the tick.
-        try:
-            _create_job_for_task(
-                session, task, next_attempt, settings,
-                qm_engine=qm_engine, previous_failed_job=last_failed,
-            )
-        except Exception:  # noqa: BLE001 - one bad task must not stop the rest
-            logger.exception("Failed to create retry job for task %d", task.id)
+        if not _build_job(session, task, next_attempt, settings, qm_engine, last_failed):
             continue
         logger.info(
             "Created retry job (attempt %d) for task %d",
@@ -754,6 +752,7 @@ def start_new_tasks(
             state = session.get(MoleculeState, task.state_id)
             if state is None:
                 continue
+            # Created with the job folder, inside its rollback.
             task_dir = (
                 base_path
                 / f"mol_{state.molecule_id}"
@@ -761,16 +760,11 @@ def start_new_tasks(
                 / "tasks"
                 / f"{task.id}_{task.task_type.value}"
             )
-            task_dir.mkdir(parents=True, exist_ok=True)
             task.task_path = str(task_dir)
 
         # Per task, for the same reason as create_retry_jobs: one task that
         # raises here used to discard the whole step for every molecule.
-        try:
-            _create_job_for_task(session, task, attempt=(task.retry_base or 0) + 1,
-                                 settings=settings, qm_engine=qm_engine)
-        except Exception:  # noqa: BLE001 - one bad task must not stop the rest
-            logger.exception("Failed to create first job for task %d", task.id)
+        if not _build_job(session, task, (task.retry_base or 0) + 1, settings, qm_engine):
             continue
 
         task.status = TaskStatus.pending
@@ -1018,6 +1012,44 @@ def _task_project(session: Session, task: ComputationTask) -> Optional[str]:
     return molecule.project_name if molecule is not None else None
 
 
+def _build_job(
+    session: Session,
+    task: ComputationTask,
+    attempt: int,
+    settings: Settings,
+    qm_engine: QMEngine | None,
+    previous_failed_job: Optional[ComputationJob] = None,
+) -> bool:
+    """Build *task*'s job *attempt*; True on success.
+
+    A build that raises costs no attempt but counts towards
+    :data:`MAX_BUILD_FAILURES`, after which the task fails with the last error.
+    """
+    try:
+        _create_job_for_task(session, task, attempt, settings,
+                             qm_engine=qm_engine, previous_failed_job=previous_failed_job)
+    except Exception as exc:  # noqa: BLE001 - one bad task must not stop the rest
+        logger.exception("Failed to build job (attempt %d) for task %d", attempt, task.id)
+        task.build_failures = (task.build_failures or 0) + 1
+        if task.build_failures >= MAX_BUILD_FAILURES:
+            reason = f"Job build failed {task.build_failures} times: {type(exc).__name__}: {exc}"
+            # The reason lives on a folderless failed job, as for _fail_task.
+            session.add(ComputationJob(
+                task_id=task.id, attempt=attempt, success=False,
+                fail_reason=reason[:500], time_end=datetime.now(timezone.utc),
+            ))
+            task.status = TaskStatus.failed
+            task.build_failures = 0
+            logger.error("Task %d: %s", task.id, reason)
+        task.updated_at = datetime.now(timezone.utc)
+        session.add(task)
+        return False
+    if task.build_failures:
+        task.build_failures = 0
+        session.add(task)
+    return True
+
+
 def _create_job_for_task(
     session: Session,
     task: ComputationTask,
@@ -1028,6 +1060,9 @@ def _create_job_for_task(
 ) -> ComputationJob:
     """Create a :class:`ComputationJob` record for *task* and optionally
     generate its input files via *qm_engine*.
+
+    All or nothing: if anything raises, the row is rolled back and the job
+    folder removed before the exception propagates.
 
     Args:
         previous_failed_job: The most recent failed job for this task,
@@ -1040,26 +1075,33 @@ def _create_job_for_task(
         logger.error("Task %d has no task_path", task.id)
         raise ValueError(f"Task {task.id} has no task_path")
 
-    job = ComputationJob(
-        task_id=task.id,
-        attempt=attempt,
-    )
-    session.add(job)
-    session.flush()  # get job.id
+    job_dir: Optional[Path] = None
+    try:
+        with session.begin_nested():
+            job = ComputationJob(
+                task_id=task.id,
+                attempt=attempt,
+            )
+            session.add(job)
+            session.flush()  # get job.id
 
-    job_dir = task_path / f"job_{job.id}"
-    job_dir.mkdir(parents=True, exist_ok=True)
-    job.job_path = str(job_dir)
-    session.add(job)
+            job_dir = task_path / f"job_{job.id}"
+            job_dir.mkdir(parents=True, exist_ok=True)
+            job.job_path = str(job_dir)
+            session.add(job)
 
-    # Generate input files if qm_engine is available
-    if qm_engine is not None:
-        _generate_job_files(
-            session, job, task, settings, qm_engine, attempt,
-            previous_failed_job=previous_failed_job,
-        )
+            # Generate input files if qm_engine is available
+            if qm_engine is not None:
+                _generate_job_files(
+                    session, job, task, settings, qm_engine, attempt,
+                    previous_failed_job=previous_failed_job,
+                )
 
-    session.flush()
+            session.flush()
+    except BaseException:
+        if job_dir is not None:
+            shutil.rmtree(job_dir, ignore_errors=True)
+        raise
     return job
 
 
