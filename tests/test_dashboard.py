@@ -502,7 +502,9 @@ var calls = [];
 globalThis.fetch = function (url, opts) {
     return new Promise(function (resolve, reject) {
         var call = { url: url, opts: opts || {}, reject: reject,
-                     resolve: function (body, headers) { resolve(new Response(body, { headers: headers || {} })); } };
+                     resolve: function (body, headers, status) {
+                         resolve(new Response(body, { headers: headers || {}, status: status || 200 }));
+                     } };
         if (call.opts.signal) call.opts.signal.addEventListener('abort', function () {
             reject(new DOMException('The user aborted a request.', 'AbortError'));
         });
@@ -519,6 +521,9 @@ function seen() {
 }
 var out = {};
 """
+
+
+IDENTITY_KNOWN = "var identityKnown = true, submitInvalid = false, extendArchived = false;"
 
 
 def _loading_block() -> str:
@@ -881,6 +886,7 @@ def test_a_smiles_check_that_errored_is_neutral_retried_and_a_real_answer_is_cac
         out.assigned = location.assigned;
         out.refreshed = refreshed;
     """, _REPLIES_STUB, "var window = globalThis; var refreshed = 0; function refreshAll() { refreshed++; }",
+        IDENTITY_KNOWN,
         "var REPLY = %s;" % json.dumps(reply), _functions("escHtml", "setConnected"), block)
     assert out["first"].startswith("Could not check") and reply["body"]["detail"] in out["first"]
     assert "unchecked" in out["firstState"] and "invalid" not in out["firstState"]
@@ -919,7 +925,7 @@ def test_a_pasted_list_is_checked_100_lines_a_request_and_each_line_once():
         out.hint = hint.textContent;
         await paste(lines.concat(['CCO']));
         out.again = sent.slice(out.sent.length);
-    """, _REPLIES_STUB, "var window = globalThis;", _functions("escHtml", "setConnected"), block)
+    """, _REPLIES_STUB, "var window = globalThis;", IDENTITY_KNOWN, _functions("escHtml", "setConnected"), block)
     assert out["sent"] == [["/api/validate-smiles-batch", 100]] * 2 + [["/api/validate-smiles-batch", 31]]
     assert out["gate"] == 251 and out["hint"].startswith("1/251 invalid")
     assert out["again"] == [["/api/validate-smiles-batch", 1]]
@@ -1331,7 +1337,9 @@ def _start_up_code() -> str:
     html = (TEMPLATE / "dashboard.html").read_text()
     start = html.index("        // Initial load")
     assert html.count("\n        startUp();\n") == 1
-    return (_functions("adminJSON", "loadIdentity") + html[start:html.index("        Promise.all([", start)]
+    ident = html[html.index("        var ME = {"):html.index("        async function loadIdentity")]
+    return (ident + _functions("detailText", "plainDetail", "httpLabel", "adminJSON", "loadIdentity")
+            + html[start:html.index("        Promise.all([", start)]
             + "var routed = [];\n"
             # As the real one: navigation retires the open reads.
             + "function activateRoute(r) { loadingRetireReads(); routed.push(r); }\n"
@@ -1698,7 +1706,7 @@ def _projects_code() -> str:
     overview = html[start:html.index("        // Defensive: read the response body", start)]
     return (_functions("projectPath", "escHtml", "adminEscape", "adminJSON", "adminRowsLine", "atLeast",
                        "projectWipeSummary", "removalLine", "adminPrepareProjectWipe")
-            + routing + overview + _functions("submitExtend") + _PROJECTS_STUB)
+            + routing + overview + _functions("submitExtend") + _PROJECTS_STUB + IDENTITY_KNOWN)
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
@@ -2253,3 +2261,132 @@ def test_extend_shows_the_projects_headers_and_tolerance_and_sends_no_tolerance(
     assert "imag_freq_tolerance" not in out["body"]
     assert [out["body"][f"header_{k}_id"] for k in ("confsearch", "optimization", "singlepoint")] == [None, 7, 9]
     assert out["after"] == out["before"]
+
+
+# ── Error states ────────────────────────────────────────────────────────
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_failed_whoami_shows_the_error_keeps_the_gates_shut_and_retries_until_it_answers():
+    out = _run_overlay("""
+        IDENTITY_RETRY_MS = 30;
+        await sleep(10);
+        out.before = { users: els.adminUsersSection.style.display, submit: els.submitBtn.disabled,
+                       extend: els.extendBtn.disabled };
+        calls[0].resolve(JSON.stringify({ detail: 'db <b>down</b>' }), {}, 503);
+        await idle();
+        out.error = { text: els.identityError.textContent, shown: els.identityError.style.display,
+                      signed: els.identitySigned.style.display };
+        out.gated = { users: els.adminUsersSection.style.display, hold: els.adminHoldSection.style.display,
+                      submit: els.submitBtn.disabled, extend: els.extendBtn.disabled };
+        out.routed = routed.slice();
+        await sleep(60);
+        out.retries = calls.map(function (c) { return c.url; });
+        out.quiet = calls[1].opts.signal === undefined && !seen().blocked;
+        calls[1].resolve(JSON.stringify({ detail: 'still down' }), {}, 502);
+        await idle();
+        out.second = els.identityError.textContent;
+        await sleep(60);
+        calls[2].resolve(JSON.stringify({ username: 'nho', is_admin: true }));
+        await idle();
+        out.ok = { error: els.identityError.style.display, signed: els.identitySigned.style.display,
+                   name: els.identityName.textContent, users: els.adminUsersSection.style.display,
+                   submit: els.submitBtn.disabled, extend: els.extendBtn.disabled, routed: routed.slice() };
+        var n = calls.length;
+        await sleep(80);
+        out.stopped = calls.length === n;
+    """, _start_up_code())
+    assert out["before"] == {"users": "none", "submit": True, "extend": True}
+    assert out["error"] == {"text": "Could not check your account (503): db <b>down</b>", "shown": "", "signed": "none"}
+    assert out["gated"] == {"users": "none", "hold": "none", "submit": True, "extend": True}
+    assert out["routed"] == ["projects.molecules"]
+    assert out["retries"] == ["/api/whoami", "/api/whoami"] and out["quiet"]
+    assert out["second"] == "Could not check your account (502): still down"
+    assert out["ok"] == {"error": "none", "signed": "", "name": "nho (admin)", "users": "",
+                         "submit": False, "extend": False, "routed": ["projects.molecules"] * 2}
+    assert out["stopped"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_an_html_error_page_reads_as_its_status_line_never_as_markup():
+    script = (_functions("detailText", "plainDetail", "httpLabel", "apiError", "adminJSON") + """
+var html = '<html><body>502 Bad Gateway</body></html>';
+async function uiFetch(label, url, opts) {
+    return new Response(html, { status: 502, statusText: 'Bad Gateway', headers: { 'Content-Type': 'text/html' } });
+}
+(async function () {
+    var viaApi = await apiError(await uiFetch());
+    var viaAdmin = await adminJSON('GET', '/x');
+    var odd = await plainDetail({ headers: new Headers() , status: 500}, '  <!doctype html><p>x');
+    var plain = await plainDetail({ headers: new Headers(), status: 500 }, 'boom');
+    process.stdout.write(JSON.stringify([viaApi.message, viaAdmin.data.detail, odd, plain]));
+})();
+""")
+    out = json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
+    assert out == ["HTTP 502 Bad Gateway", "HTTP 502 Bad Gateway", "HTTP 500", "boom"]
+
+
+_FETCH_PROJECTS_STUB = """
+var els = {};
+function El(id) { this.id = id; this.style = {}; this.innerHTML = ''; this.textContent = ''; this.value = ''; }
+El.prototype.querySelector = function () { return null; };
+var document = { getElementById: function (id) { return els[id] || (els[id] = new El(id)); } };
+els.projectEmptyState = new El('projectEmptyState');
+els.projectEmptyState.innerHTML = 'No projects yet';
+els.moleculesEmptyState = new El('moleculesEmptyState');
+els.moleculesEmptyState.innerHTML = 'No molecules yet';
+var projectsCached = { gen: 0, listAt: null }, projectCache = [], currentProject = null, projectShown = null;
+function isAbort(e) { return e && e.name === 'AbortError'; }
+function loadProjectDetail() {}
+var replies = [];
+async function apiJSON() { var r = replies.shift(); if (r instanceof Error) throw r; return r; }
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_failed_first_project_list_shows_the_error_and_the_next_fetch_retries():
+    state = re.search(r"\n( *var EMPTY_STATES = .*?;\n *var emptyTexts = .*?;)\n", (TEMPLATE / "dashboard.html").read_text(), re.S)
+    script = (_FETCH_PROJECTS_STUB + state.group(1) + _functions("escHtml", "showNoProjects", "fetchProjects") + """
+replies.push(new Error('db <b>locked</b>'), [], [{ name: 'nho/p', molecules: 1, tasks_successful: 0, tasks_total: 1 }]);
+(async function () {
+    var out = {};
+    await fetchProjects();
+    out.failed = { sel: els.projectSelect.innerHTML, empty: els.projectEmptyState.textContent,
+                   mols: els.moleculesEmptyState.textContent, shown: els.projectEmptyState.style.display,
+                   listAt: projectsCached.listAt };
+    await fetchProjects();
+    out.empty = { empty: els.projectEmptyState.innerHTML, mols: els.moleculesEmptyState.innerHTML };
+    await fetchProjects();
+    out.ok = { hidden: els.projectEmptyState.style.display, listAt: projectsCached.listAt !== null };
+    process.stdout.write(JSON.stringify(out));
+})();
+""")
+    out = json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
+    assert out["failed"] == {"sel": '<option value="">Could not load projects</option>',
+                             "empty": "Could not load projects: db <b>locked</b>",
+                             "mols": "Could not load projects: db <b>locked</b>", "shown": "block", "listAt": None}
+    assert out["empty"] == {"empty": "No projects yet", "mols": "No molecules yet"}
+    assert out["ok"] == {"hidden": "none", "listAt": True}
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+@pytest.mark.parametrize("viewer, text, shown", [
+    ("throw 'no webgl';", "return 'cube';", "This browser cannot show 3D views (WebGL is unavailable)."),
+    ("return {};", "throw 'boom';", "Failed: boom"),
+])
+def test_the_density_popup_names_a_missing_webgl_and_never_prints_undefined(viewer, text, shown):
+    script = (_functions("projectPath", "detailText", "apiError", "renderDensity", "openDensityModal", "closeDensityModal") + """
+var els = {};
+var document = { getElementById: function (id) { return els[id] || (els[id] = { style: {}, textContent: '', innerHTML: '' }); } };
+var densityView = { token: 0, viewer: null, volume: null, kind: null, ctl: null };
+var DENSITY_ASK_BYTES = 1e12;
+var molsSp = { project: 'nho/p', densities: { 7: { build: { eldens: true } } } };
+function load3Dmol() { return Promise.resolve({ createViewer: function () { VIEWER } }); }
+async function uiFetch() {
+    return { ok: true, status: 200, headers: { get: function () { return '10'; } }, text: async function () { TEXT } };
+}
+openDensityModal('7', 'eldens').then(function () {
+    process.stdout.write(JSON.stringify(els.densityStatus ? els.densityStatus.textContent : els));
+});
+""".replace("VIEWER", viewer).replace("TEXT", text))
+    out = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout
+    assert json.loads(out) == shown

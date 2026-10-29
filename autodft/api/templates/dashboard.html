@@ -1185,7 +1185,8 @@
             <a class="nav-item" data-route="admin"    href="#/admin">   <span class="nav-icon">&#9888;</span> Admin</a>
             <div class="sidebar-footer">
                 <div id="identityLine" style="margin-bottom:8px;">
-                    Signed in as <strong id="identityName">…</strong>
+                    <span id="identitySigned">Signed in as <strong id="identityName">…</strong></span>
+                    <span id="identityError" role="alert" style="display:none; color:var(--red); overflow-wrap:anywhere;"></span>
                     <a href="/logout" style="color:var(--text-muted); margin-left:6px;">Sign out</a>
                 </div>
                 <div class="status-indicator">
@@ -2557,11 +2558,21 @@
             return detail != null && typeof detail !== 'string' ? JSON.stringify(detail) : detail;
         }
 
+        function httpLabel(resp) {
+            return 'HTTP ' + resp.status + (resp.statusText ? ' ' + resp.statusText : '');
+        }
+
+        // The detail of a non-JSON error body; a proxy's HTML page reads as its status line.
+        function plainDetail(resp, text) {
+            var type = resp.headers && resp.headers.get && resp.headers.get('Content-Type') || '';
+            return /text\/html/i.test(type) || /^\s*</.test(text) ? httpLabel(resp) : text.slice(0, 300);
+        }
+
         // A failed reply as an Error carrying the server's detail.
         async function apiError(resp) {
             var detail = null;
             try { detail = JSON.parse(await resp.text()).detail; } catch (_) {}
-            var err = new Error(detailText(detail) || 'HTTP ' + resp.status);
+            var err = new Error(detailText(detail) || httpLabel(resp));
             err.status = resp.status;
             return err;
         }
@@ -2699,7 +2710,7 @@
                 return { ok: false, status: 0, data: { detail: STOPPED_WAITING } };
             }
             var text = await resp.text();
-            var data; try { data = JSON.parse(text); } catch (_) { data = { detail: text.slice(0, 300) }; }
+            var data; try { data = JSON.parse(text); } catch (_) { data = { detail: plainDetail(resp, text) }; }
             return { ok: resp.ok, status: resp.status, data: data };
         }
 
@@ -3378,7 +3389,8 @@
                 hint.className = 'smiles-hint ' + (state || '');
                 input.classList.toggle('invalid', state === 'invalid');
                 input.classList.toggle('valid',   state === 'valid');
-                if (submitBtn) submitBtn.disabled = (state === 'invalid');
+                submitInvalid = (state === 'invalid');
+                if (submitBtn) submitBtn.disabled = submitInvalid || !identityKnown;
             }
 
             // ── Diradical lock ───────────────────────────────────────
@@ -4029,7 +4041,7 @@
                     body: JSON.stringify(body)
                 }).finally(invalidateProjects);
                 var text = await resp.text();
-                var data; try { data = JSON.parse(text); } catch (_) { data = { detail: text.slice(0, 200) }; }
+                var data; try { data = JSON.parse(text); } catch (_) { data = { detail: plainDetail(resp, text) }; }
                 if (!resp.ok) {
                     feedback.textContent = detailText(data.detail) || ('HTTP ' + resp.status);
                     feedback.className = 'submit-feedback error';
@@ -4200,7 +4212,7 @@
                 }).finally(invalidateProjects);
                 // Defensive parse — server may emit non-JSON on a 500.
                 var text = await resp.text();
-                var data; try { data = JSON.parse(text); } catch (_) { data = { detail: text.slice(0, 200) }; }
+                var data; try { data = JSON.parse(text); } catch (_) { data = { detail: plainDetail(resp, text) }; }
                 if (resp.ok) {
                     submitted = data.queued || [];
                     failed = (data.rejected || []).map(function (r) {
@@ -4373,6 +4385,46 @@
             return Promise.resolve();
         }
 
+        var EMPTY_STATES = ['projectEmptyState', 'moleculesEmptyState', 'saEmptyState', 'ppEmptyState', 'mtEmptyState'];
+        var emptyTexts = {}, projectsLoaded = false;
+
+        // No project to show: the selects read label, the empty states show.
+        function showNoProjects(label) {
+            var sel     = document.getElementById('projectSelect');
+            var selMols = document.getElementById('projectSelectMols');
+            var selSA   = document.getElementById('projectSelectSA');
+            var selPP   = document.getElementById('projectSelectPP');
+            var selMT   = document.getElementById('projectSelectMethods');
+            currentProject = projectShown = null;
+            var empty = '<option value="">' + escHtml(label) + '</option>';
+            sel.innerHTML = empty;
+            if (selMols) selMols.innerHTML = empty;
+            if (selSA)   selSA.innerHTML   = empty;
+            if (selPP)   selPP.innerHTML   = empty;
+            if (selMT)   selMT.innerHTML   = empty;
+            ['projectCards', 'projectExportSection', 'projectMoleculesSection', 'projectStatusBanner',
+             'projectExtendSection'].forEach(function (id) {
+                document.getElementById(id).style.display = 'none';
+            });
+            document.getElementById('projectEmptyState').style.display = 'block';
+            if (document.getElementById('moleculesEmptyState')) {
+                document.getElementById('moleculesEmptyState').style.display = 'block';
+                document.getElementById('moleculesTableWrapper').style.display = 'none';
+            }
+            if (document.getElementById('saEmptyState')) {
+                document.getElementById('saEmptyState').style.display = 'block';
+                document.getElementById('saCards').style.display = 'none';
+            }
+            if (document.getElementById('ppEmptyState')) {
+                document.getElementById('ppEmptyState').style.display = 'block';
+                document.getElementById('ppCards').style.display = 'none';
+            }
+            if (document.getElementById('mtEmptyState')) {
+                document.getElementById('mtEmptyState').style.display = 'block';
+                document.getElementById('mtCards').style.display = 'none';
+            }
+        }
+
         // ui: under the loading overlay (navigation, not timers).
         async function fetchProjects(ui) {
             var gen = projectsCached.gen;
@@ -4391,35 +4443,13 @@
                 var note = document.getElementById('projectSwitchNote');
                 note.style.display = 'none';
                 note.textContent = '';
+                projectsLoaded = true;
+                EMPTY_STATES.forEach(function (id) {
+                    var el = document.getElementById(id);
+                    if (el && id in emptyTexts) { el.innerHTML = emptyTexts[id]; }
+                });
                 if (!projectCache || projectCache.length === 0) {
-                    currentProject = projectShown = null;
-                    var empty = '<option value="">(no projects yet)</option>';
-                    sel.innerHTML = empty;
-                    if (selMols) selMols.innerHTML = empty;
-                    if (selSA)   selSA.innerHTML   = empty;
-                    if (selPP)   selPP.innerHTML   = empty;
-                    if (selMT)   selMT.innerHTML   = empty;
-                    ['projectCards', 'projectExportSection', 'projectMoleculesSection', 'projectStatusBanner',
-                     'projectExtendSection'].forEach(function (id) {
-                        document.getElementById(id).style.display = 'none';
-                    });
-                    document.getElementById('projectEmptyState').style.display = 'block';
-                    if (document.getElementById('moleculesEmptyState')) {
-                        document.getElementById('moleculesEmptyState').style.display = 'block';
-                        document.getElementById('moleculesTableWrapper').style.display = 'none';
-                    }
-                    if (document.getElementById('saEmptyState')) {
-                        document.getElementById('saEmptyState').style.display = 'block';
-                        document.getElementById('saCards').style.display = 'none';
-                    }
-                    if (document.getElementById('ppEmptyState')) {
-                        document.getElementById('ppEmptyState').style.display = 'block';
-                        document.getElementById('ppCards').style.display = 'none';
-                    }
-                    if (document.getElementById('mtEmptyState')) {
-                        document.getElementById('mtEmptyState').style.display = 'block';
-                        document.getElementById('mtCards').style.display = 'none';
-                    }
+                    showNoProjects('(no projects yet)');
                     return;
                 }
                 document.getElementById('projectEmptyState').style.display = 'none';
@@ -4450,7 +4480,16 @@
                 }
                 loadProjectDetail(sel.value, ui);
             } catch (err) {
-                if (!isAbort(err)) console.warn('Failed to fetch projects:', err);
+                if (isAbort(err)) return;
+                console.warn('Failed to fetch projects:', err);
+                if (projectsLoaded) return;
+                showNoProjects('Could not load projects');
+                EMPTY_STATES.forEach(function (id) {
+                    var el = document.getElementById(id);
+                    if (!el) return;
+                    if (!(id in emptyTexts)) emptyTexts[id] = el.innerHTML;
+                    el.textContent = 'Could not load projects: ' + err.message;
+                });
             }
         }
 
@@ -4505,7 +4544,8 @@
                 exportDeleteBtn.disabled = isArchived || isProtected;
                 deleteBtn.disabled = isProtected;
                 var extendBtn = document.getElementById('extendBtn');
-                extendBtn.disabled = isArchived;
+                extendArchived = isArchived;
+                extendBtn.disabled = isArchived || !identityKnown;
                 extendBtn.title = isArchived ? 'Project is archived — its calculation files are gone.' : '';
                 exportBtn.title = isArchived ? 'Project is archived — source files are gone.' : '';
                 exportDeleteBtn.title = isArchived  ? 'Project is already archived.'
@@ -5207,14 +5247,20 @@
                 if (token !== densityView.token) return;
                 densityView.ctl = null;
                 status.className = 'pp-waiting pp-warn';
-                status.textContent = (e.busy ? '' : 'Failed: ') + e.message;
+                status.textContent = (e.busy || e.plain ? '' : 'Failed: ') + (e && e.message ? e.message : String(e));
             }
         }
 
         function renderDensity($3D, cube, kind) {
             var el = document.getElementById('densityViewer');
             el.innerHTML = '';
-            var viewer = $3D.createViewer(el, { backgroundColor: 'white' });
+            var viewer;
+            try { viewer = $3D.createViewer(el, { backgroundColor: 'white' }); }
+            catch (_) {
+                var err = new Error('This browser cannot show 3D views (WebGL is unavailable).');
+                err.plain = true;
+                throw err;
+            }
             viewer.addModel(cube, 'cube');
             viewer.setStyle({}, { stick: { radius: 0.12 }, sphere: { scale: 0.22 } });
             densityView.viewer = viewer;
@@ -6186,9 +6232,49 @@
         // offering what it would refuse.
         var ME = { username: '', is_admin: false, projects: [] };
 
-        async function loadIdentity() {
-            var out = await adminJSON('GET', '/api/whoami', undefined, 'Connecting…');
-            if (!out.ok) { return; }
+        // Until whoami answers: admin-only sections hidden, Submit and Extend off.
+        var IDENTITY_GATED = ['adminUsersSection', 'adminResetSection', 'adminBreakerSection', 'adminHoldSection',
+                              'newHeaderBtn', 'headerEditor', 'priorityGroup'];
+        var IDENTITY_RETRY_MS = 5000;
+        var identityKnown = false, identityFailed = false, identityRetry = null;
+        var submitInvalid = false, extendArchived = false;
+
+        function setIdentityKnown(known) {
+            identityKnown = known;
+            IDENTITY_GATED.forEach(function (id) {
+                var el = document.getElementById(id);
+                if (el) { el.style.display = known ? '' : 'none'; }
+            });
+            document.getElementById('submitBtn').disabled = submitInvalid || !known;
+            document.getElementById('extendBtn').disabled = extendArchived || !known;
+        }
+        setIdentityKnown(false);
+
+        // quiet: a retry, with no overlay.
+        async function loadIdentity(quiet) {
+            var out;
+            try { out = await adminJSON('GET', '/api/whoami', undefined, quiet ? undefined : 'Connecting…'); }
+            catch (err) {
+                if (isAbort(err)) { throw err; }
+                out = { ok: false, status: 0, data: { detail: err.message } };
+            }
+            if (out.status === 401) { return; }
+            var signed = document.getElementById('identitySigned');
+            var failure = document.getElementById('identityError');
+            if (!out.ok) {
+                var why = detailText(out.data && out.data.detail);
+                failure.textContent = 'Could not check your account' + (out.status ? ' (' + out.status + ')' : '')
+                    + (why ? ': ' + why : '');
+                failure.style.display = '';
+                signed.style.display = 'none';
+                identityFailed = true;
+                clearTimeout(identityRetry);
+                identityRetry = setTimeout(function () { loadIdentity(true).catch(function () {}); }, IDENTITY_RETRY_MS);
+                return;
+            }
+            failure.style.display = 'none';
+            signed.style.display = '';
+            setIdentityKnown(true);
             ME = out.data;
             var name = document.getElementById('identityName');
             if (name) { name.textContent = ME.username + (ME.is_admin ? ' (admin)' : ''); }
@@ -6220,6 +6306,10 @@
             }
             // Headers may have rendered before whoami answered.
             renderHeadersList();
+            if (identityFailed) {
+                identityFailed = false;
+                activateRoute(currentRoute());
+            }
         }
 
         // Initial load
@@ -6240,7 +6330,7 @@
         function startUp() {
             identityState = 'pending';
             document.querySelectorAll('.cancelled-note').forEach(function (el) { el.remove(); });
-            withLoading('Connecting…', loadIdentity).then(function () {
+            withLoading('Connecting…', function () { return loadIdentity(); }).then(function () {
                 identityState = 'done';
             }, function (err) {
                 identityState = isAbort(err) ? 'cancelled' : 'done';
