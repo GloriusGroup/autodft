@@ -241,6 +241,18 @@ def test_a_processed_earlier_extend_does_not_block(api):
     assert len(client.post("/api/projects/p/extend", headers=key, json=body).json()["queued"]) == 1
 
 
+def test_a_waiting_extend_of_another_project_does_not_block(api):
+    client, key = api
+    body = {"smiles_list": ["CC=O"], "request_ox": True}
+    client.post("/api/projects/p/extend", headers=key, json=body)
+    with get_session() as session:
+        entry = session.exec(select(CalculationEntrypoint)).one()
+        entry.request_metadata = json.dumps({**json.loads(entry.request_metadata), "project_name": "nho/q"})
+        session.add(entry)
+        session.commit()
+    assert len(client.post("/api/projects/p/extend", headers=key, json=body).json()["queued"]) == 1
+
+
 def test_a_smiles_repeated_in_one_extend_body_queues_once(api):
     client, key = api
     r = client.post("/api/projects/p/extend", headers=key,

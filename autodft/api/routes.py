@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy import case
 from sqlmodel import col, func, select
 
 from autodft.api.auth import COOKIE_NAME, issue_token
@@ -2893,13 +2894,14 @@ def _extend_waiting(session, project: str, canonical: str, wanted: set, states: 
     """Whether an unprocessed extend entrypoint of *project* already covers *wanted* and *states*."""
     from autodft import categories
 
+    meta = col(CalculationEntrypoint.request_metadata)
     for entry in session.exec(select(CalculationEntrypoint).where(
         CalculationEntrypoint.smiles == canonical, col(CalculationEntrypoint.time_started).is_(None),
-        col(CalculationEntrypoint.request_metadata).contains(f'"project_name": {json.dumps(project)}'),
+        case((func.json_valid(meta), func.json_extract(meta, "$.project_name"))) == project,
     )).all():
-        meta = json.loads(entry.request_metadata)
-        have = {d for d, key in _EXTEND_STATES if meta.get(key)}
-        if (meta.get("extend") and wanted <= categories.requested(meta) and states <= have):
+        stored = json.loads(entry.request_metadata)
+        have = {d for d, key in _EXTEND_STATES if stored.get(key)}
+        if stored.get("extend") and wanted <= categories.requested(stored) and states <= have:
             return True
     return False
 
