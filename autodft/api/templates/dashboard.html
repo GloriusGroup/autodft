@@ -160,6 +160,10 @@
             padding: 28px 32px;
             width: 100%;
         }
+        /* Molecules table gets more room on wide screens */
+        .container:has(.page.active[data-page="projects.molecules"]) {
+            max-width: 1750px;
+        }
 
         /* Floating refresh + theme buttons — fixed to the top-right of
            the viewport, visible on every page. .top-fabs is the
@@ -218,6 +222,7 @@
             align-items: center;
             justify-content: space-between;
             padding: 4px 0 24px;
+            padding-right: 96px;
             border-bottom: 1px solid var(--border);
             margin-bottom: 24px;
         }
@@ -339,6 +344,25 @@
             transition: border-color 0.2s;
         }
 
+        /* Admin page inputs match the form ones */
+        [data-page="admin"] input[type="text"],
+        [data-page="admin"] input[type="number"],
+        [data-page="admin"] select {
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 14px;
+            color: var(--text-primary);
+            font-size: 0.9rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        [data-page="admin"] input[type="text"]:focus,
+        [data-page="admin"] input[type="number"]:focus,
+        [data-page="admin"] select:focus {
+            border-color: var(--accent);
+        }
+
         .form-group input:focus,
         .form-group select:focus,
         .form-group textarea:focus {
@@ -432,6 +456,7 @@
             font-size: 0.75rem;
             margin-top: 4px;
             font-family: 'SF Mono','Fira Code','Consolas',monospace;
+            overflow-wrap: anywhere;
         }
         .smiles-hint.valid    { color: var(--green); }
         .smiles-hint.invalid  { color: var(--red); }
@@ -500,6 +525,7 @@
             overflow: hidden;
             display: flex;
             flex-direction: column;
+            min-width: 0;
         }
 
         .table-header {
@@ -513,6 +539,7 @@
         .table-scroll {
             max-height: 420px;
             overflow-y: auto;
+            overflow-x: auto;
         }
 
         .table-scroll::-webkit-scrollbar {
@@ -3501,7 +3528,8 @@
                     setState('valid', ok);
                 } else {
                     var details = invalid.slice(0, 3).map(function (x) {
-                        return '"' + x.smiles + '" — ' + (x.result.error || 'invalid');
+                        var q = x.smiles.length > 80 ? x.smiles.slice(0, 80) + '…' : x.smiles;
+                        return '"' + q + '" — ' + (x.result.error || 'invalid');
                     }).join('; ');
                     if (invalid.length > 3) details += '; …(' + (invalid.length - 3) + ' more)';
                     setState('invalid', invalid.length + '/' + lines.length + ' invalid: ' + details);
@@ -5193,7 +5221,6 @@
             document.getElementById('densityModal').style.display = 'none';
         }
 
-        // Not under the loading overlay: the modal shows its own state and Close aborts the request.
         // Cached: whether this browser can make a WebGL context.
         function webglAvailable() {
             if (webglAvailable.ok === undefined) {
@@ -5205,6 +5232,7 @@
             return webglAvailable.ok;
         }
 
+        // Not under the loading overlay: the modal shows its own state and Close aborts the request.
         async function openDensityModal(tid, kind) {
             if (densityView.ctl) densityView.ctl.abort();
             var token = ++densityView.token;

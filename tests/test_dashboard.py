@@ -2446,3 +2446,49 @@ startProjectJob('/x', {}).then(function (r) { process.stdout.write(JSON.stringif
 """)
     out = json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
     assert out["detail"] == "Server returned non-JSON: HTTP 502 Bad Gateway"
+
+
+def _rule(css: str, selector: str) -> str:
+    m = re.search(r"(?<![\w\]-])" + re.escape(selector) + r"\s*\{([^}]*)\}", css)
+    assert m, selector
+    return m.group(1)
+
+
+def test_layout_rules_keep_long_content_inside_its_box():
+    css = (TEMPLATE / "dashboard.html").read_text()
+    assert "overflow-wrap: anywhere" in _rule(css, ".smiles-hint")
+    assert "overflow-x: auto" in _rule(css, ".table-scroll")
+    assert "min-width: 0" in _rule(css, ".table-section")
+    assert re.search(r"padding-right:\s*\d+px", _rule(css, ".page-header"))
+    assert "max-width: 1750px" in _rule(css, '.container:has(.page.active[data-page="projects.molecules"])')
+    assert "max-width: 1400px" in _rule(css, ".container")
+
+
+def test_admin_inputs_are_styled_like_the_form_ones_in_both_themes():
+    css = (TEMPLATE / "dashboard.html").read_text()
+    for sel in ('[data-page="admin"] input[type="text"]', '[data-page="admin"] input[type="number"]',
+                '[data-page="admin"] select'):
+        assert sel in css
+    rule = _rule(css, '[data-page="admin"] input[type="text"],\n        [data-page="admin"] input[type="number"],\n        [data-page="admin"] select')
+    assert "var(--bg-input)" in rule and "var(--border)" in rule and "var(--text-primary)" in rule
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_long_invalid_line_is_quoted_at_80_characters():
+    html = (TEMPLATE / "dashboard.html").read_text()
+    start = html.index("        // ── Live SMILES validation")
+    block = html[start:html.index("        // ── Headers: fetch", start)]
+    out = _run_overlay("""
+        var input = document.getElementById('smiles'), hint = document.getElementById('smilesHint');
+        globalThis.fetch = function (url, opts) {
+            var lines = JSON.parse(opts.body).smiles_list;
+            return Promise.resolve(new Response(JSON.stringify(lines.map(function (s) {
+                return { valid: s.length < 10, error: 'bad' };
+            }))));
+        };
+        input.value = 'C'.repeat(300) + '\\n' + 'CCO';
+        input.on.input();
+        await sleep(400);
+        out.hint = hint.textContent;
+    """, _REPLIES_STUB, "var window = globalThis;", IDENTITY_KNOWN, _functions("escHtml", "setConnected"), block)
+    assert '"' + "C" * 80 + '…" — bad' in out["hint"] and "C" * 81 not in out["hint"]
