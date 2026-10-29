@@ -159,6 +159,7 @@
             margin: 0 auto;
             padding: 28px 32px;
             width: 100%;
+            min-width: 0;
         }
         /* Molecules table gets more room on wide screens */
         .container:has(.page.active[data-page="projects.molecules"]) {
@@ -515,7 +516,6 @@
             overflow: hidden;
             display: flex;
             flex-direction: column;
-            min-width: 0;
         }
 
         .table-header {
@@ -529,7 +529,6 @@
         .table-scroll {
             max-height: 420px;
             overflow-y: auto;
-            overflow-x: auto;
         }
 
         .table-scroll::-webkit-scrollbar {
@@ -4067,7 +4066,7 @@
                     var rejected = data.rejected || [];
                     var skipped = (data.skipped || []).length;
                     feedback.textContent = 'Extended ' + (data.queued || []).length + ' molecule(s) of ' + project
-                        + (skipped ? ' (' + skipped + ' already had everything)' : '')
+                        + (skipped ? ' (' + skipped + ' skipped: nothing new, already queued, or repeated)' : '')
                         + (rejected.length ? ' — not extended: ' + rejected.map(function (r) {
                             return r.smiles + ' (' + r.detail + ')';
                         }).join('; ') : '');
@@ -6303,7 +6302,6 @@
             }
             failure.style.display = 'none';
             signed.style.display = '';
-            setIdentityKnown(true);
             ME = out.data;
             var name = document.getElementById('identityName');
             if (name) { name.textContent = ME.username + (ME.is_admin ? ' (admin)' : ''); }
@@ -6332,6 +6330,7 @@
                         + 'can be undone.';
                 }
             }
+            setIdentityKnown(true);
             // Headers may have rendered before whoami answered.
             renderHeadersList();
             if (identityFailed) {

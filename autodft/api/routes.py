@@ -13,8 +13,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import case
-from sqlmodel import col, func, select
+from sqlmodel import case, col, func, select
 
 from autodft.api.auth import COOKIE_NAME, issue_token
 from autodft.api.identity import (
@@ -2869,7 +2868,7 @@ def api_extend(name: str, body: SubmitBatchRequest, identity: Identity = Depends
             if not added and states <= _state_descriptions(session, name, check["canonical"]):
                 skipped.append(smiles)
                 continue
-            if check["canonical"] in queued_now or _extend_waiting(session, name, check["canonical"], wanted, states):
+            if check["canonical"] in queued_now or _extend_waiting(session, name, check["canonical"], added, states):
                 skipped.append(smiles)
                 continue
             queued_now.add(check["canonical"])
@@ -2890,8 +2889,8 @@ def api_extend(name: str, body: SubmitBatchRequest, identity: Identity = Depends
 _EXTEND_STATES = (("T1", "request_T1"), ("ox", "request_ox"), ("red", "request_red"))
 
 
-def _extend_waiting(session, project: str, canonical: str, wanted: set, states: set) -> bool:
-    """Whether an unprocessed extend entrypoint of *project* already covers *wanted* and *states*."""
+def _extend_waiting(session, project: str, canonical: str, added: set, states: set) -> bool:
+    """Whether an unprocessed extend entrypoint of *project* already covers *added* and *states*."""
     from autodft import categories
 
     meta = col(CalculationEntrypoint.request_metadata)
@@ -2901,7 +2900,7 @@ def _extend_waiting(session, project: str, canonical: str, wanted: set, states: 
     )).all():
         stored = json.loads(entry.request_metadata)
         have = {d for d, key in _EXTEND_STATES if stored.get(key)}
-        if stored.get("extend") and wanted <= categories.requested(stored) and states <= have:
+        if stored.get("extend") and added <= categories.requested(stored) and states <= have:
             return True
     return False
 

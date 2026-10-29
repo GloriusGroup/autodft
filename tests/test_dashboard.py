@@ -472,6 +472,7 @@ function El(id) {
 }
 El.prototype.setAttribute = function (k, v) { this.attrs[k] = String(v); };
 El.prototype.removeAttribute = function (k) { delete this.attrs[k]; };
+El.prototype.remove = function () {};
 El.prototype.addEventListener = function (t, f) { this.on[t] = f; };
 El.prototype.insertAdjacentHTML = function (where, html) { this.inserted = html; };
 var els = {};
@@ -2457,8 +2458,7 @@ def _rule(css: str, selector: str) -> str:
 def test_layout_rules_keep_long_content_inside_its_box():
     css = (TEMPLATE / "dashboard.html").read_text()
     assert "overflow-wrap: anywhere" in _rule(css, ".smiles-hint")
-    assert "overflow-x: auto" in _rule(css, ".table-scroll")
-    assert "min-width: 0" in _rule(css, ".table-section")
+    assert "min-width: 0" in _rule(css, ".container")
     assert "padding-right" not in _rule(css, ".page-header")
     assert re.search(r"@media \(min-width: 901px\)\s*\{\s*\.page-header \{ padding-right: 80px; \}", css)
     assert "max-width: 1750px" in _rule(css, '.container:has(.page.active[data-page="projects.molecules"])')
@@ -2494,3 +2494,18 @@ def test_a_long_invalid_line_is_quoted_at_80_characters():
         out.hint = hint.textContent;
     """, _REPLIES_STUB, "var window = globalThis;", IDENTITY_KNOWN, _functions("escHtml", "setConnected"), block)
     assert '"' + "C" * 80 + '…" — bad' in out["hint"] and "C" * 81 not in out["hint"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_admin_sections_go_before_the_gates_open_for_a_non_admin():
+    out = _run_overlay("""
+        IDENTITY_RETRY_MS = 30;
+        await sleep(10);
+        calls[0].resolve(JSON.stringify({ detail: 'down' }), {}, 503);
+        await idle();
+        els.adminUsersSection.remove = function () { out.gatedAtRemoval = els.submitBtn.disabled; };
+        await sleep(60);
+        calls[1].resolve(JSON.stringify({ username: 'u', is_admin: false }));
+        await idle();
+    """, _start_up_code())
+    assert out["gatedAtRemoval"] is True

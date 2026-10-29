@@ -258,3 +258,11 @@ def test_a_smiles_repeated_in_one_extend_body_queues_once(api):
     r = client.post("/api/projects/p/extend", headers=key,
                     json={"smiles_list": ["CC=O", "CC=O"], "request_ox": True}).json()
     assert len(r["queued"]) == 1 and r["skipped"] == ["CC=O"]
+
+
+def test_a_waiting_extend_covers_a_request_for_what_the_molecule_already_has(api):
+    client, key = api
+    client.post("/api/projects/p/extend", headers=key, json={"smiles_list": ["CCO"], "request_ox": True})
+    again = client.post("/api/projects/p/extend", headers=key, json={
+        "smiles_list": ["CCO"], "request_ox": True, "request_spec_uvvis": True, "uvvis_nroots": 20}).json()
+    assert again["queued"] == [] and again["skipped"] == ["CCO"]
