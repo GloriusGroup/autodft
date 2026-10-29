@@ -2459,7 +2459,8 @@ def test_layout_rules_keep_long_content_inside_its_box():
     assert "overflow-wrap: anywhere" in _rule(css, ".smiles-hint")
     assert "overflow-x: auto" in _rule(css, ".table-scroll")
     assert "min-width: 0" in _rule(css, ".table-section")
-    assert re.search(r"padding-right:\s*\d+px", _rule(css, ".page-header"))
+    assert "padding-right" not in _rule(css, ".page-header")
+    assert re.search(r"@media \(min-width: 901px\)\s*\{\s*\.page-header \{ padding-right: 80px; \}", css)
     assert "max-width: 1750px" in _rule(css, '.container:has(.page.active[data-page="projects.molecules"])')
     assert "max-width: 1400px" in _rule(css, ".container")
 
@@ -2469,7 +2470,8 @@ def test_admin_inputs_are_styled_like_the_form_ones_in_both_themes():
     for sel in ('[data-page="admin"] input[type="text"]', '[data-page="admin"] input[type="number"]',
                 '[data-page="admin"] select'):
         assert sel in css
-    rule = _rule(css, '[data-page="admin"] input[type="text"],\n        [data-page="admin"] input[type="number"],\n        [data-page="admin"] select')
+    rule = _rule(css, '[data-page="admin"] select')
+    assert ".form-group input," in css[css.index(".form-group input,"):css.index('[data-page="admin"] select')]
     assert "var(--bg-input)" in rule and "var(--border)" in rule and "var(--text-primary)" in rule
 
 
