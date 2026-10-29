@@ -2850,6 +2850,7 @@ def api_extend(name: str, body: SubmitBatchRequest, identity: Identity = Depends
         states = {d for d, on in (("T1", body.request_t1), ("ox", body.request_ox), ("red", body.request_red)) if on}
         known = set(scope["smiles"])
         accepted, rejected, skipped = [], [], []
+        queued_now: set = set()
         for smiles in body.smiles_list or scope["smiles"]:
             if len(smiles) > 512:
                 # As in submit-batch: RDKit overflows the C stack on very long input.
@@ -2867,6 +2868,10 @@ def api_extend(name: str, body: SubmitBatchRequest, identity: Identity = Depends
             if not added and states <= _state_descriptions(session, name, check["canonical"]):
                 skipped.append(smiles)
                 continue
+            if check["canonical"] in queued_now or _extend_waiting(session, name, check["canonical"], wanted, states):
+                skipped.append(smiles)
+                continue
+            queued_now.add(check["canonical"])
             entry = _new_entrypoint(session, body, check["canonical"], name, identity.username, headers, advanced)
             entry.request_metadata = json.dumps({**json.loads(entry.request_metadata), "extend": True})
             accepted.append((smiles, entry))
@@ -2879,6 +2884,21 @@ def api_extend(name: str, body: SubmitBatchRequest, identity: Identity = Depends
             "rejected": rejected,
             "skipped": skipped,
         }
+
+
+def _extend_waiting(session, project: str, canonical: str, wanted: set, states: set) -> bool:
+    """Whether an unprocessed extend entrypoint of *project* already covers *wanted* and *states*."""
+    from autodft import categories
+
+    for entry in session.exec(select(CalculationEntrypoint).where(
+        CalculationEntrypoint.smiles == canonical, col(CalculationEntrypoint.time_started).is_(None)
+    )).all():
+        meta = json.loads(entry.request_metadata)
+        have = {d for d, key in (("T1", "request_T1"), ("ox", "request_ox"), ("red", "request_red")) if meta.get(key)}
+        if (meta.get("extend") and meta.get("project_name") == project
+                and wanted <= categories.requested(meta) and states <= have):
+            return True
+    return False
 
 
 def _state_descriptions(session, project: str, canonical: str) -> set[str]:

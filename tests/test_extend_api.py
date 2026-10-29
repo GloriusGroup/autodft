@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -176,7 +177,7 @@ def test_the_extend_loop_does_not_hold_the_write_lock(api, tmp_path, monkeypatch
     r = client.post("/api/projects/p/extend", headers=key, json={"smiles_list": smiles, "request_ox": True})
     assert r.status_code == 200, r.text
     assert seen == ["free"] * 50
-    assert [q["smiles"] for q in r.json()["queued"]] == smiles
+    assert [q["smiles"] for q in r.json()["queued"]] == ["CCO", "CC=O"]  # repeats are skipped
     with get_session() as session:
         rows = session.exec(select(CalculationEntrypoint).order_by(CalculationEntrypoint.id)).all()
     assert [(e.id, e.smiles) for e in rows] == [(q["id"], q["smiles"]) for q in r.json()["queued"]]
@@ -200,3 +201,40 @@ def test_extend_refuses_a_negative_conformer_limit(api):
     client, key = api
     r = client.post("/api/projects/p/extend", headers=key, json={"request_ox": True, "max_conformers_ox": -2})
     assert r.status_code == 400 and r.json()["detail"] == "max_conformers_ox must be 0 or more (got -2)."
+
+
+def test_a_repeated_extend_queues_nothing_while_the_first_waits(api):
+    client, key = api
+    body = {"smiles_list": ["CC=O"], "request_ox": True}
+    assert len(client.post("/api/projects/p/extend", headers=key, json=body).json()["queued"]) == 1
+    again = client.post("/api/projects/p/extend", headers=key, json=body).json()
+    assert again["queued"] == [] and again["skipped"] == ["CC=O"]
+    with get_session() as session:
+        assert len(session.exec(select(CalculationEntrypoint)).all()) == 1
+
+
+def test_an_extend_asking_for_more_than_the_waiting_one_still_queues(api):
+    client, key = api
+    client.post("/api/projects/p/extend", headers=key, json={"smiles_list": ["CC=O"], "request_ox": True})
+    more = client.post("/api/projects/p/extend", headers=key,
+                       json={"smiles_list": ["CC=O"], "request_ox": True, "request_red": True}).json()
+    assert [q["smiles"] for q in more["queued"]] == ["CC=O"]
+
+
+def test_a_processed_earlier_extend_does_not_block(api):
+    client, key = api
+    body = {"smiles_list": ["CC=O"], "request_ox": True}
+    client.post("/api/projects/p/extend", headers=key, json=body)
+    with get_session() as session:
+        entry = session.exec(select(CalculationEntrypoint)).one()
+        entry.time_started = datetime.now(timezone.utc)
+        session.add(entry)
+        session.commit()
+    assert len(client.post("/api/projects/p/extend", headers=key, json=body).json()["queued"]) == 1
+
+
+def test_a_smiles_repeated_in_one_extend_body_queues_once(api):
+    client, key = api
+    r = client.post("/api/projects/p/extend", headers=key,
+                    json={"smiles_list": ["CC=O", "CC=O"], "request_ox": True}).json()
+    assert len(r["queued"]) == 1 and r["skipped"] == ["CC=O"]

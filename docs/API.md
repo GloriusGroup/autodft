@@ -887,7 +887,8 @@ body's options. ESD added this way keeps the S0 conformers' own `Opt` level
 (no TightOpt). A molecule is rejected when it is archived, not in the
 project, over 512 characters, or asks for densities or NBO it does not have
 (they run inside the energy singlepoints: first submission only); one with
-nothing to add is `skipped`. ESD needs the S0 Hessians: every optimisation keeps its
+nothing to add is `skipped`, and so is one an unprocessed extension
+already covers (same project, categories and states; a repeat in the body too). ESD needs the S0 Hessians: every optimisation keeps its
 `input.hess` since 2026-09-28, and a lowest S0 conformer without one stops
 the molecule's ESD before S1 and T1 start, with that reason. Answers
 `{project, queued: [{id, smiles}], rejected: [{smiles, detail}], skipped:
