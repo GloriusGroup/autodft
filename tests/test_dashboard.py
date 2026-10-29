@@ -2463,6 +2463,10 @@ def test_layout_rules_keep_long_content_inside_its_box():
     assert re.search(r"@media \(min-width: 901px\)\s*\{\s*\.page-header \{ padding-right: 80px; \}", css)
     assert "max-width: 1750px" in _rule(css, '.container:has(.page.active[data-page="projects.molecules"])')
     assert "max-width: 1400px" in _rule(css, ".container")
+    # Status tables: as many 440px columns as fit, never wider than the page.
+    assert "repeat(auto-fit, minmax(min(440px, 100%), 1fr))" in _rule(css, ".tables-grid")
+    phone = css[css.index("@media (max-width: 900px) {"):]
+    assert ".page-header { flex-wrap: wrap;" in phone[:phone.index("\n        }\n")]
 
 
 def test_admin_inputs_are_styled_like_the_form_ones_in_both_themes():

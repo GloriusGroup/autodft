@@ -215,6 +215,7 @@
             .sidebar { width: 100%; height: auto; position: relative; padding: 14px; }
             .sidebar-brand { padding: 0 8px 10px; }
             .container { padding: 20px 14px; }
+            .page-header { flex-wrap: wrap; gap: 12px; }
         }
 
         /* Page header (shared between pages) */
@@ -501,12 +502,8 @@
         /* Tables section */
         .tables-grid {
             display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
+            grid-template-columns: repeat(auto-fit, minmax(min(440px, 100%), 1fr));
             gap: 20px;
-        }
-
-        @media (max-width: 1100px) {
-            .tables-grid { grid-template-columns: 1fr; }
         }
 
         .table-section {
