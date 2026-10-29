@@ -4043,7 +4043,7 @@
                 var text = await resp.text();
                 var data; try { data = JSON.parse(text); } catch (_) { data = { detail: plainDetail(resp, text) }; }
                 if (!resp.ok) {
-                    feedback.textContent = detailText(data.detail) || ('HTTP ' + resp.status);
+                    feedback.textContent = detailText(data.detail) || httpLabel(resp);
                     feedback.className = 'submit-feedback error';
                 } else {
                     var rejected = data.rejected || [];
@@ -4220,7 +4220,7 @@
                     });
                 } else {
                     failed = lines.map(function (smi) {
-                        return { smiles: smi, error: detailText(data.detail) || ('HTTP ' + resp.status) };
+                        return { smiles: smi, error: detailText(data.detail) || httpLabel(resp) };
                     });
                 }
             } catch (err) {
@@ -4446,7 +4446,7 @@
                 projectsLoaded = true;
                 EMPTY_STATES.forEach(function (id) {
                     var el = document.getElementById(id);
-                    if (el && id in emptyTexts) { el.innerHTML = emptyTexts[id]; }
+                    if (el && id in emptyTexts) { el.innerHTML = emptyTexts[id]; delete emptyTexts[id]; }
                 });
                 if (!projectCache || projectCache.length === 0) {
                     showNoProjects('(no projects yet)');
@@ -4649,7 +4649,7 @@
             var data = await safeJson(resp);
             if (data._err) {
                 return { ok: false, status: resp.status,
-                         detail: 'Server returned non-JSON: ' + data._err };
+                         detail: 'Server returned non-JSON: ' + (data._raw ? plainDetail(resp, data._raw) : data._err) };
             }
             if (resp.status !== 202) {
                 return { ok: false, status: resp.status,
@@ -5194,6 +5194,17 @@
         }
 
         // Not under the loading overlay: the modal shows its own state and Close aborts the request.
+        // Cached: whether this browser can make a WebGL context.
+        function webglAvailable() {
+            if (webglAvailable.ok === undefined) {
+                try {
+                    var c = document.createElement('canvas');
+                    webglAvailable.ok = !!(c.getContext('webgl2') || c.getContext('webgl'));
+                } catch (_) { webglAvailable.ok = false; }
+            }
+            return webglAvailable.ok;
+        }
+
         async function openDensityModal(tid, kind) {
             if (densityView.ctl) densityView.ctl.abort();
             var token = ++densityView.token;
@@ -5211,6 +5222,12 @@
                 ? 'Building cube with orca_plot… this can take a few minutes.'
                 : 'Loading cube…';
             document.getElementById('densityModal').style.display = 'flex';
+            if (!webglAvailable()) {
+                densityView.ctl = null;
+                status.className = 'pp-waiting pp-warn';
+                status.textContent = 'This browser cannot show 3D views (WebGL is unavailable).';
+                return;
+            }
             var url = '/api/projects/' + projectPath(project) + '/densities/' + encodeURIComponent(tid) + '/' + kind;
             async function post() {
                 var resp = await uiFetch(null, url, { method: 'POST', signal: ctl.signal });
@@ -5247,20 +5264,14 @@
                 if (token !== densityView.token) return;
                 densityView.ctl = null;
                 status.className = 'pp-waiting pp-warn';
-                status.textContent = (e.busy || e.plain ? '' : 'Failed: ') + (e && e.message ? e.message : String(e));
+                status.textContent = (e && e.busy ? '' : 'Failed: ') + (e && e.message ? e.message : String(e));
             }
         }
 
         function renderDensity($3D, cube, kind) {
             var el = document.getElementById('densityViewer');
             el.innerHTML = '';
-            var viewer;
-            try { viewer = $3D.createViewer(el, { backgroundColor: 'white' }); }
-            catch (_) {
-                var err = new Error('This browser cannot show 3D views (WebGL is unavailable).');
-                err.plain = true;
-                throw err;
-            }
+            var viewer = $3D.createViewer(el, { backgroundColor: 'white' });
             viewer.addModel(cube, 'cube');
             viewer.setStyle({}, { stick: { radius: 0.12 }, sphere: { scale: 0.22 } });
             densityView.viewer = viewer;
@@ -6291,11 +6302,10 @@
             // on everyone's data are removed -- the server refuses them
             // regardless, this stops the page offering them.
             if (!ME.is_admin) {
-                ['adminUsersSection', 'adminResetSection', 'adminBreakerSection', 'adminHoldSection', 'newHeaderBtn', 'headerEditor', 'priorityGroup']
-                    .forEach(function (id) {
-                        var el = document.getElementById(id);
-                        if (el) { el.remove(); }
-                    });
+                IDENTITY_GATED.forEach(function (id) {
+                    var el = document.getElementById(id);
+                    if (el) { el.remove(); }
+                });
                 var heading = document.getElementById('adminPageSubtitle');
                 if (heading) {
                     heading.textContent = 'Permanently remove your own calculations '

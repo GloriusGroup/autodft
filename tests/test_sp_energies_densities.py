@@ -840,9 +840,12 @@ def test_a_large_cube_asks_before_loading(size, answer, asked, shown):
 
     html = (TEMPLATE / "dashboard.html").read_text()
     limit = re.search(r"\n *var DENSITY_ASK_BYTES = .*\n", html).group(0)
-    script = (limit + _functions("projectPath", "detailText", "apiError", "openDensityModal", "closeDensityModal") + """
+    script = (limit + _functions("projectPath", "detailText", "apiError", "webglAvailable", "openDensityModal", "closeDensityModal") + """
 var els = {};
-var document = { getElementById: function (id) { return els[id] || (els[id] = { style: {}, textContent: '', innerHTML: '' }); } };
+var document = {
+    getElementById: function (id) { return els[id] || (els[id] = { style: {}, textContent: '', innerHTML: '' }); },
+    createElement: function () { return { getContext: function () { return {}; } }; },
+};
 var densityView = { token: 0, viewer: null, volume: null, kind: null, ctl: null };
 var molsSp = { project: 'nho/p', densities: { 7: { build: { eldens: true } } } };
 var asked = [], read = 0, shown = 0, signal = null;

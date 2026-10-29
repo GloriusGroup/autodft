@@ -485,6 +485,7 @@ var document = {
     },
     querySelectorAll: function () { return slots; },
     addEventListener: function () {},
+    createElement: function () { return { getContext: function () { return {}; } }; },
 };
 function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 // Past the grace that ends a session.
@@ -1250,7 +1251,7 @@ def test_the_tickboxes_are_off_and_not_restored_by_the_browser():
 
 
 def test_the_density_viewer_is_not_under_the_overlay_and_close_aborts():
-    body = _functions("openDensityModal", "closeDensityModal")
+    body = _functions("webglAvailable", "openDensityModal", "closeDensityModal")
     assert "loadingFetch" not in body and "withLoading" not in body
     assert "signal: ctl.signal" in body and "densityView.ctl.abort()" in body
 
@@ -1479,7 +1480,8 @@ def test_a_user_gets_no_new_header_button_or_editor():
     html = (TEMPLATE / "dashboard.html").read_text()
     identity = _functions("loadIdentity")
     user_branch = identity[identity.index("if (!ME.is_admin) {"):]
-    assert "'newHeaderBtn'" in user_branch and "'headerEditor'" in user_branch
+    assert "IDENTITY_GATED.forEach" in user_branch
+    assert "'newHeaderBtn'" in html and "'headerEditor'" in html
     # Headers may have rendered before whoami answered.
     assert "renderHeadersList();" in identity
     assert 'id="newHeaderBtn"' in html and 'id="headerEditor"' in html
@@ -1559,7 +1561,8 @@ def test_deactivating_a_user_asks_first_and_shows_a_refusal(button, confirmed, r
 def test_a_user_gets_no_hold_section():
     identity = _functions("loadIdentity")
     user_branch = identity[identity.index("if (!ME.is_admin) {"):]
-    assert "'adminHoldSection'" in user_branch
+    assert "IDENTITY_GATED.forEach" in user_branch
+    assert "'adminHoldSection'" in (TEMPLATE / "dashboard.html").read_text()
 
 
 # ── RDKit.js ────────────────────────────────────────────────────────────
@@ -2316,8 +2319,8 @@ async function uiFetch(label, url, opts) {
 (async function () {
     var viaApi = await apiError(await uiFetch());
     var viaAdmin = await adminJSON('GET', '/x');
-    var odd = await plainDetail({ headers: new Headers() , status: 500}, '  <!doctype html><p>x');
-    var plain = await plainDetail({ headers: new Headers(), status: 500 }, 'boom');
+    var odd = plainDetail({ headers: new Headers() , status: 500}, '  <!doctype html><p>x');
+    var plain = plainDetail({ headers: new Headers(), status: 500 }, 'boom');
     process.stdout.write(JSON.stringify([viaApi.message, viaAdmin.data.detail, odd, plain]));
 })();
 """)
@@ -2369,24 +2372,77 @@ replies.push(new Error('db <b>locked</b>'), [], [{ name: 'nho/p', molecules: 1, 
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
-@pytest.mark.parametrize("viewer, text, shown", [
-    ("throw 'no webgl';", "return 'cube';", "This browser cannot show 3D views (WebGL is unavailable)."),
-    ("return {};", "throw 'boom';", "Failed: boom"),
+@pytest.mark.parametrize("gl, viewer, text, shown, fetched", [
+    (False, "return {};", "return 'cube';", "This browser cannot show 3D views (WebGL is unavailable).", 0),
+    (True, "throw new Error('context lost');", "return 'cube';", "Failed: context lost", 1),
+    (True, "return {};", "throw 'boom';", "Failed: boom", 1),
 ])
-def test_the_density_popup_names_a_missing_webgl_and_never_prints_undefined(viewer, text, shown):
-    script = (_functions("projectPath", "detailText", "apiError", "renderDensity", "openDensityModal", "closeDensityModal") + """
+def test_the_density_popup_checks_webgl_before_fetching_and_never_prints_undefined(gl, viewer, text, shown, fetched):
+    script = (_functions("projectPath", "detailText", "apiError", "webglAvailable", "renderDensity",
+                         "openDensityModal", "closeDensityModal") + """
 var els = {};
-var document = { getElementById: function (id) { return els[id] || (els[id] = { style: {}, textContent: '', innerHTML: '' }); } };
+var document = {
+    getElementById: function (id) { return els[id] || (els[id] = { style: {}, textContent: '', innerHTML: '' }); },
+    createElement: function () { return { getContext: function () { return GL ? {} : null; } }; },
+};
 var densityView = { token: 0, viewer: null, volume: null, kind: null, ctl: null };
 var DENSITY_ASK_BYTES = 1e12;
 var molsSp = { project: 'nho/p', densities: { 7: { build: { eldens: true } } } };
+var fetched = 0;
 function load3Dmol() { return Promise.resolve({ createViewer: function () { VIEWER } }); }
 async function uiFetch() {
+    fetched++;
     return { ok: true, status: 200, headers: { get: function () { return '10'; } }, text: async function () { TEXT } };
 }
 openDensityModal('7', 'eldens').then(function () {
-    process.stdout.write(JSON.stringify(els.densityStatus ? els.densityStatus.textContent : els));
+    process.stdout.write(JSON.stringify([els.densityStatus.textContent, fetched, els.densityModal.style.display]));
 });
-""".replace("VIEWER", viewer).replace("TEXT", text))
-    out = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout
-    assert json.loads(out) == shown
+""".replace("GL", "true" if gl else "false").replace("VIEWER", viewer).replace("TEXT", text))
+    out = json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
+    assert out == [shown, fetched, "flex"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_user_recovering_from_a_failed_whoami_loses_the_admin_sections_and_a_401_retry_stops():
+    out = _run_overlay("""
+        IDENTITY_RETRY_MS = 30;
+        await sleep(10);
+        calls[0].resolve(JSON.stringify({ detail: 'down' }), {}, 503);
+        await idle();
+        els.adminUsersSection.removed = false;
+        els.adminUsersSection.remove = function () { this.removed = true; };
+        await sleep(60);
+        calls[1].resolve(JSON.stringify({ username: 'u', is_admin: false }));
+        await idle();
+        out.user = { removed: els.adminUsersSection.removed, name: els.identityName.textContent,
+                     error: els.identityError.style.display, submit: els.submitBtn.disabled };
+    """, _start_up_code())
+    assert out["user"] == {"removed": True, "name": "u", "error": "none", "submit": False}
+    out = _run_overlay("""
+        IDENTITY_RETRY_MS = 30;
+        await sleep(10);
+        calls[0].resolve(JSON.stringify({ detail: 'down' }), {}, 503);
+        await idle();
+        await sleep(60);
+        calls[1].resolve(JSON.stringify({ detail: 'Authentication required.' }), {}, 401);
+        await idle();
+        out.shown = els.identityError.textContent;
+        var n = calls.length;
+        await sleep(100);
+        out.stopped = calls.length === n;
+    """, _start_up_code(), "function checkSession(resp) { return resp; }")
+    assert out["shown"].startswith("Could not check your account (503)") and out["stopped"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_a_job_start_answered_by_an_html_page_reads_as_its_status_line():
+    script = (_functions("httpLabel", "plainDetail", "safeJson", "startProjectJob") + """
+var STOPPED_WAITING = 'stopped';
+function isAbort() { return false; }
+async function loadingFetch() {
+    return new Response('<html><body>bad</body></html>', { status: 502, statusText: 'Bad Gateway' });
+}
+startProjectJob('/x', {}).then(function (r) { process.stdout.write(JSON.stringify(r)); });
+""")
+    out = json.loads(subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True).stdout)
+    assert out["detail"] == "Server returned non-JSON: HTTP 502 Bad Gateway"
