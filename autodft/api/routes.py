@@ -2847,7 +2847,7 @@ def api_extend(name: str, body: SubmitBatchRequest, identity: Identity = Depends
                                                             ("confsearch", "optimization", "singlepoint")))
         advanced = scope["advanced"]
         wanted = categories.requested(_category_flags(body))
-        states = {d for d, on in (("T1", body.request_t1), ("ox", body.request_ox), ("red", body.request_red)) if on}
+        states = {d for d, key in _EXTEND_STATES if getattr(body, key.lower())}
         known = set(scope["smiles"])
         accepted, rejected, skipped = [], [], []
         queued_now: set = set()
@@ -2886,17 +2886,20 @@ def api_extend(name: str, body: SubmitBatchRequest, identity: Identity = Depends
         }
 
 
+_EXTEND_STATES = (("T1", "request_T1"), ("ox", "request_ox"), ("red", "request_red"))
+
+
 def _extend_waiting(session, project: str, canonical: str, wanted: set, states: set) -> bool:
     """Whether an unprocessed extend entrypoint of *project* already covers *wanted* and *states*."""
     from autodft import categories
 
     for entry in session.exec(select(CalculationEntrypoint).where(
-        CalculationEntrypoint.smiles == canonical, col(CalculationEntrypoint.time_started).is_(None)
+        CalculationEntrypoint.smiles == canonical, col(CalculationEntrypoint.time_started).is_(None),
+        col(CalculationEntrypoint.request_metadata).contains(f'"project_name": {json.dumps(project)}'),
     )).all():
         meta = json.loads(entry.request_metadata)
-        have = {d for d, key in (("T1", "request_T1"), ("ox", "request_ox"), ("red", "request_red")) if meta.get(key)}
-        if (meta.get("extend") and meta.get("project_name") == project
-                and wanted <= categories.requested(meta) and states <= have):
+        have = {d for d, key in _EXTEND_STATES if meta.get(key)}
+        if (meta.get("extend") and wanted <= categories.requested(meta) and states <= have):
             return True
     return False
 

@@ -221,6 +221,14 @@ def test_an_extend_asking_for_more_than_the_waiting_one_still_queues(api):
     assert [q["smiles"] for q in more["queued"]] == ["CC=O"]
 
 
+def test_an_extend_asking_for_an_extra_category_still_queues(api):
+    client, key = api
+    client.post("/api/projects/p/extend", headers=key, json={"smiles_list": ["CC=O"], "request_ox": True})
+    more = client.post("/api/projects/p/extend", headers=key, json={
+        "smiles_list": ["CC=O"], "request_ox": True, "request_spec_uvvis": True, "uvvis_nroots": 20}).json()
+    assert [q["smiles"] for q in more["queued"]] == ["CC=O"]
+
+
 def test_a_processed_earlier_extend_does_not_block(api):
     client, key = api
     body = {"smiles_list": ["CC=O"], "request_ox": True}
