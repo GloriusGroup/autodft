@@ -212,3 +212,131 @@ def test_the_cli_writes_the_flag_only_when_set(flag):
         "nho/p", "nho", True, True, True, False, True, 10, 1, 1, 1, seed_from_s0=flag,
     ))
     assert ("seed_from_s0" in metadata) is flag
+
+
+# --- verticals_lowest_s0 -------------------------------------------------------
+
+VERTICALS = {TaskType.singlepoint_vert_ox, TaskType.singlepoint_vert_red, TaskType.singlepoint_vert_spin_change}
+
+
+@pytest.fixture()
+def lowest(session, seeded):
+    """The seeded S0, flagged for verticals on S0* only."""
+    s0 = seeded["s0"]
+    s0.metadata_json = json.dumps({"verticals_lowest_s0": True})
+    session.add(s0)
+    session.commit()
+    return seeded
+
+
+def _verticals(session, state):
+    return [t for t in _tasks(session, state) if t.task_type in VERTICALS]
+
+
+@pytest.mark.parametrize("flag, expected", [(True, set()), (False, VERTICALS)])
+def test_an_s0_conformer_gets_verticals_only_without_the_flag(session, seeded, flag, expected):
+    from autodft.engine.state_machine import _followup_optimization
+
+    s0, opt = seeded["s0"], seeded["opts"][0]
+    _followup_optimization(session, opt, s0, {"verticals_lowest_s0": True} if flag else {})
+    session.commit()
+    created = {t.task_type for t in _tasks(session, s0) if t.depends_on_task_id == opt.id}
+    assert created == {TaskType.singlepoint} | expected
+
+
+def test_the_flag_leaves_other_states_verticals_alone(session, seeded):
+    from autodft.engine.state_machine import _followup_optimization
+
+    ox, opt = seeded["states"]["ox"], seeded["opts"][0]
+    _followup_optimization(session, opt, ox, {"verticals_lowest_s0": True})
+    session.commit()
+    assert [t.task_type for t in _verticals(session, ox)] == [TaskType.singlepoint_vert_red]
+
+
+def test_the_verticals_go_on_the_lowest_conformer_only(session, lowest):
+    s0_seed.advance_s0_seeds(session)
+    best = lowest["opts"][1]
+    made = _verticals(session, lowest["s0"])
+    assert {t.task_type for t in made} == VERTICALS and len(made) == 3
+    assert all((t.depends_on_task_id, t.input_geometry_id, t.status, t.header_id)
+               == (best.id, best.output_geometry_id, TaskStatus.created, lowest["s0"].singlepoint_header_id)
+               for t in made)
+    assert json.loads(lowest["s0"].metadata_json)["s0_verticals"] == {"task": best.id}
+
+
+def test_the_verticals_are_placed_once(session, lowest):
+    s0_seed.advance_s0_seeds(session)
+    s0_seed.advance_s0_seeds(session)
+    assert len(_verticals(session, lowest["s0"])) == 3
+
+
+def test_the_verticals_wait_for_every_s0_singlepoint(session, lowest):
+    sp = [t for t in _tasks(session, lowest["s0"]) if t.task_type == TaskType.singlepoint][0]
+    sp.status = TaskStatus.pending
+    session.add(sp)
+    session.commit()
+    s0_seed.advance_s0_seeds(session)
+    assert _verticals(session, lowest["s0"]) == []
+    assert "s0_verticals" not in json.loads(lowest["s0"].metadata_json)
+
+
+def test_an_open_shell_s0_gets_no_spin_change(session, lowest):
+    lowest["s0"].multiplicity = 2
+    session.add(lowest["s0"])
+    session.commit()
+    s0_seed.advance_s0_seeds(session)
+    assert {t.task_type for t in _verticals(session, lowest["s0"])} == VERTICALS - {TaskType.singlepoint_vert_spin_change}
+
+
+def test_no_usable_conformer_records_why(session, lowest, monkeypatch):
+    monkeypatch.setattr(PipelineExtractor, "extract_state_results", lambda *a: [])
+    s0_seed.advance_s0_seeds(session)
+    assert "error" in json.loads(lowest["s0"].metadata_json)["s0_verticals"]
+    assert _verticals(session, lowest["s0"]) == []
+
+
+def test_seeds_and_verticals_start_in_the_same_pass(session, lowest):
+    s0_seed.advance_s0_seeds(session)
+    assert len(_verticals(session, lowest["s0"])) == 3
+    assert all(len(_tasks(session, s)) == 1 for s in lowest["states"].values())
+
+
+def test_a_rerun_of_s0_star_removes_and_reopens_the_verticals(session, lowest):
+    s0_seed.advance_s0_seeds(session)
+    best = lowest["opts"][1]
+    dependents, _ = admin_ops.task_dependents(session, best)
+    assert {t.id for t in _verticals(session, lowest["s0"])} <= {t.id for t in dependents}
+    admin_ops._reopen_s0_seeds(session, lowest["s0"].molecule_id, {best.id})
+    assert "s0_verticals" not in json.loads(lowest["s0"].metadata_json)
+    assert all("s0_seed" not in json.loads(s.metadata_json) for s in lowest["states"].values())
+
+
+def test_removing_another_conformer_keeps_the_verticals(session, lowest):
+    s0_seed.advance_s0_seeds(session)
+    admin_ops._reopen_s0_seeds(session, lowest["s0"].molecule_id, {lowest["opts"][0].id})
+    assert json.loads(lowest["s0"].metadata_json)["s0_verticals"] == {"task": lowest["opts"][1].id}
+
+
+def test_only_s0_is_flagged_on_expansion(engine, tmp_path, monkeypatch):
+    _, metadata = _expand(engine, tmp_path, monkeypatch, verticals_lowest_s0=True)
+    assert metadata["S0"]["verticals_lowest_s0"] is True
+    assert all("verticals_lowest_s0" not in metadata[d] for d in SEEDED)
+
+
+@pytest.mark.parametrize("flag", [True, False])
+def test_the_api_writes_the_verticals_flag_only_when_set(session, flag):
+    from autodft.api.routes import SubmitRequest, _new_entrypoint
+
+    body = SubmitRequest(smiles="c1ccccc1", verticals_lowest_s0=flag)
+    entry = _new_entrypoint(session, body, "c1ccccc1", headers=("!GOAT XTB2\n", "!B3LYP OPT\n", "!B3LYP\n"))
+    assert ("verticals_lowest_s0" in json.loads(entry.request_metadata)) is flag
+
+
+@pytest.mark.parametrize("flag", [True, False])
+def test_the_cli_writes_the_verticals_flag_only_when_set(flag):
+    from autodft.cli.submit import _build_request_metadata
+
+    metadata = json.loads(_build_request_metadata(
+        "nho/p", "nho", False, True, True, False, True, 10, 1, 1, 1, verticals_lowest_s0=flag,
+    ))
+    assert ("verticals_lowest_s0" in metadata) is flag

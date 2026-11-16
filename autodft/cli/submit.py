@@ -234,6 +234,7 @@ def _build_request_metadata(
     imag_freq_tolerance: float = 0.0,
     advanced: Optional[dict] = None,
     seed_from_s0: bool = False,
+    verticals_lowest_s0: bool = False,
 ) -> str:
     """Build the request_metadata JSON string."""
     metadata = {
@@ -257,6 +258,8 @@ def _build_request_metadata(
 
     if seed_from_s0:
         metadata["seed_from_s0"] = True
+    if verticals_lowest_s0:
+        metadata["verticals_lowest_s0"] = True
 
     from autodft import categories
 
@@ -286,6 +289,10 @@ def submit(
     seed_from_s0: bool = typer.Option(
         False, "--seed-from-s0",
         help="T1/ox/red start from S0's lowest conformer once S0 is finished, without their own conformer search",
+    ),
+    verticals_lowest_s0: bool = typer.Option(
+        False, "--verticals-lowest-s0",
+        help="S0's vertical singlepoints run on its lowest conformer only, once S0 is finished",
     ),
     no_vert_ex: bool = typer.Option(
         False, "--no-vert-ex",
@@ -412,6 +419,7 @@ def submit(
         imag_freq_tolerance=imag_freq_tolerance,
         advanced=advanced,
         seed_from_s0=seed_from_s0,
+        verticals_lowest_s0=verticals_lowest_s0,
     )
 
     entry = CalculationEntrypoint(
@@ -453,6 +461,10 @@ def submit_batch(
     seed_from_s0: bool = typer.Option(
         False, "--seed-from-s0",
         help="T1/ox/red start from S0's lowest conformer once S0 is finished, without their own conformer search",
+    ),
+    verticals_lowest_s0: bool = typer.Option(
+        False, "--verticals-lowest-s0",
+        help="S0's vertical singlepoints run on its lowest conformer only, once S0 is finished",
     ),
     no_vert_ex: bool = typer.Option(
         False, "--no-vert-ex",
@@ -579,6 +591,7 @@ def submit_batch(
         imag_freq_tolerance=imag_freq_tolerance,
         advanced=advanced,
         seed_from_s0=seed_from_s0,
+        verticals_lowest_s0=verticals_lowest_s0,
     )
 
     smiles_list: list[str] = []

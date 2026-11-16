@@ -221,6 +221,7 @@ include a deleted one.
 | `request_red`                               | bool   | `false`       | Build a −1 (reduced) state.                                                                 |
 | `skip_confsearch`                           | bool   | `false`       | Skip GOAT, send the RDKit-generated geometry straight to optimization.                      |
 | `seed_from_s0`                              | bool   | `false`       | T1/ox/red skip their conformer search and start from the lowest S0 conformer once S0 is finished.|
+| `verticals_lowest_s0`                       | bool   | `false`       | S0's vertical singlepoints run on the lowest S0 conformer only, once S0 is finished.|
 | `request_optimization`                      | bool   | `true`        | If false, the pipeline stops after confsearch.                                              |
 | `request_singlepoint`                       | bool   | `true`        | If false, no singlepoint is created (and no vertical excitations either).                   |
 | `request_singlepoint_vertical_excitations`  | bool   | `true`        | Adds vert-ox / vert-red / spin-flip singlepoints on the optimised geometry of each state.   |

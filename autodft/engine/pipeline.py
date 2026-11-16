@@ -121,7 +121,7 @@ class PipelineWorker:
             self._run_step(session, "4b: advance photophysics",
                            lambda: advance_photophysics(session, self.settings))
 
-            self._run_step(session, "4c: seed states from S0",
+            self._run_step(session, "4c: start work from S0*",
                            lambda: advance_s0_seeds(session))
 
             # An owner whose campaign is failing systematically gets no new

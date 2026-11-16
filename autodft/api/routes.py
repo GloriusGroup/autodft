@@ -180,6 +180,8 @@ class SubmitRequest(BaseModel):
     skip_confsearch: bool = False
     # T1, ox and red start from S0's lowest conformer instead of their own conformer search.
     seed_from_s0: bool = False
+    # S0's vertical singlepoints run on its lowest conformer only.
+    verticals_lowest_s0: bool = False
     request_optimization: bool = True
     request_singlepoint: bool = True
     # Singlepoint vertical excitations (ox / red / spin-flip). On by
@@ -3061,6 +3063,8 @@ def _new_entrypoint(
     }
     if body.seed_from_s0:
         request_metadata["seed_from_s0"] = True
+    if body.verticals_lowest_s0:
+        request_metadata["verticals_lowest_s0"] = True
     # Only set categories are written, so an unflagged submission's row is
     # exactly what it always was.
     request_metadata.update(categories.snapshot(_category_flags(body)))

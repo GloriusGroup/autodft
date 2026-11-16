@@ -1283,6 +1283,10 @@
                             <input type="checkbox" id="requestVertEx" name="request_vert_ex" checked>
                             <label for="requestVertEx">Vertical excitations</label>
                         </div>
+                        <div class="checkbox-group" title="S0's vertical ox/red and spin-flip singlepoints run on the lowest S0 conformer only, once every S0 conformer is finished.">
+                            <input type="checkbox" id="verticalsLowestS0" name="verticals_lowest_s0">
+                            <label for="verticalsLowestS0">S0 verticals on lowest only</label>
+                        </div>
                         <div class="checkbox-group" title="UV/Vis absorption: a TDDFT singlepoint on every optimised S0 conformer, Boltzmann-weighted. Uses the singlepoint header's method; the number of excited states is set below.">
                             <input type="checkbox" id="requestUvvis" name="request_spec_uvvis">
                             <label for="requestUvvis">UV/Vis</label>
@@ -4169,6 +4173,7 @@
             // Options travel only with their category; a stale value from an
             // unticked panel must not reach the API.
             if (document.getElementById('seedFromS0').checked) commonBody.seed_from_s0 = true;
+            if (document.getElementById('verticalsLowestS0').checked) commonBody.verticals_lowest_s0 = true;
             if (commonBody.request_spec_uvvis) {
                 commonBody.uvvis_nroots = intOrDefault('uvvisNroots', 20);
                 commonBody.uvvis_tda = document.getElementById('uvvisTda').checked;

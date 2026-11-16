@@ -639,7 +639,20 @@ def _followup_optimization(
     # Vertical excitation variants
     if not metadata.get("request_singlepoint_vertical_excitations", True):
         return
+    # verticals_lowest_s0: S0's go on its lowest conformer alone, once S0 is finished (engine.s0_seed).
+    if state.description == "S0" and metadata.get("verticals_lowest_s0"):
+        return
+    create_verticals(session, state, sp_header_id, output_geom_id, task.id)
 
+
+def create_verticals(
+    session: Session,
+    state: MoleculeState,
+    sp_header_id: int,
+    output_geom_id: int,
+    opt_task_id: int,
+) -> None:
+    """The vertical singlepoints of one optimised conformer of *state*."""
     desc = state.description
 
     # The spin-change partner only exists for the singlet/triplet pair. For
@@ -650,25 +663,25 @@ def _followup_optimization(
     spin_change_defined = state.multiplicity in (1, 3)
 
     if desc == "S0":
-        _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, task.id, TaskType.singlepoint_vert_ox)
-        _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, task.id, TaskType.singlepoint_vert_red)
+        _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, opt_task_id, TaskType.singlepoint_vert_ox)
+        _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, opt_task_id, TaskType.singlepoint_vert_red)
         if spin_change_defined:
-            _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, task.id, TaskType.singlepoint_vert_spin_change)
+            _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, opt_task_id, TaskType.singlepoint_vert_spin_change)
         else:
             logger.info(
                 "State %d (S0, multiplicity %d) is open-shell; skipping the "
                 "vertical spin-change singlepoint", state.id, state.multiplicity,
             )
     elif desc == "S1":
-        _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, task.id, TaskType.singlepoint_vert_ox)
-        _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, task.id, TaskType.singlepoint_vert_red)
+        _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, opt_task_id, TaskType.singlepoint_vert_ox)
+        _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, opt_task_id, TaskType.singlepoint_vert_red)
     elif desc == "T1":
         if spin_change_defined:
-            _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, task.id, TaskType.singlepoint_vert_spin_change)
+            _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, opt_task_id, TaskType.singlepoint_vert_spin_change)
     elif desc == "ox":
-        _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, task.id, TaskType.singlepoint_vert_red)
+        _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, opt_task_id, TaskType.singlepoint_vert_red)
     elif desc == "red":
-        _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, task.id, TaskType.singlepoint_vert_ox)
+        _create_singlepoint_task(session, state.id, sp_header_id, output_geom_id, opt_task_id, TaskType.singlepoint_vert_ox)
 
 
 def _category_followups(description: str, metadata: dict) -> list[TaskType]:

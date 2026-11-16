@@ -499,6 +499,8 @@ Every submission path (CLI, REST, Python) ends up writing the same
   optimization directly.
 * `seed_from_s0` — T1 / ox / red run no conformer search of their own; once
   every S0 conformer is finished, each optimises from the lowest S0 conformer.
+* `verticals_lowest_s0` — S0's vertical singlepoints run on the lowest S0
+  conformer only, once every S0 conformer is finished.
 * `request_singlepoint_vertical_excitations` (default **true**) —
   vert-ox / vert-red / spin-flip singlepoints on each optimised state.
 * `max_conformers_S0 / _T1 / _ox / _red` — per-state conformer cap

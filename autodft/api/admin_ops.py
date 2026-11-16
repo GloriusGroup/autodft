@@ -1321,16 +1321,19 @@ def _reopen_esd(session: Session, molecule_id: int, removed: set[int], rate_stat
 
 
 def _reopen_s0_seeds(session: Session, molecule_id: int, removed: set[int]) -> None:
-    """Let states seeded from a removed S0* seed again."""
+    """Let work started from a removed S0* (seeds, S0's verticals) start again."""
     for state in session.exec(
         select(MoleculeState).where(
             MoleculeState.molecule_id == molecule_id,
-            col(MoleculeState.metadata_json).contains('"s0_seed"'),
+            col(MoleculeState.metadata_json).contains('"s0_seed"')
+            | col(MoleculeState.metadata_json).contains('"s0_verticals"'),
         )
     ).all():
         metadata = json.loads(state.metadata_json)
-        if metadata["s0_seed"].get("task") in removed:
-            metadata.pop("s0_seed")
+        reopened = [k for k in ("s0_seed", "s0_verticals") if k in metadata and metadata[k].get("task") in removed]
+        for key in reopened:
+            metadata.pop(key)
+        if reopened:
             state.metadata_json = json.dumps(metadata)
             session.add(state)
 

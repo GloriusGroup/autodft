@@ -235,9 +235,11 @@ def _process_entrypoint_body(
         metadata = _with_s0_settings(metadata, s0)
 
     # 4. Create states.
+    # verticals_lowest_s0: S0's verticals run on S0* alone (engine.s0_seed).
+    lowest = {s0_seed.VERTICALS_LOWEST_S0: True} if metadata.get(s0_seed.VERTICALS_LOWEST_S0) else None
     _create_state(
         session, molecule, smiles, "S0", multiplicity, charge,
-        metadata, header_ids, base_path, initial_xyz,
+        metadata, header_ids, base_path, initial_xyz, extra_metadata=lowest,
     )
 
     # ESD's triplet is the T1 state unless T1 is requested with its own
