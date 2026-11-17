@@ -230,6 +230,7 @@ include a deleted one.
 | `max_conformers_ox`                         | int    | `1`           | Conformer cap for the ox state.                                                             |
 | `max_conformers_red`                        | int    | `1`           | Conformer cap for the red state.                                                            |
 | `max_conformers`                            | int?   | `null`        | Legacy override — when set, applies to every state, regardless of the per-state fields. Every `max_conformers*` is 0 or more (0 asks for none); a negative one answers 400, on Extend too. |
+| `conformer_diversity_window`                | float  | `null`        | kcal/mol. Keep the lowest GOAT conformer plus the N−1 most diverse (heavy-atom RMSD, symmetry-aware) within this window of it, instead of the N lowest. Above 0, else 400.|
 | `header_confsearch`                         | str?   | `null`        | Raw ORCA header block (multi-line). Used if no header id is set.                            |
 | `header_optimization`                       | str?   | `null`        | Raw ORCA header block. Used if no header id is set.                                         |
 | `header_singlepoint`                        | str?   | `null`        | Raw ORCA header block. **Must not contain `Opt` or `Freq`.**                                |

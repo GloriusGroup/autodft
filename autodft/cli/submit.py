@@ -235,6 +235,7 @@ def _build_request_metadata(
     advanced: Optional[dict] = None,
     seed_from_s0: bool = False,
     verticals_lowest_s0: bool = False,
+    conformer_diversity_window: Optional[float] = None,
 ) -> str:
     """Build the request_metadata JSON string."""
     metadata = {
@@ -260,6 +261,10 @@ def _build_request_metadata(
         metadata["seed_from_s0"] = True
     if verticals_lowest_s0:
         metadata["verticals_lowest_s0"] = True
+    if conformer_diversity_window is not None:
+        if not conformer_diversity_window > 0:
+            raise typer.BadParameter("must be above 0 kcal/mol", param_hint="--conformer-diversity-window")
+        metadata["conformer_diversity_window"] = conformer_diversity_window
 
     from autodft import categories
 
@@ -293,6 +298,11 @@ def submit(
     verticals_lowest_s0: bool = typer.Option(
         False, "--verticals-lowest-s0",
         help="S0's vertical singlepoints run on its lowest conformer only, once S0 is finished",
+    ),
+    conformer_diversity_window: Optional[float] = typer.Option(
+        None, "--conformer-diversity-window", metavar="<kcal/mol>",
+        help="Keep the lowest conformer plus the N-1 most diverse (heavy-atom RMSD) within this window of it, "
+             "instead of the N lowest",
     ),
     no_vert_ex: bool = typer.Option(
         False, "--no-vert-ex",
@@ -420,6 +430,7 @@ def submit(
         advanced=advanced,
         seed_from_s0=seed_from_s0,
         verticals_lowest_s0=verticals_lowest_s0,
+        conformer_diversity_window=conformer_diversity_window,
     )
 
     entry = CalculationEntrypoint(
@@ -465,6 +476,11 @@ def submit_batch(
     verticals_lowest_s0: bool = typer.Option(
         False, "--verticals-lowest-s0",
         help="S0's vertical singlepoints run on its lowest conformer only, once S0 is finished",
+    ),
+    conformer_diversity_window: Optional[float] = typer.Option(
+        None, "--conformer-diversity-window", metavar="<kcal/mol>",
+        help="Keep the lowest conformer plus the N-1 most diverse (heavy-atom RMSD) within this window of it, "
+             "instead of the N lowest",
     ),
     no_vert_ex: bool = typer.Option(
         False, "--no-vert-ex",
@@ -592,6 +608,7 @@ def submit_batch(
         advanced=advanced,
         seed_from_s0=seed_from_s0,
         verticals_lowest_s0=verticals_lowest_s0,
+        conformer_diversity_window=conformer_diversity_window,
     )
 
     smiles_list: list[str] = []

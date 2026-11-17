@@ -19,7 +19,7 @@ from sqlmodel import Session, col, select
 
 from autodft import categories
 from autodft.config import Settings
-from autodft.engine import circuit_breaker, nmr_references, s0_seed
+from autodft.engine import circuit_breaker, conformer_selection, nmr_references, s0_seed
 from autodft.models.entrypoint import CalculationEntrypoint
 from autodft.models.geometry import MoleculeGeometry
 from autodft.models.header import ComputationHeader
@@ -883,6 +883,9 @@ def _create_state(
     # submission's metadata is exactly what it always was.
     if description == "S0":
         state_metadata.update(categories.snapshot(metadata))
+
+    if conformer_selection.DIVERSITY_WINDOW in metadata:
+        state_metadata[conformer_selection.DIVERSITY_WINDOW] = float(metadata[conformer_selection.DIVERSITY_WINDOW])
 
     # See results.imaginary_cutoff; an entrypoint queued before the tolerance keeps the old rule.
     if "imag_freq_tolerance" in metadata:

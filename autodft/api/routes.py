@@ -182,6 +182,8 @@ class SubmitRequest(BaseModel):
     seed_from_s0: bool = False
     # S0's vertical singlepoints run on its lowest conformer only.
     verticals_lowest_s0: bool = False
+    # kcal/mol: keep the lowest conformer plus the N-1 most diverse within it, not the N lowest.
+    conformer_diversity_window: Optional[float] = None
     request_optimization: bool = True
     request_singlepoint: bool = True
     # Singlepoint vertical excitations (ox / red / spin-flip). On by
@@ -2554,12 +2556,15 @@ def _tolerance_error(body: SubmitRequest) -> Optional[JSONResponse]:
 
 
 def _conformers_error(body: SubmitRequest) -> Optional[JSONResponse]:
-    """A 400 for a negative conformer limit (0 asks for none), else None."""
+    """A 400 for a negative conformer limit (0 asks for none) or a diversity window not above 0, else None."""
     for name in ("max_conformers_S0", "max_conformers_T1", "max_conformers_ox", "max_conformers_red",
                  "max_conformers"):
         value = getattr(body, name)
         if value is not None and value < 0:
             return JSONResponse(status_code=400, content={"detail": f"{name} must be 0 or more (got {value})."})
+    window = body.conformer_diversity_window
+    if window is not None and not window > 0:
+        return JSONResponse(status_code=400, content={"detail": f"conformer_diversity_window must be above 0 kcal/mol (got {window:g})."})
     return None
 
 
@@ -3065,6 +3070,8 @@ def _new_entrypoint(
         request_metadata["seed_from_s0"] = True
     if body.verticals_lowest_s0:
         request_metadata["verticals_lowest_s0"] = True
+    if body.conformer_diversity_window is not None:
+        request_metadata["conformer_diversity_window"] = body.conformer_diversity_window
     # Only set categories are written, so an unflagged submission's row is
     # exactly what it always was.
     request_metadata.update(categories.snapshot(_category_flags(body)))

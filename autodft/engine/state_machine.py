@@ -21,7 +21,7 @@ from sqlmodel import Session, col, select
 
 from autodft import categories
 from autodft.config import Settings
-from autodft.engine import circuit_breaker
+from autodft.engine import circuit_breaker, conformer_selection
 from autodft.engine.scheduler import NOT_IN_SLURM, Scheduler, SubmitResult
 from autodft.extraction import results
 from autodft.models.enums import (
@@ -583,7 +583,19 @@ def _followup_confsearch(
 
     max_key = f"max_conformers_{state.description}"
     max_conformers = metadata.get(max_key, 10)
-    conformer_geoms = conformer_geoms[:max_conformers]
+    window = metadata.get(conformer_selection.DIVERSITY_WINDOW)
+    picked = None
+    if window is not None:
+        picked = conformer_selection.diverse(
+            [g.xyz_data for g in conformer_geoms], [g.energy or 0.0 for g in conformer_geoms],
+            max_conformers, float(window),
+        )
+        if picked is None:
+            logger.warning("Task %d: conformers not comparable; keeping the %d lowest", task.id, max_conformers)
+        else:
+            logger.info("Task %d: kept conformers %s, the most diverse within %g kcal/mol",
+                        task.id, [conformer_geoms[i].label for i in picked], float(window))
+    conformer_geoms = [conformer_geoms[i] for i in picked] if picked is not None else conformer_geoms[:max_conformers]
 
     opt_header_id = state.optimization_header_id
     if opt_header_id is None:

@@ -506,6 +506,10 @@ Every submission path (CLI, REST, Python) ends up writing the same
 * `max_conformers_S0 / _T1 / _ox / _red` — per-state conformer cap
   (default **1 per state**). Legacy `max_conformers` still works as a
   blanket override.
+* `conformer_diversity_window` (kcal/mol, CLI `--conformer-diversity-window`) —
+  instead of the N lowest GOAT conformers, keep the lowest plus the N−1 most
+  diverse (farthest-point sampling on symmetry-aware heavy-atom RMSD) within
+  this window of it.
 * `request_spec_uvvis` / `request_spec_ir` / `request_spec_nmr` / `request_esd`
   — UV/Vis (TDDFT singlepoint on every S0 conformer), IR (from the
   optimisation's frequencies), NMR (¹H/¹³C/¹⁹F shifts referenced to chloroform
