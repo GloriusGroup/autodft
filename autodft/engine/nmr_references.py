@@ -2,7 +2,7 @@
 
 A shift is sigma_ref - sigma + delta_ref, delta_ref being the reference's
 experimental shift vs TMS (0 for TMS itself). Each reference (chloroform or
-TMS for 1H and 13C, per ``nmr_reference``; CFCl3 for 19F) is computed once per
+TMS for 1H and 13C, per ``nmr_reference``; TMS for 29Si; CFCl3 for 19F) is computed once per
 method -- the requester's optimisation and singlepoint headers, its
 ``nmr_method`` and its Advanced method settings -- in a project that nobody
 can submit to, wipe, archive or reassign.
@@ -47,8 +47,8 @@ CFCL3 = "FC(Cl)(Cl)Cl"
 CHCL3 = "ClC(Cl)Cl"
 # The reference compound for each nucleus, per nmr_reference.
 REFERENCES = {
-    "chcl3": {"H": CHCL3, "C": CHCL3, "F": CFCL3},
-    "tms": {"H": TMS, "C": TMS, "F": CFCL3},
+    "chcl3": {"H": CHCL3, "C": CHCL3, "F": CFCL3, "Si": TMS},
+    "tms": {"H": TMS, "C": TMS, "F": CFCL3, "Si": TMS},
 }
 # Experimental (1H, 13C) shifts of CHCl3 dissolved in each NMR solvent, ppm vs TMS
 # (Fulmer et al., Organometallics 2010, 29, 2176, Tables 1 and 2).

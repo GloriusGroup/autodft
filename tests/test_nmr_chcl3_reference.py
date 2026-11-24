@@ -30,8 +30,8 @@ def test_chloroform_shifts_follow_the_solvent_and_fall_back_to_cdcl3():
 
 
 def test_the_choice_picks_the_compounds():
-    assert nmr_references.reference_compounds(None) == {"H": CHCL3, "C": CHCL3, "F": CFCL3}
-    assert nmr_references.reference_compounds("tms") == {"H": TMS, "C": TMS, "F": CFCL3}
+    assert nmr_references.reference_compounds(None) == {"H": CHCL3, "C": CHCL3, "F": CFCL3, "Si": TMS}
+    assert nmr_references.reference_compounds("tms") == {"H": TMS, "C": TMS, "F": CFCL3, "Si": TMS}
 
 
 def test_an_unknown_reference_is_refused():

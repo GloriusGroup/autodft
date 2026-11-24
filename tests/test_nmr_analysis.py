@@ -382,3 +382,25 @@ class TestReferenceMethod:
             _tms(session, db, method="singlepoint", name="new")
         ref = _detail()["reference"]["H"]
         assert (ref["status"], ref["method_matches"]) == ("ok", True)
+
+
+def test_silicon_is_referenced_to_tms_whatever_the_1h_reference(db):
+    with get_session() as session:
+        metadata = {categories.NMR: True, "nmr_nuclei": ["H", "Si"], "nmr_reference": "chcl3"}
+        _, state = _state(session, "C[Si](C)(C)C", "nho/p", metadata)
+        geom = MoleculeGeometry(state_id=state.id, xyz_data=(FIXTURES / "tms_opt.xyz").read_text())
+        session.add(geom)
+        session.commit()
+        opt = _task(session, state, TaskType.optimization, geometry=geom.id)
+        _job(session, opt, db, "s_opt", "G-E(el)                           ...      0.03000000 Eh")
+        shield = _task(session, state, TaskType.singlepoint_nmr, parent=opt.id)
+        _job(session, shield, db, "s_nmr", TMS, B3LYP_NMR)
+        _tms(session, db)
+    shifts = _detail()
+    (silicon,) = shifts["nuclei"]["Si"]
+    assert silicon["shielding_ppm"] == pytest.approx(403.145) and silicon["shift_ppm"] == pytest.approx(0.0)
+    assert shifts["reference"]["Si"]["compound"] == "C[Si](C)(C)C"
+
+
+def test_silicon_queues_tms_even_with_a_chloroform_reference():
+    assert nmr_references.references_for("C[Si](C)(C)C", ["H", "Si"], "chcl3") == ["C[Si](C)(C)C", "ClC(Cl)Cl"]

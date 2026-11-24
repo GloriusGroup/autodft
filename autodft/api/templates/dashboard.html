@@ -1371,6 +1371,7 @@
                                 <div class="checkbox-group"><input type="checkbox" id="nmrNucH" checked><label for="nmrNucH">¹H</label></div>
                                 <div class="checkbox-group"><input type="checkbox" id="nmrNucC" checked><label for="nmrNucC">¹³C</label></div>
                                 <div class="checkbox-group"><input type="checkbox" id="nmrNucF" checked><label for="nmrNucF">¹⁹F</label></div>
+                                <div class="checkbox-group" title="Referenced to TMS."><input type="checkbox" id="nmrNucSi"><label for="nmrNucSi">²⁹Si</label></div>
                                 <div class="checkbox-group" title="No reference: the As shielding tensor and its electric field gradient (quadrupole coupling C_Q, asymmetry η), as descriptors."><input type="checkbox" id="nmrNucAs"><label for="nmrNucAs">⁷⁵As (σ, EFG)</label></div>
                                 <div class="checkbox-group" title="No reference: the N shielding tensor and its ¹⁴N electric field gradient (quadrupole coupling C_Q, asymmetry η), as descriptors."><input type="checkbox" id="nmrNucN"><label for="nmrNucN">¹⁴N (σ, EFG)</label></div>
                                 <div class="form-group" style="min-width: 220px;">
@@ -3931,7 +3932,7 @@
                 setField('uvvisNroots', options.uvvis_nroots, true);
                 setField('uvvisTda', options.uvvis_tda, true);
             } else if (key === 'request_spec_nmr') {
-                ['H', 'C', 'F', 'As', 'N'].forEach(function (n) {
+                ['H', 'C', 'F', 'Si', 'As', 'N'].forEach(function (n) {
                     setField('nmrNuc' + n, (options.nmr_nuclei || []).indexOf(n) !== -1, true);
                 });
                 setField('nmrMethod', options.nmr_method, true);
@@ -4186,7 +4187,7 @@
                 commonBody.uvvis_tda = document.getElementById('uvvisTda').checked;
             }
             if (commonBody.request_spec_nmr) {
-                commonBody.nmr_nuclei = ['H', 'C', 'F', 'As', 'N'].filter(function (n) {
+                commonBody.nmr_nuclei = ['H', 'C', 'F', 'Si', 'As', 'N'].filter(function (n) {
                     return document.getElementById('nmrNuc' + n).checked;
                 });
                 commonBody.nmr_method = document.getElementById('nmrMethod').value;
@@ -5709,12 +5710,12 @@
             return bits.join(', ');
         }
 
-        var NMR_LABELS = { H: '¹H', C: '¹³C', F: '¹⁹F', As: '⁷⁵As', N: '¹⁴N' };
+        var NMR_LABELS = { H: '¹H', C: '¹³C', F: '¹⁹F', Si: '²⁹Si', As: '⁷⁵As', N: '¹⁴N' };
 
         var NMR_REFERENCE_NAMES = { 'C[Si](C)(C)C': 'TMS', 'ClC(Cl)Cl': 'CHCl₃', 'FC(Cl)(Cl)Cl': 'CFCl₃' };
         function ppNmr(nmr) {
             var parts = [];
-            ['H', 'C', 'F', 'As', 'N'].forEach(function (el) {
+            ['H', 'C', 'F', 'Si', 'As', 'N'].forEach(function (el) {
                 var signals = (nmr.nuclei || {})[el];
                 if (!signals || !signals.length) return;
                 var ref = (nmr.reference || {})[el] || {};

@@ -85,7 +85,7 @@ def test_as_is_a_valid_nucleus():
     metadata = {categories.NMR: True, "nmr_nuclei": ["H", "As"]}
     assert categories.rejection({"multiplicity": 1}, metadata, None, "! B3LYP\n") is None
     bad = categories.rejection({"multiplicity": 1}, {categories.NMR: True, "nmr_nuclei": ["Se"]}, None, "! B3LYP\n")
-    assert "H, C, F, As" in bad
+    assert "H, C, F, Si, As, N" in bad
 
 
 def _asme3(session, tmp_path):

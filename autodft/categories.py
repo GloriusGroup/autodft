@@ -117,7 +117,7 @@ ESD_HT_SCOPES = ("all", "s1")
 ESD_HT_METHODS = ("sp", "opt")
 UVVIS_NROOTS_MAX = 100
 # As and N (14N) have no reference compound: their shielding and EFG tensor are reported raw.
-NMR_NUCLEI = ("H", "C", "F", "As", "N")
+NMR_NUCLEI = ("H", "C", "F", "Si", "As", "N")
 EFG_NUCLEI = ("As", "N")
 NMR_DH_NPROCS_MAX = 64
 NMR_DH_MAXCORE_RANGE = (1000, 16000)

@@ -243,7 +243,7 @@ include a deleted one.
 | `uvvis_tda`                                 | bool   | `false`       | Tamm–Dancoff approximation for the UV/Vis TDDFT. Stored only when UV/Vis is requested.      |
 | `request_spec_ir`                           | bool   | `false`       | IR: read from the S0 optimisation's frequency calculation — no extra job. A legacy submission needs `Freq` in the optimisation header. |
 | `request_spec_nmr`                          | bool   | `false`       | NMR: a singlepoint on every optimised S0 conformer in the `nmr_method`. Shifts are referenced to chloroform or TMS (`nmr_reference`, ¹H/¹³C) and CFCl₃ (¹⁹F), which the pipeline computes itself — once per optimisation/singlepoint header pair, `nmr_method` and Advanced method settings — in the protected `admin/reference_systems` project. Closed-shell molecules only. |
-| `nmr_nuclei`                                | list   | `["H","C","F"]` | Nuclei to report (H, C, F, As, N); stored only with NMR. As and N (¹⁴N): no reference, shielding and EFG. |
+| `nmr_nuclei`                                | list   | `["H","C","F"]` | Nuclei to report (H, C, F, Si, As, N); stored only with NMR. As and N (¹⁴N): no reference, shielding and EFG. |
 | `nmr_method`                                | string | `"singlepoint"` | `"singlepoint"`: the singlepoint header with `NMR` added to its `!` line. `"dh"`: `!revDSD-PBEP86-D4/2021 PCSSEG-3 AUTOAUX NMR NOFROZENCORE TightSCF` plus the singlepoint header's solvation keywords and `%cpcm` only, on its own `nmr_dh_nprocs` × `nmr_dh_maxcore`; refused for elements past Kr (no `pcSseg-3`). Stored only with NMR. |
 | `nmr_reference`                             | string | `"chcl3"`       | ¹H/¹³C reference compound: `"chcl3"` (chloroform; its experimental shift in the calculation's solvent is added, Fulmer et al. 2010, e.g. 7.58 / 79.17 ppm in MeCN) or `"tms"`. ¹⁹F always CFCl₃. Stored only with NMR; molecules from before the option read as `"chcl3"`; a different value is no conflict with an existing molecule. |
 | `nmr_dh_nprocs`                             | int    | `12`            | Cores of a `dh` NMR job (1–64). Stored only with `nmr_method` `"dh"`; a different value is no conflict with an existing molecule. |
@@ -649,7 +649,7 @@ electric field gradient (`efg_cq_mhz`, `efg_eta`, `efg_vzz_au`). `equivalence` i
 when atoms are grouped by the symmetry classes of the bonds perceived from
 the first counted conformer's geometry, else `"none"` (one signal per
 atom). `reference` names, per reported nucleus, the reference compound
-(chloroform or TMS for H and C per `nmr_reference`, CFCl₃ for F) at the molecule's optimisation and
+(chloroform or TMS for H and C per `nmr_reference`, TMS for Si, CFCl₃ for F) at the molecule's optimisation and
 singlepoint headers and NMR method in `admin/reference_systems` — the one
 whose NMR input matches the molecule's, else the one stored with the same
 `nmr_method` (none for molecules from before the option) and Advanced method
