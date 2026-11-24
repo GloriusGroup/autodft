@@ -117,3 +117,66 @@ def test_arsenic_reports_shielding_and_efg_without_a_reference(db):
     # The %eprnmr block does not make the TMS reference look like another method.
     assert shifts["reference"]["H"]["status"] == "ok" and shifts["reference"]["H"]["method_matches"] is True
     assert all(s["shift_ppm"] is not None and "efg_cq_mhz" not in s for s in shifts["nuclei"]["H"])
+
+
+# --- 14N: the same raw shielding and EFG as As -----------------------------------
+
+BOTH = "%eprnmr\n  Nuclei = all As {fgrad}\n  Nuclei = all N {fgrad}\nend\n"
+
+
+def test_n_gets_its_own_nuclei_line():
+    assert blocks.nmr_trailer({"nmr_nuclei": ["H", "N"]}) == "%eprnmr\n  Nuclei = all N {fgrad}\nend\n"
+    assert blocks.nmr_trailer({"nmr_nuclei": ["N", "H", "As"]}) == BOTH
+
+
+def test_n_is_a_valid_nucleus():
+    assert categories.rejection({"multiplicity": 1}, {categories.NMR: True, "nmr_nuclei": ["N"]}, None, "! B3LYP\n") is None
+
+
+ME2ASNME2 = (FIXTURES / "nmr_efg_me2asnme2.out").read_text()
+
+
+def test_the_n_efg_is_parsed_beside_the_as_one():
+    assert parse_efg(ME2ASNME2) == [
+        Efg(index=1, element="As", vzz_au=-5.8737903, cq_mhz=-433.362434, eta=0.208831),
+        Efg(index=3, element="N", vzz_au=-1.2942705, cq_mhz=-6.215973, eta=0.136267),
+    ]
+
+
+def test_nitrogen_reports_shielding_and_efg_without_a_reference(db):
+    with get_session() as session:
+        metadata = {categories.NMR: True, "nmr_nuclei": ["H", "As", "N"], "nmr_reference": "tms"}
+        _, state = _state(session, "C[As](C)N(C)C", "nho/p", metadata)
+        geom = MoleculeGeometry(state_id=state.id, xyz_data=(FIXTURES / "me2asnme2.xyz").read_text())
+        session.add(geom)
+        session.commit()
+        opt = _task(session, state, TaskType.optimization, geometry=geom.id)
+        _job(session, opt, db, "n_opt", "G-E(el)                           ...      0.03000000 Eh")
+        sp = _task(session, state, TaskType.singlepoint, parent=opt.id)
+        _job(session, sp, db, "n_sp", "FINAL SINGLE POINT ENERGY      -2490.200000000")
+        shield = _task(session, state, TaskType.singlepoint_nmr, parent=opt.id)
+        _job(session, shield, db, "n_nmr", ME2ASNME2, B3LYP_NMR + "*xyzfile 0 1 input.xyz\n\n" + BOTH)
+        _tms(session, db)
+    shifts = _detail()
+    (nitrogen,) = shifts["nuclei"]["N"]
+    assert nitrogen["atoms"] == [3] and nitrogen["shift_ppm"] is None
+    assert (nitrogen["shielding_ppm"], nitrogen["anisotropy_ppm"]) == pytest.approx((227.868, 116.049))
+    assert (nitrogen["efg_cq_mhz"], nitrogen["efg_eta"], nitrogen["efg_vzz_au"]) == pytest.approx(
+        (-6.215973, 0.136267, -1.2942705))
+    assert shifts["nuclei"]["As"][0]["efg_cq_mhz"] == pytest.approx(-433.362434)
+    assert "N" not in shifts["reference"] and shifts["reference"]["H"]["status"] == "ok"
+
+
+def test_without_n_requested_no_n_is_reported(db):
+    with get_session() as session:
+        metadata = {categories.NMR: True, "nmr_nuclei": ["H", "As"], "nmr_reference": "tms"}
+        _, state = _state(session, "C[As](C)N(C)C", "nho/p", metadata)
+        geom = MoleculeGeometry(state_id=state.id, xyz_data=(FIXTURES / "me2asnme2.xyz").read_text())
+        session.add(geom)
+        session.commit()
+        opt = _task(session, state, TaskType.optimization, geometry=geom.id)
+        _job(session, opt, db, "n_opt", "G-E(el)                           ...      0.03000000 Eh")
+        shield = _task(session, state, TaskType.singlepoint_nmr, parent=opt.id)
+        _job(session, shield, db, "n_nmr", ME2ASNME2, B3LYP_NMR + "*xyzfile 0 1 input.xyz\n\n" + TRAILER)
+        _tms(session, db)
+    assert "N" not in _detail()["nuclei"]

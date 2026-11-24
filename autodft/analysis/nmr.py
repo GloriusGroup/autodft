@@ -3,7 +3,7 @@
 delta = sigma_ref - sigma + delta_ref, where sigma_ref is the reference compound's
 mean shielding for that element at the same optimisation and singlepoint headers
 and NMR method, and delta_ref its experimental shift vs TMS in the calculation's
-solvent (see autodft.engine.nmr_references). Nuclei without a reference (As)
+solvent (see autodft.engine.nmr_references). Nuclei without a reference (As, N)
 keep their shielding and add their electric field gradient.
 """
 

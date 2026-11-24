@@ -336,7 +336,7 @@ def submit(
     uvvis_nroots: int = typer.Option(20, "--uvvis-nroots", help="UV/Vis excited states (1-100)"),
     uvvis_tda: bool = typer.Option(False, "--uvvis-tda", help="Tamm-Dancoff approximation for UV/Vis"),
     nmr_nuclei: str = typer.Option(
-        "H,C,F", "--nmr-nuclei", help="NMR nuclei to report, comma-separated (H, C, F, As; As: raw shielding and EFG)"
+        "H,C,F", "--nmr-nuclei", help="NMR nuclei to report, comma-separated (H, C, F, As, N; As and N: raw shielding and EFG)"
     ),
     esd_tn_window_ev: float = typer.Option(0.3, "--esd-tn-window", help="Include S1->Tn ISC for Tn up to this many eV above S1"),
     esd_temperature_k: float = typer.Option(298.15, "--esd-temperature", help="Temperature of the ESD rates (K)"),
@@ -514,7 +514,7 @@ def submit_batch(
     uvvis_nroots: int = typer.Option(20, "--uvvis-nroots", help="UV/Vis excited states (1-100)"),
     uvvis_tda: bool = typer.Option(False, "--uvvis-tda", help="Tamm-Dancoff approximation for UV/Vis"),
     nmr_nuclei: str = typer.Option(
-        "H,C,F", "--nmr-nuclei", help="NMR nuclei to report, comma-separated (H, C, F, As; As: raw shielding and EFG)"
+        "H,C,F", "--nmr-nuclei", help="NMR nuclei to report, comma-separated (H, C, F, As, N; As and N: raw shielding and EFG)"
     ),
     esd_tn_window_ev: float = typer.Option(0.3, "--esd-tn-window", help="Include S1->Tn ISC for Tn up to this many eV above S1"),
     esd_temperature_k: float = typer.Option(298.15, "--esd-temperature", help="Temperature of the ESD rates (K)"),

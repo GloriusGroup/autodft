@@ -1,0 +1,100 @@
+Multiplicity       :   1
+Irrep              :   0
+Energy             : -2449.4829485422233120 Eh
+Basis              : AO
+ -----------------------------------------------------------
+ Nucleus   1As: A  : Isotope=   75 I=  1.5 P= 91.6668 MHz/au**3 
+                Q  : Isotope=   75 I=  1.5 Q=  0.3140 barn      
+                HFC: iso  = NO dip= NO orb= NO gauge= NO    
+                EFG: fgrad=YES rho= NO                      
+ -----------------------------------------------------------
+
+ Raw EFG matrix (all values in a.u.**-3):
+ ------------------------------------------------------
+              3.4757001       0.3142759       0.0934558
+              0.3142759       2.0422197      -1.6719496
+              0.0934558      -1.6719496      -5.5179198
+
+ V(Tot)       2.3235804       3.5502100      -5.8737903
+ Orientation: 
+     X       -0.2420528       0.9701186       0.0167442
+     Y        0.9483403       0.2401962      -0.2072594
+     Z       -0.2050881      -0.0342885      -0.9781427
+
+ Note: Tensor is right-handed
+
+ Contributions:
+ V(El )       2.2093892       3.1434675  -5.3528567
+ V(Nuc)       0.1141912       0.4067425  -0.5209337
+
+ Quadrupole tensor eigenvalues (in MHz;Q= 0.3140 I=  1.5)
+  e**2qQ            =  -433.362434 MHz 
+  e**2qQ/(4I*(2I-1))=   -36.113536 MHz 
+  eta               =     0.208831
+  NOTE: the diagonal representation of the SH term I*Q*I = e**2qQ/(4I(2I-1))*[-(1-eta),-(1+eta),2]
+
+ -----------------------------------------------------------
+ Nucleus   3N : A  : Isotope=   14 I=  1.0 P= 38.5677 MHz/au**3 
+                Q  : Isotope=   14 I=  1.0 Q=  0.0204 barn      
+                HFC: iso  = NO dip= NO orb= NO gauge= NO    
+                EFG: fgrad=YES rho= NO                      
+ -----------------------------------------------------------
+
+ Raw EFG matrix (all values in a.u.**-3):
+ ------------------------------------------------------
+              0.7347311      -0.0091634       0.0179048
+             -0.0091634      -0.6090042       0.8946856
+              0.0179048       0.8946856      -0.1257268
+
+ V(Tot)       0.5589522       0.7353183      -1.2942705
+ Orientation: 
+     X       -0.0490699       0.9987552       0.0089505
+     Y        0.6076215       0.0227384       0.7939012
+     Z        0.7927095       0.0443952      -0.6079809
+
+ Note: Tensor is right-handed
+
+ Contributions:
+ V(El )       0.6834985      -0.7240368   0.0405383
+ V(Nuc)      -0.1245463       1.4593552  -1.3348088
+
+ Quadrupole tensor eigenvalues (in MHz;Q= 0.0204 I=  1.0)
+  e**2qQ            =    -6.215973 MHz 
+  e**2qQ/(4I*(2I-1))=    -1.553993 MHz 
+  eta               =     0.136267
+  NOTE: the diagonal representation of the SH term I*Q*I = e**2qQ/(4I(2I-1))*[-(1-eta),-(1+eta),2]
+
+
+Hyperfine and quadrupole coupling calculation done in   0.0 sec 
+GIAO: Analytic para- and diamagnetic shielding integrals (SHARK)       ... done (  0.2 sec)
+-------------------
+CHEMICAL SHIELDINGS (ppm)
+
+--------------------------------
+CHEMICAL SHIELDING SUMMARY (ppm)
+--------------------------------
+
+
+  Nucleus  Element    Isotropic     Anisotropy
+  -------  -------  ------------   ------------
+      0       C          175.422         32.486 
+      1       As        1514.220        946.484 
+      2       C          184.313         17.873 
+      3       N          227.868        116.049 
+      4       C          141.650         68.850 
+      5       C          133.131         73.804 
+      6       H           28.944         12.866 
+      7       H           29.090          8.966 
+      8       H           27.699         13.814 
+      9       H           28.611         10.240 
+     10       H           28.298         14.064 
+     11       H           30.393         12.391 
+     12       H           27.847          9.572 
+     13       H           28.908         10.276 
+     14       H           28.592          9.535 
+     15       H           28.239          9.469 
+     16       H           28.973         11.004 
+     17       H           27.842          9.313 
+
+
+NMR shielding tensor and spin rotation calculation done in   0.2 sec 
